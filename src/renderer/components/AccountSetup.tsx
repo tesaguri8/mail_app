@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Plus } from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { ServerAccountSummary } from '@bindings/ServerAccountSummary';
 import {
@@ -149,16 +150,7 @@ export function AccountSetup({
   };
 
   return (
-    <div className="w-[440px] max-w-full rounded-xl bg-black/25 p-5 text-left backdrop-blur">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-white/90">{t('account.title')}</h2>
-        {!adding && (
-          <button className={btnCls} onClick={() => setAdding(true)}>
-            {t('account.addAccount')}
-          </button>
-        )}
-      </div>
-
+    <div className="max-w-[460px] text-left">
       {!adding && accounts.length === 0 && (
         <p className="text-sm text-white/60">{t('account.none')}</p>
       )}
@@ -199,6 +191,17 @@ export function AccountSetup({
             </li>
           ))}
         </ul>
+      )}
+
+      {!adding && (
+        <button
+          onClick={() => setAdding(true)}
+          title={t('account.addAccount')}
+          aria-label={t('account.addAccount')}
+          className="mt-3 flex h-9 w-9 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white"
+        >
+          <Plus size={18} />
+        </button>
       )}
 
       {adding && (

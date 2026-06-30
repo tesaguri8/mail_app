@@ -35,6 +35,7 @@ pub fn run() {
             commands::server_account_list,
             commands::account_test_connection,
             commands::account_test_login,
+            commands::account_check,
             commands::account_delete,
             commands::mail_sync,
             commands::mail_list,

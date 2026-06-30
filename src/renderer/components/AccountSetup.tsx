@@ -5,11 +5,14 @@ import type { ServerAccountSummary } from '@bindings/ServerAccountSummary';
 import {
   accountAdd,
   accountAutoconfig,
+  accountCheck,
   accountDelete,
   accountList,
   accountTestLogin,
   serverAccountList,
 } from '../services/accounts';
+
+type ConnState = { state: 'checking' | 'ok' | 'error'; msg?: string };
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -21,6 +24,7 @@ export function AccountSetup() {
   const { t } = useTranslation();
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [servers, setServers] = useState<ServerAccountSummary[]>([]);
+  const [conn, setConn] = useState<Record<number, ConnState>>({});
   const [adding, setAdding] = useState(false);
 
   // form state
@@ -36,10 +40,20 @@ export function AccountSetup() {
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
 
+  const checkConn = (id: number) => {
+    setConn((c) => ({ ...c, [id]: { state: 'checking' } }));
+    accountCheck(id)
+      .then(() => setConn((c) => ({ ...c, [id]: { state: 'ok' } })))
+      .catch((e) => setConn((c) => ({ ...c, [id]: { state: 'error', msg: String(e) } })));
+  };
+
   const refresh = () => {
     if (!isTauri) return;
     accountList()
-      .then(setAccounts)
+      .then((a) => {
+        setAccounts(a);
+        a.forEach((acc) => checkConn(acc.id));
+      })
       .catch(() => undefined);
     serverAccountList()
       .then(setServers)
@@ -149,10 +163,23 @@ export function AccountSetup() {
               key={a.id}
               className="flex items-center justify-between gap-2 rounded-md bg-white/10 px-3 py-2 text-sm"
             >
-              <div className="min-w-0">
-                <div className="truncate font-medium">{a.email}</div>
-                <div className="truncate text-xs text-white/50">
-                  IMAP {a.imap_host} · SMTP {a.smtp_host}
+              <div className="flex min-w-0 items-center gap-2">
+                <button
+                  onClick={() => checkConn(a.id)}
+                  title={conn[a.id]?.msg ?? conn[a.id]?.state ?? ''}
+                  className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+                    conn[a.id]?.state === 'ok'
+                      ? 'bg-emerald-400'
+                      : conn[a.id]?.state === 'error'
+                        ? 'bg-red-400'
+                        : 'animate-pulse bg-amber-300'
+                  }`}
+                />
+                <div className="min-w-0">
+                  <div className="truncate font-medium">{a.email}</div>
+                  <div className="truncate text-xs text-white/50">
+                    IMAP {a.imap_host} · SMTP {a.smtp_host}
+                  </div>
                 </div>
               </div>
               <button

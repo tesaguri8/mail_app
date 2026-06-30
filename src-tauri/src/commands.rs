@@ -184,6 +184,26 @@ pub async fn account_test_login(
     .map_err(|e| e.to_string())?
 }
 
+/// 登録済みアカウントの接続状態を確認（保存済み資格情報で実ログイン）。
+#[tauri::command]
+pub async fn account_check(
+    app: AppHandle,
+    store: State<'_, Store>,
+    account_id: i64,
+) -> Result<(), String> {
+    let (email, login, host, port) = store
+        .get_account_imap(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "アカウントが見つかりません".to_string())?;
+    let service = app.config().identifier.clone();
+    let password = keyring::Entry::new(&service, &email)
+        .and_then(|e| e.get_password())
+        .map_err(|e| format!("資格情報を取得できません: {e}"))?;
+    tauri::async_runtime::spawn_blocking(move || imap_sync::test_login(&host, port, &login, &password))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// アカウントを削除（受信メールと keyring の資格情報も削除）。
 #[tauri::command]
 pub fn account_delete(app: AppHandle, store: State<Store>, account_id: i64) -> Result<(), String> {

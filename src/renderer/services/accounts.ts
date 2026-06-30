@@ -26,3 +26,6 @@ export const accountTestLogin = (
 
 export const accountDelete = (accountId: number) =>
   invoke<void>('account_delete', { accountId });
+
+export const accountCheck = (accountId: number) =>
+  invoke<void>('account_check', { accountId });

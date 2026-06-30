@@ -14,6 +14,16 @@
     "maximize": "最大化",
     "close": "閉じる"
   },
+  "nav": {
+    "home": "ホーム",
+    "settings": "設定"
+  },
+  "settings": {
+    "title": "設定",
+    "accounts": "アカウント",
+    "display": "表示",
+    "about": "このアプリ"
+  },
   "lang": {
     "switch": "English"
   },
@@ -56,6 +66,12 @@
     "hideQuotes": "引用を隠す",
     "close": "閉じる",
     "noBody": "本文がありません",
+    "more": "もっと読む →",
+    "selectMail": "メールを選択してください",
+    "side": "左右",
+    "top": "上下",
+    "syncHint": "（同期するとここに最新メールが出ます）",
+    "addInSettings": "設定からアカウントを追加してください。",
     "window": "取り込み範囲",
     "w_n50": "最新50件",
     "w_n200": "最新200件",

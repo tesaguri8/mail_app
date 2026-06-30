@@ -67,7 +67,9 @@ impl Store {
     pub fn list_accounts(&self) -> rusqlite::Result<Vec<AccountSummary>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, email, display_name, imap_host, smtp_host, COALESCE(sync_window,'6m')
+            "SELECT id, email, display_name, imap_host, smtp_host, COALESCE(sync_window,'6m'),
+                    (SELECT COUNT(*) FROM emails e WHERE e.account_id = accounts.id AND e.is_read = 0),
+                    (SELECT COUNT(*) FROM emails e WHERE e.account_id = accounts.id)
              FROM accounts ORDER BY id",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -78,6 +80,8 @@ impl Store {
                 imap_host: r.get(3)?,
                 smtp_host: r.get(4)?,
                 sync_window: r.get(5)?,
+                unread_count: r.get::<_, i64>(6)? as i32,
+                total_count: r.get::<_, i64>(7)? as i32,
             })
         })?;
         rows.collect()

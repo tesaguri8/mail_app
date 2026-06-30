@@ -11,7 +11,15 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
  */
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
-export function TitleBar() {
+export type AppView = 'home' | 'mail' | 'settings';
+
+export function TitleBar({
+  view,
+  onNavigate,
+}: {
+  view: AppView;
+  onNavigate: (v: AppView) => void;
+}) {
   const { t, i18n } = useTranslation();
   const [pinned, setPinned] = useState(false);
 
@@ -36,8 +44,24 @@ export function TitleBar() {
       data-tauri-drag-region
       className="flex h-9 select-none items-center justify-between px-3 text-white/90"
     >
-      <div data-tauri-drag-region className="text-xs font-medium tracking-wide">
-        {t('app.tagline')}
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => onNavigate('home')}
+          className={`rounded px-2 py-0.5 text-sm hover:bg-white/20 ${view === 'home' ? 'bg-white/25' : ''}`}
+          title={t('nav.home')}
+        >
+          🏠
+        </button>
+        <button
+          onClick={() => onNavigate('settings')}
+          className={`rounded px-2 py-0.5 text-sm hover:bg-white/20 ${view === 'settings' ? 'bg-white/25' : ''}`}
+          title={t('nav.settings')}
+        >
+          ⚙
+        </button>
+        <span data-tauri-drag-region className="ml-2 text-xs font-medium tracking-wide text-white/80">
+          {t('app.tagline')}
+        </span>
       </div>
       <div className="flex items-center gap-1">
         <button

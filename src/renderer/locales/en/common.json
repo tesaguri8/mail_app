@@ -14,6 +14,16 @@
     "maximize": "Maximize",
     "close": "Close"
   },
+  "nav": {
+    "home": "Home",
+    "settings": "Settings"
+  },
+  "settings": {
+    "title": "Settings",
+    "accounts": "Accounts",
+    "display": "Display",
+    "about": "About"
+  },
   "lang": {
     "switch": "日本語"
   },
@@ -56,6 +66,12 @@
     "hideQuotes": "Hide quotes",
     "close": "Close",
     "noBody": "No body",
+    "more": "Read more →",
+    "selectMail": "Select a message",
+    "side": "Side",
+    "top": "Top",
+    "syncHint": "(Sync to show latest mail here)",
+    "addInSettings": "Add an account from Settings.",
     "window": "Import range",
     "w_n50": "Latest 50",
     "w_n200": "Latest 200",

@@ -97,6 +97,8 @@ pub fn account_add(
         imap_host: input.imap_host,
         smtp_host: input.smtp_host,
         sync_window: "6m".to_string(),
+        unread_count: 0,
+        total_count: 0,
     })
 }
 

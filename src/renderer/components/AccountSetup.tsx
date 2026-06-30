@@ -14,10 +14,13 @@ import {
   serverAccountList,
 } from '../services/accounts';
 import { signatureList } from '../services/signatures';
+import { accountSetSyncWindow } from '../services/mail';
 
 type ConnState = { state: 'checking' | 'ok' | 'error'; msg?: string };
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+const WINDOWS = ['n50', 'n200', '3d', '7d', '30d', '3m', '6m', 'all'] as const;
 
 const inputCls =
   'w-full rounded-md bg-white/10 px-3 py-2 text-sm text-white placeholder-white/40 outline-none focus:bg-white/20';
@@ -40,6 +43,7 @@ export function AccountSetup({
   const [editing, setEditing] = useState<number | null>(null);
   const [editName, setEditName] = useState('');
   const [editSig, setEditSig] = useState<number | null>(null);
+  const [editWindow, setEditWindow] = useState('6m');
   const [editStatus, setEditStatus] = useState('');
 
   // form state
@@ -87,6 +91,7 @@ export function AccountSetup({
     setEditing(a.id);
     setEditName(a.display_name ?? '');
     setEditSig(a.signature_id ?? null);
+    setEditWindow(a.sync_window ?? '6m');
     setEditStatus('');
   };
 
@@ -97,6 +102,16 @@ export function AccountSetup({
       onChanged();
     } catch (e) {
       setEditStatus('✕ ' + String(e));
+    }
+  };
+
+  const changeWindow = async (id: number, w: string) => {
+    setEditWindow(w);
+    try {
+      await accountSetSyncWindow(id, w);
+      onChanged();
+    } catch {
+      /* noop */
     }
   };
 
@@ -272,6 +287,20 @@ export function AccountSetup({
                       {signatures.map((s) => (
                         <option key={s.id} value={s.id} className="text-black">
                           {s.name || t('signature.untitled')}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-white/55">{t('mailbox.window')}</span>
+                    <select
+                      className={inputCls}
+                      value={editWindow}
+                      onChange={(e) => changeWindow(a.id, e.target.value)}
+                    >
+                      {WINDOWS.map((w) => (
+                        <option key={w} value={w} className="text-black">
+                          {t(`mailbox.w_${w}`)}
                         </option>
                       ))}
                     </select>

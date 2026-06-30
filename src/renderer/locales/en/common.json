@@ -22,6 +22,14 @@
     "settings": "Settings"
   },
   "comingSoon": "Coming soon",
+  "filter": {
+    "unread": "Unread",
+    "star": "Starred",
+    "known": "Known sender",
+    "bookmark": "Bookmarked",
+    "attachment": "Has attachment",
+    "flag": "Follow-up"
+  },
   "greeting": {
     "morning": "Good morning",
     "afternoon": "Good afternoon",
@@ -103,6 +111,13 @@
     "addInSettings": "Add an account from Settings.",
     "dim": "Background dim",
     "window": "Import range",
+    "folderPlaceholder": "Search folders / groups…",
+    "folderGroups": "Filter groups",
+    "f_inbox": "Inbox",
+    "f_drafts": "Drafts",
+    "f_sent": "Sent",
+    "f_trash": "Trash",
+    "f_spam": "Spam",
     "w_n50": "Latest 50",
     "w_n200": "Latest 200",
     "w_3d": "3 days",

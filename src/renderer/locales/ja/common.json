@@ -22,6 +22,14 @@
     "settings": "設定"
   },
   "comingSoon": "準備中です",
+  "filter": {
+    "unread": "未読",
+    "star": "スター",
+    "known": "知り合い",
+    "bookmark": "ブックマーク",
+    "attachment": "添付あり",
+    "flag": "要再確認"
+  },
   "greeting": {
     "morning": "おはようございます",
     "afternoon": "こんにちは",
@@ -103,6 +111,13 @@
     "addInSettings": "設定からアカウントを追加してください。",
     "dim": "背景の濃さ",
     "window": "取り込み範囲",
+    "folderPlaceholder": "フォルダ・グループを検索…",
+    "folderGroups": "フィルタリンググループ",
+    "f_inbox": "受信箱",
+    "f_drafts": "下書き",
+    "f_sent": "送信済",
+    "f_trash": "ごみ箱",
+    "f_spam": "スパム",
     "w_n50": "最新50件",
     "w_n200": "最新200件",
     "w_3d": "3日",

@@ -67,7 +67,8 @@ impl Store {
     pub fn list_accounts(&self) -> rusqlite::Result<Vec<AccountSummary>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, email, display_name, imap_host, smtp_host FROM accounts ORDER BY id",
+            "SELECT id, email, display_name, imap_host, smtp_host, COALESCE(sync_window,'6m')
+             FROM accounts ORDER BY id",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(AccountSummary {
@@ -76,8 +77,19 @@ impl Store {
                 display_name: r.get(2)?,
                 imap_host: r.get(3)?,
                 smtp_host: r.get(4)?,
+                sync_window: r.get(5)?,
             })
         })?;
         rows.collect()
+    }
+
+    /// 同期範囲を変更。次回同期で新範囲を初回取得し直せるよう UID 状態もリセットする。
+    pub fn set_sync_window(&self, id: i64, window: &str) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE accounts SET sync_window=?1, uid_validity=NULL, last_uid=NULL WHERE id=?2",
+            params![window, id],
+        )?;
+        Ok(())
     }
 }

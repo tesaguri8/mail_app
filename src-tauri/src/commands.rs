@@ -96,6 +96,7 @@ pub fn account_add(
         display_name: input.display_name,
         imap_host: input.imap_host,
         smtp_host: input.smtp_host,
+        sync_window: "6m".to_string(),
     })
 }
 
@@ -131,10 +132,22 @@ pub async fn mail_sync(
     let db_path = store.path.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        imap_sync::sync_account(&db_path, account_id, &host, port, &login_user, &password, 50)
+        imap_sync::sync_account(&db_path, account_id, &host, port, &login_user, &password)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// 同期範囲（取り込み期間/件数）を設定する。値: "n50" / "3d" / "30d" / "3m" / "all" 等。
+#[tauri::command]
+pub fn account_set_sync_window(
+    store: State<Store>,
+    account_id: i64,
+    window: String,
+) -> Result<(), String> {
+    store
+        .set_sync_window(account_id, &window)
+        .map_err(|e| e.to_string())
 }
 
 /// メール一覧を返す。

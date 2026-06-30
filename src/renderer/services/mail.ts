@@ -10,3 +10,6 @@ export const mailList = (accountId: number, limit: number) =>
   invoke<MailSummary[]>('mail_list', { accountId, limit });
 
 export const mailGet = (id: number) => invoke<MailDetail>('mail_get', { id });
+
+export const accountSetSyncWindow = (accountId: number, window: string) =>
+  invoke<void>('account_set_sync_window', { accountId, window });

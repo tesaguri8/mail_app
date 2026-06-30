@@ -4,8 +4,10 @@ import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailSummary } from '@bindings/MailSummary';
 import type { MailDetail } from '@bindings/MailDetail';
 import { accountList } from '../services/accounts';
-import { mailGet, mailList, mailSync } from '../services/mail';
+import { accountSetSyncWindow, mailGet, mailList, mailSync } from '../services/mail';
 import { MailView } from './MailView';
+
+const WINDOWS = ['n50', 'n200', '3d', '7d', '30d', '3m', '6m', 'all'] as const;
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 const btnCls = 'rounded-md bg-white/15 px-3 py-1.5 text-sm hover:bg-white/25 disabled:opacity-40';
@@ -56,6 +58,20 @@ export function MailList() {
     }
   };
 
+  const current = accounts.find((a) => a.id === selected);
+
+  const onChangeWindow = async (w: string) => {
+    if (selected == null) return;
+    setAccounts((prev) =>
+      prev.map((a) => (a.id === selected ? { ...a, sync_window: w } : a))
+    );
+    try {
+      await accountSetSyncWindow(selected, w);
+    } catch {
+      /* noop */
+    }
+  };
+
   const openMail = async (id: number) => {
     try {
       const d = await mailGet(id);
@@ -80,6 +96,18 @@ export function MailList() {
           {accounts.map((a) => (
             <option key={a.id} value={a.id} className="text-black">
               {a.email}
+            </option>
+          ))}
+        </select>
+        <select
+          className="rounded-md bg-white/10 px-2 py-1 text-xs outline-none"
+          title={t('mailbox.window')}
+          value={current?.sync_window ?? '6m'}
+          onChange={(e) => onChangeWindow(e.target.value)}
+        >
+          {WINDOWS.map((w) => (
+            <option key={w} value={w} className="text-black">
+              {t(`mailbox.w_${w}`)}
             </option>
           ))}
         </select>

@@ -58,5 +58,8 @@ mail-parser = "0.9"
 # DNS（MX 解決でプロバイダ自動判定。docs/ONBOARDING.md）
 hickory-resolver = "0.24"
 
+# 日時（同期ウィンドウの SINCE 日付計算）
+chrono = { version = "0.4", features = ["clock"] }
+
 [dev-dependencies]
 tempfile = "3"

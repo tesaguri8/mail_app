@@ -3,4 +3,4 @@
 /**
  * アカウント一覧表示用（資格情報は含めない）。
  */
-export type AccountSummary = { id: number, email: string, display_name: string | null, imap_host: string, smtp_host: string, };
+export type AccountSummary = { id: number, email: string, display_name: string | null, imap_host: string, smtp_host: string, sync_window: string, };

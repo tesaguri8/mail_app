@@ -58,6 +58,7 @@ pub struct AccountSummary {
     pub display_name: Option<String>,
     pub imap_host: String,
     pub smtp_host: String,
+    pub sync_window: String,
 }
 
 /// メールサーバーアカウント設定（接続＋ログイン）。再利用・紐づけ用。

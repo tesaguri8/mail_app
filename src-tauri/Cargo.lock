@@ -660,6 +660,7 @@ dependencies = [
 name = "comfort-mail"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "hickory-resolver",
  "imap",
  "keyring",

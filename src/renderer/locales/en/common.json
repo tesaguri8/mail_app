@@ -54,6 +54,15 @@
     "showQuotes": "Show quotes",
     "hideQuotes": "Hide quotes",
     "close": "Close",
-    "noBody": "No body"
+    "noBody": "No body",
+    "window": "Import range",
+    "w_n50": "Latest 50",
+    "w_n200": "Latest 200",
+    "w_3d": "3 days",
+    "w_7d": "7 days",
+    "w_30d": "30 days",
+    "w_3m": "3 months",
+    "w_6m": "6 months",
+    "w_all": "All"
   }
 }

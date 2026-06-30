@@ -28,9 +28,27 @@ pub fn db_info(store: State<Store>) -> Result<DbInfo, String> {
 }
 
 /// メールアドレスから接続設定を自動判定（docs/ONBOARDING.md）。
+/// 内蔵テーブル/さくらで決まらなければ MX レコードからメールサーバーを判定。
 #[tauri::command]
-pub fn account_autoconfig(email: String) -> AutoconfigResult {
-    autoconfig::resolve(&email)
+pub async fn account_autoconfig(email: String) -> AutoconfigResult {
+    let mut r = autoconfig::resolve(&email);
+    if r.source == "guess" {
+        let domain = email.rsplit('@').next().unwrap_or("").to_lowercase();
+        if let Some(mx) = autoconfig::mx_host(&domain).await {
+            r.imap_host = mx.clone();
+            r.smtp_host = mx;
+            r.imap_port = 993;
+            r.imap_security = "ssl".to_string();
+            r.smtp_port = 587;
+            r.smtp_security = "starttls".to_string();
+            r.source = "mx".to_string();
+            r.note = Some(
+                "MX レコードからメールサーバーを判定しました。ユーザー名はメールアドレス全体の場合があります。"
+                    .to_string(),
+            );
+        }
+    }
+    r
 }
 
 /// アカウントを追加。資格情報は keyring（OS 金庫）へ、設定は DB へ保存。

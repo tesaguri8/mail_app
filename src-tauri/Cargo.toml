@@ -55,5 +55,8 @@ native-tls = "0.2"
 # MIME 解析（堅牢・純Rust）。docs/THREADING.md
 mail-parser = "0.9"
 
+# DNS（MX 解決でプロバイダ自動判定。docs/ONBOARDING.md）
+hickory-resolver = "0.24"
+
 [dev-dependencies]
 tempfile = "3"

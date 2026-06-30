@@ -95,6 +95,24 @@ pub fn resolve(email: &str) -> AutoconfigResult {
     }
 }
 
+/// ドメインの MX レコードから最優先のメールサーバーを取得する（独自ドメイン向け）。
+/// 失敗時は None（呼び出し側で推測値にフォールバック）。
+pub async fn mx_host(domain: &str) -> Option<String> {
+    use hickory_resolver::TokioAsyncResolver;
+    let resolver = TokioAsyncResolver::tokio_from_system_conf().ok()?;
+    let lookup = resolver.mx_lookup(domain.to_string()).await.ok()?;
+    let mut best: Option<(u16, String)> = None;
+    for rec in lookup.iter() {
+        let host = rec.exchange().to_utf8();
+        let host = host.trim_end_matches('.').to_string();
+        let pref = rec.preference();
+        if best.as_ref().map_or(true, |(p, _)| pref < *p) {
+            best = Some((pref, host));
+        }
+    }
+    best.map(|(_, h)| h).filter(|h| !h.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

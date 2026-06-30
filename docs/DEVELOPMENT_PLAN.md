@@ -1,8 +1,8 @@
-# 開発計画 — SNGDesign メールアプリ
+# 開発計画 — Comfort Mail（仮称）
 
 **ステータス:** 計画策定中（実装未着手 / コード 0 行）
 **作成日:** 2026-06-30
-**対象:** SNGDesign メールアプリ（mail_app）
+**対象:** Comfort Mail（仮称・リポジトリ: mail_app）
 
 ---
 
@@ -157,7 +157,7 @@ mail_app/
 - TailwindCSS 4 / PostCSS、ESLint / Prettier / Husky / lint-staged / markdownlint-cli2 を Primadoc から流用。
 - i18next + react-i18next（ja/en）セットアップ。
 - ts-rs 配線（Rust→`src/bindings/`）。
-- `tauri.conf.json` 整備（productName, CSP, updater）。**identifier 規則 `tesaguri.<app_name>.app`、暫定値 `tesaguri.mail_app.dev`**（名称確定時に置換。データ保存パスもこの identifier ベース → [DATA_STORAGE.md](DATA_STORAGE.md)）。モバイル（Expo）の bundle id / package も同規則。
+- `tauri.conf.json` 整備（**productName: `Comfort Mail`（仮称）**, CSP, updater）。**identifier 規則 `tesaguri.<app_name>.app`、暫定値 `tesaguri.comfortmail.dev`**（正式確定時に置換。データ保存パスもこの identifier ベース → [DATA_STORAGE.md](DATA_STORAGE.md)）。モバイル（Expo）の bundle id / package も同値。
 - **フレームレスウィンドウ**（`decorations: false`）+ 自作タイトルバー（`data-tauri-drag-region`）。全面ビジュアル/ウィジェット化の土台（[UI_UX_DESIGN.md](UI_UX_DESIGN.md) §1.5）。
 - ローカル画像表示のため **asset プロトコル**有効化＋**CSP `img-src`** 許可（背景画像用）。
 

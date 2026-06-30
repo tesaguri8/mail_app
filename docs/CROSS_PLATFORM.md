@@ -48,7 +48,7 @@
 
 > デスクトップ（Tauri）とモバイル（Expo）は**別アプリ**。UI 層は React と React Native で別だが、**ロジック・型・i18n は共有**する（次節）。
 
-> **識別子（identifier）**: 規則 `tesaguri.<app_name>.app`（暫定 `tesaguri.mail_app.dev`）。Expo の `ios.bundleIdentifier` / `android.package` も同値に揃える（[DATA_STORAGE.md](DATA_STORAGE.md)）。
+> **識別子（identifier）**: 規則 `tesaguri.<app_name>.app`（暫定 `tesaguri.comfortmail.dev`）。Expo の `ios.bundleIdentifier` / `android.package` も同値に揃える（[DATA_STORAGE.md](DATA_STORAGE.md)）。
 
 ---
 

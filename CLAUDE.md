@@ -1,8 +1,8 @@
-# SNGDesign メールアプリ開発プロジェクト
+# Comfort Mail（仮称）開発プロジェクト
 
 ## プロジェクト概要
 
-このプロジェクトは、既存のメールクライアントにない、モダンで直感的なユーザー体験を提供するデスクトップメールアプリケーションです。チャット形式の会話ビュー、高速検索、スマートな振り分け機能を特徴とします。さらに**住所録・カレンダー**、および**SNS（LINE・Instagram・Messenger・WhatsApp）の DM・コメント**を統合し、すべてを 1 つのチャット形式インボックスに束ねる**メッセージハブ**を目指します（特に宿泊施設などでの問い合わせ取りこぼし防止）。
+**Comfort Mail（仮称）** は、既存のメールクライアントにない、モダンで直感的なユーザー体験を提供するデスクトップメールアプリケーションです（「気持ちよく使えるメール」がコンセプト）。チャット形式の会話ビュー、高速検索、スマートな振り分け機能を特徴とします。さらに**住所録・カレンダー**、および**SNS（LINE・Instagram・Messenger・WhatsApp）の DM・コメント**を統合し、すべてを 1 つのチャット形式インボックスに束ねる**メッセージハブ**を目指します（特に宿泊施設などでの問い合わせ取りこぼし防止）。
 
 ホームはウィンドウ全面を美しい画像が覆うフレームレスのパネルで、普段は小さくして**時計・日付ウィジェット**のようにデスクトップへ常駐できます。UI 方針の詳細は [docs/UI_UX_DESIGN.md](docs/UI_UX_DESIGN.md) を参照。
 
@@ -77,22 +77,22 @@ mail_app/
 ## データ保存場所
 
 アプリ識別子（identifier）規則: **`tesaguri.<app_name>.app`**（Tesaguri アプリ共通）。
-**暫定値: `tesaguri.mail_app.dev`**（製品名未確定のため `.dev`。確定時に `tesaguri.<確定名>.app` へ）。
+**暫定値: `tesaguri.comfortmail.dev`**（仮称 **Comfort Mail**、`.dev` は暫定。正式確定時に `tesaguri.<確定名>.app` へ）。
 データディレクトリはこの identifier をフォルダ名として各 OS 標準場所に配置（詳細: [docs/DATA_STORAGE.md](docs/DATA_STORAGE.md)）。
 
 ### Windows
 ```
-C:\Users\{username}\AppData\Roaming\tesaguri.mail_app.dev\
+C:\Users\{username}\AppData\Roaming\tesaguri.comfortmail.dev\
 ```
 
 ### macOS
 ```
-~/Library/Application Support/tesaguri.mail_app.dev/
+~/Library/Application Support/tesaguri.comfortmail.dev/
 ```
 
 ### Linux
 ```
-~/.local/share/tesaguri.mail_app.dev/
+~/.local/share/tesaguri.comfortmail.dev/
 ```
 
 ## 開発コマンド

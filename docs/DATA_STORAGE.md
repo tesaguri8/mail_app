@@ -7,7 +7,8 @@
 
 ## 1. 基本方針
 - **アプリ識別子（identifier）規則: `tesaguri.<app_name>.app`**（Tesaguri アプリ共通。Primadoc = `tesaguri.primadoc.app`）。
-  - **暫定値: `tesaguri.mail_app.dev`**（製品名未確定のため `.dev` を使用）。名称確定時に `tesaguri.<確定名>.app` へ変更する。
+  - **暫定値: `tesaguri.comfortmail.dev`**（製品名は仮称 **Comfort Mail**、`.dev` は開発/暫定の意）。正式確定時に `tesaguri.<確定名>.app` へ変更する。
+  - slug は両プラットフォーム対応のため**連結 `comfortmail`**（Apple bundle id は下線不可、Android package はハイフン不可のため、区切りなしが安全）。
 - データディレクトリは **この identifier をそのままフォルダ名**として、各 OS の標準場所に配置（Tauri / Primadoc と同方式）。
 - プラットフォーム固有の標準的な場所を使用。
 - セキュリティとプライバシーを考慮した保存戦略。
@@ -16,11 +17,11 @@
 
 ## 2. プラットフォーム別データ保存場所
 
-> 以下のパス中 `tesaguri.mail_app.dev` は暫定 identifier。名称確定時に置換する。
+> 以下のパス中 `tesaguri.comfortmail.dev` は暫定 identifier。名称確定時に置換する。
 
 ### Windows
 ```
-C:\Users\{username}\AppData\Roaming\tesaguri.mail_app.dev\
+C:\Users\{username}\AppData\Roaming\tesaguri.comfortmail.dev\
 ├── data\
 │   ├── mail.db                # SQLite（SQLCipher 暗号化）
 │   ├── emails\                # メール本文ファイル（年月別: 2024\01\ ...）
@@ -37,7 +38,7 @@ C:\Users\{username}\AppData\Roaming\tesaguri.mail_app.dev\
 
 ### macOS
 ```
-~/Library/Application Support/tesaguri.mail_app.dev/
+~/Library/Application Support/tesaguri.comfortmail.dev/
 ├── data/ (mail.db, emails/, attachments/, search/)
 ├── media/backgrounds/
 ├── config/
@@ -49,8 +50,8 @@ C:\Users\{username}\AppData\Roaming\tesaguri.mail_app.dev\
 
 ### Linux
 ```
-~/.local/share/tesaguri.mail_app.dev/     # data/, media/, cache/, logs/
-~/.config/tesaguri.mail_app.dev/          # settings.json 等
+~/.local/share/tesaguri.comfortmail.dev/     # data/, media/, cache/, logs/
+~/.config/tesaguri.comfortmail.dev/          # settings.json 等
 機密情報: Secret Service（keyring クレート経由）
 ```
 
@@ -60,7 +61,7 @@ C:\Users\{username}\AppData\Roaming\tesaguri.mail_app.dev\
 
 ## 3. 実装例（Tauri / Rust）
 
-パスは Tauri の `path` API または `dirs` クレートで解決し、identifier（`tesaguri.mail_app.dev`）を付与する。
+パスは Tauri の `path` API または `dirs` クレートで解決し、identifier（`tesaguri.comfortmail.dev`）を付与する。
 資格情報は平文ファイルに置かず、必ず `keyring` を使う。
 
 ```rust
@@ -82,13 +83,13 @@ pub struct StoragePaths {
 
 impl StoragePaths {
     /// 各 OS の標準ベースディレクトリ配下に identifier フォルダを構築。
-    /// identifier 規則: tesaguri.<app_name>.app（暫定: tesaguri.mail_app.dev）
+    /// identifier 規則: tesaguri.<app_name>.app（暫定: tesaguri.comfortmail.dev）
     pub fn resolve() -> Self {
-        // Win:   %APPDATA%\tesaguri.mail_app.dev
-        // mac:   ~/Library/Application Support/tesaguri.mail_app.dev
-        // Linux: ~/.local/share/tesaguri.mail_app.dev
+        // Win:   %APPDATA%\tesaguri.comfortmail.dev
+        // mac:   ~/Library/Application Support/tesaguri.comfortmail.dev
+        // Linux: ~/.local/share/tesaguri.comfortmail.dev
         // ※ Tauri 利用時は app_handle.path().app_data_dir()（identifier ベース）でも可
-        const APP_ID: &str = "tesaguri.mail_app.dev";
+        const APP_ID: &str = "tesaguri.comfortmail.dev";
         let base = dirs::data_dir().expect("data_dir");
         let app = base.join(APP_ID);
         let data = app.join("data");
@@ -118,7 +119,7 @@ impl StoragePaths {
 }
 ```
 
-> Tauri 側で `app_handle.path().app_data_dir()` を使えば identifier ベースのパスが得られる。明示制御したい場合は上記のように `APP_ID` から組み立てる。どちらも結果は `…/tesaguri.mail_app.dev/` に一致させる。
+> Tauri 側で `app_handle.path().app_data_dir()` を使えば identifier ベースのパスが得られる。明示制御したい場合は上記のように `APP_ID` から組み立てる。どちらも結果は `…/tesaguri.comfortmail.dev/` に一致させる。
 > カスタム保存先（ユーザー指定ドライブ等）は設定で受け取り、バリデーション後に上書きする。
 
 ---

@@ -49,6 +49,10 @@ CREATE TABLE emails (
     is_bookmarked BOOLEAN DEFAULT FALSE,  -- ブックマーク
     needs_review BOOLEAN DEFAULT FALSE,   -- 要再確認（フォローアップ）
     follow_up_at TIMESTAMP,               -- 要再確認の期限（任意）
+    snooze_until TIMESTAMP,               -- スヌーズ（docs/COMPOSE.md）
+    -- 迷惑メール（docs/SPAM.md）
+    spam_score REAL,                      -- 0–1
+    is_junk BOOLEAN DEFAULT FALSE,        -- 迷惑として隔離
     folder_id INTEGER,
     raw_headers TEXT,
     body_plain TEXT,
@@ -158,6 +162,7 @@ CREATE TABLE contacts (
     avatar_path TEXT,
     is_favorite BOOLEAN DEFAULT FALSE,
     is_business BOOLEAN DEFAULT FALSE,  -- 取引先（取引実績の手動フラグ。docs/FILTERING.md）
+    allow_remote_images BOOLEAN DEFAULT FALSE,  -- 外部画像許可（docs/MAIL_SECURITY.md）
     source TEXT DEFAULT 'local',    -- 'local' | 'google' | 'icloud' | ...
     external_id TEXT,               -- 連携元のID（マージ・同期用）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -279,6 +284,33 @@ CREATE TABLE background_images (
     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 署名（docs/COMPOSE.md）
+CREATE TABLE signatures (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER,
+    name TEXT,
+    body_text TEXT,
+    body_html TEXT,
+    is_default BOOLEAN DEFAULT FALSE,
+    FOREIGN KEY (account_id) REFERENCES accounts(id)
+);
+
+-- テンプレート（定型文。docs/COMPOSE.md）
+CREATE TABLE templates (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    subject TEXT,
+    body TEXT,            -- Markdown
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 迷惑メールのローカル学習（docs/SPAM.md）。モデルファイルでも可。
+CREATE TABLE spam_tokens (
+    token TEXT PRIMARY KEY,
+    spam_count INTEGER DEFAULT 0,
+    ham_count INTEGER DEFAULT 0
+);
+
 -- 保存フィルタ（スマートフォルダ。docs/FILTERING.md）
 -- 条件は可変構造のため JSON で保持（ファセットの AND/OR 組み合わせ）。
 CREATE TABLE saved_filters (
@@ -356,6 +388,8 @@ CREATE INDEX idx_emails_list_id        ON emails(list_id);
 -- フィルタリング（docs/FILTERING.md）
 CREATE INDEX idx_emails_bookmarked  ON emails(is_bookmarked) WHERE is_bookmarked = TRUE;
 CREATE INDEX idx_emails_review      ON emails(needs_review, follow_up_at) WHERE needs_review = TRUE;
+CREATE INDEX idx_emails_snooze      ON emails(snooze_until) WHERE snooze_until IS NOT NULL;
+CREATE INDEX idx_emails_junk        ON emails(is_junk) WHERE is_junk = TRUE;
 CREATE INDEX idx_contacts_business  ON contacts(is_business) WHERE is_business = TRUE;
 CREATE INDEX idx_quotes_email          ON message_quotes(email_id);
 CREATE INDEX idx_quotes_match          ON message_quotes(quoted_from, quoted_at);

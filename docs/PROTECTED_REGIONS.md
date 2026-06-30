@@ -176,6 +176,8 @@ X-Protected-Regions: v=1; regions=privacy_address;
 
 > ねらい: 勝つための独自仕様ではなく、**広めるための提案**。シンプルさと段階的劣化が普及の鍵。
 
+> **公開の切り分け**: 相互運用に必要な部分だけを**ベンダー中立の公開仕様** [`spec/protected-regions-v1.md`](../spec/protected-regions-v1.md) に切り出す。アプリ本体コードは非公開、この仕様だけ公開（[POSITIONING.md](POSITIONING.md) ライセンス・公開方針）。本書（`docs/`）はアプリ内部設計、`spec/` は公開面。
+
 ---
 
 ## 10.5 配送性・互換性・セキュリティ装置との関係（重要）

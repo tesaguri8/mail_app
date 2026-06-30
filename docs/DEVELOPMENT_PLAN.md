@@ -77,6 +77,8 @@ Primadoc はドキュメントエディタであり、**IMAP/SMTP・大量メー
 - **保護領域（プライバシー伏字）**: 機密は伏字＋暗証PDF（どのクライアントでも開ける）で送り、AI には伏字で渡す。**オープンな提案型**（詳細: [PROTECTED_REGIONS.md](PROTECTED_REGIONS.md)）。
 - **保存はリレーショナル＋FTS5。JSON は保存形式に使わない**（AI/IPC のシリアライズ・AI 注釈・エクスポートに限定）。
 - **保存場所**: メール本体はアプリ専用（`tesaguri.comfortmail.dev`）／AI のアカウント・トークンは **TSG One 共有**（秘密は keyring 共通サービス名）。大容量データは**別ドライブ等へ再配置できる二層構成**（設定層は固定、データルートは可変）。詳細: [DATA_STORAGE.md](DATA_STORAGE.md) §0・§1.5。
+- **プライバシー安全機能**: リモート画像/トラッキングを**既定ブロック**、なりすまし/危険警告UI（[MAIL_SECURITY.md](MAIL_SECURITY.md)）。迷惑メールは**ローカル学習＋TSG One 共有シグナル**（本文は送らない・オプトイン、[SPAM.md](SPAM.md)）。
+- **公開方針**: アプリ本体コードは**非公開（フリーウェア）**、保護領域の**相互運用仕様だけを公開**（`spec/` に切り出し）。**テレメトリは最小・透明・オプトイン**（コンテンツは送らない）。詳細: [POSITIONING.md](POSITIONING.md)。
 - **アプリ識別情報は単一ソース**: 製品名・identifier 等を `config/app-identity.json` に集約し、各設定へ生成/実行時参照で配る（**ハードコード排除**。いつでも改名可能）。詳細: [APP_IDENTITY.md](APP_IDENTITY.md)。
 - **クロスプラットフォーム**: デスクトップ = Tauri 2（Rust コア）／モバイル = **Expo / React Native**（Primadoc 流）。**メールは各端末が IMAP で独立同期**（共有バックエンドなし）。引用解析・スレッド再構築アルゴリズムは **TS の `packages/mail-core` に共有**して二重実装を避ける（詳細: [CROSS_PLATFORM.md](CROSS_PLATFORM.md)）。モバイルはコア安定後の別トラック。
 - **スコープにメール＋住所録＋カレンダーを含む**（Phase 8 / 9）。
@@ -113,7 +115,7 @@ mail_app/
 │   │   │                       #   tag, attachment, sync, contact, event, settings, window
 │   │   ├── services/           # imap/, smtp/, parser/（引用・署名分離）, threading/（論理スレッド再構築）,
 │   │   │                       #   store/, search/, contacts/, calendar/（ics 含む）, ai/（cloud+ollama）,
-│   │   │                       #   crypto.rs, account.rs, sync/
+│   │   │                       #   security/（リモート画像/認証）, spam/, import/, crypto.rs, account.rs, sync/
 │   │   ├── error.rs
 │   │   ├── ids.rs
 │   │   ├── lib.rs
@@ -131,6 +133,8 @@ mail_app/
 │   ├── types/                  # 境界型（ts-rs 生成と整合）
 │   ├── i18n/                   # 翻訳リソース
 │   └── utils/                  # 共通関数
+├── spec/                       # 公開仕様（ベンダー中立。コードは非公開、仕様のみ公開）
+│   └── protected-regions-v1.md
 ├── config/
 │   └── app-identity.json       # 製品名・identifier の単一ソース（docs/APP_IDENTITY.md）
 ├── scripts/
@@ -177,10 +181,11 @@ mail_app/
 - スキーマ設計：accounts / emails / threads / tags / email_tags / attachments / email_fts（詳細は [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)）。
 - 境界型（Message, Thread, Account 等）を ts-rs で生成。
 
-### Phase 3 — アカウント・認証
+### Phase 3 — アカウント・認証・オンボーディング・移行
 - `services/account.rs` + `keyring`：資格情報を OS 金庫に保存。
-- **普通のメールクライアントと同じ手動設定**（IMAP/SMTP のホスト/ポート/ユーザー/パスワード・アプリパスワード）。主要プロバイダは設定自動判定。**OAuth は不要**（基本メール）。
-- OAuth は AI・TSG One アカウント連携で使用（プロバイダがアプリパスワード/OAuth を要求するケースは後続対応）。
+- **普通のメールクライアントと同じ手動設定**（IMAP/SMTP のホスト/ポート/ユーザー/パスワード・アプリパスワード）。**OAuth は不要**（基本メール）。OAuth は AI・TSG One 連携のみ。
+- **オンボーディング＋プロバイダ自動設定**（autoconfig/autodiscover、[ONBOARDING.md](ONBOARDING.md)）。
+- **インポート/エクスポート**（.eml/.mbox/Thunderbird/Outlook、[IMPORT_EXPORT.md](IMPORT_EXPORT.md)）。
 
 ### Phase 4 — メール同期・受信＋スレッド解析基盤
 - `services/imap/`（`async-imap`）＋ `services/parser/`（`mail-parser`）。
@@ -193,10 +198,12 @@ mail_app/
 - **背景画像管理**: アプリ同梱＋ユーザー取り込み（インポート・サムネ生成・`media/backgrounds/` 保存）、自動ローテーション（時間帯／日替わり）。
 - **ウィジェット（コンパクト）モード**: リサイズ連動で時計・日付ウィジェット化。always-on-top トグル。
 - チャット形式の会話ビュー（`clean_body` 表示・引用折りたたみ・論理スレッド単位）/ 従来スレッドビュー、メールリスト（仮想スクロール）。
+- **リモート画像/トラッキングの既定ブロック＋なりすまし/危険警告UI**（[MAIL_SECURITY.md](MAIL_SECURITY.md)）。
 - Zustand ストア + `services/` invoke ラッパー。
 
 ### Phase 6 — 送信＋作成支援
 - `services/smtp/`（`lettre`）＋作成画面（宛先/件名/本文/添付、下書き、返信引用）。
+- **作成実務**（[COMPOSE.md](COMPOSE.md)）: 下書き自動保存・送信取消・予約送信・署名・テンプレート・スヌーズ・Markdown→HTML 送信。
 - **作成モード**: 返信 / **このアドレスへ新規メール**（参照ヘッダなし・新論理スレッド）。
 - **AI 作成支援（オプトイン）**: `services/ai/`（cloud + Ollama）。件名生成・本文ドラフト/リライト。要約・返信提案・分類は Phase 7 で拡張（[AI_FEATURES.md](AI_FEATURES.md)）。
 - **保護領域（プライバシー伏字）**: まず **Lv1 MVP**（ヘッダ方式＋アプリ共有鍵＋`aes-gcm`、鍵交換・PDF 不要）で参照実装を成立 → Lv2（本人鍵・自動鍵交換）で強化、PDF フォールバックは後続。作成時の伏字化、受信時の復号インライン表示、AI 連携前の伏字置換（[PROTECTED_REGIONS.md](PROTECTED_REGIONS.md) §3.5）。
@@ -205,6 +212,7 @@ mail_app/
 - FTS5 検索 UI（件名/`clean_body`/差出人/添付名）、ファセット、検索履歴。
 - **フィルタリング**（[FILTERING.md](FILTERING.md)）: 状態フラグ（ブックマーク/要再確認）、相手（知り合い/取引実績/グループ）、カテゴリ、保存フィルタ（スマートフォルダ）。
 - 手動/自動タグ、振り分けルールエンジン（`List-Id` 等のヘッダ活用）。
+- **迷惑メール**（[SPAM.md](SPAM.md)）: ローカル学習＋（オプトイン）TSG One 共有シグナル。隔離・誤検知復帰。
 - **スレッド整理 UI**: 自動分割の精緻化、手動の分割/結合/**再件名**、論理スレッドのラベル付け（[THREADING.md](THREADING.md)）。
 - **AI 拡張**: スレッド要約・返信候補提案・自動分類/タグ提案（[AI_FEATURES.md](AI_FEATURES.md)）。`ai_annotations` への保存。
 
@@ -258,6 +266,12 @@ mail_app/
 - [THREADING.md](THREADING.md) — スレッド再構築エンジン（引用解析・論理スレッド・ヘッダ活用）
 - [FILTERING.md](FILTERING.md) — フィルタリング（状態フラグ・相手・グループ・カテゴリ・保存フィルタ）
 - [SYNC.md](SYNC.md) — 同期範囲・保持期間（取得期間をユーザー選択、本文/添付の遅延取得）
+- [MAIL_SECURITY.md](MAIL_SECURITY.md) — リモート画像ブロック・なりすまし/危険警告
+- [SPAM.md](SPAM.md) — 迷惑メール（ローカル学習＋TSG One 共有シグナル）
+- [ONBOARDING.md](ONBOARDING.md) — 初回設定・プロバイダ自動設定
+- [IMPORT_EXPORT.md](IMPORT_EXPORT.md) — 移行・インポート/エクスポート
+- [COMPOSE.md](COMPOSE.md) — 作成・送信の実務（下書き/送信取消/予約/署名/定型文/スヌーズ/Markdown）
+- 公開仕様: [spec/](../spec/README.md)（保護領域の相互運用仕様。コードは非公開、仕様のみ公開）
 - [AI_FEATURES.md](AI_FEATURES.md) — AI 活用（件名/本文生成・要約・返信提案・分類、プライバシー方針）
 - [PROTECTED_REGIONS.md](PROTECTED_REGIONS.md) — 保護領域（プライバシー伏字・暗証PDF・AIには伏字・オープン提案）
 - [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) — SQLite スキーマ

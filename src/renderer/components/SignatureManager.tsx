@@ -91,13 +91,8 @@ export function SignatureManager() {
                   onClick={() => toggle(s)}
                   className="flex min-w-0 flex-1 items-center gap-2 text-left"
                 >
-                  <span className="min-w-0">
-                    <span className="block truncate font-medium">
-                      {s.name || t('signature.untitled')}
-                    </span>
-                    <span className="block truncate text-xs text-white/50">
-                      {s.body.split('\n')[0] || '—'}
-                    </span>
+                  <span className="min-w-0 truncate font-medium">
+                    {s.name || t('signature.untitled')}
                   </span>
                   <ChevronDown
                     size={16}

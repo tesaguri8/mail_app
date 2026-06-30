@@ -3,4 +3,8 @@
 /**
  * アカウント一覧表示用（資格情報は含めない）。
  */
-export type AccountSummary = { id: number, email: string, display_name: string | null, imap_host: string, smtp_host: string, sync_window: string, unread_count: number, total_count: number, };
+export type AccountSummary = { id: number, email: string, display_name: string | null, imap_host: string, smtp_host: string, sync_window: string, 
+/**
+ * 既定署名の ID（未設定なら None）。
+ */
+signature_id: number | null, unread_count: number, total_count: number, };

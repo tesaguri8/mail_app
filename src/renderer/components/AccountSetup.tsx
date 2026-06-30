@@ -1,16 +1,19 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Minus, Plus } from 'lucide-react';
+import { ChevronDown, Minus, Plus } from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { ServerAccountSummary } from '@bindings/ServerAccountSummary';
+import type { SignatureSummary } from '@bindings/SignatureSummary';
 import {
   accountAdd,
   accountAutoconfig,
   accountCheck,
   accountDelete,
   accountTestLogin,
+  accountUpdate,
   serverAccountList,
 } from '../services/accounts';
+import { signatureList } from '../services/signatures';
 
 type ConnState = { state: 'checking' | 'ok' | 'error'; msg?: string };
 
@@ -31,6 +34,13 @@ export function AccountSetup({
   const [servers, setServers] = useState<ServerAccountSummary[]>([]);
   const [conn, setConn] = useState<Record<number, ConnState>>({});
   const [adding, setAdding] = useState(false);
+
+  // 既存アカウントのインライン編集（差出人名・既定署名）
+  const [signatures, setSignatures] = useState<SignatureSummary[]>([]);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editSig, setEditSig] = useState<number | null>(null);
+  const [editStatus, setEditStatus] = useState('');
 
   // form state
   const [email, setEmail] = useState('');
@@ -60,6 +70,35 @@ export function AccountSetup({
       .catch(() => undefined);
   };
   useEffect(loadServers, []);
+
+  // 署名一覧（編集ドロップダウン用）
+  useEffect(() => {
+    if (!isTauri) return;
+    signatureList()
+      .then(setSignatures)
+      .catch(() => undefined);
+  }, []);
+
+  const toggleEdit = (a: AccountSummary) => {
+    if (editing === a.id) {
+      setEditing(null);
+      return;
+    }
+    setEditing(a.id);
+    setEditName(a.display_name ?? '');
+    setEditSig(a.signature_id ?? null);
+    setEditStatus('');
+  };
+
+  const saveEdit = async (id: number) => {
+    try {
+      await accountUpdate(id, editName.trim() || null, editSig);
+      setEditStatus('✓ ' + t('account.saved'));
+      onChanged();
+    } catch (e) {
+      setEditStatus('✕ ' + String(e));
+    }
+  };
 
   // アカウントが変わるたびに各接続状態をチェック
   useEffect(() => {
@@ -158,37 +197,93 @@ export function AccountSetup({
       {!adding && accounts.length > 0 && (
         <ul className="space-y-2">
           {accounts.map((a) => (
-            <li
-              key={a.id}
-              className="flex items-center justify-between gap-2 rounded-md bg-white/10 px-3 py-2 text-sm"
-            >
-              <div className="flex min-w-0 items-center gap-2">
+            <li key={a.id} className="overflow-hidden rounded-md bg-white/10 text-sm">
+              <div className="flex items-center justify-between gap-2 px-3 py-2">
                 <button
-                  onClick={() => checkConn(a.id)}
-                  title={conn[a.id]?.msg ?? conn[a.id]?.state ?? ''}
-                  className={`h-2.5 w-2.5 shrink-0 rounded-full ${
-                    conn[a.id]?.state === 'ok'
-                      ? 'bg-emerald-400'
-                      : conn[a.id]?.state === 'error'
-                        ? 'bg-red-400'
-                        : 'animate-pulse bg-amber-300'
-                  }`}
-                />
-                <div className="min-w-0">
-                  <div className="truncate font-medium">{a.email}</div>
-                  <div className="truncate text-xs text-white/50">
-                    IMAP {a.imap_host} · SMTP {a.smtp_host}
+                  onClick={() => toggleEdit(a)}
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                >
+                  <span
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      checkConn(a.id);
+                    }}
+                    title={conn[a.id]?.msg ?? conn[a.id]?.state ?? ''}
+                    className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+                      conn[a.id]?.state === 'ok'
+                        ? 'bg-emerald-400'
+                        : conn[a.id]?.state === 'error'
+                          ? 'bg-red-400'
+                          : 'animate-pulse bg-amber-300'
+                    }`}
+                  />
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium">
+                      {a.display_name ? `${a.display_name} <${a.email}>` : a.email}
+                    </span>
+                    <span className="block truncate text-xs text-white/50">
+                      IMAP {a.imap_host} · SMTP {a.smtp_host}
+                    </span>
+                  </span>
+                  <ChevronDown
+                    size={16}
+                    className={`ml-auto shrink-0 text-white/40 transition-transform ${
+                      editing === a.id ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+                <button
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/60 hover:border-red-400/60 hover:bg-red-500/30 hover:text-white"
+                  title={t('account.delete')}
+                  aria-label={t('account.delete')}
+                  onClick={() => onDelete(a.id)}
+                >
+                  <Minus size={18} />
+                </button>
+              </div>
+
+              {editing === a.id && (
+                <div className="space-y-3 border-t border-white/10 bg-black/15 px-3 py-3">
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-white/55">
+                      {t('account.displayName')}
+                    </span>
+                    <input
+                      className={inputCls}
+                      placeholder={t('account.displayNamePlaceholder')}
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-white/55">
+                      {t('account.signature')}
+                    </span>
+                    <select
+                      className={inputCls}
+                      value={editSig ?? ''}
+                      onChange={(e) =>
+                        setEditSig(e.target.value === '' ? null : Number(e.target.value))
+                      }
+                    >
+                      <option value="" className="text-black">
+                        {t('account.signatureNone')}
+                      </option>
+                      {signatures.map((s) => (
+                        <option key={s.id} value={s.id} className="text-black">
+                          {s.name || t('signature.untitled')}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="flex items-center gap-3">
+                    <button className={btnCls} onClick={() => saveEdit(a.id)}>
+                      {t('account.save')}
+                    </button>
+                    {editStatus && <span className="text-xs text-white/70">{editStatus}</span>}
                   </div>
                 </div>
-              </div>
-              <button
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/60 hover:border-red-400/60 hover:bg-red-500/30 hover:text-white"
-                title={t('account.delete')}
-                aria-label={t('account.delete')}
-                onClick={() => onDelete(a.id)}
-              >
-                <Minus size={18} />
-              </button>
+              )}
             </li>
           ))}
         </ul>

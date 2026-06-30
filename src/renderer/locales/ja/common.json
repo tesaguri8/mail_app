@@ -31,6 +31,7 @@
   "settings": {
     "title": "設定",
     "accounts": "アカウント",
+    "signatures": "署名",
     "display": "表示",
     "about": "このアプリ"
   },
@@ -61,7 +62,25 @@
     "serverAccount": "メールサーバーアカウント設定",
     "useExistingServer": "既存のサーバー設定を使う…",
     "newServer": "新しいサーバー設定",
-    "delete": "削除"
+    "delete": "削除",
+    "displayName": "差出人名",
+    "displayNamePlaceholder": "例: 末松 / SNG Design",
+    "signature": "署名",
+    "signatureNone": "（署名なし）",
+    "save": "保存",
+    "saved": "保存しました"
+  },
+  "signature": {
+    "title": "署名",
+    "none": "署名がありません。下の＋で追加できます。",
+    "name": "署名の名前",
+    "namePlaceholder": "例: 仕事用 / プライベート",
+    "body": "署名の本文",
+    "bodyPlaceholder": "--\n末松 / SNG Design\nhttps://sng-design.com",
+    "add": "署名を追加",
+    "save": "保存",
+    "delete": "削除",
+    "untitled": "（名称未設定）"
   },
   "mailbox": {
     "title": "受信箱",

@@ -29,3 +29,9 @@ export const accountDelete = (accountId: number) =>
 
 export const accountCheck = (accountId: number) =>
   invoke<void>('account_check', { accountId });
+
+export const accountUpdate = (
+  accountId: number,
+  displayName: string | null,
+  signatureId: number | null
+) => invoke<void>('account_update', { accountId, displayName, signatureId });

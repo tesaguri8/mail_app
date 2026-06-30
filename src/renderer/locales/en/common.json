@@ -31,6 +31,7 @@
   "settings": {
     "title": "Settings",
     "accounts": "Accounts",
+    "signatures": "Signatures",
     "display": "Display",
     "about": "About"
   },
@@ -61,7 +62,25 @@
     "serverAccount": "Mail server account",
     "useExistingServer": "Use an existing server…",
     "newServer": "New server",
-    "delete": "Delete"
+    "delete": "Delete",
+    "displayName": "Sender name",
+    "displayNamePlaceholder": "e.g. Suematsu / SNG Design",
+    "signature": "Signature",
+    "signatureNone": "(No signature)",
+    "save": "Save",
+    "saved": "Saved"
+  },
+  "signature": {
+    "title": "Signatures",
+    "none": "No signatures yet. Add one with + below.",
+    "name": "Signature name",
+    "namePlaceholder": "e.g. Work / Personal",
+    "body": "Signature text",
+    "bodyPlaceholder": "--\nSuematsu / SNG Design\nhttps://sng-design.com",
+    "add": "Add signature",
+    "save": "Save",
+    "delete": "Delete",
+    "untitled": "(Untitled)"
   },
   "mailbox": {
     "title": "Inbox",

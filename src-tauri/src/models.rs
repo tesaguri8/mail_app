@@ -59,8 +59,19 @@ pub struct AccountSummary {
     pub imap_host: String,
     pub smtp_host: String,
     pub sync_window: String,
+    /// 既定署名の ID（未設定なら None）。
+    pub signature_id: Option<i32>,
     pub unread_count: i32,
     pub total_count: i32,
+}
+
+/// 署名（差出人ごとに使い回せる本文）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct SignatureSummary {
+    pub id: i32,
+    pub name: String,
+    pub body: String,
 }
 
 /// メールサーバーアカウント設定（接続＋ログイン）。再利用・紐づけ用。

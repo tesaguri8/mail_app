@@ -1,6 +1,6 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AutoconfigResult, DbInfo, MailDetail, MailSummary,
-    ServerAccountSummary, SyncResult,
+    ServerAccountSummary, SignatureSummary, SyncResult,
 };
 use crate::services::autoconfig;
 use crate::services::imap_sync;
@@ -97,6 +97,7 @@ pub fn account_add(
         imap_host: input.imap_host,
         smtp_host: input.smtp_host,
         sync_window: "6m".to_string(),
+        signature_id: None,
         unread_count: 0,
         total_count: 0,
     })
@@ -112,6 +113,66 @@ pub fn account_list(store: State<Store>) -> Result<Vec<AccountSummary>, String> 
 #[tauri::command]
 pub fn server_account_list(store: State<Store>) -> Result<Vec<ServerAccountSummary>, String> {
     store.list_server_accounts().map_err(|e| e.to_string())
+}
+
+/// アカウントの編集（差出人名・既定署名）。
+#[tauri::command]
+pub fn account_update(
+    store: State<Store>,
+    account_id: i64,
+    display_name: Option<String>,
+    signature_id: Option<i64>,
+) -> Result<(), String> {
+    // 空文字は未設定として扱う
+    let dn = display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    store
+        .update_account(account_id, dn, signature_id)
+        .map_err(|e| e.to_string())
+}
+
+/// 署名一覧。
+#[tauri::command]
+pub fn signature_list(store: State<Store>) -> Result<Vec<SignatureSummary>, String> {
+    store.list_signatures().map_err(|e| e.to_string())
+}
+
+/// 署名を新規作成（作成した署名を返す）。
+#[tauri::command]
+pub fn signature_create(
+    store: State<Store>,
+    name: String,
+    body: String,
+) -> Result<SignatureSummary, String> {
+    let id = store
+        .insert_signature(&name, &body)
+        .map_err(|e| e.to_string())?;
+    Ok(SignatureSummary {
+        id: id as i32,
+        name,
+        body,
+    })
+}
+
+/// 署名を更新。
+#[tauri::command]
+pub fn signature_update(
+    store: State<Store>,
+    id: i64,
+    name: String,
+    body: String,
+) -> Result<(), String> {
+    store
+        .update_signature(id, &name, &body)
+        .map_err(|e| e.to_string())
+}
+
+/// 署名を削除（参照していたアカウントの紐づけは解除）。
+#[tauri::command]
+pub fn signature_delete(store: State<Store>, id: i64) -> Result<(), String> {
+    store.delete_signature(id).map_err(|e| e.to_string())
 }
 
 /// IMAP に接続して INBOX を同期し、新着を DB に保存（PoC）。

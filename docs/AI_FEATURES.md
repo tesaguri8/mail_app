@@ -3,6 +3,7 @@
 **ステータス:** 計画（実装未着手）
 **位置づけ:** メール作成・整理を AI で支援する。Primadoc の **マルチモデル AI（Claude / GPT / Gemini）＋ ローカル Ollama** 基盤を流用する。
 **プライバシー方針（確定）:** **AI はオプトイン**。既定はクラウド（Claude）、**機密データはローカル（Ollama）を選択可**。ゲスト個人情報など業務データの扱いに配慮する。
+さらに **保護領域（プライバシー伏字）** を尊重し、**AI へ渡す前に保護領域を伏字へ置換**する（人には実値・AIには伏字）。詳細: [PROTECTED_REGIONS.md](PROTECTED_REGIONS.md)。
 
 関連: [FEATURE_SPEC.md](FEATURE_SPEC.md) / [THREADING.md](THREADING.md) / [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)
 

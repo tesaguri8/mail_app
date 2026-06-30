@@ -130,7 +130,15 @@
 - **既定の表示**: **自動ローテーション（時間帯／日替わり）**。設定で固定/時間/日替わり/季節/ランダムへ切替可。
 - **保存先**: `%APPDATA%\tesaguri.comfortmail.dev\media\backgrounds\`（[DATA_STORAGE.md](DATA_STORAGE.md)）。
 
-### 2.8 AI 活用（[AI_FEATURES.md](AI_FEATURES.md)）
+### 2.8 保護領域（プライバシー伏字）※提案型 [PROTECTED_REGIONS.md](PROTECTED_REGIONS.md)
+
+機密部分を本文では伏字（`/////name/////`）で送り、実値は**どのメールクライアントでも開ける暗証番号付きPDF**（AES-256）で届ける。相手側の**不用意なクラウドAI処理にプライバシーデータを自動で渡さない**ための仕組み。
+
+- **核ルール**: 保護領域は「人には実値・AIには伏字」。Comfort Mail の全AI機能はAIへ渡す前に伏字へ置換。
+- **受信**: どのクライアントでもPDFをパスワードで開ける／Comfort Mail は復号してインライン表示。
+- **位置づけ**: 業界の不用意なAI露出を減らす**オープンな提案型**（将来の標準化のきっかけを狙う）。
+
+### 2.9 AI 活用（[AI_FEATURES.md](AI_FEATURES.md)）
 
 メール作成・整理を AI で支援。Primadoc の **マルチモデル（Claude / GPT / Gemini）＋ ローカル Ollama** 基盤を流用。
 

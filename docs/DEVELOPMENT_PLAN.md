@@ -71,6 +71,7 @@ Primadoc はドキュメントエディタであり、**IMAP/SMTP・大量メー
 - **スレッドは独自再構築**: ヘッダ＋引用解析の多層シグナルで論理スレッドを構築し、同件名・別内容を**自動分割＋手動上書き**。アプリ内で**再件名**して整理。コア機能（詳細: [THREADING.md](THREADING.md)）。
 - **作成は返信 / 新規の 2 モード**: 「このアドレスへ新規メール」で別案件を正しく新規送信（参照ヘッダなし・新論理スレッド）。
 - **AI 活用はオプトイン**: 既定クラウド（Claude）／機密はローカル（Ollama）。件名・本文生成・要約・返信提案・分類（詳細: [AI_FEATURES.md](AI_FEATURES.md)）。Primadoc の AI 基盤を流用。
+- **保護領域（プライバシー伏字）**: 機密は伏字＋暗証PDF（どのクライアントでも開ける）で送り、AI には伏字で渡す。**オープンな提案型**（詳細: [PROTECTED_REGIONS.md](PROTECTED_REGIONS.md)）。
 - **保存はリレーショナル＋FTS5。JSON は保存形式に使わない**（AI/IPC のシリアライズ・AI 注釈・エクスポートに限定）。
 - **アプリ識別情報は単一ソース**: 製品名・identifier 等を `config/app-identity.json` に集約し、各設定へ生成/実行時参照で配る（**ハードコード排除**。いつでも改名可能）。詳細: [APP_IDENTITY.md](APP_IDENTITY.md)。
 - **クロスプラットフォーム**: デスクトップ = Tauri 2（Rust コア）／モバイル = **Expo / React Native**（Primadoc 流）。**メールは各端末が IMAP で独立同期**（共有バックエンドなし）。引用解析・スレッド再構築アルゴリズムは **TS の `packages/mail-core` に共有**して二重実装を避ける（詳細: [CROSS_PLATFORM.md](CROSS_PLATFORM.md)）。モバイルはコア安定後の別トラック。
@@ -194,6 +195,7 @@ mail_app/
 - `services/smtp/`（`lettre`）＋作成画面（宛先/件名/本文/添付、下書き、返信引用）。
 - **作成モード**: 返信 / **このアドレスへ新規メール**（参照ヘッダなし・新論理スレッド）。
 - **AI 作成支援（オプトイン）**: `services/ai/`（cloud + Ollama）。件名生成・本文ドラフト/リライト。要約・返信提案・分類は Phase 7 で拡張（[AI_FEATURES.md](AI_FEATURES.md)）。
+- **保護領域（プライバシー伏字）**: 作成時に機密スパンを伏字化＋暗証PDF生成（AES-256、qpdf 等）。受信時の復号インライン表示。AI 連携前の伏字置換（[PROTECTED_REGIONS.md](PROTECTED_REGIONS.md)）。
 
 ### Phase 7 — 検索・タグ・フィルタ・スレッド整理
 - FTS5 検索 UI（件名/`clean_body`/差出人/添付名）、ファセット、検索履歴。
@@ -253,6 +255,7 @@ mail_app/
 - [FILTERING.md](FILTERING.md) — フィルタリング（状態フラグ・相手・グループ・カテゴリ・保存フィルタ）
 - [SYNC.md](SYNC.md) — 同期範囲・保持期間（取得期間をユーザー選択、本文/添付の遅延取得）
 - [AI_FEATURES.md](AI_FEATURES.md) — AI 活用（件名/本文生成・要約・返信提案・分類、プライバシー方針）
+- [PROTECTED_REGIONS.md](PROTECTED_REGIONS.md) — 保護領域（プライバシー伏字・暗証PDF・AIには伏字・オープン提案）
 - [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) — SQLite スキーマ
 - [UI_UX_DESIGN.md](UI_UX_DESIGN.md) — UI/UX 設計
 - [DATA_STORAGE.md](DATA_STORAGE.md) — データ保存場所設計

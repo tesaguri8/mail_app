@@ -1,6 +1,6 @@
 use super::Store;
-use crate::models::MailSummary;
-use rusqlite::{params, Connection};
+use crate::models::{MailDetail, MailSummary};
+use rusqlite::{params, Connection, OptionalExtension};
 
 /// メール挿入用（内部）。
 pub struct NewEmail {
@@ -68,5 +68,35 @@ impl Store {
             })
         })?;
         rows.collect()
+    }
+
+    /// メール本文の取得（表示用）。
+    pub fn get_email(&self, id: i64) -> rusqlite::Result<Option<MailDetail>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, has_attachments
+             FROM emails WHERE id = ?1",
+            params![id],
+            |r| {
+                Ok(MailDetail {
+                    id: r.get::<_, i64>(0)? as i32,
+                    subject: r.get(1)?,
+                    from_address: r.get(2)?,
+                    to_addresses: r.get(3)?,
+                    date: r.get(4)?,
+                    clean_body: r.get(5)?,
+                    body_plain: r.get(6)?,
+                    has_attachments: r.get::<_, i64>(7)? != 0,
+                })
+            },
+        )
+        .optional()
+    }
+
+    /// 既読にする。
+    pub fn mark_read(&self, id: i64) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE emails SET is_read = 1 WHERE id = ?1", params![id])?;
+        Ok(())
     }
 }

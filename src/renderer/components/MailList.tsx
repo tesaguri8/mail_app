@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailSummary } from '@bindings/MailSummary';
+import type { MailDetail } from '@bindings/MailDetail';
 import { accountList } from '../services/accounts';
-import { mailList, mailSync } from '../services/mail';
+import { mailGet, mailList, mailSync } from '../services/mail';
+import { MailView } from './MailView';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 const btnCls = 'rounded-md bg-white/15 px-3 py-1.5 text-sm hover:bg-white/25 disabled:opacity-40';
@@ -21,6 +23,7 @@ export function MailList() {
   const [mails, setMails] = useState<MailSummary[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [status, setStatus] = useState('');
+  const [opened, setOpened] = useState<MailDetail | null>(null);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -53,6 +56,16 @@ export function MailList() {
     }
   };
 
+  const openMail = async (id: number) => {
+    try {
+      const d = await mailGet(id);
+      setOpened(d);
+      setMails((prev) => prev.map((m) => (m.id === id ? { ...m, is_read: true } : m)));
+    } catch {
+      /* noop */
+    }
+  };
+
   if (accounts.length === 0) return null;
 
   return (
@@ -81,7 +94,11 @@ export function MailList() {
       ) : (
         <ul className="max-h-72 space-y-1 overflow-y-auto pr-1">
           {mails.map((m) => (
-            <li key={m.id} className="rounded-md bg-white/5 px-3 py-2 hover:bg-white/10">
+            <li
+              key={m.id}
+              onClick={() => openMail(m.id)}
+              className="cursor-pointer rounded-md bg-white/5 px-3 py-2 hover:bg-white/10"
+            >
               <div className="flex items-baseline justify-between gap-2">
                 <span className="truncate text-sm font-medium">
                   {!m.is_read && <span className="mr-1 text-sky-300">●</span>}
@@ -97,6 +114,8 @@ export function MailList() {
           ))}
         </ul>
       )}
+
+      {opened && <MailView detail={opened} onClose={() => setOpened(null)} />}
     </div>
   );
 }

@@ -48,6 +48,12 @@
     "syncing": "Syncing…",
     "empty": "No mail yet. Press \"Sync\".",
     "account": "Account",
-    "result": "Fetched {{fetched}} / New {{stored}}"
+    "result": "Fetched {{fetched}} / New {{stored}}",
+    "from": "From",
+    "to": "To",
+    "showQuotes": "Show quotes",
+    "hideQuotes": "Hide quotes",
+    "close": "Close",
+    "noBody": "No body"
   }
 }

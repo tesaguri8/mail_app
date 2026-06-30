@@ -35,7 +35,8 @@ pub fn run() {
             commands::server_account_list,
             commands::account_test_connection,
             commands::mail_sync,
-            commands::mail_list
+            commands::mail_list,
+            commands::mail_get
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

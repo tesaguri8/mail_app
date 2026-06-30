@@ -1,5 +1,5 @@
 use crate::models::{
-    AccountInput, AccountSummary, AppInfo, AutoconfigResult, DbInfo, MailSummary,
+    AccountInput, AccountSummary, AppInfo, AutoconfigResult, DbInfo, MailDetail, MailSummary,
     ServerAccountSummary, SyncResult,
 };
 use crate::services::autoconfig;
@@ -143,6 +143,17 @@ pub fn mail_list(store: State<Store>, account_id: i64, limit: i64) -> Result<Vec
     store
         .list_emails(account_id, limit)
         .map_err(|e| e.to_string())
+}
+
+/// メール本文を取得し、既読にする。
+#[tauri::command]
+pub fn mail_get(store: State<Store>, id: i64) -> Result<MailDetail, String> {
+    let detail = store
+        .get_email(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "メールが見つかりません".to_string())?;
+    let _ = store.mark_read(id);
+    Ok(detail)
 }
 
 /// ホスト:ポートへの TCP 疎通テスト（認証は行わない。オンボーディングの確認用）。

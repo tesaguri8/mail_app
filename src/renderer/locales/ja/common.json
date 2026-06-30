@@ -48,6 +48,12 @@
     "syncing": "同期中…",
     "empty": "メールがありません。「同期」を押してください。",
     "account": "アカウント",
-    "result": "取得 {{fetched}} 件 / 新規 {{stored}} 件"
+    "result": "取得 {{fetched}} 件 / 新規 {{stored}} 件",
+    "from": "差出人",
+    "to": "宛先",
+    "showQuotes": "引用を表示",
+    "hideQuotes": "引用を隠す",
+    "close": "閉じる",
+    "noBody": "本文がありません"
   }
 }

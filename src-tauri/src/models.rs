@@ -86,6 +86,20 @@ pub struct MailSummary {
     pub has_attachments: bool,
 }
 
+/// メール詳細（本文表示用）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct MailDetail {
+    pub id: i32,
+    pub subject: Option<String>,
+    pub from_address: Option<String>,
+    pub to_addresses: Option<String>,
+    pub date: Option<String>,
+    pub clean_body: Option<String>,
+    pub body_plain: Option<String>,
+    pub has_attachments: bool,
+}
+
 /// 同期結果。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

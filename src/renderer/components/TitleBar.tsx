@@ -42,10 +42,10 @@ export function TitleBar({ onNavigate }: { onNavigate: (v: AppView) => void }) {
       data-tauri-drag-region
       className="flex h-9 select-none items-center justify-between px-3 text-white/90"
     >
+      <span data-tauri-drag-region className="text-sm font-semibold tracking-wide">
+        {APP.productName}
+      </span>
       <div className="flex items-center gap-1">
-        <span data-tauri-drag-region className="mr-1 text-sm font-semibold tracking-wide">
-          {APP.productName}
-        </span>
         <button
           onClick={(e) => {
             onNavigate('home');
@@ -66,8 +66,6 @@ export function TitleBar({ onNavigate }: { onNavigate: (v: AppView) => void }) {
         >
           <Settings size={ICON} />
         </button>
-      </div>
-      <div className="flex items-center gap-1">
         <button
           onClick={() => i18n.changeLanguage(i18n.language === 'ja' ? 'en' : 'ja')}
           className="rounded px-2 py-0.5 text-xs hover:bg-white/20"

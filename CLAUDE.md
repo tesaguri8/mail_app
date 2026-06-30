@@ -2,48 +2,67 @@
 
 ## プロジェクト概要
 
-このプロジェクトは、既存のメールクライアントにない、モダンで直感的なユーザー体験を提供するデスクトップメールアプリケーションです。チャット形式の会話ビュー、高速検索、スマートな振り分け機能を特徴とします。
+このプロジェクトは、既存のメールクライアントにない、モダンで直感的なユーザー体験を提供するデスクトップメールアプリケーションです。チャット形式の会話ビュー、高速検索、スマートな振り分け機能を特徴とします。さらに**住所録・カレンダー**を統合し、「メール／住所録／カレンダー」を束ねるパーソナルなホームを目指します。
+
+ホームはウィンドウ全面を美しい画像が覆うフレームレスのパネルで、普段は小さくして**時計・日付ウィジェット**のようにデスクトップへ常駐できます。UI 方針の詳細は [docs/UI_UX_DESIGN.md](docs/UI_UX_DESIGN.md) を参照。
 
 ## 技術スタック
 
-### フロントエンド
-- **Electron 28.x** - デスクトップアプリケーション基盤
-- **React 18.x** - UIライブラリ
-- **TypeScript 5.x** - 型安全な開発
-- **Vite** - 高速ビルドツール
-- **TailwindCSS** - ユーティリティファーストCSS
-- **Zustand** - 軽量状態管理
-- **React Query** - データフェッチング
+> **Primadoc 同等スタック（Tauri 2 + Rust）を採用。** 構成・段階計画は [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) を参照。本プロジェクトは実装未着手の計画段階。
 
-### バックエンド
-- **Python 3.11+** - サーバーサイド言語
-- **FastAPI 0.104+** - 高性能Web API フレームワーク
-- **SQLAlchemy 2.0** - ORM
-- **Alembic** - データベースマイグレーション
-- **Pydantic 2.x** - データバリデーション
+### アプリ基盤
+- **Tauri 2** - デスクトップアプリケーション基盤（Rust + WebView）
+
+### フロントエンド
+- **React 18.x** - UIライブラリ
+- **TypeScript 5.x** - 型安全な開発（`any` 原則禁止）
+- **Vite** - 高速ビルドツール
+- **TailwindCSS 4.x** - ユーティリティファーストCSS（@tailwindcss/postcss）
+- **Zustand** - 軽量状態管理
+- **i18next / react-i18next** - 多言語対応
+- データ取得は `invoke()` ラッパー + Zustand で実装（React Query は不採用）
+
+### バックエンド（Rust / Tauri）
+- **Rust** - Tauri バックエンドに統合（別プロセス Python/FastAPI は不採用）
+- **`#[tauri::command]` + invoke** - フロント/バック間通信（FastAPI 不要）
+- **ts-rs** - Rust→TS 境界型の自動生成（`src/bindings/`）
+- **async-imap + tokio** - IMAP 受信・同期
+- **lettre** - SMTP 送信
+- **mail-parser** - MIME 解析
+- **keyring** - 資格情報を OS 金庫に保存（Electron safeStorage の代替）
 
 ### データベース
-- **SQLite** - メタデータ管理
-- **SQLCipher** - データベース暗号化
-- **FTS5** - 全文検索
+- **SQLite**（Rust `rusqlite`）- メタデータ管理・索引
+- **SQLCipher** - データベース暗号化（`bundled-sqlcipher`）
+- **FTS5** - 全文検索（メール大量件数向けにインデックス検索）
+- マイグレーションは Rust 側で自前 SQL 管理（Alembic 不採用）
 
 ## 主な機能
 
-1. **美しいホーム画面** - 背景写真と重要情報の概要表示
+1. **美しいホーム画面** - 全面ビジュアル背景＋概要ダッシュボード。小さくすると時計・日付ウィジェット化し常駐
 2. **チャット形式メール表示** - 手紙風の温かい会話体験
 3. **高速検索** - SQLiteベースの軽快な全文検索
 4. **スマートタグ** - 自動振り分けと手動タグ付け
-5. **多言語対応** - 日本語・英語（将来的に拡張）
-6. **マルチアカウント** - 複数のメールアカウント統合管理
+5. **住所録（アドレス帳）** - 連絡先・グループ・誕生日。メール／カレンダーと連携
+6. **カレンダー** - 予定管理（月／週／日）。メール招待・連絡先と連携
+7. **多言語対応** - 日本語・英語（将来的に拡張）
+8. **マルチアカウント** - 複数のメールアカウント統合管理
 
 ## ディレクトリ構造
 
 ```
 mail_app/
-├── gui/                # Electronアプリケーション
-├── api/                # FastAPIバックエンド
-├── data/               # 翻訳・設定データ
-├── shared/             # 共有型定義
+├── src/                # フロントエンド（React レンダラー）
+│   ├── bindings/       # ts-rs 生成の Rust→TS 型（手書き禁止）
+│   ├── renderer/       # components/ hooks/ stores/ services/ locales/ config/ ...
+│   └── shared/         # フロント/バック共有ロジック
+├── src-tauri/          # Rust バックエンド
+│   ├── src/
+│   │   ├── commands/   # #[tauri::command]（account, mail, search, tag, sync ...）
+│   │   ├── services/   # imap/ smtp/ parser/ store/ search/ crypto.rs ...
+│   │   ├── lib.rs / main.rs / error.rs
+│   ├── capabilities/   # 権限定義（宣言的）
+│   └── tauri.conf.json
 ├── scripts/            # 開発ツール
 └── docs/               # ドキュメント
 ```
@@ -69,116 +88,94 @@ C:\Users\{username}\AppData\Roaming\SNGDesign\MailApp\
 
 ### 初期セットアップ
 ```bash
-# フロントエンド依存関係
-cd gui && npm install
+# 依存関係（フロント + Tauri CLI）
+npm install
 
-# バックエンド依存関係
-cd api && pip install -r requirements.txt
-
-# 開発環境初期化
-npm run setup:dev
+# Rust ツールチェーン（未導入の場合）: https://rustup.rs
 ```
 
 ### 開発サーバー起動
 ```bash
-# フロントエンド開発サーバー
-cd gui && npm run dev
+# Tauri 開発（Rust バックエンド + Vite レンダラーを同時起動）
+npm run tauri dev
 
-# バックエンドサーバー
-cd api && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# レンダラーのみ（UI 単体確認）
+npm run dev:renderer
 ```
 
 ### ビルド
 ```bash
-# プロダクションビルド
-cd gui && npm run build
+# Tauri アプリのビルド・パッケージング（nsis/dmg/deb/appimage）
+npm run tauri build
+```
 
-# Electronアプリパッケージング
-cd gui && npm run dist
+### Rust→TS 型生成
+```bash
+# ts-rs で境界型を src/bindings/ に出力
+npm run gen:bindings
 ```
 
 ### テスト
 ```bash
-# フロントエンドテスト
-cd gui && npm test
+# フロントエンドテスト（Vitest）
+npm test
 
-# バックエンドテスト
-cd api && pytest
-
-# E2Eテスト
-cd gui && npm run test:e2e
+# Rust テスト
+cd src-tauri && cargo test
 ```
 
 ### リント・フォーマット
 ```bash
 # TypeScript/React
-cd gui && npm run lint
-cd gui && npm run lint:fix
+npm run lint
+npm run format
 
-# Python
-cd api && ruff check .
-cd api && ruff format .
+# Rust
+cd src-tauri && cargo fmt && cargo clippy
 ```
 
 ## 翻訳管理
 
+i18next / react-i18next を使用。文字列は必ず翻訳リソースで管理し、ハードコードしない。
+
 ### 翻訳ファイルの場所
 ```
-data/translations/
-├── common.json      # 共通翻訳
-├── mail.json        # メール関連
-├── settings.json    # 設定関連
-├── search.json      # 検索関連
-└── tags.json        # タグ関連
-```
-
-### 翻訳バリデーション
-```bash
-node scripts/validate-translations.js
+src/renderer/locales/
+├── ja/      # 日本語リソース（common, mail, settings, search, tags ...）
+└── en/      # 英語リソース
 ```
 
 ## データベース管理
 
-### マイグレーション
-```bash
-# マイグレーション作成
-cd api && alembic revision --autogenerate -m "migration description"
+SQLite（`rusqlite` + SQLCipher + FTS5）を Rust バックエンドで管理。マイグレーションは
+Alembic ではなく、`src-tauri/src/services/store/` 内で自前のバージョン管理 SQL として実装する。
 
-# マイグレーション実行
-cd api && alembic upgrade head
-
-# マイグレーション履歴
-cd api && alembic history
-```
+- スキーマ例: accounts / mailboxes / messages / threads / attachments / tags / messages_fts
+- 起動時に現在のスキーマバージョンを確認し、未適用のマイグレーションを順次適用
 
 ## 環境変数
 
-`.env`ファイルを作成して以下の環境変数を設定：
+アプリ設定の大半は Tauri の設定ストア（`tauri-plugin-store`）で管理し、機密情報は OS 金庫
+（`keyring`）に保存する。開発時に必要な環境変数（例: `RUST_LOG`）は `cross-env` 等で渡す。
 
 ```bash
-# アプリケーション設定
-APP_NAME=SNGDesign MailApp
-APP_VERSION=1.0.0
-DEBUG=false
+# ログレベル（Rust 側）
+RUST_LOG=info
 
-# データベース
-DATABASE_URL=sqlite:///./mail.db
-DATABASE_ENCRYPTION_KEY=your-encryption-key-here
-
-# ログ設定
-LOG_LEVEL=INFO
-LOG_FILE=logs/app.log
-
-# メール設定
-MAIL_SYNC_INTERVAL=300  # 5分
-MAX_ATTACHMENT_SIZE=25MB
+# メール設定（既定値の例。実値はアプリ設定で管理）
+MAIL_SYNC_INTERVAL=300    # 同期間隔（秒）
+MAX_ATTACHMENT_SIZE=25MB  # 添付上限
 ```
+
+> DB 暗号化キーやアカウント資格情報は環境変数・平文ファイルに置かず、必ず `keyring`（OS 金庫）に保存する。
 
 ## セキュリティ
 
-- アカウント認証情報: Electron safeStorage使用
-- データベース: SQLCipher暗号化
-- 通信: TLS/SSL必須
+- アカウント認証情報: `keyring`（OS 金庫: Win=Credential Manager / mac=Keychain / Linux=Secret Service）
+- 認証方式: まずアプリパスワード/基本認証に対応し、OAuth2（Gmail/Outlook）は後続フェーズ
+- データベース: SQLCipher 暗号化
+- 通信: TLS/SSL 必須（IMAP/SMTP）
+- 権限: Tauri `capabilities/` で宣言的に最小権限を付与
 - ファイルアクセス: 適切なパーミッション設定
 
 ## パフォーマンス最適化
@@ -198,23 +195,20 @@ MAX_ATTACHMENT_SIZE=25MB
 
 ### よくある問題
 
-1. **ビルドエラー**
+1. **フロントのビルドエラー**
    ```bash
    # node_modules削除して再インストール
    rm -rf node_modules && npm install
    ```
 
-2. **データベース接続エラー**
+2. **Rust / Tauri のビルドエラー**
    ```bash
-   # データベースマイグレーション確認
-   cd api && alembic current
+   # 依存の再取得・キャッシュクリア
+   cd src-tauri && cargo clean && cargo build
    ```
 
-3. **翻訳ファイルエラー**
-   ```bash
-   # 翻訳バリデーション実行
-   node scripts/validate-translations.js
-   ```
+3. **SQLCipher のビルドで詰まる場合**
+   - `rusqlite` の `bundled-sqlcipher` フィーチャと、Windows ビルドツール（MSVC）の導入を確認
 
 ## 貢献方法
 
@@ -234,4 +228,4 @@ MAX_ATTACHMENT_SIZE=25MB
 
 ---
 
-最終更新日: 2024年1月
+最終更新日: 2026年6月（Tauri 2 + Rust スタックで計画策定）

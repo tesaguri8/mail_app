@@ -21,6 +21,27 @@ export function matchesDate(dateStr: string | null, df: DateRange | null): boole
 const inputCls =
   'rounded-md border border-white/15 bg-white/10 px-2 py-1 text-xs text-white outline-none focus:bg-white/20 [color-scheme:dark]';
 
+/** ローカル日付を YYYY-MM-DD に整形（UTC ずれを避ける）。 */
+function fmt(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+function daysAgo(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return fmt(d);
+}
+function monthStart(offset: number): string {
+  const t = new Date();
+  return fmt(new Date(t.getFullYear(), t.getMonth() + offset, 1));
+}
+function monthEnd(offset: number): string {
+  const t = new Date();
+  return fmt(new Date(t.getFullYear(), t.getMonth() + offset + 1, 0));
+}
+
 /**
  * 期間フィルタ（カレンダーアイコン＋ポップオーバー）。
  * 以降 / 以前 / 期間 を選び、日付を指定して絞り込む。
@@ -56,6 +77,37 @@ export function DateFilter({
   }, [open]);
 
   const on = value !== null;
+  const today = fmt(new Date());
+
+  // ワンクリックで過去日を入れるプリセット（モードに応じて start/end を決定）
+  type Preset = { key: string; start: string; end: string };
+  const presets: Preset[] =
+    mode === 'range'
+      ? [
+          { key: 'today', start: today, end: today },
+          { key: 'last7', start: daysAgo(6), end: today },
+          { key: 'last30', start: daysAgo(29), end: today },
+          { key: 'thisMonth', start: monthStart(0), end: today },
+          { key: 'lastMonth', start: monthStart(-1), end: monthEnd(-1) },
+        ]
+      : (['today', 'yesterday', 'd7', 'd30', 'd90'] as const).map((key) => {
+          const v =
+            key === 'today'
+              ? today
+              : key === 'yesterday'
+                ? daysAgo(1)
+                : daysAgo(Number(key.slice(1)));
+          return mode === 'after'
+            ? { key, start: v, end: '' }
+            : { key, start: '', end: v };
+        });
+
+  const applyPreset = (p: Preset) => {
+    setStart(p.start);
+    setEnd(p.end);
+    onChange({ mode, start: p.start, end: p.end });
+    setOpen(false);
+  };
 
   const apply = () => {
     if ((mode === 'after' && !start) || (mode === 'before' && !end) || (mode === 'range' && !start && !end)) {
@@ -104,12 +156,26 @@ export function DateFilter({
             ))}
           </div>
 
+          {/* 過去日のクイック入力 */}
+          <div className="mb-2 flex flex-wrap gap-1">
+            {presets.map((p) => (
+              <button
+                key={p.key}
+                onClick={() => applyPreset(p)}
+                className="rounded bg-white/10 px-2 py-0.5 text-[11px] text-white/75 hover:bg-white/20 hover:text-white"
+              >
+                {t(`date.${p.key}`)}
+              </button>
+            ))}
+          </div>
+
           <div className="space-y-2">
             {(mode === 'after' || mode === 'range') && (
               <label className="flex items-center justify-between gap-2 text-xs text-white/55">
                 <span className="shrink-0">{t('date.start')}</span>
                 <input
                   type="date"
+                  max={today}
                   className={inputCls}
                   value={start}
                   onChange={(e) => setStart(e.target.value)}
@@ -121,6 +187,7 @@ export function DateFilter({
                 <span className="shrink-0">{t('date.end')}</span>
                 <input
                   type="date"
+                  max={today}
                   className={inputCls}
                   value={end}
                   onChange={(e) => setEnd(e.target.value)}

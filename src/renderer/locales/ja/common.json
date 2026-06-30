@@ -38,7 +38,16 @@
     "start": "開始日",
     "end": "終了日",
     "apply": "適用",
-    "clear": "クリア"
+    "clear": "クリア",
+    "today": "今日",
+    "yesterday": "昨日",
+    "d7": "7日前",
+    "d30": "30日前",
+    "d90": "90日前",
+    "last7": "過去7日",
+    "last30": "過去30日",
+    "thisMonth": "今月",
+    "lastMonth": "先月"
   },
   "compose": {
     "new": "新規作成",

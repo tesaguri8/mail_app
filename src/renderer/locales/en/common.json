@@ -38,7 +38,16 @@
     "start": "Start date",
     "end": "End date",
     "apply": "Apply",
-    "clear": "Clear"
+    "clear": "Clear",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "d7": "7d ago",
+    "d30": "30d ago",
+    "d90": "90d ago",
+    "last7": "Last 7 days",
+    "last30": "Last 30 days",
+    "thisMonth": "This month",
+    "lastMonth": "Last month"
   },
   "compose": {
     "new": "Compose",

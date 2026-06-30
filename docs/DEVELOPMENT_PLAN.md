@@ -67,6 +67,7 @@ Primadoc はドキュメントエディタであり、**IMAP/SMTP・大量メー
 - **全文検索は SQLite FTS5 を採用**（Primadoc の JSON メタデータストア方式ではなく）。メールは件数が数千〜数万に達するため、FTS5 のインデックス検索が適切。
 - **認証はまずアプリパスワード/基本認証**から対応。OAuth2（Gmail/Outlook）は後続フェーズ（Phase 3 範囲）。
 - **データ取得は invoke + Zustand**（React Query は不採用）。
+- **スレッドは独自再構築**: ヘッダ＋引用解析の多層シグナルで論理スレッドを構築し、同件名・別内容を**自動分割＋手動上書き**。アプリ内で**再件名**して整理。コア機能（詳細: [THREADING.md](THREADING.md)）。
 - **スコープにメール＋住所録＋カレンダーを含む**（Phase 8 / 9）。
 - **ウィンドウはフレームレス全面ビジュアル**。ダッシュボード⇔ウィジェットは**同一ウィンドウのリサイズ連動**で切替（別ウィンドウは持たない）。
 - **カレンダーはローカル予定 + .ics 取り込みから**。Google Calendar / CalDAV 双方向同期は後続。
@@ -99,8 +100,8 @@ mail_app/
 │   ├── src/
 │   │   ├── commands/           # #[tauri::command]: account, mail, thread, search,
 │   │   │                       #   tag, attachment, sync, contact, event, settings, window
-│   │   ├── services/           # imap/, smtp/, parser/, store/, search/, contacts/,
-│   │   │                       #   calendar/（ics 含む）, crypto.rs, account.rs, sync/
+│   │   ├── services/           # imap/, smtp/, parser/（引用・署名分離）, threading/（論理スレッド再構築）,
+│   │   │                       #   store/, search/, contacts/, calendar/（ics 含む）, crypto.rs, account.rs, sync/
 │   │   ├── error.rs
 │   │   ├── ids.rs
 │   │   ├── lib.rs
@@ -155,23 +156,25 @@ mail_app/
 - IMAP/SMTP 接続設定（手動設定 → 主要プロバイダ自動判定）。
 - まずアプリパスワード方式、OAuth2（Gmail/Outlook）は後続。
 
-### Phase 4 — メール同期・受信
+### Phase 4 — メール同期・受信＋スレッド解析基盤
 - `services/imap/`（`async-imap`）＋ `services/parser/`（`mail-parser`）。
-- 差分同期（UIDVALIDITY / UIDNEXT 管理）、添付の遅延取得、FTS5 への索引投入。
-- IDLE による準リアルタイム更新は任意。
+- 差分同期（UIDVALIDITY / UIDNEXT 管理）、添付の遅延取得。
+- **スレッド再構築の解析基盤**（[THREADING.md](THREADING.md)）: 引用・署名分離 → `clean_body` 生成、引用属性の (from+時刻) 抽出・fingerprint、活用ヘッダ（`Thread-Index`/`List-Id`/`Delivered-To`/`Authentication-Results` 等）抽出、論理スレッド割当。
+- FTS5（`clean_body`）への索引投入。IDLE による準リアルタイム更新は任意。
 
 ### Phase 5 — UI（ホーム・表示）
 - **ホーム（ダッシュボード）**: 全面背景画像 + 概要パネル + ナビゲーション。時計・日付表示。
 - **ウィジェット（コンパクト）モード**: リサイズ連動で時計・日付ウィジェット化。always-on-top トグル。
-- チャット形式の会話ビュー / 従来スレッドビュー、メールリスト（仮想スクロール）。
+- チャット形式の会話ビュー（`clean_body` 表示・引用折りたたみ・論理スレッド単位）/ 従来スレッドビュー、メールリスト（仮想スクロール）。
 - Zustand ストア + `services/` invoke ラッパー。
 
 ### Phase 6 — 送信
 - `services/smtp/`（`lettre`）＋作成画面（宛先/件名/本文/添付、下書き、返信引用）。
 
-### Phase 7 — 検索・タグ
-- FTS5 検索 UI（件名/本文/差出人/添付名）、ファセット、検索履歴。
-- 手動/自動タグ、振り分けルールエンジン。
+### Phase 7 — 検索・タグ・スレッド整理
+- FTS5 検索 UI（件名/`clean_body`/差出人/添付名）、ファセット、検索履歴。
+- 手動/自動タグ、振り分けルールエンジン（`List-Id` 等のヘッダ活用）。
+- **スレッド整理 UI**: 自動分割の精緻化、手動の分割/結合/**再件名**、論理スレッドのラベル付け（[THREADING.md](THREADING.md)）。
 
 ### Phase 8 — 住所録（アドレス帳）
 - `services/contacts/` + `contact_*` コマンド。ローカル連絡先 CRUD・グループ・お気に入り・誕生日。
@@ -212,6 +215,7 @@ mail_app/
 機能・設計の詳細は以下に分割（[docs/README.md](README.md) がインデックス）。
 
 - [FEATURE_SPEC.md](FEATURE_SPEC.md) — 機能仕様・Tauri コマンド・セキュリティ・テスト・将来拡張
+- [THREADING.md](THREADING.md) — スレッド再構築エンジン（引用解析・論理スレッド・ヘッダ活用）
 - [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) — SQLite スキーマ
 - [UI_UX_DESIGN.md](UI_UX_DESIGN.md) — UI/UX 設計
 - [DATA_STORAGE.md](DATA_STORAGE.md) — データ保存場所設計

@@ -39,7 +39,14 @@
 - タイムスタンプの自動グループ化（5分以内）
 - インライン返信機能
 - 既読/未読の視覚的表現
+- **引用を解析して剥がし、新しく書かれた部分だけ**をバブル表示（長い引用のストレスを解消）
 - 実装: 仮想スクロール（大量メール対応）、リアルタイム更新、アニメーション付き追加
+
+#### スレッド再構築・アプリ内整理（コア機能 → [THREADING.md](THREADING.md)）
+- **独自スレッド再構築**: ヘッダ（`Message-ID`/`References`/`Thread-Index`）＋**引用解析（差出人+時刻・引用本文）**の多層シグナルで会話を再構築。
+- **同件名・別内容の自動分割**: 「返信で別件」を検出して別スレッドに分割（**自動＋手動上書き**）。
+- **アプリ内で再件名**: 論理スレッドに自分用のタイトルを付け直し、整理しやすくする（元件名は保持）。
+- **ヘッダメタデータの活用**: `List-Id`（メルマガ/ML 判定）・`Delivered-To`（宛先エイリアス）・`Authentication-Results`（なりすまし検知）・`X-Mailer`（引用形式推定）等を仕分け・信頼表示・解析に利用。
 
 #### 従来形式ビュー
 - 標準的なメールスレッド表示
@@ -110,7 +117,7 @@
 |---------|--------------|-------------|
 | アカウント | `account_add` / `account_list` / `account_update` / `account_remove` | `POST/GET/PUT/DELETE /api/accounts` |
 | メール | `mail_list`（ページネーション）/ `mail_get` / `mail_send` / `mail_update`（既読・フラグ）/ `mail_delete` | `/api/emails*` |
-| スレッド | `thread_list` / `thread_messages` | `/api/threads*` |
+| スレッド | `thread_list` / `thread_messages` / `thread_split` / `thread_merge` / `thread_rename` / `message_reassign` / `thread_rebuild` | `/api/threads*`（＋再構築系を新規） |
 | 検索 | `search_run` / `search_suggest` | `/api/search*` |
 | タグ | `tag_list` / `tag_create` / `tag_update` / `tag_delete` | `/api/tags*` |
 | 同期 | `sync_start` / `sync_status` / `sync_stop` | `/api/sync*` |

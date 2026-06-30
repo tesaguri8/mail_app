@@ -44,8 +44,49 @@ CREATE TABLE emails (
     raw_headers TEXT,
     body_plain TEXT,
     body_html TEXT,
+    -- スレッド再構築（docs/THREADING.md）
+    clean_body TEXT,                       -- 引用・署名を除去した新規本文（表示・FTS用）
+    body_fingerprint TEXT,                 -- clean_body の正規化ハッシュ
+    logical_thread_id INTEGER,             -- アプリが再構築した論理スレッド（threads とは別）
+    thread_assignment TEXT DEFAULT 'auto', -- 'auto' | 'manual'（手動上書きは保持）
+    -- 活用ヘッダ（スレッド化・仕分け・信頼・解析ヒント）
+    thread_index TEXT,                     -- Outlook/Exchange Thread-Index
+    list_id TEXT,                          -- メルマガ/ML 判定（List-Id）
+    delivered_to TEXT,                     -- 受信した自分のアドレス/エイリアス
+    auth_result TEXT,                      -- SPF/DKIM/DMARC 認証結果サマリ
+    precedence TEXT,                       -- bulk/list 等
+    x_mailer TEXT,                         -- 送信クライアント（引用形式の推定に利用）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (account_id) REFERENCES accounts(id)
+    FOREIGN KEY (account_id) REFERENCES accounts(id),
+    FOREIGN KEY (logical_thread_id) REFERENCES logical_threads(id)
+);
+
+-- 論理スレッド（アプリが引用解析で再構築する会話単位。ヘッダの threads とは独立）
+-- 詳細: docs/THREADING.md
+CREATE TABLE logical_threads (
+    id INTEGER PRIMARY KEY,
+    title TEXT,                     -- アプリ独自タイトル（リネーム可）
+    auto_title TEXT,               -- 元の件名（正規化）
+    participants TEXT,             -- 参加者（JSON）
+    last_activity TIMESTAMP,
+    message_count INTEGER DEFAULT 0,
+    unread_count INTEGER DEFAULT 0,
+    is_user_renamed BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 引用ブロック（1メール内に複数あり得る。属性行から from+時刻を抽出して突合）
+CREATE TABLE message_quotes (
+    id INTEGER PRIMARY KEY,
+    email_id INTEGER NOT NULL,
+    block_order INTEGER,           -- 入れ子・並び順
+    quoted_from TEXT,              -- 属性行から抽出した差出人
+    quoted_at TIMESTAMP,           -- 属性行から抽出した時刻
+    fingerprint TEXT,              -- 引用本文の正規化ハッシュ
+    matched_email_id INTEGER,      -- 突合できた元メール（任意）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (email_id) REFERENCES emails(id),
+    FOREIGN KEY (matched_email_id) REFERENCES emails(id)
 );
 
 -- スレッド
@@ -215,7 +256,7 @@ CREATE VIRTUAL TABLE email_fts USING fts5(
     subject,
     from_address,
     to_addresses,
-    body_plain,
+    clean_body,                 -- 引用除去後の本文を索引（重複ヒットを減らし精度向上）
     content=emails,
     content_rowid=id
 );
@@ -253,6 +294,12 @@ CREATE INDEX idx_emails_date           ON emails(date DESC);
 CREATE INDEX idx_emails_from           ON emails(from_address);
 CREATE INDEX idx_emails_account_folder ON emails(account_id, folder_id);
 CREATE INDEX idx_email_tags_tag_id     ON email_tags(tag_id);
+
+-- スレッド再構築（docs/THREADING.md）
+CREATE INDEX idx_emails_logical_thread ON emails(logical_thread_id, date);
+CREATE INDEX idx_emails_list_id        ON emails(list_id);
+CREATE INDEX idx_quotes_email          ON message_quotes(email_id);
+CREATE INDEX idx_quotes_match          ON message_quotes(quoted_from, quoted_at);
 
 -- 住所録・カレンダー
 CREATE INDEX idx_contacts_name      ON contacts(name_kana, display_name);

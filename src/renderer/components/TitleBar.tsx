@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { House, Minus, Pin, Settings, Square, X } from 'lucide-react';
+
+const ICON = 15;
 
 /**
  * フレームレス用の自作タイトルバー（docs/UI_UX_DESIGN.md §1.5）。
@@ -47,17 +50,17 @@ export function TitleBar({
       <div className="flex items-center gap-1">
         <button
           onClick={() => onNavigate('home')}
-          className={`rounded px-2 py-0.5 text-sm hover:bg-white/20 ${view === 'home' ? 'bg-white/25' : ''}`}
+          className={`flex items-center justify-center rounded p-1.5 hover:bg-white/20 ${view === 'home' ? 'bg-white/25' : ''}`}
           title={t('nav.home')}
         >
-          🏠
+          <House size={ICON} />
         </button>
         <button
           onClick={() => onNavigate('settings')}
-          className={`rounded px-2 py-0.5 text-sm hover:bg-white/20 ${view === 'settings' ? 'bg-white/25' : ''}`}
+          className={`flex items-center justify-center rounded p-1.5 hover:bg-white/20 ${view === 'settings' ? 'bg-white/25' : ''}`}
           title={t('nav.settings')}
         >
-          ⚙
+          <Settings size={ICON} />
         </button>
         <span data-tauri-drag-region className="ml-2 text-xs font-medium tracking-wide text-white/80">
           {t('app.tagline')}
@@ -73,31 +76,31 @@ export function TitleBar({
         </button>
         <button
           onClick={togglePin}
-          className={`rounded px-2 py-0.5 text-sm hover:bg-white/20 ${pinned ? 'bg-white/25' : ''}`}
+          className={`flex items-center justify-center rounded p-1.5 hover:bg-white/20 ${pinned ? 'bg-white/25' : ''}`}
           title={t('titlebar.alwaysOnTop')}
         >
-          📌
+          <Pin size={ICON} className={pinned ? 'fill-current' : ''} />
         </button>
         <button
           onClick={() => isTauri && win().minimize()}
-          className="rounded px-2 py-0.5 hover:bg-white/20"
+          className="flex items-center justify-center rounded p-1.5 hover:bg-white/20"
           title={t('titlebar.minimize')}
         >
-          —
+          <Minus size={ICON} />
         </button>
         <button
           onClick={() => isTauri && win().toggleMaximize()}
-          className="rounded px-2 py-0.5 hover:bg-white/20"
+          className="flex items-center justify-center rounded p-1.5 hover:bg-white/20"
           title={t('titlebar.maximize')}
         >
-          ▢
+          <Square size={ICON - 2} />
         </button>
         <button
           onClick={() => isTauri && win().close()}
-          className="rounded px-2 py-0.5 hover:bg-red-500/70"
+          className="flex items-center justify-center rounded p-1.5 hover:bg-red-500/70"
           title={t('titlebar.close')}
         >
-          ✕
+          <X size={ICON} />
         </button>
       </div>
     </header>

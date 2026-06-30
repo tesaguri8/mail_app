@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Forward, Reply, ReplyAll } from 'lucide-react';
 import type { MailDetail } from '@bindings/MailDetail';
 import { HtmlText } from './HtmlText';
 
@@ -16,6 +17,15 @@ function formatDate(d: string | null): string {
 export function MailBody({ detail }: { detail: MailDetail }) {
   const { t } = useTranslation();
   const [showQuotes, setShowQuotes] = useState(false);
+  const [note, setNote] = useState('');
+
+  // 作成機能は後続。今はアイコン配置とフィードバックのみ。
+  const composeStub = () => setNote(t('comingSoon'));
+  const COMPOSE_ACTIONS = [
+    { key: 'reply', Icon: Reply },
+    { key: 'replyAll', Icon: ReplyAll },
+    { key: 'forward', Icon: Forward },
+  ] as const;
 
   const clean = detail.clean_body ?? '';
   const full = detail.body_plain ?? '';
@@ -27,9 +37,25 @@ export function MailBody({ detail }: { detail: MailDetail }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b border-white/10 px-5 py-3">
-        <h3 className="text-base font-semibold">
-          {detail.subject ?? '(no subject)'} {detail.has_attachments && '📎'}
-        </h3>
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="min-w-0 text-base font-semibold">
+            {detail.subject ?? '(no subject)'} {detail.has_attachments && '📎'}
+          </h3>
+          <div className="flex shrink-0 items-center gap-1">
+            {COMPOSE_ACTIONS.map(({ key, Icon }) => (
+              <button
+                key={key}
+                onClick={composeStub}
+                title={t(`compose.${key}`)}
+                aria-label={t(`compose.${key}`)}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80"
+              >
+                <Icon size={16} />
+              </button>
+            ))}
+            {note && <span className="ml-1 text-[10px] text-white/45">{note}</span>}
+          </div>
+        </div>
         <div className="mt-1 text-xs text-white/50">
           <div>
             {t('mailbox.from')}: {detail.from_address ?? '—'}

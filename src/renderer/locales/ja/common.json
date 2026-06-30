@@ -30,6 +30,12 @@
     "attachment": "添付あり",
     "flag": "要再確認"
   },
+  "compose": {
+    "new": "新規作成",
+    "reply": "返信",
+    "replyAll": "全員返信",
+    "forward": "転送"
+  },
   "ctx": {
     "markRead": "既読にする",
     "markUnread": "未読にする",

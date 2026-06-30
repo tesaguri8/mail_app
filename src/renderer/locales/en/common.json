@@ -30,6 +30,12 @@
     "attachment": "Has attachment",
     "flag": "Follow-up"
   },
+  "compose": {
+    "new": "Compose",
+    "reply": "Reply",
+    "replyAll": "Reply all",
+    "forward": "Forward"
+  },
   "ctx": {
     "markRead": "Mark as read",
     "markUnread": "Mark as unread",

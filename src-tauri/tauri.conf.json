@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Comfort Mail",
+  "productName": "Rondine",
   "version": "0.1.0",
-  "identifier": "tesaguri.comfortmail.dev",
+  "identifier": "tesaguri.rondine.dev",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Comfort Mail",
+        "title": "Rondine",
         "width": 1200,
         "height": 800,
         "minWidth": 400,

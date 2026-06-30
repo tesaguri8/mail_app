@@ -1,14 +1,14 @@
 [package]
-name = "comfort-mail"
+name = "rondine"
 version = "0.1.0"
-description = "Comfort Mail (仮称)"
+description = "Rondine"
 authors = ["Tesaguri tech"]
 license = "UNLICENSED"
 edition = "2021"
 rust-version = "1.80"
 
 [lib]
-name = "comfort_mail_lib"
+name = "rondine_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

@@ -9,7 +9,7 @@
 
 | データ | 置き場所 | 理由 |
 |---|---|---|
-| メールDB(SQLCipher)・添付・索引・`media`（背景）・アプリ設定 | **アプリ専用** `…\tesaguri.comfortmail.dev\` | 大容量・機密・アプリ固有。隔離＆暗号化、移行/アンインストール容易 |
+| メールDB(SQLCipher)・添付・索引・`media`（背景）・アプリ設定 | **アプリ専用** `…\tesaguri.rondine.dev\` | 大容量・機密・アプリ固有。隔離＆暗号化、移行/アンインストール容易 |
 | AI 注釈（要約・分類など、メール内容由来） | **アプリ専用**（メールDB側 `ai_annotations`） | メールに紐づく機密。共有領域に出さない |
 | TSG One アカウント／サインイン・**AIトークン残量・使用量**・共有AI設定 | **TSG One 共有** `…\tesaguri.tsg-one\` | 全TSGアプリで同一アカウント・同一トークン残量を共有 |
 | 機密（TSG One トークン・資格情報） | **OS keyring**（サービス名 `tesaguri.tsg-one`） | keyring は OS 全体共有 → 全TSGアプリが同じ資格情報を参照。平文フォルダ不要 |
@@ -21,8 +21,8 @@
 
 ## 1. 基本方針
 - **アプリ識別子（identifier）規則: `tesaguri.<app_name>.app`**（Tesaguri アプリ共通。Primadoc = `tesaguri.primadoc.app`）。
-  - **暫定値: `tesaguri.comfortmail.dev`**（製品名は仮称 **Comfort Mail**、`.dev` は開発/暫定の意）。正式確定時に `tesaguri.<確定名>.app` へ変更する。
-  - slug は両プラットフォーム対応のため**連結 `comfortmail`**（Apple bundle id は下線不可、Android package はハイフン不可のため、区切りなしが安全）。
+  - **暫定値: `tesaguri.rondine.dev`**（製品名は**Rondine**、`.dev` は開発/暫定の意）。正式確定時に `tesaguri.<確定名>.app` へ変更する。
+  - slug は両プラットフォーム対応のため**連結 `rondine`**（Apple bundle id は下線不可、Android package はハイフン不可のため、区切りなしが安全）。
 - データディレクトリは **この identifier をそのままフォルダ名**として、各 OS の標準場所に配置（Tauri / Primadoc と同方式）。
 - プラットフォーム固有の標準的な場所を使用。
 - セキュリティとプライバシーを考慮した保存戦略。
@@ -35,8 +35,8 @@
 
 | 層 | 内容 | 場所 |
 |---|---|---|
-| **設定層（小・固定）** | `settings.json` / `ui-state.json` / **データルートの場所ポインタ** | 標準: `…\tesaguri.comfortmail.dev\config\` |
-| **データルート（大・再配置可）** | `mail.db`・`emails`・`attachments`・`search`・`media`・`cache` | 既定はアプリ配下。**設定で任意のフォルダ/ドライブへ変更可**（例 `D:\ComfortMailData\`） |
+| **設定層（小・固定）** | `settings.json` / `ui-state.json` / **データルートの場所ポインタ** | 標準: `…\tesaguri.rondine.dev\config\` |
+| **データルート（大・再配置可）** | `mail.db`・`emails`・`attachments`・`search`・`media`・`cache` | 既定はアプリ配下。**設定で任意のフォルダ/ドライブへ変更可**（例 `D:\RondineData\`） |
 
 - **移動操作**: 設定で新しいデータルートを選択 → 既存データを移行（コピー → 検証 → 旧削除）→ ポインタ更新。
 - **保持ポリシーと併用**: 物理的な再配置（どこに置くか）と、[SYNC.md](SYNC.md) の保持ポリシー（どれだけ残すか）は別軸。両方で容量を管理。
@@ -47,11 +47,11 @@
 
 ## 2. プラットフォーム別データ保存場所
 
-> 以下のパス中 `tesaguri.comfortmail.dev` は暫定 identifier。名称確定時に置換する。
+> 以下のパス中 `tesaguri.rondine.dev` は暫定 identifier。名称確定時に置換する。
 
 ### Windows
 ```
-C:\Users\{username}\AppData\Roaming\tesaguri.comfortmail.dev\
+C:\Users\{username}\AppData\Roaming\tesaguri.rondine.dev\
 ├── data\
 │   ├── mail.db                # SQLite（SQLCipher 暗号化）
 │   ├── emails\                # メール本文ファイル（年月別: 2024\01\ ...）
@@ -68,7 +68,7 @@ C:\Users\{username}\AppData\Roaming\tesaguri.comfortmail.dev\
 
 ### macOS
 ```
-~/Library/Application Support/tesaguri.comfortmail.dev/
+~/Library/Application Support/tesaguri.rondine.dev/
 ├── data/ (mail.db, emails/, attachments/, search/)
 ├── media/backgrounds/
 ├── config/
@@ -80,8 +80,8 @@ C:\Users\{username}\AppData\Roaming\tesaguri.comfortmail.dev\
 
 ### Linux
 ```
-~/.local/share/tesaguri.comfortmail.dev/     # data/, media/, cache/, logs/
-~/.config/tesaguri.comfortmail.dev/          # settings.json 等
+~/.local/share/tesaguri.rondine.dev/     # data/, media/, cache/, logs/
+~/.config/tesaguri.rondine.dev/          # settings.json 等
 機密情報: Secret Service（keyring クレート経由）
 ```
 
@@ -148,7 +148,7 @@ impl StoragePaths {
 }
 ```
 
-> `app_data_dir()` は `tauri.conf.json` の `identifier` をフォルダ名に用いるため、**Rust 側に識別子のハードコードが不要**になる（identifier は `config/app-identity.json` → 生成 → tauri.conf という単一ソース）。現状の暫定 identifier は `tesaguri.comfortmail.dev`。
+> `app_data_dir()` は `tauri.conf.json` の `identifier` をフォルダ名に用いるため、**Rust 側に識別子のハードコードが不要**になる（identifier は `config/app-identity.json` → 生成 → tauri.conf という単一ソース）。現状の暫定 identifier は `tesaguri.rondine.dev`。
 > カスタム保存先（ユーザー指定ドライブ等）は設定で受け取り、バリデーション後に上書きする。
 
 ---

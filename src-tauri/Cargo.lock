@@ -657,33 +657,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "comfort-mail"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "hickory-resolver",
- "imap",
- "keyring",
- "log",
- "mail-parser",
- "native-tls",
- "rusqlite",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-fs",
- "tauri-plugin-log",
- "tauri-plugin-opener",
- "tauri-plugin-shell",
- "tauri-plugin-store",
- "tempfile",
- "thiserror 2.0.18",
- "ts-rs",
-]
-
-[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3529,6 +3502,33 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "rondine"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hickory-resolver",
+ "imap",
+ "keyring",
+ "log",
+ "mail-parser",
+ "native-tls",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-fs",
+ "tauri-plugin-log",
+ "tauri-plugin-opener",
+ "tauri-plugin-shell",
+ "tauri-plugin-store",
+ "tempfile",
+ "thiserror 2.0.18",
+ "ts-rs",
 ]
 
 [[package]]

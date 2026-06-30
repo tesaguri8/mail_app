@@ -1,4 +1,4 @@
--- Comfort Mail 初期スキーマ（コア。docs/DATABASE_SCHEMA.md）
+-- Rondine 初期スキーマ（コア。docs/DATABASE_SCHEMA.md）
 -- 連絡先/カレンダー/SNS/AI 等のテーブルは後続マイグレーションで追加する。
 
 -- アカウント（同期範囲・保持の設定も保持。docs/SYNC.md）

@@ -145,7 +145,7 @@ interface BackgroundConfig {
 
 #### ユーザー画像の取り込み
 - **インポート**: ファイル選択（`@tauri-apps/plugin-dialog`）→ 形式/サイズ検証（jpg/png/webp・上限）→ アプリ保存領域へ**コピー**（元ファイルは参照しない）→ サムネ生成（Rust `image`）→ DB 登録。巨大画像は縮小も検討。
-- **保存先**: `…\tesaguri.comfortmail.dev\media\backgrounds\`（サムネは `cache\thumbnails\`）。詳細は [DATA_STORAGE.md](DATA_STORAGE.md)。
+- **保存先**: `…\tesaguri.rondine.dev\media\backgrounds\`（サムネは `cache\thumbnails\`）。詳細は [DATA_STORAGE.md](DATA_STORAGE.md)。
 - **選択 UI**: 同梱画像とユーザー画像をギャラリー表示し、固定表示にするか、ローテーション対象に含めるかを選ぶ。
 - **WebView 表示**: ローカル画像表示には Tauri の **asset プロトコル**有効化＋**CSP `img-src`** 許可が必要（Primadoc と同構成）。
 

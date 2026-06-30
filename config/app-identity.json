@@ -1,8 +1,8 @@
 {
-  "productName": "Comfort Mail",
-  "identifier": "tesaguri.comfortmail.dev",
+  "productName": "Rondine",
+  "identifier": "tesaguri.rondine.dev",
   "vendor": "tesaguri",
-  "slug": "comfortmail",
-  "scheme": "comfortmail",
+  "slug": "rondine",
+  "scheme": "rondine",
   "channel": "dev"
 }

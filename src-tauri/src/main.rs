@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    comfort_mail_lib::run();
+    rondine_lib::run();
 }

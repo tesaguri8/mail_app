@@ -25,16 +25,16 @@
 ```jsonc
 // config/app-identity.json  ← ここだけ編集すれば全体に反映
 {
-  "productName": "Comfort Mail",          // 表示名（仮称）
-  "identifier":  "tesaguri.comfortmail.dev", // 規則: tesaguri.<slug>.<channel|app>
+  "productName": "Rondine",          // 表示名
+  "identifier":  "tesaguri.rondine.dev", // 規則: tesaguri.<slug>.<channel|app>
   "vendor":      "tesaguri",
-  "slug":        "comfortmail",            // 両OS安全な連結（_・- を使わない）
-  "scheme":      "comfortmail",            // ディープリンク用 URL スキーム
+  "slug":        "rondine",            // 両OS安全な連結（_・- を使わない）
+  "scheme":      "rondine",            // ディープリンク用 URL スキーム
   "channel":     "dev"                     // dev/staging/stable（正式時は app）
 }
 ```
 
-> slug は **連結（`comfortmail`）**。Apple bundle id は下線不可、Android package はハイフン不可のため、区切りなしが安全。
+> slug は **連結（`rondine`）**。Apple bundle id は下線不可、Android package はハイフン不可のため、区切りなしが安全。
 
 ---
 

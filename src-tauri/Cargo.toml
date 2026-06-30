@@ -48,5 +48,12 @@ keyring = { version = "3", features = [
     "crypto-rust",
 ] }
 
+# IMAP 受信（同期）。TLS は native-tls（Win=SChannel / mac=SecureTransport → OpenSSL不要）
+imap = "2"
+native-tls = "0.2"
+
+# MIME 解析（堅牢・純Rust）。docs/THREADING.md
+mail-parser = "0.9"
+
 [dev-dependencies]
 tempfile = "3"

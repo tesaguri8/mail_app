@@ -30,6 +30,30 @@ impl Store {
         Ok(conn.last_insert_rowid())
     }
 
+    /// 同期に必要な IMAP 接続情報（email, host, port）を取得。
+    pub fn get_account_imap(&self, id: i64) -> rusqlite::Result<Option<(String, String, u16)>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT email, imap_host, imap_port FROM accounts WHERE id = ?1",
+            params![id],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)? as u16,
+                ))
+            },
+        )
+        .map(Some)
+        .or_else(|e| {
+            if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
+                Ok(None)
+            } else {
+                Err(e)
+            }
+        })
+    }
+
     pub fn list_accounts(&self) -> rusqlite::Result<Vec<AccountSummary>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(

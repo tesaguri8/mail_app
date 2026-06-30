@@ -36,5 +36,13 @@
     "testFail": "Connection failed",
     "adding": "Adding…",
     "needEmailFirst": "Enter an email address first"
+  },
+  "mailbox": {
+    "title": "Inbox",
+    "sync": "Sync",
+    "syncing": "Syncing…",
+    "empty": "No mail yet. Press \"Sync\".",
+    "account": "Account",
+    "result": "Fetched {{fetched}} / New {{stored}}"
   }
 }

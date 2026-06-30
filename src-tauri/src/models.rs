@@ -57,3 +57,24 @@ pub struct AccountSummary {
     pub imap_host: String,
     pub smtp_host: String,
 }
+
+/// メール一覧表示用（軽量）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct MailSummary {
+    pub id: i32,
+    pub subject: Option<String>,
+    pub from_address: Option<String>,
+    pub date: Option<String>,
+    pub preview: String,
+    pub is_read: bool,
+    pub has_attachments: bool,
+}
+
+/// 同期結果。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct SyncResult {
+    pub fetched: i32,
+    pub stored: i32,
+}

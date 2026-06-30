@@ -32,7 +32,9 @@ pub fn run() {
             commands::account_autoconfig,
             commands::account_add,
             commands::account_list,
-            commands::account_test_connection
+            commands::account_test_connection,
+            commands::mail_sync,
+            commands::mail_list
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

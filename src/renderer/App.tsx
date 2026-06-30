@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { TitleBar } from './components/TitleBar';
 import { AccountSetup } from './components/AccountSetup';
+import { MailList } from './components/MailList';
 import { APP } from './config/appIdentity';
 import type { AppInfo } from '@bindings/AppInfo';
 import type { DbInfo } from '@bindings/DbInfo';
@@ -62,8 +63,9 @@ export default function App() {
         </h1>
         <p className="text-white/70">{t('app.tagline')}</p>
 
-        <div className="mt-6">
+        <div className="mt-6 flex flex-col items-center">
           <AccountSetup />
+          <MailList />
         </div>
 
         {(appInfo || dbInfo) && (

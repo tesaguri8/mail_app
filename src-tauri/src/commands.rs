@@ -1,6 +1,9 @@
-use crate::models::{AccountInput, AccountSummary, AppInfo, AutoconfigResult, DbInfo};
-use crate::services::store::{NewAccount, Store};
+use crate::models::{
+    AccountInput, AccountSummary, AppInfo, AutoconfigResult, DbInfo, MailSummary, SyncResult,
+};
 use crate::services::autoconfig;
+use crate::services::store::{NewAccount, Store};
+use crate::services::imap_sync;
 use tauri::{AppHandle, State};
 
 /// アプリ識別情報を返す（identifier はハードコードせず Tauri 設定から取得）。
@@ -67,6 +70,39 @@ pub fn account_add(
 #[tauri::command]
 pub fn account_list(store: State<Store>) -> Result<Vec<AccountSummary>, String> {
     store.list_accounts().map_err(|e| e.to_string())
+}
+
+/// IMAP に接続して INBOX を同期し、新着を DB に保存（PoC）。
+/// ブロッキング処理は spawn_blocking に載せ、UI を止めない。
+#[tauri::command]
+pub async fn mail_sync(
+    app: AppHandle,
+    store: State<'_, Store>,
+    account_id: i64,
+) -> Result<SyncResult, String> {
+    let (email, host, port) = store
+        .get_account_imap(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "アカウントが見つかりません".to_string())?;
+    let service = app.config().identifier.clone();
+    let password = keyring::Entry::new(&service, &email)
+        .and_then(|e| e.get_password())
+        .map_err(|e| format!("資格情報を取得できません: {e}"))?;
+    let db_path = store.path.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        imap_sync::sync_account(&db_path, account_id, &host, port, &email, &password, 50)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// メール一覧を返す。
+#[tauri::command]
+pub fn mail_list(store: State<Store>, account_id: i64, limit: i64) -> Result<Vec<MailSummary>, String> {
+    store
+        .list_emails(account_id, limit)
+        .map_err(|e| e.to_string())
 }
 
 /// ホスト:ポートへの TCP 疎通テスト（認証は行わない。オンボーディングの確認用）。

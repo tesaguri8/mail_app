@@ -36,5 +36,13 @@
     "testFail": "接続できませんでした",
     "adding": "追加中…",
     "needEmailFirst": "メールアドレスを入力してください"
+  },
+  "mailbox": {
+    "title": "受信箱",
+    "sync": "同期",
+    "syncing": "同期中…",
+    "empty": "メールがありません。「同期」を押してください。",
+    "account": "アカウント",
+    "result": "取得 {{fetched}} 件 / 新規 {{stored}} 件"
   }
 }

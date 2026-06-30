@@ -6,18 +6,21 @@
 ---
 
 ## 1. 基本方針
-- ベンダー専用ディレクトリ（SNGDesign）配下にアプリ別ディレクトリ（MailApp）を配置
-- プラットフォーム固有の標準的な場所を使用
-- セキュリティとプライバシーを考慮した保存戦略
-- 将来的な他の SNGDesign アプリとの一貫性を保持
+- **アプリ識別子（identifier）規則: `tesaguri.<app_name>.app`**（Tesaguri アプリ共通。Primadoc = `tesaguri.primadoc.app`）。
+  - **暫定値: `tesaguri.mail_app.dev`**（製品名未確定のため `.dev` を使用）。名称確定時に `tesaguri.<確定名>.app` へ変更する。
+- データディレクトリは **この identifier をそのままフォルダ名**として、各 OS の標準場所に配置（Tauri / Primadoc と同方式）。
+- プラットフォーム固有の標準的な場所を使用。
+- セキュリティとプライバシーを考慮した保存戦略。
 
 ---
 
 ## 2. プラットフォーム別データ保存場所
 
+> 以下のパス中 `tesaguri.mail_app.dev` は暫定 identifier。名称確定時に置換する。
+
 ### Windows
 ```
-C:\Users\{username}\AppData\Roaming\SNGDesign\MailApp\
+C:\Users\{username}\AppData\Roaming\tesaguri.mail_app.dev\
 ├── data\
 │   ├── mail.db                # SQLite（SQLCipher 暗号化）
 │   ├── emails\                # メール本文ファイル（年月別: 2024\01\ ...）
@@ -34,8 +37,9 @@ C:\Users\{username}\AppData\Roaming\SNGDesign\MailApp\
 
 ### macOS
 ```
-~/Library/Application Support/SNGDesign/MailApp/
+~/Library/Application Support/tesaguri.mail_app.dev/
 ├── data/ (mail.db, emails/, attachments/, search/)
+├── media/backgrounds/
 ├── config/
 ├── cache/
 └── logs/
@@ -45,8 +49,8 @@ C:\Users\{username}\AppData\Roaming\SNGDesign\MailApp\
 
 ### Linux
 ```
-~/.local/share/sngdesign/mailapp/     # data/, cache/, logs/
-~/.config/sngdesign/mailapp/          # settings.json 等
+~/.local/share/tesaguri.mail_app.dev/     # data/, media/, cache/, logs/
+~/.config/tesaguri.mail_app.dev/          # settings.json 等
 機密情報: Secret Service（keyring クレート経由）
 ```
 
@@ -56,7 +60,7 @@ C:\Users\{username}\AppData\Roaming\SNGDesign\MailApp\
 
 ## 3. 実装例（Tauri / Rust）
 
-パスは Tauri の `path` API または `dirs` クレートで解決し、`SNGDesign/MailApp` を付与する。
+パスは Tauri の `path` API または `dirs` クレートで解決し、identifier（`tesaguri.mail_app.dev`）を付与する。
 資格情報は平文ファイルに置かず、必ず `keyring` を使う。
 
 ```rust
@@ -77,17 +81,16 @@ pub struct StoragePaths {
 }
 
 impl StoragePaths {
-    /// OS ごとの標準ベースディレクトリ配下に SNGDesign/MailApp を構築
+    /// 各 OS の標準ベースディレクトリ配下に identifier フォルダを構築。
+    /// identifier 規則: tesaguri.<app_name>.app（暫定: tesaguri.mail_app.dev）
     pub fn resolve() -> Self {
-        // Win:  %APPDATA%\SNGDesign\MailApp
-        // mac:  ~/Library/Application Support/SNGDesign/MailApp
-        // Linux: ~/.local/share/sngdesign/mailapp
+        // Win:   %APPDATA%\tesaguri.mail_app.dev
+        // mac:   ~/Library/Application Support/tesaguri.mail_app.dev
+        // Linux: ~/.local/share/tesaguri.mail_app.dev
+        // ※ Tauri 利用時は app_handle.path().app_data_dir()（identifier ベース）でも可
+        const APP_ID: &str = "tesaguri.mail_app.dev";
         let base = dirs::data_dir().expect("data_dir");
-        let app = if cfg!(target_os = "linux") {
-            base.join("sngdesign").join("mailapp")
-        } else {
-            base.join("SNGDesign").join("MailApp")
-        };
+        let app = base.join(APP_ID);
         let data = app.join("data");
         Self {
             database: data.join("mail.db"),
@@ -115,7 +118,7 @@ impl StoragePaths {
 }
 ```
 
-> Tauri 側で `app_handle.path().app_data_dir()` を使う方法もある。ベンダー名（SNGDesign）を確実に付与するため、上記のように明示的に組み立てる方針とする。
+> Tauri 側で `app_handle.path().app_data_dir()` を使えば identifier ベースのパスが得られる。明示制御したい場合は上記のように `APP_ID` から組み立てる。どちらも結果は `…/tesaguri.mail_app.dev/` に一致させる。
 > カスタム保存先（ユーザー指定ドライブ等）は設定で受け取り、バリデーション後に上書きする。
 
 ---
@@ -154,7 +157,7 @@ interface StorageConfig {
 
 ## 6. メリット
 1. **一貫性**: 全プラットフォームで統一されたディレクトリ構造
-2. **拡張性**: 将来の他 SNGDesign アプリとの統合が容易
+2. **拡張性**: identifier 規則（`tesaguri.<app>.app`）統一で、他 Tesaguri アプリ（Primadoc 等）と一貫
 3. **管理性**: 複数アプリ利用時の一元管理
 4. **標準準拠**: 各プラットフォームの標準的な場所を使用
 5. **セキュリティ**: 適切なアクセス制御と暗号化

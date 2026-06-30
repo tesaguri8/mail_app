@@ -76,19 +76,23 @@ mail_app/
 
 ## データ保存場所
 
+アプリ識別子（identifier）規則: **`tesaguri.<app_name>.app`**（Tesaguri アプリ共通）。
+**暫定値: `tesaguri.mail_app.dev`**（製品名未確定のため `.dev`。確定時に `tesaguri.<確定名>.app` へ）。
+データディレクトリはこの identifier をフォルダ名として各 OS 標準場所に配置（詳細: [docs/DATA_STORAGE.md](docs/DATA_STORAGE.md)）。
+
 ### Windows
 ```
-C:\Users\{username}\AppData\Roaming\SNGDesign\MailApp\
+C:\Users\{username}\AppData\Roaming\tesaguri.mail_app.dev\
 ```
 
 ### macOS
 ```
-~/Library/Application Support/SNGDesign/MailApp/
+~/Library/Application Support/tesaguri.mail_app.dev/
 ```
 
 ### Linux
 ```
-~/.local/share/sngdesign/mailapp/
+~/.local/share/tesaguri.mail_app.dev/
 ```
 
 ## 開発コマンド

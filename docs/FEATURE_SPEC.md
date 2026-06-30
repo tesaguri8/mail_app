@@ -120,7 +120,7 @@
 - **インポート**: ファイル選択 → 形式/サイズ検証（jpg/png/webp）→ アプリ保存領域（`media/backgrounds/`）へコピー → サムネ生成 → DB 登録。
 - **選択**: ギャラリーから固定表示、またはローテーション対象に追加。
 - **既定の表示**: **自動ローテーション（時間帯／日替わり）**。設定で固定/時間/日替わり/季節/ランダムへ切替可。
-- **保存先**: `%APPDATA%\SNGDesign\MailApp\media\backgrounds\`（[DATA_STORAGE.md](DATA_STORAGE.md)）。
+- **保存先**: `%APPDATA%\tesaguri.mail_app.dev\media\backgrounds\`（[DATA_STORAGE.md](DATA_STORAGE.md)）。
 
 ### 2.8 AI 活用（[AI_FEATURES.md](AI_FEATURES.md)）
 

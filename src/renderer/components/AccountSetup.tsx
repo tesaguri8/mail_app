@@ -7,7 +7,6 @@ import {
   accountAutoconfig,
   accountCheck,
   accountDelete,
-  accountList,
   accountTestLogin,
   serverAccountList,
 } from '../services/accounts';
@@ -20,9 +19,14 @@ const inputCls =
   'w-full rounded-md bg-white/10 px-3 py-2 text-sm text-white placeholder-white/40 outline-none focus:bg-white/20';
 const btnCls = 'rounded-md bg-white/15 px-3 py-2 text-sm hover:bg-white/25 disabled:opacity-40';
 
-export function AccountSetup() {
+export function AccountSetup({
+  accounts,
+  onChanged,
+}: {
+  accounts: AccountSummary[];
+  onChanged: () => void;
+}) {
   const { t } = useTranslation();
-  const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [servers, setServers] = useState<ServerAccountSummary[]>([]);
   const [conn, setConn] = useState<Record<number, ConnState>>({});
   const [adding, setAdding] = useState(false);
@@ -47,19 +51,21 @@ export function AccountSetup() {
       .catch((e) => setConn((c) => ({ ...c, [id]: { state: 'error', msg: String(e) } })));
   };
 
-  const refresh = () => {
+  // サーバー設定一覧の取得
+  const loadServers = () => {
     if (!isTauri) return;
-    accountList()
-      .then((a) => {
-        setAccounts(a);
-        a.forEach((acc) => checkConn(acc.id));
-      })
-      .catch(() => undefined);
     serverAccountList()
       .then(setServers)
       .catch(() => undefined);
   };
-  useEffect(refresh, []);
+  useEffect(loadServers, []);
+
+  // アカウントが変わるたびに各接続状態をチェック
+  useEffect(() => {
+    if (!isTauri) return;
+    accounts.forEach((a) => checkConn(a.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accounts]);
 
   const onPickServer = (id: string) => {
     const s = servers.find((x) => String(x.id) === id);
@@ -104,7 +110,7 @@ export function AccountSetup() {
   const onDelete = async (id: number) => {
     try {
       await accountDelete(id);
-      refresh();
+      onChanged();
     } catch {
       /* noop */
     }
@@ -133,7 +139,8 @@ export function AccountSetup() {
       setPassword('');
       setNote('');
       setStatus('');
-      refresh();
+      onChanged();
+      loadServers();
     } catch (e) {
       setStatus('✕ ' + String(e));
     } finally {

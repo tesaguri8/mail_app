@@ -3,13 +3,11 @@ import { useTranslation } from 'react-i18next';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailSummary } from '@bindings/MailSummary';
 import type { MailDetail } from '@bindings/MailDetail';
-import { accountList } from '../services/accounts';
 import { accountSetSyncWindow, mailGet, mailList, mailSync } from '../services/mail';
 import { MailView } from './MailView';
 
 const WINDOWS = ['n50', 'n200', '3d', '7d', '30d', '3m', '6m', 'all'] as const;
 
-const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 const btnCls = 'rounded-md bg-white/15 px-3 py-1.5 text-sm hover:bg-white/25 disabled:opacity-40';
 
 function formatDate(d: string | null): string {
@@ -18,24 +16,22 @@ function formatDate(d: string | null): string {
   return isNaN(dt.getTime()) ? d : dt.toLocaleString();
 }
 
-export function MailList() {
+export function MailList({ accounts }: { accounts: AccountSummary[] }) {
   const { t } = useTranslation();
-  const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
   const [mails, setMails] = useState<MailSummary[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [status, setStatus] = useState('');
   const [opened, setOpened] = useState<MailDetail | null>(null);
+  const [windowSel, setWindowSel] = useState('6m');
 
   useEffect(() => {
-    if (!isTauri) return;
-    accountList()
-      .then((a) => {
-        setAccounts(a);
-        if (a.length > 0) setSelected((prev) => prev ?? a[0].id);
-      })
-      .catch(() => undefined);
-  }, []);
+    if (accounts.length > 0) {
+      setSelected((prev) => (prev != null && accounts.some((a) => a.id === prev) ? prev : accounts[0].id));
+    } else {
+      setSelected(null);
+    }
+  }, [accounts]);
 
   const loadMails = (id: number) => mailList(id, 100).then(setMails).catch(() => undefined);
 
@@ -60,11 +56,13 @@ export function MailList() {
 
   const current = accounts.find((a) => a.id === selected);
 
+  useEffect(() => {
+    setWindowSel(current?.sync_window ?? '6m');
+  }, [current?.sync_window]);
+
   const onChangeWindow = async (w: string) => {
     if (selected == null) return;
-    setAccounts((prev) =>
-      prev.map((a) => (a.id === selected ? { ...a, sync_window: w } : a))
-    );
+    setWindowSel(w);
     try {
       await accountSetSyncWindow(selected, w);
     } catch {
@@ -102,7 +100,7 @@ export function MailList() {
         <select
           className="rounded-md bg-white/10 px-2 py-1 text-xs outline-none"
           title={t('mailbox.window')}
-          value={current?.sync_window ?? '6m'}
+          value={windowSel}
           onChange={(e) => onChangeWindow(e.target.value)}
         >
           {WINDOWS.map((w) => (

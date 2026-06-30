@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { TitleBar } from './components/TitleBar';
 import { AccountSetup } from './components/AccountSetup';
 import { MailList } from './components/MailList';
 import { APP } from './config/appIdentity';
+import { accountList } from './services/accounts';
 import type { AppInfo } from '@bindings/AppInfo';
+import type { AccountSummary } from '@bindings/AccountSummary';
 import type { DbInfo } from '@bindings/DbInfo';
 // Phase 1: アプリ同梱の背景画像（プレースホルダ。docs/UI_UX_DESIGN.md 背景写真システム）
 import backgroundUrl from './assets/background.jpg';
@@ -26,6 +28,15 @@ export default function App() {
   const now = useClock();
   const [appInfo, setAppInfo] = useState<string>('');
   const [dbInfo, setDbInfo] = useState<string>('');
+  const [accounts, setAccounts] = useState<AccountSummary[]>([]);
+
+  const refreshAccounts = useCallback(() => {
+    if (!isTauri) return;
+    accountList()
+      .then(setAccounts)
+      .catch(() => undefined);
+  }, []);
+  useEffect(refreshAccounts, [refreshAccounts]);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -64,8 +75,8 @@ export default function App() {
         <p className="text-white/70">{t('app.tagline')}</p>
 
         <div className="mt-6 flex flex-col items-center">
-          <AccountSetup />
-          <MailList />
+          <AccountSetup accounts={accounts} onChanged={refreshAccounts} />
+          <MailList accounts={accounts} />
         </div>
 
         {(appInfo || dbInfo) && (

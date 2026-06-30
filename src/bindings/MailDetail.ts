@@ -3,4 +3,8 @@
 /**
  * メール詳細（本文表示用）。
  */
-export type MailDetail = { id: number, subject: string | null, from_address: string | null, to_addresses: string | null, date: string | null, clean_body: string | null, body_plain: string | null, has_attachments: boolean, };
+export type MailDetail = { id: number, subject: string | null, from_address: string | null, to_addresses: string | null, date: string | null, clean_body: string | null, body_plain: string | null, 
+/**
+ * HTML 本文（あれば）。レンダラ側でテキスト＋リンクのみ安全描画する。
+ */
+body_html: string | null, has_attachments: boolean, };

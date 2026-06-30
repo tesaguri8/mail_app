@@ -13,6 +13,7 @@ pub struct NewEmail {
     pub date: Option<String>,
     pub body_plain: Option<String>,
     pub clean_body: Option<String>,
+    pub body_html: Option<String>,
     pub has_attachments: bool,
 }
 
@@ -21,8 +22,8 @@ pub struct NewEmail {
 pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<Option<i64>> {
     let changed = conn.execute(
         "INSERT OR IGNORE INTO emails
-           (account_id, message_id, canonical_key, subject, from_address, to_addresses, date, has_attachments, body_plain, clean_body)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+           (account_id, message_id, canonical_key, subject, from_address, to_addresses, date, has_attachments, body_plain, clean_body, body_html)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             e.account_id,
             e.message_id,
@@ -34,6 +35,7 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<Option<
             e.has_attachments as i64,
             e.body_plain,
             e.clean_body,
+            e.body_html,
         ],
     )?;
     if changed == 0 {
@@ -125,7 +127,7 @@ impl Store {
     pub fn get_email(&self, id: i64) -> rusqlite::Result<Option<MailDetail>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, has_attachments
+            "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, has_attachments
              FROM emails WHERE id = ?1",
             params![id],
             |r| {
@@ -137,7 +139,8 @@ impl Store {
                     date: r.get(4)?,
                     clean_body: r.get(5)?,
                     body_plain: r.get(6)?,
-                    has_attachments: r.get::<_, i64>(7)? != 0,
+                    body_html: r.get(7)?,
+                    has_attachments: r.get::<_, i64>(8)? != 0,
                 })
             },
         )

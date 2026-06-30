@@ -229,6 +229,7 @@ fn store_fetches<'a>(
                 date: p.date,
                 body_plain: p.body_plain,
                 clean_body: p.clean_body,
+                body_html: p.body_html,
                 has_attachments: p.has_attachments,
             };
             if insert_email(conn, &ne).map_err(|e| e.to_string())?.is_some() {

@@ -113,6 +113,8 @@ pub struct MailDetail {
     pub date: Option<String>,
     pub clean_body: Option<String>,
     pub body_plain: Option<String>,
+    /// HTML 本文（あれば）。レンダラ側でテキスト＋リンクのみ安全描画する。
+    pub body_html: Option<String>,
     pub has_attachments: bool,
 }
 

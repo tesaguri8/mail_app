@@ -10,6 +10,7 @@ pub struct ParsedEmail {
     pub date: Option<String>,
     pub body_plain: Option<String>,
     pub clean_body: Option<String>,
+    pub body_html: Option<String>,
     pub has_attachments: bool,
     pub preview: String,
 }
@@ -32,6 +33,7 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
     let message_id = msg.message_id().map(|s| s.to_string());
     let date = msg.date().map(|d| d.to_rfc3339());
     let body_plain = msg.body_text(0).map(|c| c.to_string());
+    let body_html = msg.body_html(0).map(|c| c.to_string());
     let has_attachments = msg.attachments().count() > 0;
 
     let clean_body = body_plain.as_deref().map(strip_quotes);
@@ -62,6 +64,7 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
         date,
         body_plain,
         clean_body,
+        body_html,
         has_attachments,
         preview,
     })

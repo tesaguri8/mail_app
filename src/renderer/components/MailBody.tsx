@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { MailDetail } from '@bindings/MailDetail';
+import { HtmlText } from './HtmlText';
 
 function formatDate(d: string | null): string {
   if (!d) return '';
@@ -18,7 +19,9 @@ export function MailBody({ detail }: { detail: MailDetail }) {
 
   const clean = detail.clean_body ?? '';
   const full = detail.body_plain ?? '';
-  const hasQuotedExtra = full.trim().length > clean.trim().length;
+  const html = detail.body_html?.trim() ?? '';
+  const hasHtml = html.length > 0;
+  const hasQuotedExtra = !hasHtml && full.trim().length > clean.trim().length;
   const body = showQuotes ? full : clean || full;
 
   return (
@@ -41,7 +44,9 @@ export function MailBody({ detail }: { detail: MailDetail }) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-        {body.trim() ? (
+        {hasHtml ? (
+          <HtmlText html={html} />
+        ) : body.trim() ? (
           <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-white/90">
             {body}
           </pre>

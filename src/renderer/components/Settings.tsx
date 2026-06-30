@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import { APP } from '../config/appIdentity';
+import { getInlineImages, setInlineImages } from '../config/prefs';
 import { AccountSetup } from './AccountSetup';
 import { SignatureManager } from './SignatureManager';
 
@@ -47,9 +48,7 @@ export function Settings({
       <div className="min-h-0 overflow-y-auto p-5">
         {section === 'accounts' && <AccountSetup accounts={accounts} onChanged={onChanged} />}
         {section === 'signatures' && <SignatureManager />}
-        {section === 'display' && (
-          <p className="text-sm text-white/60">表示設定は今後追加します。</p>
-        )}
+        {section === 'display' && <DisplaySettings />}
         {section === 'about' && (
           <div className="space-y-1 text-sm text-white/70">
             <div className="text-base font-semibold text-white">{APP.productName}</div>
@@ -60,6 +59,46 @@ export function Settings({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** 表示設定: インライン画像の自動取得など。 */
+function DisplaySettings() {
+  const { t } = useTranslation();
+  const [inline, setInline] = useState(getInlineImages());
+
+  const toggleInline = () => {
+    const next = !inline;
+    setInline(next);
+    setInlineImages(next);
+  };
+
+  return (
+    <div className="space-y-4">
+      <label className="flex cursor-pointer items-start justify-between gap-4">
+        <span>
+          <span className="block text-sm text-white/85">{t('settings.inlineImages')}</span>
+          <span className="mt-0.5 block text-xs text-white/45">
+            {t('settings.inlineImagesHint')}
+          </span>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={inline}
+          onClick={toggleInline}
+          className={`relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors ${
+            inline ? 'bg-sky-500' : 'bg-white/20'
+          }`}
+        >
+          <span
+            className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+              inline ? 'translate-x-4' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+      </label>
     </div>
   );
 }

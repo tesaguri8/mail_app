@@ -42,6 +42,7 @@ pub fn run() {
             commands::mail_get,
             commands::mail_attachments,
             commands::attachment_download,
+            commands::attachment_view,
             commands::attachment_open,
             commands::mail_set_read,
             commands::mail_set_starred,

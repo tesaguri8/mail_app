@@ -130,6 +130,10 @@ pub struct AttachmentSummary {
     pub is_downloaded: bool,
     /// ダウンロード済みの保存先（未取得なら None）。
     pub file_path: Option<String>,
+    /// 'attachment'（本来の添付）| 'inline'（本文埋め込み画像）。
+    pub kind: String,
+    /// Content-ID（cid: 参照の解決用。山括弧除去済み）。
+    pub content_id: Option<String>,
 }
 
 /// 同期結果。

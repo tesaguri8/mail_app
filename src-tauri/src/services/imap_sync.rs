@@ -252,6 +252,8 @@ fn store_fetches<'a>(
                     filename: a.filename,
                     content_type: a.content_type,
                     size: a.size,
+                    kind: a.kind,
+                    content_id: a.content_id,
                 })
                 .collect();
             let ne = NewEmail {

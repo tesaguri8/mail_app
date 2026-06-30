@@ -4,6 +4,7 @@ use crate::models::{
 };
 use crate::services::autoconfig;
 use crate::services::imap_sync;
+use crate::services::media;
 use crate::services::store::{NewAccount, NewServerAccount, Store};
 use tauri::{AppHandle, Manager, State};
 
@@ -276,26 +277,23 @@ pub fn mail_attachments(
     store.list_attachments(email_id).map_err(|e| e.to_string())
 }
 
-/// 添付ファイルをオンデマンドで取得して保存する（既に取得済みならそれを返す）。
+/// 添付本体をディスクに用意して保存先パスを返す（既に取得済みならそれを再利用）。
 /// emails.uid + attachments.part_index で IMAP から該当パートだけを再取得する。
-#[tauri::command]
-pub async fn attachment_download(
-    app: AppHandle,
-    store: State<'_, Store>,
+async fn ensure_attachment_file(
+    app: &AppHandle,
+    store: &Store,
     attachment_id: i64,
-) -> Result<AttachmentSummary, String> {
+) -> Result<std::path::PathBuf, String> {
     let info = store
         .attachment_fetch_info(attachment_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "添付が見つかりません".to_string())?;
 
-    // 取得済みでファイルが残っていればそのまま返す
+    // 取得済みでファイルが残っていればそのまま使う
     if let Some(path) = info.file_path.as_ref() {
-        if std::path::Path::new(path).exists() {
-            return store
-                .get_attachment(attachment_id)
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| "添付が見つかりません".to_string());
+        let p = std::path::PathBuf::from(path);
+        if p.exists() {
+            return Ok(p);
         }
     }
 
@@ -347,17 +345,65 @@ pub async fn attachment_download(
         .set_attachment_downloaded(attachment_id, &path_str, Some(&checksum))
         .map_err(|e| e.to_string())?;
 
+    Ok(path)
+}
+
+/// 添付ファイルをオンデマンドで取得して保存する（既に取得済みならそれを返す）。
+#[tauri::command]
+pub async fn attachment_download(
+    app: AppHandle,
+    store: State<'_, Store>,
+    attachment_id: i64,
+) -> Result<AttachmentSummary, String> {
+    ensure_attachment_file(&app, &store, attachment_id).await?;
     store
         .get_attachment(attachment_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "添付が見つかりません".to_string())
 }
 
-/// ダウンロード済みの添付を OS の関連アプリで開く。
+/// 画像の添付/インラインを web 表示用に変換し、data URL を返す。
+/// HEIC は WebView 非対応のため JPEG へ変換し、大きすぎる画像は縮小する。
+/// `thumb=true` なら一覧サムネイル用に小さめのレンディションを返す。
 #[tauri::command]
-pub fn attachment_open(
+pub async fn attachment_view(
     app: AppHandle,
-    store: State<Store>,
+    store: State<'_, Store>,
+    attachment_id: i64,
+    thumb: bool,
+) -> Result<String, String> {
+    let att = store
+        .get_attachment(attachment_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "添付が見つかりません".to_string())?;
+    let ct = att.content_type.as_deref();
+    if !media::is_image(ct, &att.filename) {
+        return Err("画像ではありません".to_string());
+    }
+
+    let path = ensure_attachment_file(&app, &store, attachment_id).await?;
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let max = if thumb {
+        media::THUMB_MAX
+    } else {
+        media::VIEW_MAX
+    };
+
+    let filename = att.filename.clone();
+    let content_type = att.content_type.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        media::to_web_data_url(&bytes, content_type.as_deref(), &filename, max)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 添付を OS の関連アプリで開く（未取得なら先に取得）。
+/// HEIC は Windows 標準で開けないことがあるため、JPEG レンディションを作って開く。
+#[tauri::command]
+pub async fn attachment_open(
+    app: AppHandle,
+    store: State<'_, Store>,
     attachment_id: i64,
 ) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
@@ -365,14 +411,26 @@ pub fn attachment_open(
         .get_attachment(attachment_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "添付が見つかりません".to_string())?;
-    let path = att
-        .file_path
-        .ok_or_else(|| "まだダウンロードされていません".to_string())?;
-    if !std::path::Path::new(&path).exists() {
-        return Err("ファイルが見つかりません".to_string());
-    }
+
+    let original = ensure_attachment_file(&app, &store, attachment_id).await?;
+
+    // HEIC はそのままだと Windows で開けない場合があるので JPEG 版を作って開く。
+    let to_open = if media::is_heic(att.content_type.as_deref(), &att.filename) {
+        let bytes = std::fs::read(&original).map_err(|e| e.to_string())?;
+        let jpeg = tauri::async_runtime::spawn_blocking(move || {
+            media::heic_to_jpeg_bytes(&bytes, media::VIEW_MAX)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        let jpeg_path = original.with_extension("jpg");
+        std::fs::write(&jpeg_path, &jpeg).map_err(|e| e.to_string())?;
+        jpeg_path
+    } else {
+        original
+    };
+
     app.opener()
-        .open_path(path, None::<&str>)
+        .open_path(to_open.to_string_lossy().to_string(), None::<&str>)
         .map_err(|e| e.to_string())
 }
 

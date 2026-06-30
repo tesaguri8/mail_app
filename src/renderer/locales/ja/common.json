@@ -76,7 +76,9 @@
     "accounts": "アカウント",
     "signatures": "署名",
     "display": "表示",
-    "about": "このアプリ"
+    "about": "このアプリ",
+    "inlineImages": "本文の埋め込み画像を表示",
+    "inlineImagesHint": "メールに同梱されたインライン画像を自動取得して本文に表示します。外部（リモート）画像は引き続きブロックします。"
   },
   "lang": {
     "switch": "EN"
@@ -141,6 +143,8 @@
     "attachments": "添付ファイル",
     "attachmentDownload": "ダウンロード",
     "attachmentOpen": "開く",
+    "attachmentPreview": "プレビュー",
+    "attachmentHide": "閉じる",
     "attachmentBusy": "処理中…",
     "more": "もっと読む →",
     "selectMail": "メールを選択してください",

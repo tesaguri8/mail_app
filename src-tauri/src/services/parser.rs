@@ -7,6 +7,25 @@ pub struct ParsedAttachment {
     pub filename: String,
     pub content_type: Option<String>,
     pub size: i64,
+    /// 'attachment'（本来の添付）| 'inline'（本文埋め込み画像）。
+    pub kind: &'static str,
+    /// Content-ID（cid: 参照の解決用。前後の山括弧は除去済み）。
+    pub content_id: Option<String>,
+}
+
+/// 添付パートを「本来の添付」と「本文埋め込み(inline)」に分類する。
+/// Content-Disposition が inline、または Content-ID を持つ画像は inline 扱い。
+fn classify_part(part: &mail_parser::MessagePart) -> &'static str {
+    let disp_inline = part
+        .content_disposition()
+        .map(|d| d.ctype().eq_ignore_ascii_case("inline"))
+        .unwrap_or(false);
+    let has_cid = part.content_id().is_some();
+    if disp_inline || has_cid {
+        "inline"
+    } else {
+        "attachment"
+    }
 }
 
 /// MIME 解析結果（内部）。docs/THREADING.md の解析基盤の最小実装。
@@ -67,6 +86,11 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
             filename: part_filename(part, i),
             content_type: part_content_type(part),
             size: part.contents().len() as i64,
+            kind: classify_part(part),
+            // Content-ID は通常 <...> で囲まれる。cid: 参照と突き合わせるため山括弧を除去。
+            content_id: part
+                .content_id()
+                .map(|c| c.trim_matches(|ch| ch == '<' || ch == '>').to_string()),
         })
         .collect();
     let has_attachments = !attachments.is_empty();

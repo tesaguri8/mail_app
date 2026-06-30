@@ -1,0 +1,10 @@
+# HEIC デコード用の libheif（libheif-sys）は vcpkg 経由でネイティブライブラリを探す。
+# この開発機では vcpkg が C:\vcpkg にあり、libheif:x64-windows-static-md が導入済み。
+# force = false（既定）なので、環境変数 VCPKG_ROOT が既に設定されていればそちらが優先される
+# （CI や別マシンで上書き可能）。
+#
+# 別マシンでのセットアップ:
+#   vcpkg install libheif[hevc]:x64-windows-static-md
+#   （または VCPKG_ROOT を自分の vcpkg ツリーに向ける）
+[env]
+VCPKG_ROOT = "C:\\vcpkg"

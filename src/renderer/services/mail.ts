@@ -20,6 +20,10 @@ export const mailAttachments = (emailId: number) =>
 export const attachmentDownload = (attachmentId: number) =>
   invoke<AttachmentSummary>('attachment_download', { attachmentId });
 
+// 画像の添付/インラインを web 表示用 data URL に変換して取得（HEIC は JPEG 化）。
+export const attachmentView = (attachmentId: number, thumb = false) =>
+  invoke<string>('attachment_view', { attachmentId, thumb });
+
 // ダウンロード済みの添付を OS の関連アプリで開く。
 export const attachmentOpen = (attachmentId: number) =>
   invoke<void>('attachment_open', { attachmentId });

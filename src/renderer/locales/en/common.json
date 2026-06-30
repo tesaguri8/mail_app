@@ -76,7 +76,9 @@
     "accounts": "Accounts",
     "signatures": "Signatures",
     "display": "Display",
-    "about": "About"
+    "about": "About",
+    "inlineImages": "Show embedded images in body",
+    "inlineImagesHint": "Automatically fetch inline images bundled in the message and show them in the body. Remote (external) images stay blocked."
   },
   "lang": {
     "switch": "JP"
@@ -141,6 +143,8 @@
     "attachments": "Attachments",
     "attachmentDownload": "Download",
     "attachmentOpen": "Open",
+    "attachmentPreview": "Preview",
+    "attachmentHide": "Hide",
     "attachmentBusy": "Working…",
     "more": "Read more →",
     "selectMail": "Select a message",

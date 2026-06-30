@@ -8,4 +8,12 @@ export type AttachmentSummary = { id: number, filename: string, content_type: st
 /**
  * ダウンロード済みの保存先（未取得なら None）。
  */
-file_path: string | null, };
+file_path: string | null, 
+/**
+ * 'attachment'（本来の添付）| 'inline'（本文埋め込み画像）。
+ */
+kind: string, 
+/**
+ * Content-ID（cid: 参照の解決用。山括弧除去済み）。
+ */
+content_id: string | null, };

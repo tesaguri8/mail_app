@@ -34,10 +34,13 @@ const BLOCK = new Set([
   'h6',
   'blockquote',
 ]);
-// 中身を捨てる要素（スクリプト・スタイル・画像など）
-const DROP = new Set(['script', 'style', 'head', 'title', 'noscript', 'iframe', 'img', 'svg']);
+// 中身を捨てる要素（スクリプト・スタイル等）。img は cid: 解決時のみ描画する。
+const DROP = new Set(['script', 'style', 'head', 'title', 'noscript', 'iframe', 'svg']);
 
-function renderNode(node: Node, key: number): ReactNode {
+/** 本文埋め込み画像（content_id → data URL）。リモート画像は対象外（ブロック）。 */
+type InlineImages = Record<string, string>;
+
+function renderNode(node: Node, key: number, inlineImages: InlineImages): ReactNode {
   if (node.nodeType === Node.TEXT_NODE) {
     return node.textContent ?? '';
   }
@@ -47,8 +50,34 @@ function renderNode(node: Node, key: number): ReactNode {
   const tag = el.tagName.toLowerCase();
   if (DROP.has(tag)) return null;
 
+  // 画像: cid: 参照かつ解決済みのものだけ表示。リモート(http)は既定ブロック。
+  if (tag === 'img') {
+    const src = (el.getAttribute('src') ?? '').trim();
+    const alt = el.getAttribute('alt') ?? '';
+    if (src.toLowerCase().startsWith('cid:')) {
+      const cid = src.slice(4).replace(/^<|>$/g, '');
+      const url = inlineImages[cid];
+      if (url) {
+        return (
+          <img
+            key={key}
+            src={url}
+            alt={alt}
+            className="my-2 block max-h-[480px] max-w-full rounded-md"
+          />
+        );
+      }
+    }
+    // 未解決 / リモート画像はプレースホルダのみ（トラッキング防止）
+    return (
+      <span key={key} className="text-white/30" title={src}>
+        🖼{alt ? ` ${alt}` : ''}
+      </span>
+    );
+  }
+
   const children: ReactNode[] = [];
-  el.childNodes.forEach((c, i) => children.push(renderNode(c, i)));
+  el.childNodes.forEach((c, i) => children.push(renderNode(c, i, inlineImages)));
 
   if (tag === 'br') return <br key={key} />;
 
@@ -79,12 +108,19 @@ function renderNode(node: Node, key: number): ReactNode {
 }
 
 /**
- * メールの HTML 本文を「テキスト＋リンクのみ」で安全に描画する。
+ * メールの HTML 本文を「テキスト＋リンク＋埋め込み画像」で安全に描画する。
  * - innerHTML は使わず DOM を走査して React 要素に変換（スクリプト実行なし）
- * - 画像/スクリプト/スタイルは描画しない（リモート画像によるトラッキング既定ブロック）
+ * - スクリプト/スタイルは描画しない。リモート(http)画像は既定ブロック（トラッキング防止）
+ * - cid: 埋め込み画像は解決済み（inlineImages）のものだけ表示
  * - リンクは下線なしの水色。クリックは外部ブラウザで開く
  */
-export function HtmlText({ html }: { html: string }) {
+export function HtmlText({
+  html,
+  inlineImages = {},
+}: {
+  html: string;
+  inlineImages?: InlineImages;
+}) {
   let doc: Document;
   try {
     doc = new DOMParser().parseFromString(html, 'text/html');
@@ -92,7 +128,7 @@ export function HtmlText({ html }: { html: string }) {
     return <>{html}</>;
   }
   const nodes: ReactNode[] = [];
-  doc.body.childNodes.forEach((c, i) => nodes.push(renderNode(c, i)));
+  doc.body.childNodes.forEach((c, i) => nodes.push(renderNode(c, i, inlineImages)));
   return (
     <div className="break-words text-sm leading-relaxed text-white/90 [&_a]:break-all">{nodes}</div>
   );

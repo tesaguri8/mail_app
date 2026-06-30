@@ -27,6 +27,8 @@ pub struct NewAttachment {
     pub filename: String,
     pub content_type: Option<String>,
     pub size: i64,
+    pub kind: &'static str,
+    pub content_id: Option<String>,
 }
 
 /// オンデマンド再取得に必要な情報（添付＋親メール）。
@@ -74,8 +76,8 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<Option<
     // 添付メタ（本体は file_path NULL = 未取得）
     if !e.attachments.is_empty() {
         let mut stmt = conn.prepare(
-            "INSERT INTO attachments (email_id, filename, content_type, size, part_index)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO attachments (email_id, filename, content_type, size, part_index, kind, content_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )?;
         for a in &e.attachments {
             stmt.execute(params![
@@ -83,7 +85,9 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<Option<
                 a.filename,
                 a.content_type,
                 a.size,
-                a.part_index
+                a.part_index,
+                a.kind,
+                a.content_id
             ])?;
         }
     }
@@ -205,6 +209,8 @@ impl Store {
             size: r.get::<_, Option<i64>>(3)?.unwrap_or(0) as i32,
             is_downloaded: file_path.is_some(),
             file_path,
+            kind: r.get(5)?,
+            content_id: r.get(6)?,
         })
     }
 
@@ -212,7 +218,7 @@ impl Store {
     pub fn list_attachments(&self, email_id: i64) -> rusqlite::Result<Vec<AttachmentSummary>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, filename, content_type, size, file_path
+            "SELECT id, filename, content_type, size, file_path, kind, content_id
              FROM attachments WHERE email_id = ?1 ORDER BY part_index",
         )?;
         let rows = stmt.query_map(params![email_id], Self::map_attachment)?;
@@ -223,7 +229,7 @@ impl Store {
     pub fn get_attachment(&self, id: i64) -> rusqlite::Result<Option<AttachmentSummary>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, filename, content_type, size, file_path FROM attachments WHERE id = ?1",
+            "SELECT id, filename, content_type, size, file_path, kind, content_id FROM attachments WHERE id = ?1",
             params![id],
             Self::map_attachment,
         )

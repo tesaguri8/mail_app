@@ -30,6 +30,16 @@
     "attachment": "Has attachment",
     "flag": "Follow-up"
   },
+  "date": {
+    "filter": "Filter by date",
+    "after": "On/after",
+    "before": "On/before",
+    "range": "Range",
+    "start": "Start date",
+    "end": "End date",
+    "apply": "Apply",
+    "clear": "Clear"
+  },
   "compose": {
     "new": "Compose",
     "reply": "Reply",

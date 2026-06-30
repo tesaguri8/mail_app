@@ -30,6 +30,16 @@
     "attachment": "添付あり",
     "flag": "要再確認"
   },
+  "date": {
+    "filter": "期間で絞り込み",
+    "after": "以降",
+    "before": "以前",
+    "range": "期間",
+    "start": "開始日",
+    "end": "終了日",
+    "apply": "適用",
+    "clear": "クリア"
+  },
   "compose": {
     "new": "新規作成",
     "reply": "返信",

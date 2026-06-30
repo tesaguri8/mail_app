@@ -33,6 +33,7 @@ import {
 import { MailBody } from './MailBody';
 import { FolderCombobox } from './FolderCombobox';
 import { ContextMenu, type MenuItem } from './ContextMenu';
+import { DateFilter, matchesDate, type DateRange } from './DateFilter';
 
 const iconBtn =
   'flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80 disabled:opacity-40';
@@ -89,6 +90,8 @@ export function MailboxView({
   const [folder, setFolder] = useState('inbox');
   // リスト絞り込みトグル
   const [filters, setFilters] = useState<Set<string>>(new Set());
+  // 期間フィルタ（以降/以前/期間）
+  const [dateFilter, setDateFilter] = useState<DateRange | null>(null);
   const toggleFilter = (key: string) =>
     setFilters((prev) => {
       const next = new Set(prev);
@@ -268,7 +271,9 @@ export function MailboxView({
     return <div className="p-8 text-white/60">{t('mailbox.addInSettings')}</div>;
   }
 
-  const visibleMails = mails.filter((m) => matchesFilters(m, filters));
+  const visibleMails = mails.filter(
+    (m) => matchesFilters(m, filters) && matchesDate(m.date, dateFilter)
+  );
 
   const listPane =
     folder !== 'inbox' ? (
@@ -371,6 +376,7 @@ export function MailboxView({
             </button>
           );
         })}
+        <DateFilter value={dateFilter} onChange={setDateFilter} />
         <span className="mx-1 h-5 w-px bg-white/15" />
 
         <button

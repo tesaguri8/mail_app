@@ -1,11 +1,33 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronsUpDown } from 'lucide-react';
+import {
+  Ban,
+  ChevronsUpDown,
+  FilePen,
+  Folder,
+  Inbox,
+  Send,
+  Trash2,
+  type LucideIcon,
+} from 'lucide-react';
 
 export type FolderOption = { key: string; label: string; group?: boolean };
 
 /** 標準フォルダ。フィルタリンググループは groups で後から渡す。 */
 export const STANDARD_FOLDERS = ['inbox', 'drafts', 'sent', 'trash', 'spam'] as const;
+
+/** フォルダのアイコン（スパムは bad アイコン）。 */
+const FOLDER_ICON: Record<string, LucideIcon> = {
+  inbox: Inbox,
+  drafts: FilePen,
+  sent: Send,
+  trash: Trash2,
+  spam: Ban,
+};
+
+function iconFor(o: FolderOption): LucideIcon {
+  return FOLDER_ICON[o.key] ?? Folder;
+}
 
 /**
  * フォルダ/グループ選択のコンボボックス（入力オートコンプリート＋ドロップダウン）。
@@ -58,7 +80,13 @@ export function FolderCombobox({
         onClick={() => setOpen((v) => !v)}
         className="flex min-w-[140px] items-center justify-between gap-2 rounded-md bg-white/10 px-2 py-1 text-xs hover:bg-white/15"
       >
-        <span className="truncate">{current?.label ?? t('mailbox.f_inbox')}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          {(() => {
+            const Icon = iconFor(current ?? { key: 'inbox', label: '' });
+            return <Icon size={13} className="shrink-0 text-white/55" />;
+          })()}
+          <span className="truncate">{current?.label ?? t('mailbox.f_inbox')}</span>
+        </span>
         <ChevronsUpDown size={13} className="shrink-0 text-white/45" />
       </button>
 
@@ -72,35 +100,43 @@ export function FolderCombobox({
             className="w-full border-b border-white/10 bg-transparent px-3 py-2 text-xs outline-none placeholder-white/40"
           />
           <ul className="max-h-64 overflow-y-auto py-1">
-            {folders.map((o) => (
-              <li key={o.key}>
-                <button
-                  onClick={() => pick(o.key)}
-                  className={`block w-full px-3 py-1.5 text-left text-xs hover:bg-white/10 ${
-                    o.key === value ? 'text-sky-300' : 'text-white/85'
-                  }`}
-                >
-                  {o.label}
-                </button>
-              </li>
-            ))}
+            {folders.map((o) => {
+              const Icon = iconFor(o);
+              return (
+                <li key={o.key}>
+                  <button
+                    onClick={() => pick(o.key)}
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-white/10 ${
+                      o.key === value ? 'text-sky-300' : 'text-white/85'
+                    }`}
+                  >
+                    <Icon size={14} className="shrink-0 opacity-80" />
+                    {o.label}
+                  </button>
+                </li>
+              );
+            })}
             {groupItems.length > 0 && (
               <li className="mt-1 border-t border-white/10 px-3 pb-1 pt-1.5 text-[10px] uppercase tracking-wide text-white/40">
                 {t('mailbox.folderGroups')}
               </li>
             )}
-            {groupItems.map((o) => (
-              <li key={o.key}>
-                <button
-                  onClick={() => pick(o.key)}
-                  className={`block w-full px-3 py-1.5 text-left text-xs hover:bg-white/10 ${
-                    o.key === value ? 'text-sky-300' : 'text-white/85'
-                  }`}
-                >
-                  {o.label}
-                </button>
-              </li>
-            ))}
+            {groupItems.map((o) => {
+              const Icon = iconFor(o);
+              return (
+                <li key={o.key}>
+                  <button
+                    onClick={() => pick(o.key)}
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-white/10 ${
+                      o.key === value ? 'text-sky-300' : 'text-white/85'
+                    }`}
+                  >
+                    <Icon size={14} className="shrink-0 opacity-80" />
+                    {o.label}
+                  </button>
+                </li>
+              );
+            })}
             {filtered.length === 0 && (
               <li className="px-3 py-2 text-xs text-white/40">—</li>
             )}

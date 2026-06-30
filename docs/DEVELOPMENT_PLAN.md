@@ -149,6 +149,7 @@ mail_app/
 - ts-rs 配線（Rust→`src/bindings/`）。
 - `tauri.conf.json`（productName, identifier, CSP, updater）整備。
 - **フレームレスウィンドウ**（`decorations: false`）+ 自作タイトルバー（`data-tauri-drag-region`）。全面ビジュアル/ウィジェット化の土台（[UI_UX_DESIGN.md](UI_UX_DESIGN.md) §1.5）。
+- ローカル画像表示のため **asset プロトコル**有効化＋**CSP `img-src`** 許可（背景画像用）。
 
 ### Phase 2 — データ層
 - `services/store/`：`rusqlite`（SQLCipher + FTS5）で DB 初期化・自前マイグレーション。
@@ -168,6 +169,7 @@ mail_app/
 
 ### Phase 5 — UI（ホーム・表示）
 - **ホーム（ダッシュボード）**: 全面背景画像 + 概要パネル + ナビゲーション。時計・日付表示。
+- **背景画像管理**: アプリ同梱＋ユーザー取り込み（インポート・サムネ生成・`media/backgrounds/` 保存）、自動ローテーション（時間帯／日替わり）。
 - **ウィジェット（コンパクト）モード**: リサイズ連動で時計・日付ウィジェット化。always-on-top トグル。
 - チャット形式の会話ビュー（`clean_body` 表示・引用折りたたみ・論理スレッド単位）/ 従来スレッドビュー、メールリスト（仮想スクロール）。
 - Zustand ストア + `services/` invoke ラッパー。

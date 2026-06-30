@@ -251,6 +251,23 @@ CREATE TABLE sns_messages (
     FOREIGN KEY (conversation_id) REFERENCES sns_conversations(id)
 );
 
+-- 背景画像（ホーム/ウィジェットの全面ビジュアル。アプリ同梱＋ユーザー取り込み）
+-- 表示モード（fixed/time/daily/season/random）はアプリ設定(tauri-plugin-store)で保持。
+CREATE TABLE background_images (
+    id INTEGER PRIMARY KEY,
+    source TEXT NOT NULL,           -- 'app'（同梱）| 'user'（取り込み）
+    file_path TEXT,                 -- user: media/backgrounds/ のコピー先
+    resource_key TEXT,              -- app: 同梱リソース識別子
+    thumbnail_path TEXT,            -- cache/thumbnails/
+    width INTEGER,
+    height INTEGER,
+    time_of_day TEXT,               -- 任意: 'morning'|'afternoon'|'evening'|'night'
+    season TEXT,                    -- 任意: 'spring'|'summer'|'autumn'|'winter'
+    in_rotation BOOLEAN DEFAULT TRUE,  -- ローテーション対象に含めるか
+    is_active BOOLEAN DEFAULT FALSE,   -- mode='fixed' で選択中
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- ───────────────────────────────────────────────
 -- AI 注釈（docs/AI_FEATURES.md）
 -- メール本体はリレーショナルで保持（JSON 不要）。AI 生成物のみ可変構造のため JSON 列に格納。

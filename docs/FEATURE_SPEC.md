@@ -113,7 +113,16 @@
 
 **スコープ外**: TikTok の DM（公開 API なし）/ Airbnb 個人ホスト窓口（公開 API なし）/ X DM（有料・高コストで将来判断）。**公式 API のみ使用**（スクレイピングは行わない）。
 
-### 2.7 AI 活用（[AI_FEATURES.md](AI_FEATURES.md)）
+### 2.7 ホーム背景画像（取り込み・選択）
+
+ホーム/ウィジェットの全面ビジュアル背景を、**アプリ同梱画像**と**ユーザー取り込み画像**から選べる（UI 詳細は [UI_UX_DESIGN.md](UI_UX_DESIGN.md) 背景写真システム）。
+
+- **インポート**: ファイル選択 → 形式/サイズ検証（jpg/png/webp）→ アプリ保存領域（`media/backgrounds/`）へコピー → サムネ生成 → DB 登録。
+- **選択**: ギャラリーから固定表示、またはローテーション対象に追加。
+- **既定の表示**: **自動ローテーション（時間帯／日替わり）**。設定で固定/時間/日替わり/季節/ランダムへ切替可。
+- **保存先**: `%APPDATA%\SNGDesign\MailApp\media\backgrounds\`（[DATA_STORAGE.md](DATA_STORAGE.md)）。
+
+### 2.8 AI 活用（[AI_FEATURES.md](AI_FEATURES.md)）
 
 メール作成・整理を AI で支援。Primadoc の **マルチモデル（Claude / GPT / Gemini）＋ ローカル Ollama** 基盤を流用。
 
@@ -141,6 +150,7 @@
 | 住所録 | `contact_list` / `contact_get` / `contact_upsert` / `contact_delete` / `contact_group_list` | （新規） |
 | カレンダー | `event_list`（期間指定）/ `event_get` / `event_upsert` / `event_delete` / `ics_import` | （新規） |
 | ウィンドウ | `window_set_always_on_top` / `window_set_mode`（dashboard / widget） | （新規） |
+| 背景画像 | `background_list` / `background_import` / `background_remove` / `background_set_active` / `background_set_mode` | （新規） |
 | SNS統合 | `channel_list` / `channel_connect` / `inbox_list`（横断）/ `message_send` / `message_mark` | （新規・中継サービス経由） |
 | 通知 | Tauri イベント（`emit`/`listen`）。SNS は中継サービスからの WebSocket 配信 | WebSocket `/ws/notifications` |
 

@@ -110,23 +110,44 @@
 ---
 
 ### 背景写真システム
+
+背景は **アプリ同梱画像** と **ユーザーが取り込んだ画像** の両方から選べる。既定は**自動ローテーション**（時間帯／日替わり）。
+
 ```typescript
+type BackgroundSource = 'app' | 'user';
+
+// 表示モード（既定は 'time' or 'daily' の自動ローテーション）
+type BackgroundMode =
+  | 'fixed'    // 1枚を固定
+  | 'time'     // 時間帯（朝/昼/夕/夜）で切替
+  | 'daily'    // 日替わり
+  | 'season'   // 季節で切替
+  | 'random';  // ランダム
+
+interface BackgroundImage {
+  id: string;
+  source: BackgroundSource;     // 'app' = 同梱, 'user' = 取り込み
+  path: string;                 // user: ローカルパス / app: リソースキー
+  thumbnail?: string;
+  timeOfDay?: 'morning' | 'afternoon' | 'evening' | 'night';
+  season?: 'spring' | 'summer' | 'autumn' | 'winter';
+}
+
 interface BackgroundConfig {
-  timeOfDay: {
-    morning: string[];   // 朝の背景画像URLs
-    afternoon: string[]; // 昼の背景画像URLs
-    evening: string[];   // 夕方の背景画像URLs
-    night: string[];     // 夜の背景画像URLs
-  };
-  season: {
-    spring: string[];
-    summer: string[];
-    autumn: string[];
-    winter: string[];
-  };
-  weather?: string[];    // 将来: 天気連携
+  mode: BackgroundMode;         // 既定: 'time'（時間帯）/ 'daily'（日替わり）
+  fixedImageId?: string;        // mode='fixed' のとき
+  pool: BackgroundImage[];      // ローテーション対象（app + user の混在可）
+  weather?: boolean;            // 将来: 天気連携
 }
 ```
+
+#### ユーザー画像の取り込み
+- **インポート**: ファイル選択（`@tauri-apps/plugin-dialog`）→ 形式/サイズ検証（jpg/png/webp・上限）→ アプリ保存領域へ**コピー**（元ファイルは参照しない）→ サムネ生成（Rust `image`）→ DB 登録。巨大画像は縮小も検討。
+- **保存先**: `…\SNGDesign\MailApp\media\backgrounds\`（サムネは `cache\thumbnails\`）。詳細は [DATA_STORAGE.md](DATA_STORAGE.md)。
+- **選択 UI**: 同梱画像とユーザー画像をギャラリー表示し、固定表示にするか、ローテーション対象に含めるかを選ぶ。
+- **WebView 表示**: ローカル画像表示には Tauri の **asset プロトコル**有効化＋**CSP `img-src`** 許可が必要（Primadoc と同構成）。
+
+> ローテーション既定（時間帯／日替わり）でも、ユーザーは設定でモード（固定/時間/日替わり/季節/ランダム）を切替できる。
 
 ### 情報表示の優先順位
 1. **最重要**: 未読メール数、緊急フラグ付きメール

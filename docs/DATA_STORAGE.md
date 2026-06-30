@@ -23,10 +23,14 @@ C:\Users\{username}\AppData\Roaming\SNGDesign\MailApp\
 │   ├── emails\                # メール本文ファイル（年月別: 2024\01\ ...）
 │   ├── attachments\           # 添付（{email_id}\ 別）
 │   └── search\                # 検索インデックス
+├── media\                     # ユーザー資産
+│   └── backgrounds\           # 取り込んだ背景画像（コピー保存）
 ├── config\                    # settings.json / ui-state.json（アカウント機密は keyring）
-├── cache\                     # thumbnails / temp
+├── cache\                     # thumbnails（背景サムネ含む）/ temp
 └── logs\                      # app.log / sync.log / error.log
 ```
+
+> **背景画像の取り込み方針**: ユーザー選択画像は元ファイルを参照せず `media\backgrounds\` へ**コピー**して保持（移動/削除に強く、バックアップ・移行も完結）。サムネは `cache\thumbnails\`。アプリ同梱画像は `static/`（バンドル resources）。大容量メディアで Roaming プロファイルの肥大を避けたい場合は `media\` のみ `%LOCALAPPDATA%`（Local）に置く選択肢もある。
 
 ### macOS
 ```
@@ -66,6 +70,7 @@ pub struct StoragePaths {
     pub emails: PathBuf,
     pub attachments: PathBuf,
     pub search_index: PathBuf,
+    pub backgrounds: PathBuf,   // media/backgrounds（取り込み背景画像）
     pub config: PathBuf,
     pub cache: PathBuf,
     pub logs: PathBuf,
@@ -89,6 +94,7 @@ impl StoragePaths {
             emails: data.join("emails"),
             attachments: data.join("attachments"),
             search_index: data.join("search"),
+            backgrounds: app.join("media").join("backgrounds"),
             config: app.join("config"),
             cache: app.join("cache"),
             logs: app.join("logs"),
@@ -100,7 +106,8 @@ impl StoragePaths {
     /// 必要なディレクトリを作成
     pub fn ensure_dirs(&self) -> std::io::Result<()> {
         for dir in [&self.data, &self.emails, &self.attachments,
-                    &self.search_index, &self.config, &self.cache, &self.logs] {
+                    &self.search_index, &self.backgrounds,
+                    &self.config, &self.cache, &self.logs] {
             std::fs::create_dir_all(dir)?;
         }
         Ok(())

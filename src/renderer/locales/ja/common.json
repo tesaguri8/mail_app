@@ -16,5 +16,25 @@
   },
   "lang": {
     "switch": "English"
+  },
+  "account": {
+    "title": "アカウント",
+    "none": "アカウントがありません。追加してください。",
+    "addAccount": "アカウントを追加",
+    "email": "メールアドレス",
+    "password": "パスワード / アプリパスワード",
+    "autoconfig": "自動設定",
+    "imapHost": "IMAP サーバー",
+    "imapPort": "IMAP ポート",
+    "smtpHost": "SMTP サーバー",
+    "smtpPort": "SMTP ポート",
+    "test": "接続テスト",
+    "add": "追加",
+    "cancel": "キャンセル",
+    "testing": "接続中…",
+    "testOk": "接続できました",
+    "testFail": "接続できませんでした",
+    "adding": "追加中…",
+    "needEmailFirst": "メールアドレスを入力してください"
   }
 }

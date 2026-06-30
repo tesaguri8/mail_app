@@ -40,5 +40,13 @@ ts-rs = { version = "10", features = ["serde-compat", "no-serde-warnings"] }
 # SQLite（FTS5 同梱）。SQLCipher 暗号化は後続でフィーチャ差し替え（docs/DATABASE_SCHEMA.md）
 rusqlite = { version = "0.32", features = ["bundled"] }
 
+# OS ネイティブ資格情報ストア（Win: Credential Manager / mac: Keychain / Linux: Secret Service）
+keyring = { version = "3", features = [
+    "apple-native",
+    "windows-native",
+    "sync-secret-service",
+    "crypto-rust",
+] }
+
 [dev-dependencies]
 tempfile = "3"

@@ -16,5 +16,25 @@
   },
   "lang": {
     "switch": "日本語"
+  },
+  "account": {
+    "title": "Accounts",
+    "none": "No accounts yet. Add one to get started.",
+    "addAccount": "Add account",
+    "email": "Email address",
+    "password": "Password / app password",
+    "autoconfig": "Auto-configure",
+    "imapHost": "IMAP server",
+    "imapPort": "IMAP port",
+    "smtpHost": "SMTP server",
+    "smtpPort": "SMTP port",
+    "test": "Test connection",
+    "add": "Add",
+    "cancel": "Cancel",
+    "testing": "Connecting…",
+    "testOk": "Connection succeeded",
+    "testFail": "Connection failed",
+    "adding": "Adding…",
+    "needEmailFirst": "Enter an email address first"
   }
 }

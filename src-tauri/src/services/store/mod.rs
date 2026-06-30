@@ -1,4 +1,7 @@
+mod accounts;
 mod migrations;
+
+pub use accounts::NewAccount;
 
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};

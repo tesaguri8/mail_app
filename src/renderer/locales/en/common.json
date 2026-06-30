@@ -18,6 +18,12 @@
     "home": "Home",
     "settings": "Settings"
   },
+  "greeting": {
+    "morning": "Good morning",
+    "afternoon": "Good afternoon",
+    "evening": "Good evening",
+    "night": "Working late?"
+  },
   "settings": {
     "title": "Settings",
     "accounts": "Accounts",

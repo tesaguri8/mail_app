@@ -18,6 +18,12 @@
     "home": "ホーム",
     "settings": "設定"
   },
+  "greeting": {
+    "morning": "おはようございます",
+    "afternoon": "こんにちは",
+    "evening": "こんばんは",
+    "night": "お疲れさまです"
+  },
   "settings": {
     "title": "設定",
     "accounts": "アカウント",

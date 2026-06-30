@@ -1,8 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AccountSummary } from '@bindings/AccountSummary';
-import { APP } from '../config/appIdentity';
 import { AccountsOverview } from './AccountsOverview';
+
+/** 時間帯に応じたあいさつキー（将来は各国の今日のメッセージ等に拡張）。 */
+function greetingKey(hour: number): string {
+  if (hour >= 5 && hour < 11) return 'greeting.morning';
+  if (hour >= 11 && hour < 18) return 'greeting.afternoon';
+  if (hour >= 18 && hour < 23) return 'greeting.evening';
+  return 'greeting.night';
+}
 
 function useClock() {
   const [now, setNow] = useState(() => new Date());
@@ -40,8 +47,7 @@ export function Home({
           {hh}:{mm}
         </div>
         <div className="mt-1 text-sm text-white/70">{dateStr}</div>
-        <h1 className="mt-8 text-2xl font-semibold drop-shadow">{APP.productName}</h1>
-        <p className="text-white/70">{t('app.tagline')}</p>
+        <p className="mt-8 text-lg text-white/85 drop-shadow">{t(greetingKey(now.getHours()))}</p>
       </div>
 
       {/* 右: 最新メール（ゴースト） */}

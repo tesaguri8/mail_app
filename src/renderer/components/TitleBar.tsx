@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { House, Minus, Pin, Settings, Square, X } from 'lucide-react';
+import { APP } from '../config/appIdentity';
 
 const ICON = 15;
 
@@ -47,24 +48,26 @@ export function TitleBar({
       data-tauri-drag-region
       className="flex h-9 select-none items-center justify-between px-3 text-white/90"
     >
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-2">
+        <span data-tauri-drag-region className="text-sm font-semibold tracking-wide">
+          {APP.productName}
+        </span>
+        <span className="text-white/25">｜</span>
         <button
           onClick={() => onNavigate('home')}
-          className={`flex items-center justify-center rounded p-1.5 hover:bg-white/20 ${view === 'home' ? 'bg-white/25' : ''}`}
-          title={t('nav.home')}
+          className={`flex items-center gap-1 rounded px-2 py-0.5 text-xs hover:bg-white/20 ${view === 'home' ? 'bg-white/25' : ''}`}
         >
           <House size={ICON} />
+          {t('nav.home')}
         </button>
+        <span className="text-white/25">｜</span>
         <button
           onClick={() => onNavigate('settings')}
-          className={`flex items-center justify-center rounded p-1.5 hover:bg-white/20 ${view === 'settings' ? 'bg-white/25' : ''}`}
-          title={t('nav.settings')}
+          className={`flex items-center gap-1 rounded px-2 py-0.5 text-xs hover:bg-white/20 ${view === 'settings' ? 'bg-white/25' : ''}`}
         >
           <Settings size={ICON} />
+          {t('nav.settings')}
         </button>
-        <span data-tauri-drag-region className="ml-2 text-xs font-medium tracking-wide text-white/80">
-          {t('app.tagline')}
-        </span>
       </div>
       <div className="flex items-center gap-1">
         <button

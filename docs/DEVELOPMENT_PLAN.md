@@ -195,7 +195,7 @@ mail_app/
 - `services/smtp/`（`lettre`）＋作成画面（宛先/件名/本文/添付、下書き、返信引用）。
 - **作成モード**: 返信 / **このアドレスへ新規メール**（参照ヘッダなし・新論理スレッド）。
 - **AI 作成支援（オプトイン）**: `services/ai/`（cloud + Ollama）。件名生成・本文ドラフト/リライト。要約・返信提案・分類は Phase 7 で拡張（[AI_FEATURES.md](AI_FEATURES.md)）。
-- **保護領域（プライバシー伏字）**: 作成時に機密スパンを伏字化＋暗証PDF生成（AES-256、qpdf 等）。受信時の復号インライン表示。AI 連携前の伏字置換（[PROTECTED_REGIONS.md](PROTECTED_REGIONS.md)）。
+- **保護領域（プライバシー伏字）**: まず **Lv1 MVP**（ヘッダ方式＋アプリ共有鍵＋`aes-gcm`、鍵交換・PDF 不要）で参照実装を成立 → Lv2（本人鍵・自動鍵交換）で強化、PDF フォールバックは後続。作成時の伏字化、受信時の復号インライン表示、AI 連携前の伏字置換（[PROTECTED_REGIONS.md](PROTECTED_REGIONS.md) §3.5）。
 
 ### Phase 7 — 検索・タグ・フィルタ・スレッド整理
 - FTS5 検索 UI（件名/`clean_body`/差出人/添付名）、ファセット、検索履歴。

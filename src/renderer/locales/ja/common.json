@@ -16,8 +16,12 @@
   },
   "nav": {
     "home": "ホーム",
+    "mail": "メール",
+    "contacts": "住所録",
+    "calendar": "カレンダー",
     "settings": "設定"
   },
+  "comingSoon": "準備中です",
   "greeting": {
     "morning": "おはようございます",
     "afternoon": "こんにちは",
@@ -31,7 +35,7 @@
     "about": "このアプリ"
   },
   "lang": {
-    "switch": "English"
+    "switch": "EN"
   },
   "account": {
     "title": "アカウント",

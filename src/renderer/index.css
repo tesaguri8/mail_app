@@ -30,3 +30,34 @@ body {
   display: none; /* Chromium / WebView2 */
 }
 
+/* 細いスライダー（ボトムバーの背景濃さ調整など） */
+input[type='range'].thin-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 2px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.25);
+  cursor: pointer;
+}
+input[type='range'].thin-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: #7dd3fc; /* sky-300 */
+  border: none;
+}
+input[type='range'].thin-range::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: #7dd3fc;
+  border: none;
+}
+input[type='range'].thin-range::-moz-range-track {
+  height: 2px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.25);
+}
+

@@ -16,8 +16,7 @@ export function BottomBar({
     <div className="flex h-8 shrink-0 items-center gap-3 border-t border-white/10 px-4 text-xs text-white/55">
       {/* 左: 将来のステータス領域 */}
       <div className="flex-1" />
-      {/* 右: 背景の濃さ */}
-      <span>{t('mailbox.dim')}</span>
+      {/* 右: 背景の濃さ（ラベルなし） */}
       <input
         type="range"
         min={0}
@@ -25,7 +24,7 @@ export function BottomBar({
         step={0.01}
         value={dim}
         onChange={(e) => onDimChange(Number(e.target.value))}
-        className="w-40 accent-sky-400"
+        className="thin-range w-40"
         title={t('mailbox.dim')}
       />
       <span className="w-9 text-right tabular-nums text-white/40">{Math.round(dim * 100)}%</span>

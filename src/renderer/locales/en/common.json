@@ -16,8 +16,12 @@
   },
   "nav": {
     "home": "Home",
+    "mail": "Mail",
+    "contacts": "Contacts",
+    "calendar": "Calendar",
     "settings": "Settings"
   },
+  "comingSoon": "Coming soon",
   "greeting": {
     "morning": "Good morning",
     "afternoon": "Good afternoon",
@@ -31,7 +35,7 @@
     "about": "About"
   },
   "lang": {
-    "switch": "日本語"
+    "switch": "JP"
   },
   "account": {
     "title": "Accounts",

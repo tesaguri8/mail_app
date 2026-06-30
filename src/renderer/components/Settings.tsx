@@ -26,8 +26,8 @@ export function Settings({
   ];
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[200px_1fr] gap-4 p-4">
-      <nav className="space-y-1 rounded-xl bg-black/25 p-2 backdrop-blur">
+    <div className="grid h-full min-h-0 grid-cols-[200px_1fr] overflow-hidden">
+      <nav className="min-h-0 space-y-1 overflow-y-auto border-r border-white/10 p-2">
         <div className="px-2 py-1 text-sm font-semibold text-white/80">{t('settings.title')}</div>
         {items.map((it) => (
           <button
@@ -42,7 +42,7 @@ export function Settings({
         ))}
       </nav>
 
-      <div className="min-h-0 overflow-y-auto rounded-xl bg-black/25 p-5 backdrop-blur">
+      <div className="min-h-0 overflow-y-auto p-5">
         {section === 'accounts' && <AccountSetup accounts={accounts} onChanged={onChanged} />}
         {section === 'display' && (
           <p className="text-sm text-white/60">表示設定は今後追加します。</p>

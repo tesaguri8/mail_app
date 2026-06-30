@@ -3,6 +3,7 @@ import { TitleBar, type AppView } from './components/TitleBar';
 import { BottomBar } from './components/BottomBar';
 import { Home } from './components/Home';
 import { MailboxView } from './components/MailboxView';
+import { StubView } from './components/StubView';
 import { Settings } from './components/Settings';
 import { accountList } from './services/accounts';
 import type { AccountSummary } from '@bindings/AccountSummary';
@@ -41,6 +42,12 @@ export default function App() {
     setView('mail');
   };
 
+  // タイトルバーからの遷移。メールは特定メッセージを開かずに開く。
+  const navigate = (v: AppView) => {
+    if (v === 'mail') setMailOpenId(null);
+    setView(v);
+  };
+
   return (
     <div
       className="flex h-full flex-col overflow-hidden bg-cover bg-center text-white"
@@ -48,7 +55,7 @@ export default function App() {
         backgroundImage: `linear-gradient(160deg, rgba(15,18,35,${(0.35 + dim).toFixed(2)}) 0%, rgba(8,12,28,${(0.55 + dim).toFixed(2)}) 100%), url(${backgroundUrl})`,
       }}
     >
-      <TitleBar onNavigate={setView} />
+      <TitleBar onNavigate={navigate} />
 
       <main className="min-h-0 flex-1 overflow-hidden">
         {view === 'home' && <Home accounts={accounts} onOpenMail={openMail} />}
@@ -59,6 +66,8 @@ export default function App() {
             initialMailId={mailOpenId}
           />
         )}
+        {view === 'contacts' && <StubView titleKey="nav.contacts" />}
+        {view === 'calendar' && <StubView titleKey="nav.calendar" />}
         {view === 'settings' && <Settings accounts={accounts} onChanged={refreshAccounts} />}
       </main>
 

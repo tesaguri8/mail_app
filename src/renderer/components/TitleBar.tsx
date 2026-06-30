@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { House, Minus, Pin, Settings, Square, X } from 'lucide-react';
+import { CalendarDays, Contact, House, Mail, Minus, Pin, Settings, Square, X } from 'lucide-react';
 import { APP } from '../config/appIdentity';
 
 const ICON = 15;
@@ -15,7 +15,7 @@ const ICON = 15;
  */
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
-export type AppView = 'home' | 'mail' | 'settings';
+export type AppView = 'home' | 'mail' | 'contacts' | 'calendar' | 'settings';
 
 export function TitleBar({ onNavigate }: { onNavigate: (v: AppView) => void }) {
   const { t, i18n } = useTranslation();
@@ -55,6 +55,36 @@ export function TitleBar({ onNavigate }: { onNavigate: (v: AppView) => void }) {
           className="flex items-center justify-center rounded p-1.5 hover:bg-white/20 focus:bg-white/20"
         >
           <House size={ICON} />
+        </button>
+        <button
+          onClick={(e) => {
+            onNavigate('mail');
+            e.currentTarget.blur();
+          }}
+          title={t('nav.mail')}
+          className="flex items-center justify-center rounded p-1.5 hover:bg-white/20 focus:bg-white/20"
+        >
+          <Mail size={ICON} />
+        </button>
+        <button
+          onClick={(e) => {
+            onNavigate('contacts');
+            e.currentTarget.blur();
+          }}
+          title={t('nav.contacts')}
+          className="flex items-center justify-center rounded p-1.5 hover:bg-white/20 focus:bg-white/20"
+        >
+          <Contact size={ICON} />
+        </button>
+        <button
+          onClick={(e) => {
+            onNavigate('calendar');
+            e.currentTarget.blur();
+          }}
+          title={t('nav.calendar')}
+          className="flex items-center justify-center rounded p-1.5 hover:bg-white/20 focus:bg-white/20"
+        >
+          <CalendarDays size={ICON} />
         </button>
         <button
           onClick={(e) => {

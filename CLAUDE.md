@@ -6,6 +6,8 @@
 
 ホームはウィンドウ全面を美しい画像が覆うフレームレスのパネルで、普段は小さくして**時計・日付ウィジェット**のようにデスクトップへ常駐できます。UI 方針の詳細は [docs/UI_UX_DESIGN.md](docs/UI_UX_DESIGN.md) を参照。
 
+> 看板メッセージ：**「Windows で唯一の、軽くて美しくて、AIに勝手に中身を渡さない、所有したくなるメール」**。フリーウェアで TSG One アプリ群の一員（AIトークン利用可）。プロダクトの北極星は [docs/POSITIONING.md](docs/POSITIONING.md)。
+
 ## 技術スタック
 
 > **Primadoc 同等スタック（Tauri 2 + Rust）を採用。** 構成・段階計画は [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) を参照。本プロジェクトは実装未着手の計画段階。
@@ -187,7 +189,7 @@ MAX_ATTACHMENT_SIZE=25MB  # 添付上限
 ## セキュリティ
 
 - アカウント認証情報: `keyring`（OS 金庫: Win=Credential Manager / mac=Keychain / Linux=Secret Service）
-- 認証方式: まずアプリパスワード/基本認証に対応し、OAuth2（Gmail/Outlook）は後続フェーズ
+- 認証方式: 基本メールは普通のクライアント同様の手動 IMAP/SMTP 設定（OAuth 不要）。OAuth は AI・TSG One 連携時のみ（[docs/POSITIONING.md](docs/POSITIONING.md) §5）
 - データベース: SQLCipher 暗号化
 - 通信: TLS/SSL 必須（IMAP/SMTP）
 - 権限: Tauri `capabilities/` で宣言的に最小権限を付与

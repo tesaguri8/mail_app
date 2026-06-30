@@ -26,7 +26,7 @@ export function AccountsOverview({
     }
     setExpanded(id);
     if (!previews[id]) {
-      // 一覧は多めに取得し、表示は約3件高さでスクロール可能にする
+      // 一覧は多めに取得（表示はバー間いっぱいまで伸ばしてスクロール）
       mailList(id, 100)
         .then((m) => setPreviews((p) => ({ ...p, [id]: m })))
         .catch(() => undefined);
@@ -38,24 +38,27 @@ export function AccountsOverview({
   }
 
   return (
-    <div className="space-y-3 drop-shadow">
+    <div className="flex h-full min-h-0 flex-col justify-center gap-3 drop-shadow">
       {accounts.map((a) => (
-        <div key={a.id}>
+        <div
+          key={a.id}
+          className={expanded === a.id ? 'flex min-h-0 flex-1 flex-col' : 'shrink-0'}
+        >
           <button
             onClick={() => toggle(a.id)}
-            className="flex w-full items-baseline justify-between gap-3 text-left text-white/85 hover:text-white"
+            className="flex w-full shrink-0 items-baseline justify-between gap-3 text-left text-white/85 hover:text-white"
           >
             <span className="truncate">{a.email}</span>
             <span className="shrink-0 tabular-nums">{a.unread_count}</span>
           </button>
 
           {expanded === a.id && (
-            <div className="mt-1 pl-1">
+            <div className="mt-1 flex min-h-0 flex-1 flex-col pl-1">
               {(previews[a.id] ?? []).length === 0 ? (
                 <p className="text-xs text-white/45">{t('mailbox.syncHint')}</p>
               ) : (
-                // 約3件分の高さでスクロール（全新着はスクロールで確認）
-                <div className="max-h-48 space-y-2 overflow-y-auto pr-1">
+                // バー間いっぱいまで伸ばし、超過分はスクロール
+                <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
                   {(previews[a.id] ?? []).map((m) => (
                     <div
                       key={m.id}
@@ -74,7 +77,7 @@ export function AccountsOverview({
               )}
               <button
                 onClick={() => onOpenMail(a.id)}
-                className="mt-2 text-xs text-sky-200/90 hover:underline"
+                className="mt-2 shrink-0 text-xs text-sky-200/90 hover:underline"
               >
                 {t('mailbox.more')}
               </button>

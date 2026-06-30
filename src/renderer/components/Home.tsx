@@ -50,8 +50,8 @@ export function Home({
         <p className="mt-8 text-lg text-white/85 drop-shadow">{t(greetingKey(now.getHours()))}</p>
       </div>
 
-      {/* 右: 最新メール（ゴースト） */}
-      <div className="flex flex-col justify-center overflow-y-auto py-6">
+      {/* 右: 最新メール（ゴースト）。展開時はバー間いっぱいに伸びる */}
+      <div className="flex min-h-0 flex-col py-6">
         <AccountsOverview accounts={accounts} onOpenMail={onOpenMail} />
       </div>
     </div>

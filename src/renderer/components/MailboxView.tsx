@@ -322,15 +322,6 @@ export function MailboxView({
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/10 px-4 py-2">
-        <button
-          className={iconBtn}
-          onClick={() => setStatus(t('comingSoon'))}
-          title={t('compose.new')}
-          aria-label={t('compose.new')}
-        >
-          <SquarePen size={16} />
-        </button>
-        <span className="mx-1 h-5 w-px bg-white/15" />
         <select
           className="rounded-md bg-white/10 px-2 py-1 text-xs outline-none"
           value={selected ?? ''}
@@ -344,6 +335,16 @@ export function MailboxView({
         </select>
         <FolderCombobox value={folder} onChange={setFolder} />
 
+        <span className="mx-1 h-5 w-px bg-white/15" />
+        {/* 新規作成（新規｜未読 のように配置） */}
+        <button
+          className={iconBtn}
+          onClick={() => setStatus(t('comingSoon'))}
+          title={t('compose.new')}
+          aria-label={t('compose.new')}
+        >
+          <SquarePen size={16} />
+        </button>
         <span className="mx-1 h-5 w-px bg-white/15" />
         {/* 絞り込みトグル: 選択時のみハイライト、オフはゴースト */}
         {FILTERS.map(({ key, Icon }) => {

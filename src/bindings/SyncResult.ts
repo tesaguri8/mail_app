@@ -3,4 +3,8 @@
 /**
  * 同期結果。
  */
-export type SyncResult = { fetched: number, stored: number, };
+export type SyncResult = { fetched: number, stored: number, 
+/**
+ * 既存メールに uid/添付メタを埋め戻した件数（点検つき再取り込み時に意味を持つ）。
+ */
+backfilled: number, };

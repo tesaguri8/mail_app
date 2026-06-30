@@ -1,6 +1,6 @@
 use crate::models::SyncResult;
 use crate::services::parser;
-use crate::services::store::{insert_email, NewAttachment, NewEmail};
+use crate::services::store::{insert_email, InsertOutcome, NewAttachment, NewEmail};
 use chrono::{Duration, Utc};
 use mail_parser::MessageParser;
 use rusqlite::{params, Connection};
@@ -119,9 +119,12 @@ pub fn sync_account(
         && stored_validity == uid_validity.map(|v| v as i64)
         && stored_last_uid.is_some();
 
-    let mut fetched = 0i32;
-    let mut stored = 0i32;
-    let mut max_uid: u32 = stored_last_uid.unwrap_or(0) as u32;
+    let mut c = Counters {
+        fetched: 0,
+        stored: 0,
+        backfilled: 0,
+        max_uid: stored_last_uid.unwrap_or(0) as u32,
+    };
 
     // 取得対象を決める
     if incremental {
@@ -134,15 +137,7 @@ pub fn sync_account(
             .filter(|&u| u > last)
             .collect();
         uids.sort_unstable();
-        fetch_uids(
-            &mut session,
-            &conn,
-            account_id,
-            &uids,
-            &mut fetched,
-            &mut stored,
-            &mut max_uid,
-        )?;
+        fetch_uids(&mut session, &conn, account_id, &uids, &mut c)?;
     } else {
         match parse_scope(&window) {
             Scope::Count(n) if total > 0 => {
@@ -152,14 +147,7 @@ pub fn sync_account(
                 let msgs = session
                     .fetch(seq, "(UID FLAGS BODY[])")
                     .map_err(|e| e.to_string())?;
-                store_fetches(
-                    &conn,
-                    account_id,
-                    msgs.iter(),
-                    &mut fetched,
-                    &mut stored,
-                    &mut max_uid,
-                )?;
+                store_fetches(&conn, account_id, msgs.iter(), &mut c)?;
             }
             Scope::Count(_) => { /* 空 */ }
             scope => {
@@ -177,15 +165,7 @@ pub fn sync_account(
                 if uids.len() > SAFETY_MAX {
                     uids = uids.split_off(uids.len() - SAFETY_MAX); // 新しい方を残す
                 }
-                fetch_uids(
-                    &mut session,
-                    &conn,
-                    account_id,
-                    &uids,
-                    &mut fetched,
-                    &mut stored,
-                    &mut max_uid,
-                )?;
+                fetch_uids(&mut session, &conn, account_id, &uids, &mut c)?;
             }
         }
     }
@@ -193,11 +173,23 @@ pub fn sync_account(
     // 同期状態を更新
     let _ = conn.execute(
         "UPDATE accounts SET uid_validity=?1, last_uid=?2 WHERE id=?3",
-        params![uid_validity.map(|v| v as i64), max_uid as i64, account_id],
+        params![uid_validity.map(|v| v as i64), c.max_uid as i64, account_id],
     );
 
     let _ = session.logout();
-    Ok(SyncResult { fetched, stored })
+    Ok(SyncResult {
+        fetched: c.fetched,
+        stored: c.stored,
+        backfilled: c.backfilled,
+    })
+}
+
+/// 同期中の集計（取得/新規保存/埋め戻し/最大UID）。
+struct Counters {
+    fetched: i32,
+    stored: i32,
+    backfilled: i32,
+    max_uid: u32,
 }
 
 fn fetch_uids(
@@ -205,9 +197,7 @@ fn fetch_uids(
     conn: &Connection,
     account_id: i64,
     uids: &[u32],
-    fetched: &mut i32,
-    stored: &mut i32,
-    max_uid: &mut u32,
+    c: &mut Counters,
 ) -> Result<(), String> {
     for chunk in uids.chunks(CHUNK) {
         let set = chunk
@@ -218,7 +208,7 @@ fn fetch_uids(
         let msgs = session
             .uid_fetch(set, "(UID FLAGS BODY[])")
             .map_err(|e| e.to_string())?;
-        store_fetches(conn, account_id, msgs.iter(), fetched, stored, max_uid)?;
+        store_fetches(conn, account_id, msgs.iter(), c)?;
     }
     Ok(())
 }
@@ -227,15 +217,13 @@ fn store_fetches<'a>(
     conn: &Connection,
     account_id: i64,
     msgs: impl Iterator<Item = &'a imap::types::Fetch>,
-    fetched: &mut i32,
-    stored: &mut i32,
-    max_uid: &mut u32,
+    c: &mut Counters,
 ) -> Result<(), String> {
     for m in msgs {
-        *fetched += 1;
+        c.fetched += 1;
         if let Some(u) = m.uid {
-            if u > *max_uid {
-                *max_uid = u;
+            if u > c.max_uid {
+                c.max_uid = u;
             }
         }
         let raw = match m.body() {
@@ -271,11 +259,10 @@ fn store_fetches<'a>(
                 uid,
                 attachments,
             };
-            if insert_email(conn, &ne)
-                .map_err(|e| e.to_string())?
-                .is_some()
-            {
-                *stored += 1;
+            match insert_email(conn, &ne).map_err(|e| e.to_string())? {
+                InsertOutcome::Inserted(_) => c.stored += 1,
+                InsertOutcome::Backfilled => c.backfilled += 1,
+                InsertOutcome::Unchanged => {}
             }
         }
     }

@@ -142,4 +142,6 @@ pub struct AttachmentSummary {
 pub struct SyncResult {
     pub fetched: i32,
     pub stored: i32,
+    /// 既存メールに uid/添付メタを埋め戻した件数（点検つき再取り込み時に意味を持つ）。
+    pub backfilled: i32,
 }

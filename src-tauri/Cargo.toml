@@ -62,6 +62,9 @@ libheif-rs = "1"
 # 画像レンディションを data URL で渡すための base64
 base64 = "0.22"
 
+# 本文（特に HTML）の保存圧縮。テキストは zstd で 80% 以上縮む（docs/SYNC.md ストレージ最適化）
+zstd = "0.13"
+
 # DNS（MX 解決でプロバイダ自動判定。docs/ONBOARDING.md）
 hickory-resolver = "0.24"
 

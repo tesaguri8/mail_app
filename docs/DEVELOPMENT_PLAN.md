@@ -75,6 +75,7 @@ Primadoc はドキュメントエディタであり、**IMAP/SMTP・大量メー
 - **AI 活用はオプトイン**: 既定クラウド（Claude）／機密はローカル（Ollama）。件名・本文生成・要約・返信提案・分類（詳細: [AI_FEATURES.md](AI_FEATURES.md)）。Primadoc の AI 基盤を流用。
 - **保護領域（プライバシー伏字）**: 機密は伏字＋暗証PDF（どのクライアントでも開ける）で送り、AI には伏字で渡す。**オープンな提案型**（詳細: [PROTECTED_REGIONS.md](PROTECTED_REGIONS.md)）。
 - **保存はリレーショナル＋FTS5。JSON は保存形式に使わない**（AI/IPC のシリアライズ・AI 注釈・エクスポートに限定）。
+- **保存場所**: メール本体はアプリ専用（`tesaguri.comfortmail.dev`）／AI のアカウント・トークンは **TSG One 共有**（秘密は keyring 共通サービス名）。大容量データは**別ドライブ等へ再配置できる二層構成**（設定層は固定、データルートは可変）。詳細: [DATA_STORAGE.md](DATA_STORAGE.md) §0・§1.5。
 - **アプリ識別情報は単一ソース**: 製品名・identifier 等を `config/app-identity.json` に集約し、各設定へ生成/実行時参照で配る（**ハードコード排除**。いつでも改名可能）。詳細: [APP_IDENTITY.md](APP_IDENTITY.md)。
 - **クロスプラットフォーム**: デスクトップ = Tauri 2（Rust コア）／モバイル = **Expo / React Native**（Primadoc 流）。**メールは各端末が IMAP で独立同期**（共有バックエンドなし）。引用解析・スレッド再構築アルゴリズムは **TS の `packages/mail-core` に共有**して二重実装を避ける（詳細: [CROSS_PLATFORM.md](CROSS_PLATFORM.md)）。モバイルはコア安定後の別トラック。
 - **スコープにメール＋住所録＋カレンダーを含む**（Phase 8 / 9）。
@@ -250,7 +251,7 @@ mail_app/
 
 ## 7. 関連ドキュメント
 
-機能・設計の詳細は以下に分割（[docs/README.md](README.md) がインデックス）。
+機能・設計の詳細は以下に分割（[docs/README.md](README.md) がインデックス）。横断的な要検討点は [CROSS_CUTTING.md](CROSS_CUTTING.md)。
 
 - [FEATURE_SPEC.md](FEATURE_SPEC.md) — 機能仕様・Tauri コマンド・セキュリティ・テスト・将来拡張
 - [THREADING.md](THREADING.md) — スレッド再構築エンジン（引用解析・論理スレッド・ヘッダ活用）

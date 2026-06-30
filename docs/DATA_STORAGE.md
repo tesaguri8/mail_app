@@ -5,6 +5,20 @@
 
 ---
 
+## 0. データの置き場所：アプリ専用 vs TSG One 共有
+
+| データ | 置き場所 | 理由 |
+|---|---|---|
+| メールDB(SQLCipher)・添付・索引・`media`（背景）・アプリ設定 | **アプリ専用** `…\tesaguri.comfortmail.dev\` | 大容量・機密・アプリ固有。隔離＆暗号化、移行/アンインストール容易 |
+| AI 注釈（要約・分類など、メール内容由来） | **アプリ専用**（メールDB側 `ai_annotations`） | メールに紐づく機密。共有領域に出さない |
+| TSG One アカウント／サインイン・**AIトークン残量・使用量**・共有AI設定 | **TSG One 共有** `…\tesaguri.tsg-one\` | 全TSGアプリで同一アカウント・同一トークン残量を共有 |
+| 機密（TSG One トークン・資格情報） | **OS keyring**（サービス名 `tesaguri.tsg-one`） | keyring は OS 全体共有 → 全TSGアプリが同じ資格情報を参照。平文フォルダ不要 |
+
+> 方針: **メール本体はアプリ専用**（他アプリと共有しない）／**AI のアカウント・トークンは TSG One 共有**。秘密は共有フォルダでなく **keyring の共通サービス名**で集約する。
+> ※ 共有ストアの正確な名称は、既存 TSG One デスクトップのアカウント保管と揃える（単一ソース）。
+
+---
+
 ## 1. 基本方針
 - **アプリ識別子（identifier）規則: `tesaguri.<app_name>.app`**（Tesaguri アプリ共通。Primadoc = `tesaguri.primadoc.app`）。
   - **暫定値: `tesaguri.comfortmail.dev`**（製品名は仮称 **Comfort Mail**、`.dev` は開発/暫定の意）。正式確定時に `tesaguri.<確定名>.app` へ変更する。
@@ -12,6 +26,22 @@
 - データディレクトリは **この identifier をそのままフォルダ名**として、各 OS の標準場所に配置（Tauri / Primadoc と同方式）。
 - プラットフォーム固有の標準的な場所を使用。
 - セキュリティとプライバシーを考慮した保存戦略。
+
+---
+
+## 1.5 容量と分離（再配置できるデータルート）
+
+メールは添付・大量メールで**容量が大きくなる**ため、保存を二層に分け、**大容量側をユーザーが別の場所（別ドライブ等）へ再配置できる**ようにする。
+
+| 層 | 内容 | 場所 |
+|---|---|---|
+| **設定層（小・固定）** | `settings.json` / `ui-state.json` / **データルートの場所ポインタ** | 標準: `…\tesaguri.comfortmail.dev\config\` |
+| **データルート（大・再配置可）** | `mail.db`・`emails`・`attachments`・`search`・`media`・`cache` | 既定はアプリ配下。**設定で任意のフォルダ/ドライブへ変更可**（例 `D:\ComfortMailData\`） |
+
+- **移動操作**: 設定で新しいデータルートを選択 → 既存データを移行（コピー → 検証 → 旧削除）→ ポインタ更新。
+- **保持ポリシーと併用**: 物理的な再配置（どこに置くか）と、[SYNC.md](SYNC.md) の保持ポリシー（どれだけ残すか）は別軸。両方で容量を管理。
+- keyring（秘密）は場所に依存しない（OS 共有）。
+- （任意・将来）アカウント別に異なるデータルート（大きいアカウントを別ドライブ）も拡張可能。
 
 ---
 
@@ -82,25 +112,27 @@ pub struct StoragePaths {
 }
 
 impl StoragePaths {
-    /// identifier はハードコードせず、Tauri（tauri.conf.json）を単一ソースに解決する。
-    /// app_data_dir() は identifier ベース:
-    ///   Win %APPDATA%\<identifier> / mac ~/Library/Application Support/<identifier> / Linux ~/.local/share/<identifier>
-    /// identifier は config/app-identity.json から生成（docs/APP_IDENTITY.md）。
-    pub fn resolve(app: &tauri::AppHandle) -> Self {
+    /// 二層構成: 設定層は identifier 配下に固定、データルート(大容量)は再配置可。
+    /// identifier はハードコードせず Tauri（tauri.conf.json）を単一ソースに解決（app_data_dir）。
+    /// data_root_override = ユーザーが設定した別ドライブ等のパス（無ければ既定＝アプリ配下）。
+    pub fn resolve(app: &tauri::AppHandle, data_root_override: Option<PathBuf>) -> Self {
         use tauri::Manager;
-        let base = app.path().app_data_dir().expect("app_data_dir"); // = …/<identifier>
-        let data = base.join("data");
+        let config_base = app.path().app_data_dir().expect("app_data_dir"); // 設定層(固定) = …/<identifier>
+        let data_root = data_root_override.unwrap_or_else(|| config_base.clone()); // 大容量(再配置可)
+        let data = data_root.join("data");
         Self {
+            // 大容量 → データルート配下（別ドライブに移動可能）
             database: data.join("mail.db"),
             emails: data.join("emails"),
             attachments: data.join("attachments"),
             search_index: data.join("search"),
-            backgrounds: base.join("media").join("backgrounds"),
-            config: base.join("config"),
-            cache: base.join("cache"),
-            logs: base.join("logs"),
+            backgrounds: data_root.join("media").join("backgrounds"),
+            cache: data_root.join("cache"),
+            // 小・固定 → 設定層
+            config: config_base.join("config"),
+            logs: config_base.join("logs"),
             data,
-            app: base,
+            app: config_base,
         }
     }
 

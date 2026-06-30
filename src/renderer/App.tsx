@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { TitleBar, type AppView } from './components/TitleBar';
+import { BottomBar } from './components/BottomBar';
 import { Home } from './components/Home';
 import { MailboxView } from './components/MailboxView';
 import { Settings } from './components/Settings';
@@ -56,12 +57,12 @@ export default function App() {
             accounts={accounts}
             initialAccountId={mailAccountId}
             initialMailId={mailOpenId}
-            dim={dim}
-            onDimChange={setDim}
           />
         )}
         {view === 'settings' && <Settings accounts={accounts} onChanged={refreshAccounts} />}
       </main>
+
+      <BottomBar dim={dim} onDimChange={setDim} />
     </div>
   );
 }

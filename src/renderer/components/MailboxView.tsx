@@ -22,14 +22,10 @@ export function MailboxView({
   accounts,
   initialAccountId,
   initialMailId,
-  dim,
-  onDimChange,
 }: {
   accounts: AccountSummary[];
   initialAccountId: number | null;
   initialMailId: number | null;
-  dim: number;
-  onDimChange: (v: number) => void;
 }) {
   const { t } = useTranslation();
   const [selected, setSelected] = useState<number | null>(
@@ -204,22 +200,6 @@ export function MailboxView({
           <div className="min-h-0 flex-1 overflow-hidden">{bodyPane}</div>
         </div>
       )}
-
-      {/* ボトムバー: 背景のかぶせ（暗さ）を調整して可読性を上げる */}
-      <div className="flex shrink-0 items-center gap-3 border-t border-white/10 px-4 py-1.5 text-xs text-white/55">
-        <span>{t('mailbox.dim')}</span>
-        <input
-          type="range"
-          min={0}
-          max={0.45}
-          step={0.01}
-          value={dim}
-          onChange={(e) => onDimChange(Number(e.target.value))}
-          className="w-44 accent-sky-400"
-          title={t('mailbox.dim')}
-        />
-        <span className="tabular-nums text-white/40">{Math.round(dim * 100)}%</span>
-      </div>
     </div>
   );
 }

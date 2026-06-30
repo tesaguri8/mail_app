@@ -70,6 +70,7 @@ Primadoc はドキュメントエディタであり、**IMAP/SMTP・大量メー
 - **スコープにメール＋住所録＋カレンダーを含む**（Phase 8 / 9）。
 - **ウィンドウはフレームレス全面ビジュアル**。ダッシュボード⇔ウィジェットは**同一ウィンドウのリサイズ連動**で切替（別ウィンドウは持たない）。
 - **カレンダーはローカル予定 + .ics 取り込みから**。Google Calendar / CalDAV 双方向同期は後続。
+- **メッセージハブとして SNS 統合を行う**（LINE / Instagram / Messenger / WhatsApp）。SNS は Webhook 型のため**クラウド中継サービスを前提**とし、メール本体のローカル完結方針からの意図的な例外とする（詳細: [SNS_INTEGRATION.md](SNS_INTEGRATION.md)）。公式 API のみ使用。
 
 ---
 
@@ -185,6 +186,15 @@ mail_app/
 - `tauri build`（Windows nsis を最優先、将来 dmg/deb/appimage）。
 - 署名、`tauri-plugin-updater` 配信。
 
+### SNS 統合トラック（並行）— メッセージハブ
+クラウド中継を伴うため別トラックとして進行（詳細: [SNS_INTEGRATION.md](SNS_INTEGRATION.md)）。
+
+- **S1 基盤**: 共通スキーマ、クラウド中継サービス雛形（tesaguri 基盤に相乗り）、アプリ⇄中継の認証付き WebSocket、ローカルキャッシュ DB（`channels` / `sns_conversations` / `sns_messages`）。
+- **S2 LINE**: 受信・返信・通知まで一気通貫（最優先）。
+- **S3 Meta**: Instagram + Messenger の DM + コメント。アプリ審査・ビジネス認証を並行申請。
+- **S4 WhatsApp Business**: 海外ゲスト向け。テンプレート審査対応。
+- **S5 運用強化**: 対応状態・キーワード強調・複数施設管理。（将来）Booking.com / X を検討。
+
 ---
 
 ## 6. リスクと確認事項
@@ -206,6 +216,7 @@ mail_app/
 - [UI_UX_DESIGN.md](UI_UX_DESIGN.md) — UI/UX 設計
 - [DATA_STORAGE.md](DATA_STORAGE.md) — データ保存場所設計
 - [I18N.md](I18N.md) — 多言語対応（i18next）
+- [SNS_INTEGRATION.md](SNS_INTEGRATION.md) — SNS 統合（メッセージハブ）・クラウド中継アーキテクチャ
 
 ## 8. 次アクション
 

@@ -21,9 +21,11 @@
 4. マルチアカウント対応
 5. **住所録（アドレス帳）** — メールアプリの正式スコープとして実装
 6. **カレンダー** — 予定管理。メール・連絡先と連携
+7. **SNS 統合（メッセージハブ）** — LINE / Instagram / Messenger / WhatsApp の DM・コメントを統合インボックスに集約
 
-> 本アプリは「メール / 住所録 / カレンダー」を束ねるパーソナルなホームを目指す。
-> ホームの常駐・ウィジェット化を含む UI 方針は [UI_UX_DESIGN.md](UI_UX_DESIGN.md) を参照。
+> 本アプリは「メール / 住所録 / カレンダー / SNS」を束ねる**メッセージハブ**を目指す。
+> 複数 SNS のやり取りを 1 つのチャット形式インボックスに集約し、取りこぼしを防ぐ（特に宿泊施設の問い合わせ対応）。
+> ホームの常駐・ウィジェット化を含む UI 方針は [UI_UX_DESIGN.md](UI_UX_DESIGN.md)、SNS 統合の詳細は [SNS_INTEGRATION.md](SNS_INTEGRATION.md) を参照。
 
 ---
 
@@ -82,6 +84,18 @@
 
 **ローカル方針**: まずローカル予定 + .ics 取り込みに対応し、外部カレンダー双方向同期は後続フェーズ。
 
+### 2.6 SNS 統合（メッセージハブ）
+
+複数 SNS の DM・コメントを共通スキーマに正規化し、メールと同じチャット形式の**統合インボックス**で一元管理する。詳細は [SNS_INTEGRATION.md](SNS_INTEGRATION.md)。
+
+**対応チャネル（初期）**: LINE 公式アカウント / Instagram（DM + コメント）/ Facebook Messenger（DM + コメント）/ WhatsApp Business
+
+**主な機能**: 統合インボックス（チャネル横断一覧）/ 未読・対応状態管理 / 各チャネルへの返信 / 新着通知（重要キーワード強調）/ 全チャネル横断検索（FTS5）/ ホーム・ウィジェットへの合算未読表示
+
+**アーキテクチャ要点**: SNS API は Webhook 型のため**クラウド中継サービス**（受信・正規化・配信、トークンはサーバー保管）を前提とする。メール本体はローカル完結を維持。tesaguri-tech バックエンド基盤に相乗り。
+
+**スコープ外**: TikTok の DM（公開 API なし）/ Airbnb 個人ホスト窓口（公開 API なし）/ X DM（有料・高コストで将来判断）。**公式 API のみ使用**（スクレイピングは行わない）。
+
 ---
 
 ## 3. バックエンドインターフェース（Tauri コマンド）
@@ -101,7 +115,8 @@
 | 住所録 | `contact_list` / `contact_get` / `contact_upsert` / `contact_delete` / `contact_group_list` | （新規） |
 | カレンダー | `event_list`（期間指定）/ `event_get` / `event_upsert` / `event_delete` / `ics_import` | （新規） |
 | ウィンドウ | `window_set_always_on_top` / `window_set_mode`（dashboard / widget） | （新規） |
-| 通知 | Tauri イベント（`emit`/`listen`） | WebSocket `/ws/notifications` |
+| SNS統合 | `channel_list` / `channel_connect` / `inbox_list`（横断）/ `message_send` / `message_mark` | （新規・中継サービス経由） |
+| 通知 | Tauri イベント（`emit`/`listen`）。SNS は中継サービスからの WebSocket 配信 | WebSocket `/ws/notifications` |
 
 データモデル例（ts-rs で Rust→TS 生成）:
 

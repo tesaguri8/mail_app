@@ -159,6 +159,57 @@ CREATE TABLE event_attendees (
     FOREIGN KEY (contact_id) REFERENCES contacts(id)
 );
 
+-- ───────────────────────────────────────────────
+-- SNS 統合（メッセージハブ）: ローカルキャッシュ
+-- 正規化済みメッセージを中継サービスから受信して保持する。
+-- 詳細方針は docs/SNS_INTEGRATION.md を参照。
+-- ───────────────────────────────────────────────
+
+-- 接続チャネル（プラットフォームのアカウント単位）
+CREATE TABLE channels (
+    id INTEGER PRIMARY KEY,
+    platform TEXT NOT NULL,         -- 'line' | 'instagram' | 'messenger' | 'whatsapp'
+    display_name TEXT,              -- 表示名（例: ふくぎリビング公式LINE）
+    external_account_id TEXT,       -- プラットフォーム側のアカウントID
+    is_enabled BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    -- 注: アクセストークン等の機密は端末DBに保存しない（中継サービス側で集中管理）
+);
+
+-- 会話（DM スレッド / コメントの投稿単位）
+CREATE TABLE sns_conversations (
+    id INTEGER PRIMARY KEY,
+    channel_id INTEGER NOT NULL,
+    kind TEXT DEFAULT 'dm',         -- 'dm' | 'comment'
+    conversation_key TEXT NOT NULL, -- チャネル内の会話識別子（相手ユーザーID / 投稿ID 等）
+    title TEXT,                     -- 相手名や投稿の要約
+    contact_id INTEGER,             -- 住所録との突き合わせ（任意）
+    last_activity TIMESTAMP,
+    unread_count INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'open',     -- 'open' | 'handled'
+    UNIQUE (channel_id, conversation_key),
+    FOREIGN KEY (channel_id) REFERENCES channels(id),
+    FOREIGN KEY (contact_id) REFERENCES contacts(id)
+);
+
+-- 正規化メッセージ
+CREATE TABLE sns_messages (
+    id INTEGER PRIMARY KEY,
+    conversation_id INTEGER NOT NULL,
+    external_message_id TEXT,       -- プラットフォームのメッセージID
+    direction TEXT NOT NULL,        -- 'inbound' | 'outbound'
+    sender_name TEXT,
+    sender_handle TEXT,
+    body_text TEXT,
+    attachments TEXT,               -- JSON（type/url_or_ref）
+    timestamp TIMESTAMP,
+    status TEXT DEFAULT 'unread',   -- 'unread' | 'read' | 'replied'
+    raw_ref TEXT,                   -- 中継側の元ペイロード参照（監査・再処理用）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (conversation_id, external_message_id),
+    FOREIGN KEY (conversation_id) REFERENCES sns_conversations(id)
+);
+
 -- 検索インデックス（FTS5）
 CREATE VIRTUAL TABLE email_fts USING fts5(
     subject,
@@ -178,7 +229,19 @@ CREATE VIRTUAL TABLE contact_fts USING fts5(
     content=contacts,
     content_rowid=id
 );
+
+-- SNS メッセージの全文検索（統合インボックスの横断検索用）
+CREATE VIRTUAL TABLE sns_message_fts USING fts5(
+    body_text,
+    sender_name,
+    content=sns_messages,
+    content_rowid=id
+);
 ```
+
+> **統合インボックスの一覧**: メール（`emails`/`threads`）と SNS（`sns_conversations`/`sns_messages`）は
+> ソース固有テーブルに保持しつつ、ホーム/統合一覧では両者を時刻順にマージして表示する
+> （アプリ側で UNION、または将来 `inbox_items` ビューを用意）。横断検索は各 FTS5 を束ねて集約する。
 
 ---
 
@@ -197,6 +260,11 @@ CREATE INDEX idx_contacts_email     ON contacts(email);
 CREATE INDEX idx_contacts_birthday  ON contacts(birthday);
 CREATE INDEX idx_events_start       ON events(start_at);
 CREATE INDEX idx_event_attendees_c  ON event_attendees(contact_id);
+
+-- SNS 統合
+CREATE INDEX idx_sns_conv_channel   ON sns_conversations(channel_id, last_activity DESC);
+CREATE INDEX idx_sns_conv_contact   ON sns_conversations(contact_id);
+CREATE INDEX idx_sns_msg_conv       ON sns_messages(conversation_id, timestamp DESC);
 ```
 
 ---

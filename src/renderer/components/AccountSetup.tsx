@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus } from 'lucide-react';
+import { Minus, Plus } from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { ServerAccountSummary } from '@bindings/ServerAccountSummary';
 import {
@@ -182,11 +182,12 @@ export function AccountSetup({
                 </div>
               </div>
               <button
-                className="shrink-0 rounded px-2 py-1 text-xs text-white/50 hover:bg-red-500/40 hover:text-white"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/60 hover:border-red-400/60 hover:bg-red-500/30 hover:text-white"
                 title={t('account.delete')}
+                aria-label={t('account.delete')}
                 onClick={() => onDelete(a.id)}
               >
-                🗑
+                <Minus size={18} />
               </button>
             </li>
           ))}

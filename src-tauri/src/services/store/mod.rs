@@ -5,7 +5,7 @@ mod server_accounts;
 mod signatures;
 
 pub use accounts::NewAccount;
-pub use emails::{insert_email, NewEmail};
+pub use emails::{insert_email, AttachmentFetchInfo, NewAttachment, NewEmail};
 pub use server_accounts::NewServerAccount;
 
 use rusqlite::Connection;

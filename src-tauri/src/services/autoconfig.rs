@@ -91,7 +91,9 @@ pub fn resolve(email: &str) -> AutoconfigResult {
         smtp_port: 587,
         smtp_security: "starttls".to_string(),
         source: "guess".to_string(),
-        note: Some("自動判定できなかったため推測値です。必要に応じて修正してください。".to_string()),
+        note: Some(
+            "自動判定できなかったため推測値です。必要に応じて修正してください。".to_string(),
+        ),
     }
 }
 

@@ -1,13 +1,21 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Forward, Reply, ReplyAll } from 'lucide-react';
+import { Download, Forward, Paperclip, Reply, ReplyAll } from 'lucide-react';
 import type { MailDetail } from '@bindings/MailDetail';
+import type { AttachmentSummary } from '@bindings/AttachmentSummary';
+import { attachmentDownload, attachmentOpen, mailAttachments } from '../services/mail';
 import { HtmlText } from './HtmlText';
 
 function formatDate(d: string | null): string {
   if (!d) return '';
   const dt = new Date(d);
   return isNaN(dt.getTime()) ? d : dt.toLocaleString();
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 /**
@@ -18,6 +26,39 @@ export function MailBody({ detail }: { detail: MailDetail }) {
   const { t } = useTranslation();
   const [showQuotes, setShowQuotes] = useState(false);
   const [note, setNote] = useState('');
+  const [attachments, setAttachments] = useState<AttachmentSummary[]>([]);
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  // メール切り替えごとに添付メタを読み込む（本体は押下時に取得）。
+  useEffect(() => {
+    let active = true;
+    setAttachments([]);
+    if (detail.has_attachments) {
+      mailAttachments(detail.id)
+        .then((a) => active && setAttachments(a))
+        .catch(() => {});
+    }
+    return () => {
+      active = false;
+    };
+  }, [detail.id, detail.has_attachments]);
+
+  // 未取得ならダウンロードしてから、OS の関連アプリで開く。
+  const handleAttachment = async (a: AttachmentSummary) => {
+    setBusyId(a.id);
+    setNote('');
+    try {
+      if (!a.is_downloaded) {
+        const updated = await attachmentDownload(a.id);
+        setAttachments((list) => list.map((x) => (x.id === a.id ? updated : x)));
+      }
+      await attachmentOpen(a.id);
+    } catch (e) {
+      setNote(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   // 作成機能は後続。今はアイコン配置とフィードバックのみ。
   const composeStub = () => setNote(t('comingSoon'));
@@ -80,6 +121,44 @@ export function MailBody({ detail }: { detail: MailDetail }) {
           <p className="text-sm text-white/40">{t('mailbox.noBody')}</p>
         )}
       </div>
+
+      {attachments.length > 0 && (
+        <div className="border-t border-white/10 px-5 py-3">
+          <div className="mb-2 text-xs font-medium text-white/50">
+            {t('mailbox.attachments')} ({attachments.length})
+          </div>
+          <ul className="space-y-1.5">
+            {attachments.map((a) => (
+              <li
+                key={a.id}
+                className="flex items-center gap-3 rounded-md bg-white/5 px-3 py-2"
+              >
+                <Paperclip size={14} className="shrink-0 text-white/40" />
+                <span className="min-w-0 flex-1 truncate text-sm text-white/85" title={a.filename}>
+                  {a.filename}
+                </span>
+                <span className="shrink-0 text-xs text-white/40">{formatSize(a.size)}</span>
+                <button
+                  onClick={() => handleAttachment(a)}
+                  disabled={busyId === a.id}
+                  className="flex shrink-0 items-center gap-1 rounded-md bg-white/10 px-2.5 py-1 text-xs text-white/80 hover:bg-white/20 disabled:opacity-50"
+                >
+                  {busyId === a.id ? (
+                    t('mailbox.attachmentBusy')
+                  ) : a.is_downloaded ? (
+                    t('mailbox.attachmentOpen')
+                  ) : (
+                    <>
+                      <Download size={12} />
+                      {t('mailbox.attachmentDownload')}
+                    </>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {hasQuotedExtra && (
         <div className="border-t border-white/10 px-5 py-2">

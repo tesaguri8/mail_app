@@ -1,7 +1,8 @@
 use crate::models::SyncResult;
 use crate::services::parser;
-use crate::services::store::{insert_email, NewEmail};
+use crate::services::store::{insert_email, NewAttachment, NewEmail};
 use chrono::{Duration, Utc};
+use mail_parser::MessageParser;
 use rusqlite::{params, Connection};
 use std::path::Path;
 
@@ -133,7 +134,15 @@ pub fn sync_account(
             .filter(|&u| u > last)
             .collect();
         uids.sort_unstable();
-        fetch_uids(&mut session, &conn, account_id, &uids, &mut fetched, &mut stored, &mut max_uid)?;
+        fetch_uids(
+            &mut session,
+            &conn,
+            account_id,
+            &uids,
+            &mut fetched,
+            &mut stored,
+            &mut max_uid,
+        )?;
     } else {
         match parse_scope(&window) {
             Scope::Count(n) if total > 0 => {
@@ -143,7 +152,14 @@ pub fn sync_account(
                 let msgs = session
                     .fetch(seq, "(UID FLAGS BODY[])")
                     .map_err(|e| e.to_string())?;
-                store_fetches(&conn, account_id, msgs.iter(), &mut fetched, &mut stored, &mut max_uid)?;
+                store_fetches(
+                    &conn,
+                    account_id,
+                    msgs.iter(),
+                    &mut fetched,
+                    &mut stored,
+                    &mut max_uid,
+                )?;
             }
             Scope::Count(_) => { /* 空 */ }
             scope => {
@@ -161,7 +177,15 @@ pub fn sync_account(
                 if uids.len() > SAFETY_MAX {
                     uids = uids.split_off(uids.len() - SAFETY_MAX); // 新しい方を残す
                 }
-                fetch_uids(&mut session, &conn, account_id, &uids, &mut fetched, &mut stored, &mut max_uid)?;
+                fetch_uids(
+                    &mut session,
+                    &conn,
+                    account_id,
+                    &uids,
+                    &mut fetched,
+                    &mut stored,
+                    &mut max_uid,
+                )?;
             }
         }
     }
@@ -218,7 +242,18 @@ fn store_fetches<'a>(
             Some(b) => b,
             None => continue,
         };
+        let uid = m.uid.map(|u| u as i64);
         if let Some(p) = parser::parse_message(raw) {
+            let attachments = p
+                .attachments
+                .into_iter()
+                .map(|a| NewAttachment {
+                    part_index: a.part_index,
+                    filename: a.filename,
+                    content_type: a.content_type,
+                    size: a.size,
+                })
+                .collect();
             let ne = NewEmail {
                 account_id,
                 message_id: p.message_id,
@@ -231,11 +266,69 @@ fn store_fetches<'a>(
                 clean_body: p.clean_body,
                 body_html: p.body_html,
                 has_attachments: p.has_attachments,
+                uid,
+                attachments,
             };
-            if insert_email(conn, &ne).map_err(|e| e.to_string())?.is_some() {
+            if insert_email(conn, &ne)
+                .map_err(|e| e.to_string())?
+                .is_some()
+            {
                 *stored += 1;
             }
         }
     }
     Ok(())
+}
+
+/// 取得した添付の本体（バイト列・ファイル名・MIME型）。
+pub struct FetchedAttachment {
+    pub bytes: Vec<u8>,
+    pub filename: String,
+    pub content_type: Option<String>,
+}
+
+/// 指定 UID のメッセージを再取得し、part_index 番目の添付本体を取り出す（オンデマンド）。
+pub fn fetch_attachment(
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    uid: u32,
+    part_index: usize,
+) -> Result<FetchedAttachment, String> {
+    let tls = native_tls::TlsConnector::builder()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let client = imap::connect((host, port), host, &tls).map_err(|e| e.to_string())?;
+    let mut session = client
+        .login(user, password)
+        .map_err(|(e, _)| e.to_string())?;
+    session.select("INBOX").map_err(|e| e.to_string())?;
+
+    let msgs = session
+        .uid_fetch(uid.to_string(), "(BODY[])")
+        .map_err(|e| e.to_string())?;
+    let raw = msgs
+        .iter()
+        .next()
+        .and_then(|m| m.body())
+        .ok_or_else(|| "メッセージが見つかりませんでした".to_string())?;
+
+    let msg = MessageParser::default()
+        .parse(raw)
+        .ok_or_else(|| "メッセージを解析できませんでした".to_string())?;
+    let part = msg
+        .attachment(part_index)
+        .ok_or_else(|| "添付が見つかりませんでした".to_string())?;
+
+    let bytes = part.contents().to_vec();
+    let filename = parser::part_filename(part, part_index);
+    let content_type = parser::part_content_type(part);
+
+    let _ = session.logout();
+    Ok(FetchedAttachment {
+        bytes,
+        filename,
+        content_type,
+    })
 }

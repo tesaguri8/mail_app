@@ -1,5 +1,5 @@
 use super::Store;
-use crate::models::{MailDetail, MailSummary};
+use crate::models::{AttachmentSummary, MailDetail, MailSummary};
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// メール挿入用（内部）。
@@ -15,6 +15,29 @@ pub struct NewEmail {
     pub clean_body: Option<String>,
     pub body_html: Option<String>,
     pub has_attachments: bool,
+    /// メッセージの IMAP UID（添付のオンデマンド再取得用）。
+    pub uid: Option<i64>,
+    /// 添付メタ（本体は未取得。ダウンロード時に再取得）。
+    pub attachments: Vec<NewAttachment>,
+}
+
+/// 添付メタ挿入用（内部）。
+pub struct NewAttachment {
+    pub part_index: i64,
+    pub filename: String,
+    pub content_type: Option<String>,
+    pub size: i64,
+}
+
+/// オンデマンド再取得に必要な情報（添付＋親メール）。
+pub struct AttachmentFetchInfo {
+    pub account_id: i64,
+    /// 親メールの IMAP UID（None なら再取得不可＝要再同期）。
+    pub email_uid: Option<i64>,
+    pub part_index: i64,
+    pub filename: String,
+    /// 取得済みの保存先（未取得なら None）。
+    pub file_path: Option<String>,
 }
 
 /// 接続を直接受け取る挿入（同期スレッドの別接続から使うため）。
@@ -22,8 +45,8 @@ pub struct NewEmail {
 pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<Option<i64>> {
     let changed = conn.execute(
         "INSERT OR IGNORE INTO emails
-           (account_id, message_id, canonical_key, subject, from_address, to_addresses, date, has_attachments, body_plain, clean_body, body_html)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+           (account_id, message_id, canonical_key, subject, from_address, to_addresses, date, has_attachments, body_plain, clean_body, body_html, uid)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             e.account_id,
             e.message_id,
@@ -36,6 +59,7 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<Option<
             e.body_plain,
             e.clean_body,
             e.body_html,
+            e.uid,
         ],
     )?;
     if changed == 0 {
@@ -47,6 +71,22 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<Option<
         "INSERT INTO email_fts(rowid, subject, from_address, clean_body) VALUES (?1, ?2, ?3, ?4)",
         params![id, e.subject, e.from_address, e.clean_body],
     )?;
+    // 添付メタ（本体は file_path NULL = 未取得）
+    if !e.attachments.is_empty() {
+        let mut stmt = conn.prepare(
+            "INSERT INTO attachments (email_id, filename, content_type, size, part_index)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+        for a in &e.attachments {
+            stmt.execute(params![
+                id,
+                a.filename,
+                a.content_type,
+                a.size,
+                a.part_index
+            ])?;
+        }
+    }
     Ok(Some(id))
 }
 
@@ -114,9 +154,11 @@ impl Store {
         let tx = conn.transaction()?;
         {
             let mut fts = tx.prepare("DELETE FROM email_fts WHERE rowid = ?1")?;
+            let mut att = tx.prepare("DELETE FROM attachments WHERE email_id = ?1")?;
             let mut del = tx.prepare("DELETE FROM emails WHERE id = ?1")?;
             for id in ids {
                 fts.execute(params![id])?;
+                att.execute(params![id])?; // FK 制約のため先に添付を削除
                 del.execute(params![id])?;
             }
         }
@@ -151,6 +193,79 @@ impl Store {
     pub fn mark_read(&self, id: i64) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("UPDATE emails SET is_read = 1 WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    fn map_attachment(r: &rusqlite::Row) -> rusqlite::Result<AttachmentSummary> {
+        let file_path: Option<String> = r.get(4)?;
+        Ok(AttachmentSummary {
+            id: r.get::<_, i64>(0)? as i32,
+            filename: r.get(1)?,
+            content_type: r.get(2)?,
+            size: r.get::<_, Option<i64>>(3)?.unwrap_or(0) as i32,
+            is_downloaded: file_path.is_some(),
+            file_path,
+        })
+    }
+
+    /// メールの添付メタ一覧（序数順）。
+    pub fn list_attachments(&self, email_id: i64) -> rusqlite::Result<Vec<AttachmentSummary>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, filename, content_type, size, file_path
+             FROM attachments WHERE email_id = ?1 ORDER BY part_index",
+        )?;
+        let rows = stmt.query_map(params![email_id], Self::map_attachment)?;
+        rows.collect()
+    }
+
+    /// 添付 1 件のメタ。
+    pub fn get_attachment(&self, id: i64) -> rusqlite::Result<Option<AttachmentSummary>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, filename, content_type, size, file_path FROM attachments WHERE id = ?1",
+            params![id],
+            Self::map_attachment,
+        )
+        .optional()
+    }
+
+    /// オンデマンド再取得に必要な情報を取得する。
+    pub fn attachment_fetch_info(
+        &self,
+        attachment_id: i64,
+    ) -> rusqlite::Result<Option<AttachmentFetchInfo>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT e.account_id, e.uid, a.part_index, a.filename, a.file_path
+             FROM attachments a JOIN emails e ON e.id = a.email_id
+             WHERE a.id = ?1",
+            params![attachment_id],
+            |r| {
+                Ok(AttachmentFetchInfo {
+                    account_id: r.get(0)?,
+                    email_uid: r.get(1)?,
+                    part_index: r.get(2)?,
+                    filename: r.get(3)?,
+                    file_path: r.get(4)?,
+                })
+            },
+        )
+        .optional()
+    }
+
+    /// ダウンロード完了を記録（保存先と簡易チェックサム）。
+    pub fn set_attachment_downloaded(
+        &self,
+        attachment_id: i64,
+        path: &str,
+        checksum: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE attachments SET file_path = ?1, checksum = ?2 WHERE id = ?3",
+            params![path, checksum, attachment_id],
+        )?;
         Ok(())
     }
 }

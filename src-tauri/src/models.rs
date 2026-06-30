@@ -118,6 +118,20 @@ pub struct MailDetail {
     pub has_attachments: bool,
 }
 
+/// 添付ファイル（一覧/ダウンロード状態）。
+/// `is_downloaded` が false のときは本体未取得（メタのみ）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct AttachmentSummary {
+    pub id: i32,
+    pub filename: String,
+    pub content_type: Option<String>,
+    pub size: i32,
+    pub is_downloaded: bool,
+    /// ダウンロード済みの保存先（未取得なら None）。
+    pub file_path: Option<String>,
+}
+
 /// 同期結果。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

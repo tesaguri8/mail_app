@@ -1,11 +1,11 @@
 use crate::models::{
-    AccountInput, AccountSummary, AppInfo, AutoconfigResult, DbInfo, MailDetail, MailSummary,
-    ServerAccountSummary, SignatureSummary, SyncResult,
+    AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult, DbInfo, MailDetail,
+    MailSummary, ServerAccountSummary, SignatureSummary, SyncResult,
 };
 use crate::services::autoconfig;
 use crate::services::imap_sync;
 use crate::services::store::{NewAccount, NewServerAccount, Store};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 /// アプリ識別情報を返す（identifier はハードコードせず Tauri 設定から取得）。
 #[tauri::command]
@@ -66,7 +66,10 @@ pub fn account_add(
     entry.set_password(&password).map_err(|e| e.to_string())?;
 
     // メールサーバーアカウント設定を再利用 or 作成して紐づける
-    let login_user = input.username.clone().unwrap_or_else(|| input.email.clone());
+    let login_user = input
+        .username
+        .clone()
+        .unwrap_or_else(|| input.email.clone());
     let server_account_id = store
         .find_or_create_server_account(&NewServerAccount {
             imap_host: input.imap_host.clone(),
@@ -215,7 +218,11 @@ pub fn account_set_sync_window(
 
 /// メール一覧を返す。
 #[tauri::command]
-pub fn mail_list(store: State<Store>, account_id: i64, limit: i64) -> Result<Vec<MailSummary>, String> {
+pub fn mail_list(
+    store: State<Store>,
+    account_id: i64,
+    limit: i64,
+) -> Result<Vec<MailSummary>, String> {
     store
         .list_emails(account_id, limit)
         .map_err(|e| e.to_string())
@@ -260,6 +267,143 @@ pub fn mail_get(store: State<Store>, id: i64) -> Result<MailDetail, String> {
     Ok(detail)
 }
 
+/// メールの添付メタ一覧を返す（本体未取得のものは is_downloaded=false）。
+#[tauri::command]
+pub fn mail_attachments(
+    store: State<Store>,
+    email_id: i64,
+) -> Result<Vec<AttachmentSummary>, String> {
+    store.list_attachments(email_id).map_err(|e| e.to_string())
+}
+
+/// 添付ファイルをオンデマンドで取得して保存する（既に取得済みならそれを返す）。
+/// emails.uid + attachments.part_index で IMAP から該当パートだけを再取得する。
+#[tauri::command]
+pub async fn attachment_download(
+    app: AppHandle,
+    store: State<'_, Store>,
+    attachment_id: i64,
+) -> Result<AttachmentSummary, String> {
+    let info = store
+        .attachment_fetch_info(attachment_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "添付が見つかりません".to_string())?;
+
+    // 取得済みでファイルが残っていればそのまま返す
+    if let Some(path) = info.file_path.as_ref() {
+        if std::path::Path::new(path).exists() {
+            return store
+                .get_attachment(attachment_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "添付が見つかりません".to_string());
+        }
+    }
+
+    let uid = info.email_uid.ok_or_else(|| {
+        "再取得に必要な情報がありません。アカウントを再同期してください。".to_string()
+    })?;
+    let part_index = info.part_index;
+    let filename = info.filename;
+
+    let (email, login, host, port) = store
+        .get_account_imap(info.account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "アカウントが見つかりません".to_string())?;
+    let service = app.config().identifier.clone();
+    let password = keyring::Entry::new(&service, &email)
+        .and_then(|e| e.get_password())
+        .map_err(|e| format!("資格情報を取得できません: {e}"))?;
+
+    let fetched = tauri::async_runtime::spawn_blocking(move || {
+        imap_sync::fetch_attachment(
+            &host,
+            port,
+            &login,
+            &password,
+            uid as u32,
+            part_index as usize,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // 保存先: <app_data>/data/attachments/<attachment_id>/<filename>
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("data")
+        .join("attachments")
+        .join(attachment_id.to_string());
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    let safe = sanitize_filename(&filename);
+    let path = dir.join(&safe);
+    std::fs::write(&path, &fetched.bytes).map_err(|e| e.to_string())?;
+
+    let checksum = simple_checksum(&fetched.bytes);
+    let path_str = path.to_string_lossy().to_string();
+    store
+        .set_attachment_downloaded(attachment_id, &path_str, Some(&checksum))
+        .map_err(|e| e.to_string())?;
+
+    store
+        .get_attachment(attachment_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "添付が見つかりません".to_string())
+}
+
+/// ダウンロード済みの添付を OS の関連アプリで開く。
+#[tauri::command]
+pub fn attachment_open(
+    app: AppHandle,
+    store: State<Store>,
+    attachment_id: i64,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let att = store
+        .get_attachment(attachment_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "添付が見つかりません".to_string())?;
+    let path = att
+        .file_path
+        .ok_or_else(|| "まだダウンロードされていません".to_string())?;
+    if !std::path::Path::new(&path).exists() {
+        return Err("ファイルが見つかりません".to_string());
+    }
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// ファイル名を保存に安全な形へ正規化する（パス区切り・禁止文字を除去）。
+fn sanitize_filename(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim().trim_matches('.').trim();
+    if trimmed.is_empty() {
+        "attachment".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// 非暗号の簡易チェックサム（キャッシュ整合の目安。改ざん検知用ではない）。
+fn simple_checksum(bytes: &[u8]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
 /// 実際に IMAP ログインを試す（ユーザー名/パスワードの検証）。
 #[tauri::command]
 pub async fn account_test_login(
@@ -290,9 +434,11 @@ pub async fn account_check(
     let password = keyring::Entry::new(&service, &email)
         .and_then(|e| e.get_password())
         .map_err(|e| format!("資格情報を取得できません: {e}"))?;
-    tauri::async_runtime::spawn_blocking(move || imap_sync::test_login(&host, port, &login, &password))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        imap_sync::test_login(&host, port, &login, &password)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// アカウントを削除（受信メールと keyring の資格情報も削除）。

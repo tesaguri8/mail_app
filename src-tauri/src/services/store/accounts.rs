@@ -111,6 +111,11 @@ impl Store {
             "DELETE FROM email_fts WHERE rowid IN (SELECT id FROM emails WHERE account_id=?1)",
             params![id],
         )?;
+        // FK 制約のため、メール本体より先に添付を削除する。
+        conn.execute(
+            "DELETE FROM attachments WHERE email_id IN (SELECT id FROM emails WHERE account_id=?1)",
+            params![id],
+        )?;
         conn.execute("DELETE FROM emails WHERE account_id=?1", params![id])?;
         conn.execute("DELETE FROM accounts WHERE id=?1", params![id])?;
         Ok(())

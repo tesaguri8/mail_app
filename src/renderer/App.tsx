@@ -37,14 +37,14 @@ export default function App() {
 
   return (
     <div
-      className="flex h-full flex-col bg-cover bg-center text-white"
+      className="flex h-full flex-col overflow-hidden bg-cover bg-center text-white"
       style={{
         backgroundImage: `linear-gradient(160deg, rgba(20,20,40,0.45) 0%, rgba(10,15,35,0.65) 100%), url(${backgroundUrl})`,
       }}
     >
       <TitleBar onNavigate={setView} />
 
-      <main className="min-h-0 flex-1">
+      <main className="min-h-0 flex-1 overflow-hidden">
         {view === 'home' && <Home accounts={accounts} onOpenMail={openMail} />}
         {view === 'mail' && (
           <MailboxView

@@ -112,7 +112,7 @@ export function MailboxView({
   }
 
   const listPane = (
-    <ul className="min-h-0 space-y-1 overflow-y-auto p-2">
+    <ul className="h-full space-y-1 overflow-y-auto p-2">
       {mails.length === 0 ? (
         <li className="px-2 py-3 text-sm text-white/50">{t('mailbox.empty')}</li>
       ) : (
@@ -151,8 +151,8 @@ export function MailboxView({
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-wrap items-center gap-2 border-b border-white/10 px-4 py-2">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/10 px-4 py-2">
         <select
           className="rounded-md bg-white/10 px-2 py-1 text-xs outline-none"
           value={selected ?? ''}
@@ -190,14 +190,14 @@ export function MailboxView({
       </div>
 
       {layout === 'side' ? (
-        <div className="grid min-h-0 flex-1 grid-cols-[340px_1fr]">
-          <div className="min-h-0 border-r border-white/10">{listPane}</div>
-          <div className="min-h-0">{bodyPane}</div>
+        <div className="grid min-h-0 flex-1 grid-cols-[340px_1fr] overflow-hidden">
+          <div className="min-h-0 overflow-hidden border-r border-white/10">{listPane}</div>
+          <div className="min-h-0 overflow-hidden">{bodyPane}</div>
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="h-1/3 min-h-0 border-b border-white/10">{listPane}</div>
-          <div className="min-h-0 flex-1">{bodyPane}</div>
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="h-1/3 min-h-0 overflow-hidden border-b border-white/10">{listPane}</div>
+          <div className="min-h-0 flex-1 overflow-hidden">{bodyPane}</div>
         </div>
       )}
     </div>

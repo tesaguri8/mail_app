@@ -87,20 +87,31 @@ export function SignatureManager() {
           {items.map((s) => (
             <li key={s.id} className="overflow-hidden rounded-md bg-white/10 text-sm">
               <div className="flex items-center justify-between gap-2 px-3 py-2">
-                <button
-                  onClick={() => toggle(s)}
-                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                >
-                  <span className="min-w-0 truncate font-medium">
-                    {s.name || t('signature.untitled')}
-                  </span>
-                  <ChevronDown
-                    size={16}
-                    className={`ml-auto shrink-0 text-white/40 transition-transform ${
-                      editing === s.id ? 'rotate-180' : ''
-                    }`}
-                  />
-                </button>
+                {editing === s.id ? (
+                  // 展開時はヘッダーの名前をそのまま直接編集（二重表示を避ける）
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                    <input
+                      autoFocus
+                      className="min-w-0 flex-1 rounded bg-transparent px-1 py-0.5 font-medium outline-none focus:bg-white/10"
+                      placeholder={t('signature.namePlaceholder')}
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                    />
+                    <button onClick={() => toggle(s)} aria-label={t('signature.name')}>
+                      <ChevronDown size={16} className="shrink-0 rotate-180 text-white/40" />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => toggle(s)}
+                    className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                  >
+                    <span className="min-w-0 truncate font-medium">
+                      {s.name || t('signature.untitled')}
+                    </span>
+                    <ChevronDown size={16} className="ml-auto shrink-0 text-white/40" />
+                  </button>
+                )}
                 <button
                   className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/60 hover:border-red-400/60 hover:bg-red-500/30 hover:text-white"
                   title={t('signature.delete')}
@@ -113,15 +124,6 @@ export function SignatureManager() {
 
               {editing === s.id && (
                 <div className="space-y-3 border-t border-white/10 bg-black/15 px-3 py-3">
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-white/55">{t('signature.name')}</span>
-                    <input
-                      className={inputCls}
-                      placeholder={t('signature.namePlaceholder')}
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                    />
-                  </label>
                   <label className="block">
                     <span className="mb-1 block text-xs text-white/55">{t('signature.body')}</span>
                     <textarea

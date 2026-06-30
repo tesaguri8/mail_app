@@ -1,0 +1,1 @@
+# ts-rs が生成する Rust→TS 型の出力先（npm run gen:bindings）。手書き禁止。

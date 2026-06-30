@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+packages/*/node_modules/
+
+# Build outputs
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# Generated (single-source: config/app-identity.json → これらを生成)
+src/renderer/config/appIdentity.ts
+
+# Logs / env
+*.log
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+*.swp

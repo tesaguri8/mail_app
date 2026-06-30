@@ -1,0 +1,20 @@
+{
+  "app": {
+    "tagline": "Email that feels good to use"
+  },
+  "home": {
+    "welcome": "Welcome",
+    "unread": "Unread",
+    "today": "New today",
+    "placeholder": "Your overview dashboard appears here"
+  },
+  "titlebar": {
+    "alwaysOnTop": "Always on top",
+    "minimize": "Minimize",
+    "maximize": "Maximize",
+    "close": "Close"
+  },
+  "lang": {
+    "switch": "日本語"
+  }
+}

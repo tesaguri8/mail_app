@@ -1,0 +1,38 @@
+[package]
+name = "comfort-mail"
+version = "0.1.0"
+description = "Comfort Mail (仮称)"
+authors = ["Tesaguri tech"]
+license = "UNLICENSED"
+edition = "2021"
+rust-version = "1.80"
+
+[lib]
+name = "comfort_mail_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri コア
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-store = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-log = "2"
+
+# シリアライズ
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 型付きエラー
+thiserror = "2"
+
+# ログ
+log = "0.4"
+
+# Rust → TS 型生成（boundary 型を src/bindings/ に export）。詳細: docs/APP_IDENTITY.md / TS bindings
+ts-rs = { version = "10", features = ["serde-compat", "no-serde-warnings"] }

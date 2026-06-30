@@ -1,0 +1,20 @@
+{
+  "app": {
+    "tagline": "気持ちよく使えるメール"
+  },
+  "home": {
+    "welcome": "ようこそ",
+    "unread": "未読メール",
+    "today": "今日の新着",
+    "placeholder": "ここに概要ダッシュボードが表示されます"
+  },
+  "titlebar": {
+    "alwaysOnTop": "最前面に固定",
+    "minimize": "最小化",
+    "maximize": "最大化",
+    "close": "閉じる"
+  },
+  "lang": {
+    "switch": "English"
+  }
+}

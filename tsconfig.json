@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "moduleResolution": "Bundler",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "allowSyntheticDefaultImports": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@renderer/*": ["src/renderer/*"],
+      "@components/*": ["src/renderer/components/*"],
+      "@stores/*": ["src/renderer/stores/*"],
+      "@services/*": ["src/renderer/services/*"],
+      "@config/*": ["src/renderer/config/*"],
+      "@utils/*": ["src/renderer/utils/*"],
+      "@locales/*": ["src/renderer/locales/*"],
+      "@bindings/*": ["src/bindings/*"]
+    },
+    "types": ["vite/client", "node", "vitest/globals"]
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "src-tauri"]
+}

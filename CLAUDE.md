@@ -12,6 +12,7 @@
 
 ### アプリ基盤
 - **Tauri 2** - デスクトップアプリケーション基盤（Rust + WebView）
+- **Expo / React Native** - モバイル版（iOS / Android）。デスクトップとは別アプリ、TS ロジックを `packages/` で共有（[docs/CROSS_PLATFORM.md](docs/CROSS_PLATFORM.md)）
 
 ### フロントエンド
 - **React 18.x** - UIライブラリ
@@ -67,6 +68,8 @@ mail_app/
 │   │   ├── lib.rs / main.rs / error.rs
 │   ├── capabilities/   # 権限定義（宣言的）
 │   └── tauri.conf.json
+├── mobile/             # モバイル版（Expo / React Native）
+├── packages/           # 共有 TS（mail-core: 引用解析/スレッド再構築, types, i18n, utils）
 ├── scripts/            # 開発ツール
 └── docs/               # ドキュメント
 ```

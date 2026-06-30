@@ -15,6 +15,11 @@ export default function App() {
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [mailAccountId, setMailAccountId] = useState<number | null>(null);
   const [mailOpenId, setMailOpenId] = useState<number | null>(null);
+  // 背景のかぶせ（暗さ）。写真によって文字が見づらい時に上げる。
+  const [dim, setDim] = useState<number>(() => Number(localStorage.getItem('rondine.dim') ?? 0));
+  useEffect(() => {
+    localStorage.setItem('rondine.dim', String(dim));
+  }, [dim]);
 
   const refreshAccounts = useCallback(() => {
     if (!isTauri) return;
@@ -39,7 +44,7 @@ export default function App() {
     <div
       className="flex h-full flex-col overflow-hidden bg-cover bg-center text-white"
       style={{
-        backgroundImage: `linear-gradient(160deg, rgba(20,20,40,0.45) 0%, rgba(10,15,35,0.65) 100%), url(${backgroundUrl})`,
+        backgroundImage: `linear-gradient(160deg, rgba(15,18,35,${(0.35 + dim).toFixed(2)}) 0%, rgba(8,12,28,${(0.55 + dim).toFixed(2)}) 100%), url(${backgroundUrl})`,
       }}
     >
       <TitleBar onNavigate={setView} />
@@ -51,6 +56,8 @@ export default function App() {
             accounts={accounts}
             initialAccountId={mailAccountId}
             initialMailId={mailOpenId}
+            dim={dim}
+            onDimChange={setDim}
           />
         )}
         {view === 'settings' && <Settings accounts={accounts} onChanged={refreshAccounts} />}

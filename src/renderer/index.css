@@ -18,3 +18,15 @@ body {
     'Meiryo',
     sans-serif;
 }
+
+/* スクロールバーは非表示（スクロール自体は可能）。アンビエントな見た目を優先 */
+* {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* 旧 Edge/IE */
+}
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none; /* Chromium / WebView2 */
+}
+

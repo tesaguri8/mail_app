@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { TitleBar } from './components/TitleBar';
 import { APP } from './config/appIdentity';
+// Phase 1: アプリ同梱の背景画像（プレースホルダ。docs/UI_UX_DESIGN.md 背景写真システム）
+import backgroundUrl from './assets/background.jpg';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -36,9 +38,8 @@ export default function App() {
     <div
       className="flex h-full flex-col bg-cover bg-center text-white"
       style={{
-        // Phase 1: 背景画像の取り込みは後続。まずは美しいグラデーションで全面ビジュアル。
-        backgroundImage:
-          'linear-gradient(135deg, #1a1a2e 0%, #16213e 45%, #0f3460 100%)',
+        // 全面ビジュアル背景。可読性のため上から時間帯風グラデーションを重ねる。
+        backgroundImage: `linear-gradient(160deg, rgba(20,20,40,0.45) 0%, rgba(10,15,35,0.65) 100%), url(${backgroundUrl})`,
       }}
     >
       <TitleBar />

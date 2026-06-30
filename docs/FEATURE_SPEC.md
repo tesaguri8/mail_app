@@ -17,7 +17,7 @@
 ### 主要機能
 1. チャット形式のメール表示
 2. 高速メタデータ検索
-3. スマートタグシステム
+3. スマートタグ・フィルタリング（ブックマーク/要再確認/知り合い/取引実績/グループ/カテゴリ）
 4. マルチアカウント対応
 5. **住所録（アドレス帳）** — メールアプリの正式スコープとして実装
 6. **カレンダー** — 予定管理。メール・連絡先と連携
@@ -70,13 +70,21 @@
 
 **インデックス戦略**: 非同期インデックス作成 / 差分更新 / 定期的な最適化 / メモリ効率的な実装
 
-### 2.3 タグ・振り分けシステム
+**同期範囲との関係**: ローカル検索は同期ウィンドウ内（or メタデータ保持分）。ウィンドウ外はサーバー検索（IMAP SEARCH）を任意で実行（[SYNC.md](SYNC.md)）。
 
-**タグ機能**: 手動タグ付け / 自動タグ付けルール / タグの階層構造 / カラーコーディング / タグベースのフィルタリング
+### 2.3 タグ・振り分け・フィルタリング（[FILTERING.md](FILTERING.md)）
 
-**ルールエンジン条件**: 送信者ベース / 件名パターンマッチ / 本文キーワード / 添付有無 / 時間帯
+**タグ/カテゴリ**: 手動タグ付け / 自動タグ付けルール / 階層構造 / カラー / カテゴリ（`kind='category'`、AI 自動分類可）
 
-**スマートフォルダ**: 動的フォルダ（検索条件保存）/ プリセット（未読・重要 等）/ カスタム
+**状態フラグ**: ブックマーク / 要再確認（フォローアップ・期限）/ フラグ / 未読・既読
+
+**相手で絞り込み**: 知り合い（住所録に存在）/ 取引実績（双方向履歴の自動判定＋「取引先」手動フラグ）/ お気に入り・VIP / アドレスグループ
+
+**種別で絞り込み**: メルマガ/一括（`List-Id`/`Precedence`）/ 宛先エイリアス（`Delivered-To`）/（将来）SNS チャネル
+
+**ルールエンジン条件**: 送信者 / 件名パターン / 本文キーワード / `List-Id` / 添付有無 / 時間帯 → フラグ・カテゴリ・タグを自動付与
+
+**保存フィルタ（スマートフォルダ）**: ファセットの AND/OR を名前付き保存（例「要対応」「常連ゲスト」「メルマガ」）。動的評価。サイドバーに固定。
 
 ### 2.4 住所録（アドレス帳）機能
 
@@ -146,7 +154,8 @@
 | スレッド | `thread_list` / `thread_messages` / `thread_split` / `thread_merge` / `thread_rename` / `message_reassign` / `thread_rebuild` | `/api/threads*`（＋再構築系を新規） |
 | 検索 | `search_run` / `search_suggest` | `/api/search*` |
 | タグ | `tag_list` / `tag_create` / `tag_update` / `tag_delete` | `/api/tags*` |
-| 同期 | `sync_start` / `sync_status` / `sync_stop` | `/api/sync*` |
+| フィルタ | `inbox_filter`（ファセット）/ `message_set_flag`（ブックマーク・要再確認）/ `filter_save` / `filter_list` / `filter_delete` / `contact_set_business` / `category_list` / `category_assign` | （新規。[FILTERING.md](FILTERING.md)） |
+| 同期 | `sync_start` / `sync_status` / `sync_stop` / `account_set_sync_window` / `account_set_retention` / `message_fetch_body` / `attachment_download` / `server_search` | `/api/sync*`（＋範囲設定。[SYNC.md](SYNC.md)） |
 | 住所録 | `contact_list` / `contact_get` / `contact_upsert` / `contact_delete` / `contact_group_list` | （新規） |
 | カレンダー | `event_list`（期間指定）/ `event_get` / `event_upsert` / `event_delete` / `ics_import` | （新規） |
 | ウィンドウ | `window_set_always_on_top` / `window_set_mode`（dashboard / widget） | （新規） |

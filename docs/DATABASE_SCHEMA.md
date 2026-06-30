@@ -19,6 +19,11 @@ CREATE TABLE accounts (
     smtp_host TEXT NOT NULL,
     smtp_port INTEGER DEFAULT 587,
     auth_type TEXT DEFAULT 'password',   -- 'password' | 'oauth2'（将来）
+    -- 同期範囲・保持（docs/SYNC.md。ユーザーが選択）
+    sync_window TEXT DEFAULT '6m',          -- '1m'|'3m'|'6m'|'1y'|'2y'|'all'
+    body_fetch TEXT DEFAULT 'window',       -- 'window'|'on_demand'
+    attachment_fetch TEXT DEFAULT 'on_demand', -- 'on_demand'|'auto'
+    retention TEXT DEFAULT 'window',        -- 'window'|'metadata_only'|'keep_all'
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -40,6 +45,10 @@ CREATE TABLE emails (
     has_attachments BOOLEAN DEFAULT FALSE,
     is_read BOOLEAN DEFAULT FALSE,
     is_flagged BOOLEAN DEFAULT FALSE,
+    -- フィルタリング用の状態フラグ（docs/FILTERING.md）
+    is_bookmarked BOOLEAN DEFAULT FALSE,  -- ブックマーク
+    needs_review BOOLEAN DEFAULT FALSE,   -- 要再確認（フォローアップ）
+    follow_up_at TIMESTAMP,               -- 要再確認の期限（任意）
     folder_id INTEGER,
     raw_headers TEXT,
     body_plain TEXT,
@@ -100,10 +109,11 @@ CREATE TABLE threads (
     has_attachments BOOLEAN DEFAULT FALSE
 );
 
--- タグ
+-- タグ / カテゴリ（kind で区別。docs/FILTERING.md）
 CREATE TABLE tags (
     id INTEGER PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,
+    kind TEXT DEFAULT 'tag',        -- 'tag'（複数付与）| 'category'（分類）
     color TEXT,
     parent_id INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -147,6 +157,7 @@ CREATE TABLE contacts (
     note TEXT,
     avatar_path TEXT,
     is_favorite BOOLEAN DEFAULT FALSE,
+    is_business BOOLEAN DEFAULT FALSE,  -- 取引先（取引実績の手動フラグ。docs/FILTERING.md）
     source TEXT DEFAULT 'local',    -- 'local' | 'google' | 'icloud' | ...
     external_id TEXT,               -- 連携元のID（マージ・同期用）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -268,6 +279,17 @@ CREATE TABLE background_images (
     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 保存フィルタ（スマートフォルダ。docs/FILTERING.md）
+-- 条件は可変構造のため JSON で保持（ファセットの AND/OR 組み合わせ）。
+CREATE TABLE saved_filters (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    definition_json TEXT NOT NULL,  -- 例: {"all":[{"needs_review":true},{"is_read":false}]}
+    is_pinned BOOLEAN DEFAULT FALSE,
+    sort_order INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- ───────────────────────────────────────────────
 -- AI 注釈（docs/AI_FEATURES.md）
 -- メール本体はリレーショナルで保持（JSON 不要）。AI 生成物のみ可変構造のため JSON 列に格納。
@@ -330,6 +352,11 @@ CREATE INDEX idx_email_tags_tag_id     ON email_tags(tag_id);
 -- スレッド再構築（docs/THREADING.md）
 CREATE INDEX idx_emails_logical_thread ON emails(logical_thread_id, date);
 CREATE INDEX idx_emails_list_id        ON emails(list_id);
+
+-- フィルタリング（docs/FILTERING.md）
+CREATE INDEX idx_emails_bookmarked  ON emails(is_bookmarked) WHERE is_bookmarked = TRUE;
+CREATE INDEX idx_emails_review      ON emails(needs_review, follow_up_at) WHERE needs_review = TRUE;
+CREATE INDEX idx_contacts_business  ON contacts(is_business) WHERE is_business = TRUE;
 CREATE INDEX idx_quotes_email          ON message_quotes(email_id);
 CREATE INDEX idx_quotes_match          ON message_quotes(quoted_from, quoted_at);
 

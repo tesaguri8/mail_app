@@ -179,7 +179,7 @@ mail_app/
 
 ### Phase 4 — メール同期・受信＋スレッド解析基盤
 - `services/imap/`（`async-imap`）＋ `services/parser/`（`mail-parser`）。
-- 差分同期（UIDVALIDITY / UIDNEXT 管理）、添付の遅延取得。
+- **同期範囲はユーザー選択**（[SYNC.md](SYNC.md)）: アカウント単位の同期ウィンドウ（既定 6ヶ月、全期間も可）。メタデータ→本文→添付の段階取得、保持ポリシー、差分同期（UIDVALIDITY / UIDNEXT 管理）、添付の遅延取得。
 - **スレッド再構築の解析基盤**（[THREADING.md](THREADING.md)）: 引用・署名分離 → `clean_body` 生成、引用属性の (from+時刻) 抽出・fingerprint、活用ヘッダ（`Thread-Index`/`List-Id`/`Delivered-To`/`Authentication-Results` 等）抽出、論理スレッド割当。**アルゴリズムは `packages/mail-core`(TS) への切り出しを意識**（モバイル再利用のため。[CROSS_PLATFORM.md](CROSS_PLATFORM.md)）。
 - FTS5（`clean_body`）への索引投入。IDLE による準リアルタイム更新は任意。
 
@@ -195,8 +195,9 @@ mail_app/
 - **作成モード**: 返信 / **このアドレスへ新規メール**（参照ヘッダなし・新論理スレッド）。
 - **AI 作成支援（オプトイン）**: `services/ai/`（cloud + Ollama）。件名生成・本文ドラフト/リライト。要約・返信提案・分類は Phase 7 で拡張（[AI_FEATURES.md](AI_FEATURES.md)）。
 
-### Phase 7 — 検索・タグ・スレッド整理
+### Phase 7 — 検索・タグ・フィルタ・スレッド整理
 - FTS5 検索 UI（件名/`clean_body`/差出人/添付名）、ファセット、検索履歴。
+- **フィルタリング**（[FILTERING.md](FILTERING.md)）: 状態フラグ（ブックマーク/要再確認）、相手（知り合い/取引実績/グループ）、カテゴリ、保存フィルタ（スマートフォルダ）。
 - 手動/自動タグ、振り分けルールエンジン（`List-Id` 等のヘッダ活用）。
 - **スレッド整理 UI**: 自動分割の精緻化、手動の分割/結合/**再件名**、論理スレッドのラベル付け（[THREADING.md](THREADING.md)）。
 - **AI 拡張**: スレッド要約・返信候補提案・自動分類/タグ提案（[AI_FEATURES.md](AI_FEATURES.md)）。`ai_annotations` への保存。
@@ -249,6 +250,8 @@ mail_app/
 
 - [FEATURE_SPEC.md](FEATURE_SPEC.md) — 機能仕様・Tauri コマンド・セキュリティ・テスト・将来拡張
 - [THREADING.md](THREADING.md) — スレッド再構築エンジン（引用解析・論理スレッド・ヘッダ活用）
+- [FILTERING.md](FILTERING.md) — フィルタリング（状態フラグ・相手・グループ・カテゴリ・保存フィルタ）
+- [SYNC.md](SYNC.md) — 同期範囲・保持期間（取得期間をユーザー選択、本文/添付の遅延取得）
 - [AI_FEATURES.md](AI_FEATURES.md) — AI 活用（件名/本文生成・要約・返信提案・分類、プライバシー方針）
 - [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) — SQLite スキーマ
 - [UI_UX_DESIGN.md](UI_UX_DESIGN.md) — UI/UX 設計

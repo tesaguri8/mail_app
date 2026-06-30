@@ -72,6 +72,7 @@ Primadoc はドキュメントエディタであり、**IMAP/SMTP・大量メー
 - **作成は返信 / 新規の 2 モード**: 「このアドレスへ新規メール」で別案件を正しく新規送信（参照ヘッダなし・新論理スレッド）。
 - **AI 活用はオプトイン**: 既定クラウド（Claude）／機密はローカル（Ollama）。件名・本文生成・要約・返信提案・分類（詳細: [AI_FEATURES.md](AI_FEATURES.md)）。Primadoc の AI 基盤を流用。
 - **保存はリレーショナル＋FTS5。JSON は保存形式に使わない**（AI/IPC のシリアライズ・AI 注釈・エクスポートに限定）。
+- **アプリ識別情報は単一ソース**: 製品名・identifier 等を `config/app-identity.json` に集約し、各設定へ生成/実行時参照で配る（**ハードコード排除**。いつでも改名可能）。詳細: [APP_IDENTITY.md](APP_IDENTITY.md)。
 - **クロスプラットフォーム**: デスクトップ = Tauri 2（Rust コア）／モバイル = **Expo / React Native**（Primadoc 流）。**メールは各端末が IMAP で独立同期**（共有バックエンドなし）。引用解析・スレッド再構築アルゴリズムは **TS の `packages/mail-core` に共有**して二重実装を避ける（詳細: [CROSS_PLATFORM.md](CROSS_PLATFORM.md)）。モバイルはコア安定後の別トラック。
 - **スコープにメール＋住所録＋カレンダーを含む**（Phase 8 / 9）。
 - **ウィンドウはフレームレス全面ビジュアル**。ダッシュボード⇔ウィジェットは**同一ウィンドウのリサイズ連動**で切替（別ウィンドウは持たない）。
@@ -125,6 +126,10 @@ mail_app/
 │   ├── types/                  # 境界型（ts-rs 生成と整合）
 │   ├── i18n/                   # 翻訳リソース
 │   └── utils/                  # 共通関数
+├── config/
+│   └── app-identity.json       # 製品名・identifier の単一ソース（docs/APP_IDENTITY.md）
+├── scripts/
+│   └── sync-app-identity.mjs   # 上記を tauri.conf / appIdentity.ts へ反映
 ├── docs/                       # 本ドキュメント群
 ├── package.json
 ├── vite.config.ts
@@ -157,7 +162,8 @@ mail_app/
 - TailwindCSS 4 / PostCSS、ESLint / Prettier / Husky / lint-staged / markdownlint-cli2 を Primadoc から流用。
 - i18next + react-i18next（ja/en）セットアップ。
 - ts-rs 配線（Rust→`src/bindings/`）。
-- `tauri.conf.json` 整備（**productName: `Comfort Mail`（仮称）**, CSP, updater）。**identifier 規則 `tesaguri.<app_name>.app`、暫定値 `tesaguri.comfortmail.dev`**（正式確定時に置換。データ保存パスもこの identifier ベース → [DATA_STORAGE.md](DATA_STORAGE.md)）。モバイル（Expo）の bundle id / package も同値。
+- **アプリ識別情報の単一ソース化**（[APP_IDENTITY.md](APP_IDENTITY.md)）: `config/app-identity.json` ＋ `scripts/sync-app-identity.mjs` を整備し、`tauri.conf.json`（productName / identifier）と `src/config/appIdentity.ts` を生成。Rust は実行時参照（`app_data_dir()` 等）でハードコードしない。
+- 現状の暫定: **productName `Comfort Mail`（仮称）／identifier `tesaguri.comfortmail.dev`**（規則 `tesaguri.<slug>.<channel|app>`、正式確定時に置換）。モバイル（Expo）の bundle id / package / scheme も同ソースから導出。
 - **フレームレスウィンドウ**（`decorations: false`）+ 自作タイトルバー（`data-tauri-drag-region`）。全面ビジュアル/ウィジェット化の土台（[UI_UX_DESIGN.md](UI_UX_DESIGN.md) §1.5）。
 - ローカル画像表示のため **asset プロトコル**有効化＋**CSP `img-src`** 許可（背景画像用）。
 
@@ -247,6 +253,7 @@ mail_app/
 - [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) — SQLite スキーマ
 - [UI_UX_DESIGN.md](UI_UX_DESIGN.md) — UI/UX 設計
 - [DATA_STORAGE.md](DATA_STORAGE.md) — データ保存場所設計
+- [APP_IDENTITY.md](APP_IDENTITY.md) — アプリ識別情報の単一ソース化（ハードコード排除）
 - [I18N.md](I18N.md) — 多言語対応（i18next）
 - [CROSS_PLATFORM.md](CROSS_PLATFORM.md) — クロスプラットフォーム / モバイル版（Expo, 独立 IMAP, 共有 mail-core）
 - [SNS_INTEGRATION.md](SNS_INTEGRATION.md) — SNS 統合（メッセージハブ）・クラウド中継アーキテクチャ

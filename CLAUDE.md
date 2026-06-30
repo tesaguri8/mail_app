@@ -70,7 +70,8 @@ mail_app/
 │   └── tauri.conf.json
 ├── mobile/             # モバイル版（Expo / React Native）
 ├── packages/           # 共有 TS（mail-core: 引用解析/スレッド再構築, types, i18n, utils）
-├── scripts/            # 開発ツール
+├── config/             # 定数の単一ソース（app-identity.json 等。ハードコード排除）
+├── scripts/            # 開発ツール（sync-app-identity.mjs 等）
 └── docs/               # ドキュメント
 ```
 
@@ -79,6 +80,8 @@ mail_app/
 アプリ識別子（identifier）規則: **`tesaguri.<app_name>.app`**（Tesaguri アプリ共通）。
 **暫定値: `tesaguri.comfortmail.dev`**（仮称 **Comfort Mail**、`.dev` は暫定。正式確定時に `tesaguri.<確定名>.app` へ）。
 データディレクトリはこの identifier をフォルダ名として各 OS 標準場所に配置（詳細: [docs/DATA_STORAGE.md](docs/DATA_STORAGE.md)）。
+
+> **ハードコード排除**: 製品名・identifier は `config/app-identity.json`（単一ソース）に集約し、`tauri.conf.json` / TS / Expo へ生成・実行時参照で配る。直書きしない（詳細: [docs/APP_IDENTITY.md](docs/APP_IDENTITY.md)）。
 
 ### Windows
 ```

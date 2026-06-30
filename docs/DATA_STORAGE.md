@@ -61,7 +61,7 @@ C:\Users\{username}\AppData\Roaming\tesaguri.comfortmail.dev\
 
 ## 3. 実装例（Tauri / Rust）
 
-パスは Tauri の `path` API または `dirs` クレートで解決し、identifier（`tesaguri.comfortmail.dev`）を付与する。
+識別子は**ハードコードしない**。`tauri.conf.json` の `identifier` を単一ソースとし、`app_data_dir()`（identifier ベース）でパスを解決する。identifier 自体は `config/app-identity.json` から生成する（[APP_IDENTITY.md](APP_IDENTITY.md)）。
 資格情報は平文ファイルに置かず、必ず `keyring` を使う。
 
 ```rust
@@ -82,28 +82,25 @@ pub struct StoragePaths {
 }
 
 impl StoragePaths {
-    /// 各 OS の標準ベースディレクトリ配下に identifier フォルダを構築。
-    /// identifier 規則: tesaguri.<app_name>.app（暫定: tesaguri.comfortmail.dev）
-    pub fn resolve() -> Self {
-        // Win:   %APPDATA%\tesaguri.comfortmail.dev
-        // mac:   ~/Library/Application Support/tesaguri.comfortmail.dev
-        // Linux: ~/.local/share/tesaguri.comfortmail.dev
-        // ※ Tauri 利用時は app_handle.path().app_data_dir()（identifier ベース）でも可
-        const APP_ID: &str = "tesaguri.comfortmail.dev";
-        let base = dirs::data_dir().expect("data_dir");
-        let app = base.join(APP_ID);
-        let data = app.join("data");
+    /// identifier はハードコードせず、Tauri（tauri.conf.json）を単一ソースに解決する。
+    /// app_data_dir() は identifier ベース:
+    ///   Win %APPDATA%\<identifier> / mac ~/Library/Application Support/<identifier> / Linux ~/.local/share/<identifier>
+    /// identifier は config/app-identity.json から生成（docs/APP_IDENTITY.md）。
+    pub fn resolve(app: &tauri::AppHandle) -> Self {
+        use tauri::Manager;
+        let base = app.path().app_data_dir().expect("app_data_dir"); // = …/<identifier>
+        let data = base.join("data");
         Self {
             database: data.join("mail.db"),
             emails: data.join("emails"),
             attachments: data.join("attachments"),
             search_index: data.join("search"),
-            backgrounds: app.join("media").join("backgrounds"),
-            config: app.join("config"),
-            cache: app.join("cache"),
-            logs: app.join("logs"),
+            backgrounds: base.join("media").join("backgrounds"),
+            config: base.join("config"),
+            cache: base.join("cache"),
+            logs: base.join("logs"),
             data,
-            app,
+            app: base,
         }
     }
 
@@ -119,7 +116,7 @@ impl StoragePaths {
 }
 ```
 
-> Tauri 側で `app_handle.path().app_data_dir()` を使えば identifier ベースのパスが得られる。明示制御したい場合は上記のように `APP_ID` から組み立てる。どちらも結果は `…/tesaguri.comfortmail.dev/` に一致させる。
+> `app_data_dir()` は `tauri.conf.json` の `identifier` をフォルダ名に用いるため、**Rust 側に識別子のハードコードが不要**になる（identifier は `config/app-identity.json` → 生成 → tauri.conf という単一ソース）。現状の暫定 identifier は `tesaguri.comfortmail.dev`。
 > カスタム保存先（ユーザー指定ドライブ等）は設定で受け取り、バリデーション後に上書きする。
 
 ---

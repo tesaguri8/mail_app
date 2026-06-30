@@ -64,6 +64,22 @@ pub fn resolve(email: &str) -> AutoconfigResult {
         };
     }
 
+    // さくらインターネット（*.sakura.ne.jp）: メールホスト＝そのままのドメイン
+    if domain.ends_with(".sakura.ne.jp") {
+        return AutoconfigResult {
+            email: email.to_string(),
+            display_name: None,
+            imap_host: domain.clone(),
+            imap_port: 993,
+            imap_security: "ssl".to_string(),
+            smtp_host: domain.clone(),
+            smtp_port: 587,
+            smtp_security: "starttls".to_string(),
+            source: "builtin".to_string(),
+            note: Some("さくらのメール: ユーザー名はメールアドレス全体、パスワードはメールボックスのパスワードです。".to_string()),
+        };
+    }
+
     // フォールバック推測
     AutoconfigResult {
         email: email.to_string(),
@@ -96,5 +112,15 @@ mod tests {
         assert_eq!(r.imap_host, "imap.example.org");
         assert_eq!(r.smtp_host, "smtp.example.org");
         assert_eq!(r.source, "guess");
+    }
+
+    #[test]
+    fn sakura_uses_bare_domain() {
+        let r = resolve("suematsu@sngdesign.sakura.ne.jp");
+        assert_eq!(r.imap_host, "sngdesign.sakura.ne.jp");
+        assert_eq!(r.smtp_host, "sngdesign.sakura.ne.jp");
+        assert_eq!(r.imap_port, 993);
+        assert_eq!(r.smtp_port, 587);
+        assert_eq!(r.source, "builtin");
     }
 }

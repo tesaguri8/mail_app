@@ -62,8 +62,24 @@
     "unstar": "Remove from favorites",
     "bookmark": "Add bookmark",
     "unbookmark": "Remove bookmark",
+    "tags": "Tags…",
     "delete": "Delete",
     "selected": "{{count}} selected"
+  },
+  "tag": {
+    "title": "Tags",
+    "assign": "Assign tags",
+    "filter": "Filter by tag",
+    "none": "No tags yet",
+    "empty": "No tags yet. Add one with + below.",
+    "newPlaceholder": "New tag…",
+    "namePlaceholder": "e.g. Project A / Finance",
+    "create": "Create",
+    "add": "Add tag",
+    "delete": "Delete",
+    "color": "Change color",
+    "count": "{{count}}",
+    "untitled": "New tag"
   },
   "greeting": {
     "morning": "Good morning",
@@ -75,6 +91,7 @@
     "title": "Settings",
     "accounts": "Accounts",
     "signatures": "Signatures",
+    "tags": "Tags",
     "display": "Display",
     "about": "About"
   },

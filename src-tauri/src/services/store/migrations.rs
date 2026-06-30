@@ -28,6 +28,10 @@ const MIGRATIONS: &[Migration] = &[
         version: 5,
         sql: include_str!("migrations/0005_signatures.sql"),
     },
+    Migration {
+        version: 6,
+        sql: include_str!("migrations/0006_tags.sql"),
+    },
 ];
 
 pub fn run(conn: &Connection) -> rusqlite::Result<()> {
@@ -56,7 +60,7 @@ mod tests {
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 5);
+        assert_eq!(v, 6);
 
         // emails テーブルが存在
         let n: i64 = conn
@@ -90,5 +94,48 @@ mod tests {
         run(&conn).unwrap();
         // 2回目の run は no-op（再作成でエラーにならない）
         run(&conn).unwrap();
+    }
+
+    #[test]
+    fn tags_can_be_assigned_and_queried() {
+        let conn = Connection::open_in_memory().unwrap();
+        run(&conn).unwrap();
+
+        // tag_id 索引が存在する（0006_tags.sql）
+        let idx: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_email_tags_tag'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx, 1);
+
+        // 最小限のアカウント・メール・タグを作って紐づけ → タグ ID でメールを引ける
+        conn.execute(
+            "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1, 'a@b', 'imap', 'smtp')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO emails (id, account_id, canonical_key) VALUES (1, 1, 'k1')",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO tags (id, name) VALUES (10, '案件A')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO email_tags (email_id, tag_id) VALUES (1, 10)",
+            [],
+        )
+        .unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM email_tags WHERE tag_id = 10",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
     }
 }

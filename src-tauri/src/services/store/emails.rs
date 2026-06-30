@@ -56,10 +56,16 @@ impl Store {
         let mut stmt = conn.prepare(
             "SELECT id, subject, from_address, date, is_read, has_attachments,
                     substr(COALESCE(clean_body, body_plain, ''), 1, 140) AS preview,
-                    is_flagged, is_bookmarked
+                    is_flagged, is_bookmarked,
+                    (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = emails.id) AS tag_ids
              FROM emails WHERE account_id = ?1 ORDER BY date DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![account_id, limit], |r| {
+            // group_concat はカンマ区切り文字列。空（タグ無し）は None。
+            let tag_ids = r
+                .get::<_, Option<String>>(9)?
+                .map(|s| s.split(',').filter_map(|p| p.parse::<i32>().ok()).collect())
+                .unwrap_or_default();
             Ok(MailSummary {
                 id: r.get::<_, i64>(0)? as i32,
                 subject: r.get(1)?,
@@ -70,6 +76,7 @@ impl Store {
                 preview: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
                 is_starred: r.get::<_, i64>(7)? != 0,
                 is_bookmarked: r.get::<_, i64>(8)? != 0,
+                tag_ids,
             })
         })?;
         rows.collect()
@@ -114,9 +121,11 @@ impl Store {
         let tx = conn.transaction()?;
         {
             let mut fts = tx.prepare("DELETE FROM email_fts WHERE rowid = ?1")?;
+            let mut etags = tx.prepare("DELETE FROM email_tags WHERE email_id = ?1")?;
             let mut del = tx.prepare("DELETE FROM emails WHERE id = ?1")?;
             for id in ids {
                 fts.execute(params![id])?;
+                etags.execute(params![id])?;
                 del.execute(params![id])?;
             }
         }

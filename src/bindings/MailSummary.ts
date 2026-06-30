@@ -3,4 +3,8 @@
 /**
  * メール一覧表示用（軽量）。
  */
-export type MailSummary = { id: number, subject: string | null, from_address: string | null, date: string | null, preview: string, is_read: boolean, has_attachments: boolean, is_starred: boolean, is_bookmarked: boolean, };
+export type MailSummary = { id: number, subject: string | null, from_address: string | null, date: string | null, preview: string, is_read: boolean, has_attachments: boolean, is_starred: boolean, is_bookmarked: boolean, 
+/**
+ * 付与されているタグの ID 群（表示・絞り込み用）。
+ */
+tag_ids: Array<number>, };

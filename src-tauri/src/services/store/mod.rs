@@ -3,6 +3,7 @@ mod emails;
 mod migrations;
 mod server_accounts;
 mod signatures;
+mod tags;
 
 pub use accounts::NewAccount;
 pub use emails::{insert_email, NewEmail};

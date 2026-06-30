@@ -100,6 +100,20 @@ pub struct MailSummary {
     pub has_attachments: bool,
     pub is_starred: bool,
     pub is_bookmarked: bool,
+    /// 付与されているタグの ID 群（表示・絞り込み用）。
+    pub tag_ids: Vec<i32>,
+}
+
+/// ユーザー定義タグ（プロジェクト等の任意ラベル。docs/FILTERING.md）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct TagSummary {
+    pub id: i32,
+    pub name: String,
+    /// 表示色（CSS カラー文字列。未設定なら None）。
+    pub color: Option<String>,
+    /// 付与されているメール件数。
+    pub count: i32,
 }
 
 /// メール詳細（本文表示用）。

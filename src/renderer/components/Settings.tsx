@@ -4,8 +4,9 @@ import type { AccountSummary } from '@bindings/AccountSummary';
 import { APP } from '../config/appIdentity';
 import { AccountSetup } from './AccountSetup';
 import { SignatureManager } from './SignatureManager';
+import { TagManager } from './TagManager';
 
-type Section = 'accounts' | 'signatures' | 'display' | 'about';
+type Section = 'accounts' | 'signatures' | 'tags' | 'display' | 'about';
 
 /**
  * 設定ページ: 左サイドバー（項目）＋右コンテンツの2カラム。
@@ -23,6 +24,7 @@ export function Settings({
   const items: { key: Section; label: string }[] = [
     { key: 'accounts', label: t('settings.accounts') },
     { key: 'signatures', label: t('settings.signatures') },
+    { key: 'tags', label: t('settings.tags') },
     { key: 'display', label: t('settings.display') },
     { key: 'about', label: t('settings.about') },
   ];
@@ -47,6 +49,7 @@ export function Settings({
       <div className="min-h-0 overflow-y-auto p-5">
         {section === 'accounts' && <AccountSetup accounts={accounts} onChanged={onChanged} />}
         {section === 'signatures' && <SignatureManager />}
+        {section === 'tags' && <TagManager />}
         {section === 'display' && (
           <p className="text-sm text-white/60">表示設定は今後追加します。</p>
         )}

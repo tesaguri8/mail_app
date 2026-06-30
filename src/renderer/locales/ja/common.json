@@ -62,8 +62,24 @@
     "unstar": "お気に入りを解除",
     "bookmark": "ブックマークに追加",
     "unbookmark": "ブックマークを解除",
+    "tags": "タグ…",
     "delete": "削除",
     "selected": "{{count}} 件を選択中"
+  },
+  "tag": {
+    "title": "タグ",
+    "assign": "タグを付ける",
+    "filter": "タグで絞り込み",
+    "none": "タグがありません",
+    "empty": "タグがありません。下の＋で追加できます。",
+    "newPlaceholder": "新しいタグ…",
+    "namePlaceholder": "例: 案件A / 経理",
+    "create": "作成",
+    "add": "タグを追加",
+    "delete": "削除",
+    "color": "色を変える",
+    "count": "{{count}} 件",
+    "untitled": "新しいタグ"
   },
   "greeting": {
     "morning": "おはようございます",
@@ -75,6 +91,7 @@
     "title": "設定",
     "accounts": "アカウント",
     "signatures": "署名",
+    "tags": "タグ",
     "display": "表示",
     "about": "このアプリ"
   },

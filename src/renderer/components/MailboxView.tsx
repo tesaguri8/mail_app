@@ -14,6 +14,7 @@ import {
   SquarePen,
   Star,
   StarOff,
+  Tag,
   Trash2,
   UserRound,
   type LucideIcon,
@@ -21,6 +22,7 @@ import {
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailSummary } from '@bindings/MailSummary';
 import type { MailDetail } from '@bindings/MailDetail';
+import type { TagSummary } from '@bindings/TagSummary';
 import {
   mailDelete,
   mailGet,
@@ -30,10 +32,14 @@ import {
   mailSetStarred,
   mailSync,
 } from '../services/mail';
+import { mailAddTag, mailRemoveTag, tagCreate, tagList } from '../services/tags';
+import { pickTagColor, DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import { MailBody } from './MailBody';
 import { FolderCombobox } from './FolderCombobox';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { DateFilter, matchesDate, type DateRange } from './DateFilter';
+import { TagFilter, matchesTags } from './TagFilter';
+import { TagPicker } from './TagPicker';
 
 const iconBtn =
   'flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80 disabled:opacity-40';
@@ -92,6 +98,10 @@ export function MailboxView({
   const [filters, setFilters] = useState<Set<string>>(new Set());
   // 期間フィルタ（以降/以前/期間）
   const [dateFilter, setDateFilter] = useState<DateRange | null>(null);
+  // タグ（一覧データ・絞り込み条件・付与ポップオーバー位置）
+  const [tags, setTags] = useState<TagSummary[]>([]);
+  const [tagFilter, setTagFilter] = useState<Set<number>>(new Set());
+  const [tagPicker, setTagPicker] = useState<{ x: number; y: number } | null>(null);
   const toggleFilter = (key: string) =>
     setFilters((prev) => {
       const next = new Set(prev);
@@ -108,6 +118,13 @@ export function MailboxView({
   useEffect(() => {
     if (selected == null && accounts.length > 0) setSelected(accounts[0].id);
   }, [accounts, selected]);
+
+  // タグ一覧（チップ表示・絞り込み・付与候補の元データ）
+  const reloadTags = () => tagList().then(setTags).catch(() => undefined);
+  useEffect(() => {
+    reloadTags();
+  }, []);
+  const tagById = new Map(tags.map((tg) => [tg.id, tg]));
 
   const loadMails = (id: number) => mailList(id, 200).then(setMails).catch(() => undefined);
   useEffect(() => {
@@ -239,6 +256,37 @@ export function MailboxView({
     }
   };
 
+  // 選択メール群へタグを付与/解除（楽観更新 → 永続化）。
+  const applyTagDelta = async (ids: number[], tagId: number, add: boolean) => {
+    const idSet = new Set(ids);
+    setMails((prev) =>
+      prev.map((m) => {
+        if (!idSet.has(m.id)) return m;
+        const has = m.tag_ids.includes(tagId);
+        if (add && !has) return { ...m, tag_ids: [...m.tag_ids, tagId] };
+        if (!add && has) return { ...m, tag_ids: m.tag_ids.filter((id) => id !== tagId) };
+        return m;
+      })
+    );
+    try {
+      await (add ? mailAddTag(ids, tagId) : mailRemoveTag(ids, tagId));
+      reloadTags(); // 件数表示を更新
+    } catch {
+      /* noop */
+    }
+  };
+
+  // 新規タグを作成して選択メールに付与。
+  const createAndAssign = async (name: string) => {
+    try {
+      const created = await tagCreate(name, pickTagColor(tags.length));
+      setTags((prev) => [...prev, created]);
+      await applyTagDelta(targetIds(), created.id, true);
+    } catch {
+      /* noop */
+    }
+  };
+
   // 選択集合の状態に応じてメニュー項目（トグルラベル）を組み立てる
   const buildMenuItems = (): MenuItem[] => {
     const sel = mails.filter((m) => selectedIds.has(m.id));
@@ -263,6 +311,14 @@ export function MailboxView({
             Icon: BookmarkPlus,
             onClick: () => actBookmark(true),
           },
+      {
+        key: 'tags',
+        label: t('ctx.tags'),
+        Icon: Tag,
+        onClick: () => {
+          if (menu) setTagPicker({ x: menu.x, y: menu.y });
+        },
+      },
       { key: 'delete', label: t('ctx.delete'), Icon: Trash2, danger: true, onClick: actDelete },
     ];
   };
@@ -272,7 +328,10 @@ export function MailboxView({
   }
 
   const visibleMails = mails.filter(
-    (m) => matchesFilters(m, filters) && matchesDate(m.date, dateFilter)
+    (m) =>
+      matchesFilters(m, filters) &&
+      matchesDate(m.date, dateFilter) &&
+      matchesTags(m.tag_ids, tagFilter)
   );
 
   const listPane =
@@ -310,6 +369,28 @@ export function MailboxView({
               {m.subject ?? '(no subject)'} {m.has_attachments && '📎'}
             </div>
             <div className="line-clamp-1 text-xs text-white/40">{m.preview}</div>
+            {m.tag_ids.length > 0 && (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {m.tag_ids.map((tid) => {
+                  const tg = tagById.get(tid);
+                  if (!tg) return null;
+                  const color = tg.color ?? DEFAULT_TAG_COLOR;
+                  return (
+                    <span
+                      key={tid}
+                      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium"
+                      style={{ backgroundColor: `${color}33`, color }}
+                    >
+                      <span
+                        className="h-1.5 w-1.5 rounded-full"
+                        style={{ backgroundColor: color }}
+                      />
+                      {tg.name}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
           </li>
         ))
       )}
@@ -377,6 +458,7 @@ export function MailboxView({
           );
         })}
         <DateFilter value={dateFilter} onChange={setDateFilter} />
+        <TagFilter tags={tags} value={tagFilter} onChange={setTagFilter} />
         <span className="mx-1 h-5 w-px bg-white/15" />
 
         <button
@@ -418,6 +500,18 @@ export function MailboxView({
           header={selectedIds.size > 1 ? t('ctx.selected', { count: selectedIds.size }) : undefined}
           items={buildMenuItems()}
           onClose={() => setMenu(null)}
+        />
+      )}
+
+      {tagPicker && (
+        <TagPicker
+          x={tagPicker.x}
+          y={tagPicker.y}
+          tags={tags}
+          selectedMails={mails.filter((m) => selectedIds.has(m.id))}
+          onToggle={(tagId, add) => applyTagDelta(targetIds(), tagId, add)}
+          onCreate={createAndAssign}
+          onClose={() => setTagPicker(null)}
         />
       )}
     </div>

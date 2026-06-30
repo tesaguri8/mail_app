@@ -1,6 +1,6 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AutoconfigResult, DbInfo, MailDetail, MailSummary,
-    ServerAccountSummary, SignatureSummary, SyncResult,
+    ServerAccountSummary, SignatureSummary, SyncResult, TagSummary,
 };
 use crate::services::autoconfig;
 use crate::services::imap_sync;
@@ -66,7 +66,10 @@ pub fn account_add(
     entry.set_password(&password).map_err(|e| e.to_string())?;
 
     // メールサーバーアカウント設定を再利用 or 作成して紐づける
-    let login_user = input.username.clone().unwrap_or_else(|| input.email.clone());
+    let login_user = input
+        .username
+        .clone()
+        .unwrap_or_else(|| input.email.clone());
     let server_account_id = store
         .find_or_create_server_account(&NewServerAccount {
             imap_host: input.imap_host.clone(),
@@ -215,7 +218,11 @@ pub fn account_set_sync_window(
 
 /// メール一覧を返す。
 #[tauri::command]
-pub fn mail_list(store: State<Store>, account_id: i64, limit: i64) -> Result<Vec<MailSummary>, String> {
+pub fn mail_list(
+    store: State<Store>,
+    account_id: i64,
+    limit: i64,
+) -> Result<Vec<MailSummary>, String> {
     store
         .list_emails(account_id, limit)
         .map_err(|e| e.to_string())
@@ -247,6 +254,67 @@ pub fn mail_set_bookmarked(store: State<Store>, ids: Vec<i64>, value: bool) -> R
 #[tauri::command]
 pub fn mail_delete(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
     store.delete_emails(&ids).map_err(|e| e.to_string())
+}
+
+/// タグ一覧（使用件数つき）。
+#[tauri::command]
+pub fn tag_list(store: State<Store>) -> Result<Vec<TagSummary>, String> {
+    store.list_tags().map_err(|e| e.to_string())
+}
+
+/// タグを新規作成（作成したタグを返す）。
+#[tauri::command]
+pub fn tag_create(
+    store: State<Store>,
+    name: String,
+    color: Option<String>,
+) -> Result<TagSummary, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("タグ名を入力してください".to_string());
+    }
+    store
+        .insert_tag(name, color.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// タグの名前・色を更新。
+#[tauri::command]
+pub fn tag_update(
+    store: State<Store>,
+    id: i64,
+    name: String,
+    color: Option<String>,
+) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("タグ名を入力してください".to_string());
+    }
+    store
+        .update_tag(id, name, color.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// タグを削除（メールとの紐づけも解除）。
+#[tauri::command]
+pub fn tag_delete(store: State<Store>, id: i64) -> Result<(), String> {
+    store.delete_tag(id).map_err(|e| e.to_string())
+}
+
+/// 複数メールにタグを付与。
+#[tauri::command]
+pub fn mail_add_tag(store: State<Store>, ids: Vec<i64>, tag_id: i64) -> Result<(), String> {
+    store
+        .add_tag_to_emails(&ids, tag_id)
+        .map_err(|e| e.to_string())
+}
+
+/// 複数メールからタグを外す。
+#[tauri::command]
+pub fn mail_remove_tag(store: State<Store>, ids: Vec<i64>, tag_id: i64) -> Result<(), String> {
+    store
+        .remove_tag_from_emails(&ids, tag_id)
+        .map_err(|e| e.to_string())
 }
 
 /// メール本文を取得し、既読にする。
@@ -290,9 +358,11 @@ pub async fn account_check(
     let password = keyring::Entry::new(&service, &email)
         .and_then(|e| e.get_password())
         .map_err(|e| format!("資格情報を取得できません: {e}"))?;
-    tauri::async_runtime::spawn_blocking(move || imap_sync::test_login(&host, port, &login, &password))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        imap_sync::test_login(&host, port, &login, &password)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// アカウントを削除（受信メールと keyring の資格情報も削除）。

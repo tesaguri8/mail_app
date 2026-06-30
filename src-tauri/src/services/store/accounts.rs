@@ -11,14 +11,15 @@ pub struct NewAccount {
     pub imap_port: u16,
     pub smtp_host: String,
     pub smtp_port: u16,
+    pub server_account_id: Option<i64>,
 }
 
 impl Store {
     pub fn insert_account(&self, a: &NewAccount) -> rusqlite::Result<i64> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO accounts (email, display_name, username, imap_host, imap_port, smtp_host, smtp_port)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO accounts (email, display_name, username, imap_host, imap_port, smtp_host, smtp_port, server_account_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 a.email,
                 a.display_name,
@@ -26,7 +27,8 @@ impl Store {
                 a.imap_host,
                 a.imap_port,
                 a.smtp_host,
-                a.smtp_port
+                a.smtp_port,
+                a.server_account_id
             ],
         )?;
         Ok(conn.last_insert_rowid())

@@ -1,9 +1,10 @@
 use crate::models::{
-    AccountInput, AccountSummary, AppInfo, AutoconfigResult, DbInfo, MailSummary, SyncResult,
+    AccountInput, AccountSummary, AppInfo, AutoconfigResult, DbInfo, MailSummary,
+    ServerAccountSummary, SyncResult,
 };
 use crate::services::autoconfig;
-use crate::services::store::{NewAccount, Store};
 use crate::services::imap_sync;
+use crate::services::store::{NewAccount, NewServerAccount, Store};
 use tauri::{AppHandle, State};
 
 /// アプリ識別情報を返す（identifier はハードコードせず Tauri 設定から取得）。
@@ -64,6 +65,18 @@ pub fn account_add(
     let entry = keyring::Entry::new(&service, &input.email).map_err(|e| e.to_string())?;
     entry.set_password(&password).map_err(|e| e.to_string())?;
 
+    // メールサーバーアカウント設定を再利用 or 作成して紐づける
+    let login_user = input.username.clone().unwrap_or_else(|| input.email.clone());
+    let server_account_id = store
+        .find_or_create_server_account(&NewServerAccount {
+            imap_host: input.imap_host.clone(),
+            imap_port: input.imap_port,
+            smtp_host: input.smtp_host.clone(),
+            smtp_port: input.smtp_port,
+            username: login_user,
+        })
+        .map_err(|e| e.to_string())?;
+
     let id = store
         .insert_account(&NewAccount {
             email: input.email.clone(),
@@ -73,6 +86,7 @@ pub fn account_add(
             imap_port: input.imap_port,
             smtp_host: input.smtp_host.clone(),
             smtp_port: input.smtp_port,
+            server_account_id: Some(server_account_id),
         })
         .map_err(|e| e.to_string())?;
 
@@ -89,6 +103,12 @@ pub fn account_add(
 #[tauri::command]
 pub fn account_list(store: State<Store>) -> Result<Vec<AccountSummary>, String> {
     store.list_accounts().map_err(|e| e.to_string())
+}
+
+/// 登録済みのメールサーバーアカウント設定一覧（再利用の選択肢）。
+#[tauri::command]
+pub fn server_account_list(store: State<Store>) -> Result<Vec<ServerAccountSummary>, String> {
+    store.list_server_accounts().map_err(|e| e.to_string())
 }
 
 /// IMAP に接続して INBOX を同期し、新着を DB に保存（PoC）。

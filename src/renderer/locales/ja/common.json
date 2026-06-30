@@ -36,7 +36,11 @@
     "testOk": "接続できました",
     "testFail": "接続できませんでした",
     "adding": "追加中…",
-    "needEmailFirst": "メールアドレスを入力してください"
+    "needEmailFirst": "メールアドレスを入力してください",
+    "appAccount": "メールアプリアカウント設定",
+    "serverAccount": "メールサーバーアカウント設定",
+    "useExistingServer": "既存のサーバー設定を使う…",
+    "newServer": "新しいサーバー設定"
   },
   "mailbox": {
     "title": "受信箱",

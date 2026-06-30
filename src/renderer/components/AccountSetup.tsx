@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AccountSummary } from '@bindings/AccountSummary';
+import type { ServerAccountSummary } from '@bindings/ServerAccountSummary';
 import {
   accountAdd,
   accountAutoconfig,
   accountList,
   accountTestConnection,
+  serverAccountList,
 } from '../services/accounts';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -17,6 +19,7 @@ const btnCls = 'rounded-md bg-white/15 px-3 py-2 text-sm hover:bg-white/25 disab
 export function AccountSetup() {
   const { t } = useTranslation();
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
+  const [servers, setServers] = useState<ServerAccountSummary[]>([]);
   const [adding, setAdding] = useState(false);
 
   // form state
@@ -37,8 +40,23 @@ export function AccountSetup() {
     accountList()
       .then(setAccounts)
       .catch(() => undefined);
+    serverAccountList()
+      .then(setServers)
+      .catch(() => undefined);
   };
   useEffect(refresh, []);
+
+  const onPickServer = (id: string) => {
+    const s = servers.find((x) => String(x.id) === id);
+    if (!s) return;
+    setImapHost(s.imap_host);
+    setImapPort(s.imap_port);
+    setSmtpHost(s.smtp_host);
+    setSmtpPort(s.smtp_port);
+    setUsername(s.username);
+    setUsernameEdited(true);
+    setNote('');
+  };
 
   const onAutoconfig = async () => {
     if (!email) {
@@ -128,6 +146,7 @@ export function AccountSetup() {
 
       {adding && (
         <div className="space-y-2">
+          <div className="text-xs font-semibold text-white/60">{t('account.appAccount')}</div>
           <div className="flex gap-2">
             <input
               className={inputCls}
@@ -143,6 +162,25 @@ export function AccountSetup() {
               {t('account.autoconfig')}
             </button>
           </div>
+          <div className="pt-1 text-xs font-semibold text-white/60">
+            {t('account.serverAccount')}
+          </div>
+          {servers.length > 0 && (
+            <select
+              className={inputCls}
+              defaultValue=""
+              onChange={(e) => onPickServer(e.target.value)}
+            >
+              <option value="" className="text-black">
+                {t('account.useExistingServer')}
+              </option>
+              {servers.map((s) => (
+                <option key={s.id} value={s.id} className="text-black">
+                  {s.imap_host}（{s.username}）
+                </option>
+              ))}
+            </select>
+          )}
           <input
             className={inputCls}
             placeholder={t('account.username')}

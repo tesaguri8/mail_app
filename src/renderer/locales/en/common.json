@@ -36,7 +36,11 @@
     "testOk": "Connection succeeded",
     "testFail": "Connection failed",
     "adding": "Adding…",
-    "needEmailFirst": "Enter an email address first"
+    "needEmailFirst": "Enter an email address first",
+    "appAccount": "Mail app account",
+    "serverAccount": "Mail server account",
+    "useExistingServer": "Use an existing server…",
+    "newServer": "New server"
   },
   "mailbox": {
     "title": "Inbox",

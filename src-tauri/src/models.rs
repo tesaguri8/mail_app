@@ -60,6 +60,19 @@ pub struct AccountSummary {
     pub smtp_host: String,
 }
 
+/// メールサーバーアカウント設定（接続＋ログイン）。再利用・紐づけ用。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ServerAccountSummary {
+    pub id: i32,
+    pub name: Option<String>,
+    pub imap_host: String,
+    pub imap_port: u16,
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub username: String,
+}
+
 /// メール一覧表示用（軽量）。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

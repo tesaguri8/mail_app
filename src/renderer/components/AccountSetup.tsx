@@ -21,6 +21,8 @@ export function AccountSetup() {
 
   // form state
   const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
+  const [usernameEdited, setUsernameEdited] = useState(false);
   const [password, setPassword] = useState('');
   const [imapHost, setImapHost] = useState('');
   const [imapPort, setImapPort] = useState(993);
@@ -73,6 +75,7 @@ export function AccountSetup() {
         {
           email,
           display_name: null,
+          username: username || email,
           imap_host: imapHost,
           imap_port: imapPort,
           smtp_host: smtpHost,
@@ -82,6 +85,8 @@ export function AccountSetup() {
       );
       setAdding(false);
       setEmail('');
+      setUsername('');
+      setUsernameEdited(false);
       setPassword('');
       setNote('');
       setStatus('');
@@ -129,12 +134,24 @@ export function AccountSetup() {
               type="email"
               placeholder={t('account.email')}
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                if (!usernameEdited) setUsername(e.target.value);
+              }}
             />
             <button className={btnCls} onClick={onAutoconfig}>
               {t('account.autoconfig')}
             </button>
           </div>
+          <input
+            className={inputCls}
+            placeholder={t('account.username')}
+            value={username}
+            onChange={(e) => {
+              setUsername(e.target.value);
+              setUsernameEdited(true);
+            }}
+          />
           <input
             className={inputCls}
             type="password"

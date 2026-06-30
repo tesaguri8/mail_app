@@ -68,6 +68,7 @@ pub fn account_add(
         .insert_account(&NewAccount {
             email: input.email.clone(),
             display_name: input.display_name.clone(),
+            username: input.username.clone(),
             imap_host: input.imap_host.clone(),
             imap_port: input.imap_port,
             smtp_host: input.smtp_host.clone(),
@@ -98,10 +99,11 @@ pub async fn mail_sync(
     store: State<'_, Store>,
     account_id: i64,
 ) -> Result<SyncResult, String> {
-    let (email, host, port) = store
+    let (email, login_user, host, port) = store
         .get_account_imap(account_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "アカウントが見つかりません".to_string())?;
+    // 資格情報は email をキーに保存（アカウント識別子）。ログインは login_user を使う。
     let service = app.config().identifier.clone();
     let password = keyring::Entry::new(&service, &email)
         .and_then(|e| e.get_password())
@@ -109,7 +111,7 @@ pub async fn mail_sync(
     let db_path = store.path.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        imap_sync::sync_account(&db_path, account_id, &host, port, &email, &password, 50)
+        imap_sync::sync_account(&db_path, account_id, &host, port, &login_user, &password, 50)
     })
     .await
     .map_err(|e| e.to_string())?

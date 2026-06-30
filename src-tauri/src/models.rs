@@ -41,6 +41,8 @@ pub struct AutoconfigResult {
 pub struct AccountInput {
     pub email: String,
     pub display_name: Option<String>,
+    /// ログイン用サーバーユーザー名（メールアドレスと別にできる）。未指定なら email を使う。
+    pub username: Option<String>,
     pub imap_host: String,
     pub imap_port: u16,
     pub smtp_host: String,

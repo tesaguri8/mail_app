@@ -3,4 +3,8 @@
 /**
  * アカウント追加の入力（フロントから受け取る）。
  */
-export type AccountInput = { email: string, display_name: string | null, imap_host: string, imap_port: number, smtp_host: string, smtp_port: number, };
+export type AccountInput = { email: string, display_name: string | null, 
+/**
+ * ログイン用サーバーユーザー名（メールアドレスと別にできる）。未指定なら email を使う。
+ */
+username: string | null, imap_host: string, imap_port: number, smtp_host: string, smtp_port: number, };

@@ -22,6 +22,7 @@
     "none": "No accounts yet. Add one to get started.",
     "addAccount": "Add account",
     "email": "Email address",
+    "username": "Server username (usually your email)",
     "password": "Password / app password",
     "autoconfig": "Auto-configure",
     "imapHost": "IMAP server",

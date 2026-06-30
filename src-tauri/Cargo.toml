@@ -36,3 +36,9 @@ log = "0.4"
 
 # Rust → TS 型生成（boundary 型を src/bindings/ に export）。詳細: docs/APP_IDENTITY.md / TS bindings
 ts-rs = { version = "10", features = ["serde-compat", "no-serde-warnings"] }
+
+# SQLite（FTS5 同梱）。SQLCipher 暗号化は後続でフィーチャ差し替え（docs/DATABASE_SCHEMA.md）
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3"

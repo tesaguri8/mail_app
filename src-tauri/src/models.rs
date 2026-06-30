@@ -10,3 +10,11 @@ pub struct AppInfo {
     pub version: String,
     pub identifier: String,
 }
+
+/// データベースの状態（スキーマバージョン・パス）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct DbInfo {
+    pub schema_version: i32,
+    pub path: String,
+}

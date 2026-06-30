@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { TitleBar } from './components/TitleBar';
 import { APP } from './config/appIdentity';
+import type { AppInfo } from '@bindings/AppInfo';
+import type { DbInfo } from '@bindings/DbInfo';
 // Phase 1: アプリ同梱の背景画像（プレースホルダ。docs/UI_UX_DESIGN.md 背景写真システム）
 import backgroundUrl from './assets/background.jpg';
 
@@ -21,12 +23,16 @@ export default function App() {
   const { t } = useTranslation();
   const now = useClock();
   const [appInfo, setAppInfo] = useState<string>('');
+  const [dbInfo, setDbInfo] = useState<string>('');
 
   useEffect(() => {
     if (!isTauri) return;
-    // ts-rs 由来の境界型を返す Rust コマンド（src-tauri/src/lib.rs の app_info）
-    invoke<{ name: string; version: string; identifier: string }>('app_info')
+    // ts-rs 由来の境界型を返す Rust コマンド
+    invoke<AppInfo>('app_info')
       .then((info) => setAppInfo(`${info.name} v${info.version} (${info.identifier})`))
+      .catch(() => undefined);
+    invoke<DbInfo>('db_info')
+      .then((info) => setDbInfo(`DB schema v${info.schema_version}`))
       .catch(() => undefined);
   }, []);
 
@@ -59,7 +65,11 @@ export default function App() {
           <p className="text-white/80">{t('home.placeholder')}</p>
         </div>
 
-        {appInfo && <p className="mt-4 text-xs text-white/40">{appInfo}</p>}
+        {(appInfo || dbInfo) && (
+          <p className="mt-4 text-xs text-white/40">
+            {[appInfo, dbInfo].filter(Boolean).join('  ·  ')}
+          </p>
+        )}
       </main>
     </div>
   );

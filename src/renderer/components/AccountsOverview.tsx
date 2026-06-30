@@ -13,7 +13,7 @@ export function AccountsOverview({
   onOpenMail,
 }: {
   accounts: AccountSummary[];
-  onOpenMail: (accountId: number) => void;
+  onOpenMail: (accountId: number, mailId?: number) => void;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState<number | null>(null);
@@ -26,7 +26,8 @@ export function AccountsOverview({
     }
     setExpanded(id);
     if (!previews[id]) {
-      mailList(id, 3)
+      // 一覧は多めに取得し、表示は約3件高さでスクロール可能にする
+      mailList(id, 100)
         .then((m) => setPreviews((p) => ({ ...p, [id]: m })))
         .catch(() => undefined);
     }
@@ -45,32 +46,35 @@ export function AccountsOverview({
             className="flex w-full items-baseline justify-between gap-3 text-left text-white/85 hover:text-white"
           >
             <span className="truncate">{a.email}</span>
-            <span className="shrink-0 tabular-nums">{a.unread_count}件</span>
+            <span className="shrink-0 tabular-nums">{a.unread_count}</span>
           </button>
 
           {expanded === a.id && (
-            <div className="mt-1 space-y-2 pl-1">
+            <div className="mt-1 pl-1">
               {(previews[a.id] ?? []).length === 0 ? (
                 <p className="text-xs text-white/45">{t('mailbox.syncHint')}</p>
               ) : (
-                (previews[a.id] ?? []).map((m) => (
-                  <div
-                    key={m.id}
-                    className="cursor-pointer"
-                    onClick={() => onOpenMail(a.id)}
-                  >
-                    <div className="truncate text-sm text-white/90">
-                      {m.subject ?? '(no subject)'}
+                // 約3件分の高さでスクロール（全新着はスクロールで確認）
+                <div className="max-h-48 space-y-2 overflow-y-auto pr-1">
+                  {(previews[a.id] ?? []).map((m) => (
+                    <div
+                      key={m.id}
+                      className="cursor-pointer"
+                      onClick={() => onOpenMail(a.id, m.id)}
+                    >
+                      <div className="truncate text-sm text-white/90">
+                        {m.subject ?? '(no subject)'}
+                      </div>
+                      <div className="line-clamp-3 text-xs leading-snug text-white/50">
+                        {m.preview}
+                      </div>
                     </div>
-                    <div className="line-clamp-3 text-xs leading-snug text-white/50">
-                      {m.preview}
-                    </div>
-                  </div>
-                ))
+                  ))}
+                </div>
               )}
               <button
                 onClick={() => onOpenMail(a.id)}
-                className="text-xs text-sky-200/90 hover:underline"
+                className="mt-2 text-xs text-sky-200/90 hover:underline"
               >
                 {t('mailbox.more')}
               </button>

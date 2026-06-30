@@ -17,13 +17,7 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 export type AppView = 'home' | 'mail' | 'settings';
 
-export function TitleBar({
-  view,
-  onNavigate,
-}: {
-  view: AppView;
-  onNavigate: (v: AppView) => void;
-}) {
+export function TitleBar({ onNavigate }: { onNavigate: (v: AppView) => void }) {
   const { t, i18n } = useTranslation();
   const [pinned, setPinned] = useState(false);
 
@@ -48,25 +42,29 @@ export function TitleBar({
       data-tauri-drag-region
       className="flex h-9 select-none items-center justify-between px-3 text-white/90"
     >
-      <div className="flex items-center gap-2">
-        <span data-tauri-drag-region className="text-sm font-semibold tracking-wide">
+      <div className="flex items-center gap-1">
+        <span data-tauri-drag-region className="mr-1 text-sm font-semibold tracking-wide">
           {APP.productName}
         </span>
-        <span className="text-white/25">｜</span>
         <button
-          onClick={() => onNavigate('home')}
-          className={`flex items-center gap-1 rounded px-2 py-0.5 text-xs hover:bg-white/20 ${view === 'home' ? 'bg-white/25' : ''}`}
+          onClick={(e) => {
+            onNavigate('home');
+            e.currentTarget.blur();
+          }}
+          title={t('nav.home')}
+          className="flex items-center justify-center rounded p-1.5 hover:bg-white/20 focus:bg-white/20"
         >
           <House size={ICON} />
-          {t('nav.home')}
         </button>
-        <span className="text-white/25">｜</span>
         <button
-          onClick={() => onNavigate('settings')}
-          className={`flex items-center gap-1 rounded px-2 py-0.5 text-xs hover:bg-white/20 ${view === 'settings' ? 'bg-white/25' : ''}`}
+          onClick={(e) => {
+            onNavigate('settings');
+            e.currentTarget.blur();
+          }}
+          title={t('nav.settings')}
+          className="flex items-center justify-center rounded p-1.5 hover:bg-white/20 focus:bg-white/20"
         >
           <Settings size={ICON} />
-          {t('nav.settings')}
         </button>
       </div>
       <div className="flex items-center gap-1">

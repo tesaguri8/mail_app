@@ -14,6 +14,7 @@ export default function App() {
   const [view, setView] = useState<AppView>('home');
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [mailAccountId, setMailAccountId] = useState<number | null>(null);
+  const [mailOpenId, setMailOpenId] = useState<number | null>(null);
 
   const refreshAccounts = useCallback(() => {
     if (!isTauri) return;
@@ -28,8 +29,9 @@ export default function App() {
     if (view !== 'mail') refreshAccounts();
   }, [view, refreshAccounts]);
 
-  const openMail = (accountId: number) => {
+  const openMail = (accountId: number, mailId?: number) => {
     setMailAccountId(accountId);
+    setMailOpenId(mailId ?? null);
     setView('mail');
   };
 
@@ -40,12 +42,16 @@ export default function App() {
         backgroundImage: `linear-gradient(160deg, rgba(20,20,40,0.45) 0%, rgba(10,15,35,0.65) 100%), url(${backgroundUrl})`,
       }}
     >
-      <TitleBar view={view} onNavigate={setView} />
+      <TitleBar onNavigate={setView} />
 
       <main className="min-h-0 flex-1">
         {view === 'home' && <Home accounts={accounts} onOpenMail={openMail} />}
         {view === 'mail' && (
-          <MailboxView accounts={accounts} initialAccountId={mailAccountId} />
+          <MailboxView
+            accounts={accounts}
+            initialAccountId={mailAccountId}
+            initialMailId={mailOpenId}
+          />
         )}
         {view === 'settings' && <Settings accounts={accounts} onChanged={refreshAccounts} />}
       </main>

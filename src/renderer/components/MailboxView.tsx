@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailSummary } from '@bindings/MailSummary';
@@ -21,14 +21,18 @@ function formatDate(d: string | null): string {
 export function MailboxView({
   accounts,
   initialAccountId,
+  initialMailId,
 }: {
   accounts: AccountSummary[];
   initialAccountId: number | null;
+  initialMailId: number | null;
 }) {
   const { t } = useTranslation();
   const [selected, setSelected] = useState<number | null>(
     initialAccountId ?? accounts[0]?.id ?? null
   );
+  // 遷移直後に開くべきメッセージ（ホームの新着クリック）
+  const pendingOpen = useRef<number | null>(initialMailId);
   const [mails, setMails] = useState<MailSummary[]>([]);
   const [opened, setOpened] = useState<MailDetail | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -49,8 +53,24 @@ export function MailboxView({
   const loadMails = (id: number) => mailList(id, 200).then(setMails).catch(() => undefined);
   useEffect(() => {
     setOpened(null);
-    if (selected != null) loadMails(selected);
+    if (selected != null) {
+      loadMails(selected).then(() => {
+        const pid = pendingOpen.current;
+        if (pid != null) {
+          pendingOpen.current = null;
+          openMail(pid);
+        }
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
+
+  // 開いたメッセージをリスト内でフォーカス（スクロール）
+  useEffect(() => {
+    if (opened?.id != null) {
+      document.getElementById(`mail-li-${opened.id}`)?.scrollIntoView({ block: 'nearest' });
+    }
+  }, [opened?.id]);
 
   const onSync = async () => {
     if (selected == null) return;
@@ -99,9 +119,10 @@ export function MailboxView({
         mails.map((m) => (
           <li
             key={m.id}
+            id={`mail-li-${m.id}`}
             onClick={() => openMail(m.id)}
             className={`cursor-pointer rounded-md px-3 py-2 hover:bg-white/10 ${
-              opened?.id === m.id ? 'bg-white/15' : ''
+              opened?.id === m.id ? 'bg-white/15 ring-1 ring-sky-300/40' : ''
             }`}
           >
             <div className="flex items-baseline justify-between gap-2">

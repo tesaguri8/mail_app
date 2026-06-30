@@ -40,7 +40,8 @@
     "appAccount": "メールアプリアカウント設定",
     "serverAccount": "メールサーバーアカウント設定",
     "useExistingServer": "既存のサーバー設定を使う…",
-    "newServer": "新しいサーバー設定"
+    "newServer": "新しいサーバー設定",
+    "delete": "削除"
   },
   "mailbox": {
     "title": "受信箱",

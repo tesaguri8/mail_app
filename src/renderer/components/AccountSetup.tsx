@@ -5,8 +5,9 @@ import type { ServerAccountSummary } from '@bindings/ServerAccountSummary';
 import {
   accountAdd,
   accountAutoconfig,
+  accountDelete,
   accountList,
-  accountTestConnection,
+  accountTestLogin,
   serverAccountList,
 } from '../services/accounts';
 
@@ -76,12 +77,22 @@ export function AccountSetup() {
     setBusy(true);
     setStatus(t('account.testing'));
     try {
-      await accountTestConnection(imapHost, imapPort);
+      // 本物の IMAP ログインで認証まで検証する
+      await accountTestLogin(imapHost, imapPort, username || email, password);
       setStatus('✓ ' + t('account.testOk'));
     } catch (e) {
       setStatus('✕ ' + t('account.testFail') + ': ' + String(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const onDelete = async (id: number) => {
+    try {
+      await accountDelete(id);
+      refresh();
+    } catch {
+      /* noop */
     }
   };
 
@@ -134,11 +145,23 @@ export function AccountSetup() {
       {!adding && accounts.length > 0 && (
         <ul className="space-y-2">
           {accounts.map((a) => (
-            <li key={a.id} className="rounded-md bg-white/10 px-3 py-2 text-sm">
-              <div className="font-medium">{a.email}</div>
-              <div className="text-xs text-white/50">
-                IMAP {a.imap_host} · SMTP {a.smtp_host}
+            <li
+              key={a.id}
+              className="flex items-center justify-between gap-2 rounded-md bg-white/10 px-3 py-2 text-sm"
+            >
+              <div className="min-w-0">
+                <div className="truncate font-medium">{a.email}</div>
+                <div className="truncate text-xs text-white/50">
+                  IMAP {a.imap_host} · SMTP {a.smtp_host}
+                </div>
               </div>
+              <button
+                className="shrink-0 rounded px-2 py-1 text-xs text-white/50 hover:bg-red-500/40 hover:text-white"
+                title={t('account.delete')}
+                onClick={() => onDelete(a.id)}
+              >
+                🗑
+              </button>
             </li>
           ))}
         </ul>
@@ -230,7 +253,11 @@ export function AccountSetup() {
           {status && <p className="text-xs text-white/70">{status}</p>}
 
           <div className="flex gap-2 pt-1">
-            <button className={btnCls} onClick={onTest} disabled={busy || !imapHost}>
+            <button
+              className={btnCls}
+              onClick={onTest}
+              disabled={busy || !imapHost || !password}
+            >
               {t('account.test')}
             </button>
             <button

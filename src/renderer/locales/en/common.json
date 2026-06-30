@@ -40,7 +40,8 @@
     "appAccount": "Mail app account",
     "serverAccount": "Mail server account",
     "useExistingServer": "Use an existing server…",
-    "newServer": "New server"
+    "newServer": "New server",
+    "delete": "Delete"
   },
   "mailbox": {
     "title": "Inbox",

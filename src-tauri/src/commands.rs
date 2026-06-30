@@ -169,6 +169,36 @@ pub fn mail_get(store: State<Store>, id: i64) -> Result<MailDetail, String> {
     Ok(detail)
 }
 
+/// 実際に IMAP ログインを試す（ユーザー名/パスワードの検証）。
+#[tauri::command]
+pub async fn account_test_login(
+    host: String,
+    port: u16,
+    username: String,
+    password: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        imap_sync::test_login(&host, port, &username, &password)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// アカウントを削除（受信メールと keyring の資格情報も削除）。
+#[tauri::command]
+pub fn account_delete(app: AppHandle, store: State<Store>, account_id: i64) -> Result<(), String> {
+    if let Some((email, _login, _host, _port)) = store
+        .get_account_imap(account_id)
+        .map_err(|e| e.to_string())?
+    {
+        let service = app.config().identifier.clone();
+        if let Ok(entry) = keyring::Entry::new(&service, &email) {
+            let _ = entry.delete_credential();
+        }
+    }
+    store.delete_account(account_id).map_err(|e| e.to_string())
+}
+
 /// ホスト:ポートへの TCP 疎通テスト（認証は行わない。オンボーディングの確認用）。
 #[tauri::command]
 pub fn account_test_connection(host: String, port: u16) -> Result<(), String> {

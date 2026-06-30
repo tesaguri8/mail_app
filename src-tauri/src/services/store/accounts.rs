@@ -84,6 +84,18 @@ impl Store {
     }
 
     /// 同期範囲を変更。次回同期で新範囲を初回取得し直せるよう UID 状態もリセットする。
+    /// アカウントと、その受信メール（FTS含む）を削除する。
+    pub fn delete_account(&self, id: i64) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM email_fts WHERE rowid IN (SELECT id FROM emails WHERE account_id=?1)",
+            params![id],
+        )?;
+        conn.execute("DELETE FROM emails WHERE account_id=?1", params![id])?;
+        conn.execute("DELETE FROM accounts WHERE id=?1", params![id])?;
+        Ok(())
+    }
+
     pub fn set_sync_window(&self, id: i64, window: &str) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(

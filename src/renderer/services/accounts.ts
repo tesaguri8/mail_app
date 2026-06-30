@@ -16,3 +16,13 @@ export const serverAccountList = () => invoke<ServerAccountSummary[]>('server_ac
 
 export const accountTestConnection = (host: string, port: number) =>
   invoke<void>('account_test_connection', { host, port });
+
+export const accountTestLogin = (
+  host: string,
+  port: number,
+  username: string,
+  password: string
+) => invoke<void>('account_test_login', { host, port, username, password });
+
+export const accountDelete = (accountId: number) =>
+  invoke<void>('account_delete', { accountId });

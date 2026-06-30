@@ -54,6 +54,31 @@ fn since_date(days: i64) -> String {
 
 type ImapSession = imap::Session<native_tls::TlsStream<std::net::TcpStream>>;
 
+/// 実際に IMAP ログインを試す（認証の確認）。成功なら Ok。
+pub fn test_login(host: &str, port: u16, user: &str, password: &str) -> Result<(), String> {
+    log::info!(
+        "IMAP login test: host={} port={} user={} (pw_len={})",
+        host,
+        port,
+        user,
+        password.len()
+    );
+    let tls = native_tls::TlsConnector::builder()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let client = imap::connect((host, port), host, &tls).map_err(|e| {
+        log::warn!("IMAP connect failed: {}", e);
+        e.to_string()
+    })?;
+    let mut session = client.login(user, password).map_err(|(e, _)| {
+        log::warn!("IMAP login failed for user={}: {}", user, e);
+        e.to_string()
+    })?;
+    log::info!("IMAP login OK: user={}", user);
+    let _ = session.logout();
+    Ok(())
+}
+
 /// IMAP に接続し、初回は sync_window の範囲、以降は新着 UID だけを取得して保存する。
 pub fn sync_account(
     db_path: &Path,
@@ -78,8 +103,12 @@ pub fn sync_account(
     let tls = native_tls::TlsConnector::builder()
         .build()
         .map_err(|e| e.to_string())?;
+    log::info!("sync: connect host={} port={} user={}", host, port, user);
     let client = imap::connect((host, port), host, &tls).map_err(|e| e.to_string())?;
-    let mut session = client.login(user, password).map_err(|(e, _)| e.to_string())?;
+    let mut session = client.login(user, password).map_err(|(e, _)| {
+        log::warn!("sync: IMAP login failed for user={}: {}", user, e);
+        e.to_string()
+    })?;
 
     let mailbox = session.select("INBOX").map_err(|e| e.to_string())?;
     let uid_validity = mailbox.uid_validity;

@@ -11,5 +11,16 @@ export const mailList = (accountId: number, limit: number) =>
 
 export const mailGet = (id: number) => invoke<MailDetail>('mail_get', { id });
 
+export const mailSetRead = (ids: number[], read: boolean) =>
+  invoke<void>('mail_set_read', { ids, read });
+
+export const mailSetStarred = (ids: number[], value: boolean) =>
+  invoke<void>('mail_set_starred', { ids, value });
+
+export const mailSetBookmarked = (ids: number[], value: boolean) =>
+  invoke<void>('mail_set_bookmarked', { ids, value });
+
+export const mailDelete = (ids: number[]) => invoke<void>('mail_delete', { ids });
+
 export const accountSetSyncWindow = (accountId: number, window: string) =>
   invoke<void>('account_set_sync_window', { accountId, window });

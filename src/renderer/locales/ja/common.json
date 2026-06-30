@@ -30,6 +30,16 @@
     "attachment": "添付あり",
     "flag": "要再確認"
   },
+  "ctx": {
+    "markRead": "既読にする",
+    "markUnread": "未読にする",
+    "star": "お気に入りに追加",
+    "unstar": "お気に入りを解除",
+    "bookmark": "ブックマークに追加",
+    "unbookmark": "ブックマークを解除",
+    "delete": "削除",
+    "selected": "{{count}} 件を選択中"
+  },
   "greeting": {
     "morning": "おはようございます",
     "afternoon": "こんにちは",

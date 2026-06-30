@@ -98,6 +98,8 @@ pub struct MailSummary {
     pub preview: String,
     pub is_read: bool,
     pub has_attachments: bool,
+    pub is_starred: bool,
+    pub is_bookmarked: bool,
 }
 
 /// メール詳細（本文表示用）。

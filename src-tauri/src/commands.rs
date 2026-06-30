@@ -221,6 +221,34 @@ pub fn mail_list(store: State<Store>, account_id: i64, limit: i64) -> Result<Vec
         .map_err(|e| e.to_string())
 }
 
+/// 複数メールの既読/未読を一括設定。
+#[tauri::command]
+pub fn mail_set_read(store: State<Store>, ids: Vec<i64>, read: bool) -> Result<(), String> {
+    store.set_emails_read(&ids, read).map_err(|e| e.to_string())
+}
+
+/// 複数メールのスター（お気に入り）を一括設定。
+#[tauri::command]
+pub fn mail_set_starred(store: State<Store>, ids: Vec<i64>, value: bool) -> Result<(), String> {
+    store
+        .set_emails_starred(&ids, value)
+        .map_err(|e| e.to_string())
+}
+
+/// 複数メールのブックマークを一括設定。
+#[tauri::command]
+pub fn mail_set_bookmarked(store: State<Store>, ids: Vec<i64>, value: bool) -> Result<(), String> {
+    store
+        .set_emails_bookmarked(&ids, value)
+        .map_err(|e| e.to_string())
+}
+
+/// 複数メールを一括削除。
+#[tauri::command]
+pub fn mail_delete(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
+    store.delete_emails(&ids).map_err(|e| e.to_string())
+}
+
 /// メール本文を取得し、既読にする。
 #[tauri::command]
 pub fn mail_get(store: State<Store>, id: i64) -> Result<MailDetail, String> {

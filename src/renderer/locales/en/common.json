@@ -30,6 +30,16 @@
     "attachment": "Has attachment",
     "flag": "Follow-up"
   },
+  "ctx": {
+    "markRead": "Mark as read",
+    "markUnread": "Mark as unread",
+    "star": "Add to favorites",
+    "unstar": "Remove from favorites",
+    "bookmark": "Add bookmark",
+    "unbookmark": "Remove bookmark",
+    "delete": "Delete",
+    "selected": "{{count}} selected"
+  },
   "greeting": {
     "morning": "Good morning",
     "afternoon": "Good afternoon",

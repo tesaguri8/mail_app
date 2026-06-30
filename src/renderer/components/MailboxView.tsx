@@ -1,26 +1,40 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  BookmarkMinus,
   Bookmark,
+  BookmarkPlus,
   Columns2,
   Flag,
   Mail,
+  MailOpen,
   Paperclip,
   RefreshCw,
   Rows2,
   Star,
+  StarOff,
+  Trash2,
   UserRound,
   type LucideIcon,
 } from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailSummary } from '@bindings/MailSummary';
 import type { MailDetail } from '@bindings/MailDetail';
-import { mailGet, mailList, mailSync } from '../services/mail';
+import {
+  mailDelete,
+  mailGet,
+  mailList,
+  mailSetBookmarked,
+  mailSetRead,
+  mailSetStarred,
+  mailSync,
+} from '../services/mail';
 import { MailBody } from './MailBody';
 import { FolderCombobox } from './FolderCombobox';
+import { ContextMenu, type MenuItem } from './ContextMenu';
 
 const iconBtn =
-  'flex h-8 w-8 items-center justify-center rounded-md bg-white/10 hover:bg-white/20 disabled:opacity-40';
+  'flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80 disabled:opacity-40';
 
 /** リスト絞り込みのトグル。star/known/bookmark/flag はバックエンド実装まで非適用（並びのみ）。 */
 const FILTERS: { key: string; Icon: LucideIcon }[] = [
@@ -35,7 +49,9 @@ const FILTERS: { key: string; Icon: LucideIcon }[] = [
 function matchesFilters(m: MailSummary, filters: Set<string>): boolean {
   if (filters.has('unread') && m.is_read) return false;
   if (filters.has('attachment') && !m.has_attachments) return false;
-  // star/known/bookmark/flag は対応データが入るまでフィルタしない（空表示で混乱させない）
+  if (filters.has('star') && !m.is_starred) return false;
+  if (filters.has('bookmark') && !m.is_bookmarked) return false;
+  // known/flag は対応データが入るまでフィルタしない（空表示で混乱させない）
   return true;
 }
 
@@ -80,6 +96,11 @@ export function MailboxView({
       return next;
     });
 
+  // 複数選択（右クリックメニュー対象）。anchor は Shift 範囲選択の基点。
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const anchorId = useRef<number | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+
   useEffect(() => {
     if (selected == null && accounts.length > 0) setSelected(accounts[0].id);
   }, [accounts, selected]);
@@ -87,6 +108,8 @@ export function MailboxView({
   const loadMails = (id: number) => mailList(id, 200).then(setMails).catch(() => undefined);
   useEffect(() => {
     setOpened(null);
+    setSelectedIds(new Set());
+    anchorId.current = null;
     if (selected != null) {
       loadMails(selected).then(() => {
         const pid = pendingOpen.current;
@@ -131,6 +154,115 @@ export function MailboxView({
     }
   };
 
+  // 行クリック: 通常=単一選択して開く / Ctrl(Cmd)=トグル / Shift=範囲
+  const onRowClick = (e: React.MouseEvent, id: number) => {
+    if (e.ctrlKey || e.metaKey) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+      anchorId.current = id;
+      return;
+    }
+    if (e.shiftKey && anchorId.current != null) {
+      const order = visibleMails.map((m) => m.id);
+      const a = order.indexOf(anchorId.current);
+      const b = order.indexOf(id);
+      if (a !== -1 && b !== -1) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        setSelectedIds(new Set(order.slice(lo, hi + 1)));
+        return;
+      }
+    }
+    setSelectedIds(new Set([id]));
+    anchorId.current = id;
+    openMail(id);
+  };
+
+  const onRowContextMenu = (e: React.MouseEvent, id: number) => {
+    e.preventDefault();
+    if (!selectedIds.has(id)) {
+      setSelectedIds(new Set([id]));
+      anchorId.current = id;
+    }
+    setMenu({ x: e.clientX, y: e.clientY });
+  };
+
+  const patchMails = (ids: Set<number>, patch: Partial<MailSummary>) =>
+    setMails((prev) => prev.map((m) => (ids.has(m.id) ? { ...m, ...patch } : m)));
+
+  const targetIds = () => [...selectedIds];
+
+  const actRead = async (read: boolean) => {
+    const ids = targetIds();
+    patchMails(selectedIds, { is_read: read });
+    try {
+      await mailSetRead(ids, read);
+    } catch {
+      /* noop */
+    }
+  };
+  const actStar = async (value: boolean) => {
+    const ids = targetIds();
+    patchMails(selectedIds, { is_starred: value });
+    try {
+      await mailSetStarred(ids, value);
+    } catch {
+      /* noop */
+    }
+  };
+  const actBookmark = async (value: boolean) => {
+    const ids = targetIds();
+    patchMails(selectedIds, { is_bookmarked: value });
+    try {
+      await mailSetBookmarked(ids, value);
+    } catch {
+      /* noop */
+    }
+  };
+  const actDelete = async () => {
+    const ids = targetIds();
+    const idSet = new Set(ids);
+    setMails((prev) => prev.filter((m) => !idSet.has(m.id)));
+    if (opened && idSet.has(opened.id)) setOpened(null);
+    setSelectedIds(new Set());
+    try {
+      await mailDelete(ids);
+    } catch {
+      /* noop */
+    }
+  };
+
+  // 選択集合の状態に応じてメニュー項目（トグルラベル）を組み立てる
+  const buildMenuItems = (): MenuItem[] => {
+    const sel = mails.filter((m) => selectedIds.has(m.id));
+    const allStarred = sel.length > 0 && sel.every((m) => m.is_starred);
+    const allBookmarked = sel.length > 0 && sel.every((m) => m.is_bookmarked);
+    return [
+      { key: 'read', label: t('ctx.markRead'), Icon: MailOpen, onClick: () => actRead(true) },
+      { key: 'unread', label: t('ctx.markUnread'), Icon: Mail, onClick: () => actRead(false) },
+      allStarred
+        ? { key: 'unstar', label: t('ctx.unstar'), Icon: StarOff, onClick: () => actStar(false) }
+        : { key: 'star', label: t('ctx.star'), Icon: Star, onClick: () => actStar(true) },
+      allBookmarked
+        ? {
+            key: 'unbookmark',
+            label: t('ctx.unbookmark'),
+            Icon: BookmarkMinus,
+            onClick: () => actBookmark(false),
+          }
+        : {
+            key: 'bookmark',
+            label: t('ctx.bookmark'),
+            Icon: BookmarkPlus,
+            onClick: () => actBookmark(true),
+          },
+      { key: 'delete', label: t('ctx.delete'), Icon: Trash2, danger: true, onClick: actDelete },
+    ];
+  };
+
   if (accounts.length === 0) {
     return <div className="p-8 text-white/60">{t('mailbox.addInSettings')}</div>;
   }
@@ -151,17 +283,22 @@ export function MailboxView({
           <li
             key={m.id}
             id={`mail-li-${m.id}`}
-            onClick={() => openMail(m.id)}
-            className={`cursor-pointer rounded-md px-3 py-2 hover:bg-white/10 ${
-              opened?.id === m.id ? 'bg-white/15 ring-1 ring-sky-300/40' : ''
-            }`}
+            onClick={(e) => onRowClick(e, m.id)}
+            onContextMenu={(e) => onRowContextMenu(e, m.id)}
+            className={`cursor-pointer select-none rounded-md px-3 py-2 hover:bg-white/10 ${
+              selectedIds.has(m.id) ? 'bg-white/15' : ''
+            } ${opened?.id === m.id ? 'ring-1 ring-sky-300/40' : ''}`}
           >
             <div className="flex items-baseline justify-between gap-2">
               <span className="truncate text-sm font-medium">
                 {!m.is_read && <span className="mr-1 text-sky-300">●</span>}
                 {m.from_address ?? '(no sender)'}
               </span>
-              <span className="shrink-0 text-[10px] text-white/40">{formatDate(m.date)}</span>
+              <span className="flex shrink-0 items-center gap-1 text-[10px] text-white/40">
+                {m.is_starred && <Star size={12} className="fill-amber-300 text-amber-300" />}
+                {m.is_bookmarked && <Bookmark size={12} className="fill-sky-300 text-sky-300" />}
+                {formatDate(m.date)}
+              </span>
             </div>
             <div className="truncate text-sm text-white/80">
               {m.subject ?? '(no subject)'} {m.has_attachments && '📎'}
@@ -250,6 +387,16 @@ export function MailboxView({
           <div className="h-1/3 min-h-0 overflow-hidden border-b border-white/10">{listPane}</div>
           <div className="min-h-0 flex-1 overflow-hidden">{bodyPane}</div>
         </div>
+      )}
+
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          header={selectedIds.size > 1 ? t('ctx.selected', { count: selectedIds.size }) : undefined}
+          items={buildMenuItems()}
+          onClose={() => setMenu(null)}
+        />
       )}
     </div>
   );

@@ -351,7 +351,12 @@ export function MailboxView({
                   : 'text-white/55 hover:text-white/80'
               }`}
             >
-              <Icon size={15} />
+              <span className="relative inline-flex">
+                <Icon size={15} />
+                {key === 'unread' && (
+                  <span className="absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full bg-sky-400 ring-1 ring-neutral-900/60" />
+                )}
+              </span>
             </button>
           );
         })}

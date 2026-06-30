@@ -251,6 +251,21 @@ CREATE TABLE sns_messages (
     FOREIGN KEY (conversation_id) REFERENCES sns_conversations(id)
 );
 
+-- ───────────────────────────────────────────────
+-- AI 注釈（docs/AI_FEATURES.md）
+-- メール本体はリレーショナルで保持（JSON 不要）。AI 生成物のみ可変構造のため JSON 列に格納。
+-- ───────────────────────────────────────────────
+CREATE TABLE ai_annotations (
+    id INTEGER PRIMARY KEY,
+    target_type TEXT NOT NULL,      -- 'email' | 'thread'
+    target_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,             -- 'summary' | 'subject_suggest' | 'reply_suggest' | 'category'
+    content_json TEXT,              -- 生成物（可変構造のため JSON）
+    model TEXT,                     -- 使用モデル（監査・再現用）
+    is_local BOOLEAN DEFAULT FALSE, -- ローカル(Ollama)生成か
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- 検索インデックス（FTS5）
 CREATE VIRTUAL TABLE email_fts USING fts5(
     subject,
@@ -312,6 +327,9 @@ CREATE INDEX idx_event_attendees_c  ON event_attendees(contact_id);
 CREATE INDEX idx_sns_conv_channel   ON sns_conversations(channel_id, last_activity DESC);
 CREATE INDEX idx_sns_conv_contact   ON sns_conversations(contact_id);
 CREATE INDEX idx_sns_msg_conv       ON sns_messages(conversation_id, timestamp DESC);
+
+-- AI 注釈
+CREATE INDEX idx_ai_annotations_target ON ai_annotations(target_type, target_id, kind);
 ```
 
 ---
@@ -322,3 +340,4 @@ CREATE INDEX idx_sns_msg_conv       ON sns_messages(conversation_id, timestamp D
 - **FTS5 同期**: `emails` への INSERT/UPDATE/DELETE 時に `email_fts` を更新（トリガまたはアプリ側で明示更新）。差分同期と整合させる。
 - **暗号化**: SQLCipher により DB ファイル全体を暗号化。鍵は `keyring`（OS 金庫）で管理。
 - **マイグレーション**: `user_version` プラグマ等でスキーマバージョンを管理し、起動時に未適用分を順次適用。
+- **JSON の方針**: メール本体はリレーショナル＋FTS5 で保持し、**保存形式として JSON は不要**。JSON を使うのは限定的な役割のみ —— ① AI / IPC へ渡すシリアライズ（serde/ts-rs で自動）、② AI 注釈など可変構造（`ai_annotations.content_json`）、③ 真に可変な少数フィールド（添付一覧・追加アドレス等）、④ エクスポート/バックアップ（JSONL）。リレーショナルの核を JSON で置き換えない（[AI_FEATURES.md](AI_FEATURES.md) §4）。

@@ -21,7 +21,8 @@
 4. マルチアカウント対応
 5. **住所録（アドレス帳）** — メールアプリの正式スコープとして実装
 6. **カレンダー** — 予定管理。メール・連絡先と連携
-7. **SNS 統合（メッセージハブ）** — LINE / Instagram / Messenger / WhatsApp の DM・コメントを統合インボックスに集約
+7. **AI 活用** — 件名/本文生成・スレッド要約・返信提案・分類（オプトイン／クラウド既定／ローカル選択可）
+8. **SNS 統合（メッセージハブ）** — LINE / Instagram / Messenger / WhatsApp の DM・コメントを統合インボックスに集約
 
 > 本アプリは「メール / 住所録 / カレンダー / SNS」を束ねる**メッセージハブ**を目指す。
 > 複数 SNS のやり取りを 1 つのチャット形式インボックスに集約し、取りこぼしを防ぐ（特に宿泊施設の問い合わせ対応）。
@@ -53,6 +54,13 @@
 - 折りたたみ可能な返信履歴
 - クイックプレビュー
 - 一括操作対応
+
+#### メール作成モード（返信 / 新規）
+メールを開いた状態から、用途に応じて 2 つの作成手段を提供する。
+
+- **返信**: スレッドを引き継ぐ（`In-Reply-To` / `References` 付き）。
+- **このアドレスへ新規メール**: 同じ相手宛に、**新しい `Message-ID`・参照ヘッダなし・新件名**の**別案件**として作成（＝新しい論理スレッド）。返信での“別件送信”を避け、相手のスレッドを汚さない。
+- 新規メールは件名が空になりがちなため、**AI による件名生成**（[AI_FEATURES.md](AI_FEATURES.md)）を導線に置く。
 
 ### 2.2 検索システム
 
@@ -105,6 +113,14 @@
 
 **スコープ外**: TikTok の DM（公開 API なし）/ Airbnb 個人ホスト窓口（公開 API なし）/ X DM（有料・高コストで将来判断）。**公式 API のみ使用**（スクレイピングは行わない）。
 
+### 2.7 AI 活用（[AI_FEATURES.md](AI_FEATURES.md)）
+
+メール作成・整理を AI で支援。Primadoc の **マルチモデル（Claude / GPT / Gemini）＋ ローカル Ollama** 基盤を流用。
+
+- **件名の自動生成**（本文から）/ **本文ドラフト・リライト・トーン調整** / **スレッド要約** / **返信候補の提案** / **自動分類・タグ提案**
+- **方針**: AI は**オプトイン**。既定はクラウド（Claude）、**機密データはローカル（Ollama）を選択可**。生成物は**人が確認・編集してから送信**。
+- 軽量用途（件名・分類）は Haiku 4.5、生成・要約は Sonnet 4.6 / Opus 4.8 を目安。
+
 ---
 
 ## 3. バックエンドインターフェース（Tauri コマンド）
@@ -116,7 +132,8 @@
 | ドメイン | コマンド（例） | 旧 REST 相当 |
 |---------|--------------|-------------|
 | アカウント | `account_add` / `account_list` / `account_update` / `account_remove` | `POST/GET/PUT/DELETE /api/accounts` |
-| メール | `mail_list`（ページネーション）/ `mail_get` / `mail_send` / `mail_update`（既読・フラグ）/ `mail_delete` | `/api/emails*` |
+| メール | `mail_list`（ページネーション）/ `mail_get` / `mail_compose`（reply / fresh）/ `mail_send` / `mail_update`（既読・フラグ）/ `mail_delete` | `/api/emails*` |
+| AI | `ai_generate_subject` / `ai_draft_body` / `ai_summarize_thread` / `ai_suggest_reply` / `ai_classify` / `ai_settings_get` / `ai_settings_set` | （新規） |
 | スレッド | `thread_list` / `thread_messages` / `thread_split` / `thread_merge` / `thread_rename` / `message_reassign` / `thread_rebuild` | `/api/threads*`（＋再構築系を新規） |
 | 検索 | `search_run` / `search_suggest` | `/api/search*` |
 | タグ | `tag_list` / `tag_create` / `tag_update` / `tag_delete` | `/api/tags*` |

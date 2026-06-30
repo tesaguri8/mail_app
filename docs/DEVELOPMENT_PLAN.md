@@ -68,6 +68,9 @@ Primadoc はドキュメントエディタであり、**IMAP/SMTP・大量メー
 - **認証はまずアプリパスワード/基本認証**から対応。OAuth2（Gmail/Outlook）は後続フェーズ（Phase 3 範囲）。
 - **データ取得は invoke + Zustand**（React Query は不採用）。
 - **スレッドは独自再構築**: ヘッダ＋引用解析の多層シグナルで論理スレッドを構築し、同件名・別内容を**自動分割＋手動上書き**。アプリ内で**再件名**して整理。コア機能（詳細: [THREADING.md](THREADING.md)）。
+- **作成は返信 / 新規の 2 モード**: 「このアドレスへ新規メール」で別案件を正しく新規送信（参照ヘッダなし・新論理スレッド）。
+- **AI 活用はオプトイン**: 既定クラウド（Claude）／機密はローカル（Ollama）。件名・本文生成・要約・返信提案・分類（詳細: [AI_FEATURES.md](AI_FEATURES.md)）。Primadoc の AI 基盤を流用。
+- **保存はリレーショナル＋FTS5。JSON は保存形式に使わない**（AI/IPC のシリアライズ・AI 注釈・エクスポートに限定）。
 - **スコープにメール＋住所録＋カレンダーを含む**（Phase 8 / 9）。
 - **ウィンドウはフレームレス全面ビジュアル**。ダッシュボード⇔ウィジェットは**同一ウィンドウのリサイズ連動**で切替（別ウィンドウは持たない）。
 - **カレンダーはローカル予定 + .ics 取り込みから**。Google Calendar / CalDAV 双方向同期は後続。
@@ -101,7 +104,8 @@ mail_app/
 │   │   ├── commands/           # #[tauri::command]: account, mail, thread, search,
 │   │   │                       #   tag, attachment, sync, contact, event, settings, window
 │   │   ├── services/           # imap/, smtp/, parser/（引用・署名分離）, threading/（論理スレッド再構築）,
-│   │   │                       #   store/, search/, contacts/, calendar/（ics 含む）, crypto.rs, account.rs, sync/
+│   │   │                       #   store/, search/, contacts/, calendar/（ics 含む）, ai/（cloud+ollama）,
+│   │   │                       #   crypto.rs, account.rs, sync/
 │   │   ├── error.rs
 │   │   ├── ids.rs
 │   │   ├── lib.rs
@@ -168,13 +172,16 @@ mail_app/
 - チャット形式の会話ビュー（`clean_body` 表示・引用折りたたみ・論理スレッド単位）/ 従来スレッドビュー、メールリスト（仮想スクロール）。
 - Zustand ストア + `services/` invoke ラッパー。
 
-### Phase 6 — 送信
+### Phase 6 — 送信＋作成支援
 - `services/smtp/`（`lettre`）＋作成画面（宛先/件名/本文/添付、下書き、返信引用）。
+- **作成モード**: 返信 / **このアドレスへ新規メール**（参照ヘッダなし・新論理スレッド）。
+- **AI 作成支援（オプトイン）**: `services/ai/`（cloud + Ollama）。件名生成・本文ドラフト/リライト。要約・返信提案・分類は Phase 7 で拡張（[AI_FEATURES.md](AI_FEATURES.md)）。
 
 ### Phase 7 — 検索・タグ・スレッド整理
 - FTS5 検索 UI（件名/`clean_body`/差出人/添付名）、ファセット、検索履歴。
 - 手動/自動タグ、振り分けルールエンジン（`List-Id` 等のヘッダ活用）。
 - **スレッド整理 UI**: 自動分割の精緻化、手動の分割/結合/**再件名**、論理スレッドのラベル付け（[THREADING.md](THREADING.md)）。
+- **AI 拡張**: スレッド要約・返信候補提案・自動分類/タグ提案（[AI_FEATURES.md](AI_FEATURES.md)）。`ai_annotations` への保存。
 
 ### Phase 8 — 住所録（アドレス帳）
 - `services/contacts/` + `contact_*` コマンド。ローカル連絡先 CRUD・グループ・お気に入り・誕生日。
@@ -216,6 +223,7 @@ mail_app/
 
 - [FEATURE_SPEC.md](FEATURE_SPEC.md) — 機能仕様・Tauri コマンド・セキュリティ・テスト・将来拡張
 - [THREADING.md](THREADING.md) — スレッド再構築エンジン（引用解析・論理スレッド・ヘッダ活用）
+- [AI_FEATURES.md](AI_FEATURES.md) — AI 活用（件名/本文生成・要約・返信提案・分類、プライバシー方針）
 - [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) — SQLite スキーマ
 - [UI_UX_DESIGN.md](UI_UX_DESIGN.md) — UI/UX 設計
 - [DATA_STORAGE.md](DATA_STORAGE.md) — データ保存場所設計

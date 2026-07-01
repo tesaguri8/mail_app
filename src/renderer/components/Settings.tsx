@@ -11,6 +11,10 @@ import { TagManager } from './TagManager';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
+// 迷惑メール設定の既定値（バックエンド未接続のプレビューでも UI を出せるように）。
+// 実値はアプリ起動時に spam_settings_get で上書きする（DB が単一ソース）。
+const SPAM_DEFAULTS: SpamSettingsType = { enabled: true, threshold_low: 0.5, threshold_high: 0.9 };
+
 type Section = 'accounts' | 'signatures' | 'tags' | 'display' | 'spam' | 'about';
 
 /**
@@ -115,7 +119,7 @@ function DisplaySettings() {
 /** 迷惑メール設定: オン/オフと隔離しきい値（docs/SPAM.md §9）。DB を単一ソースにする。 */
 function SpamSettings() {
   const { t } = useTranslation();
-  const [settings, setSettings] = useState<SpamSettingsType | null>(null);
+  const [settings, setSettings] = useState<SpamSettingsType>(SPAM_DEFAULTS);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -129,10 +133,6 @@ function SpamSettings() {
     setSettings(next);
     if (isTauri) spamSettingsSet(next).catch(() => undefined);
   };
-
-  if (!settings) {
-    return <div className="text-sm text-white/50">{t('settings.spamUnavailable')}</div>;
-  }
 
   return (
     <div className="max-w-[460px] space-y-4">
@@ -174,6 +174,8 @@ function SpamSettings() {
           />
         </div>
       )}
+
+      {!isTauri && <p className="text-xs text-white/40">{t('settings.spamPreviewNote')}</p>}
     </div>
   );
 }

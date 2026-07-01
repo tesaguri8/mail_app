@@ -104,7 +104,7 @@
     "spamThresholdHighHint": "このスコア以上を迷惑フォルダへ隔離します（高いほど安全側＝誤検知を抑えます）。",
     "spamThresholdLow": "「迷惑かも」と表示するしきい値",
     "spamThresholdLowHint": "このスコアから隔離しきい値までは受信トレイに残しつつ控えめに警告します。",
-    "spamUnavailable": "迷惑メール設定はアプリ版で利用できます。"
+    "spamPreviewNote": "プレビュー表示のため、変更はまだ保存されません（アプリで有効になります）。"
   },
   "storage": {
     "title": "ローカル保存容量（添付）",

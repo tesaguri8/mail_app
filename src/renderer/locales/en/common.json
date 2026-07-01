@@ -104,7 +104,7 @@
     "spamThresholdHighHint": "Scores at or above this move to the Spam folder (higher = safer, fewer false positives).",
     "spamThresholdLow": "\"Maybe spam\" threshold",
     "spamThresholdLowHint": "Scores from here up to the quarantine threshold stay in the inbox with a subtle warning.",
-    "spamUnavailable": "Spam settings are available in the desktop app."
+    "spamPreviewNote": "Preview only — changes aren't saved yet (they take effect in the app)."
   },
   "storage": {
     "title": "Local storage (attachments)",

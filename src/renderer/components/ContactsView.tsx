@@ -30,6 +30,10 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 const emptyDraft = (): ContactInput => ({
   id: null,
   display_name: '',
+  family_name: null,
+  given_name: null,
+  phonetic_family: null,
+  phonetic_given: null,
   name_kana: null,
   email: null,
   phone: null,
@@ -45,6 +49,10 @@ const emptyDraft = (): ContactInput => ({
 const toDraft = (c: ContactSummary): ContactInput => ({
   id: c.id,
   display_name: c.display_name,
+  family_name: c.family_name,
+  given_name: c.given_name,
+  phonetic_family: c.phonetic_family,
+  phonetic_given: c.phonetic_given,
   name_kana: c.name_kana,
   email: c.email,
   phone: c.phone,
@@ -334,12 +342,37 @@ export function ContactsView() {
             </div>
 
             <div className="space-y-3">
-              <Field icon={<User size={15} />} label={t('contact.nameKana')}>
-                <input
-                  className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                  value={draft.name_kana ?? ''}
-                  onChange={(e) => patch({ name_kana: nullify(e.target.value) })}
-                />
+              <Field icon={<User size={15} />} label={t('contact.nameLabel')}>
+                <div className="flex gap-2">
+                  <input
+                    className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
+                    placeholder={t('contact.familyName')}
+                    value={draft.family_name ?? ''}
+                    onChange={(e) => patch({ family_name: nullify(e.target.value) })}
+                  />
+                  <input
+                    className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
+                    placeholder={t('contact.givenName')}
+                    value={draft.given_name ?? ''}
+                    onChange={(e) => patch({ given_name: nullify(e.target.value) })}
+                  />
+                </div>
+              </Field>
+              <Field icon={<User size={15} />} label={t('contact.phoneticLabel')}>
+                <div className="flex gap-2">
+                  <input
+                    className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
+                    placeholder={t('contact.familyName')}
+                    value={draft.phonetic_family ?? ''}
+                    onChange={(e) => patch({ phonetic_family: nullify(e.target.value) })}
+                  />
+                  <input
+                    className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
+                    placeholder={t('contact.givenName')}
+                    value={draft.phonetic_given ?? ''}
+                    onChange={(e) => patch({ phonetic_given: nullify(e.target.value) })}
+                  />
+                </div>
               </Field>
               <Field icon={<Mail size={15} />} label={t('contact.email')}>
                 <input

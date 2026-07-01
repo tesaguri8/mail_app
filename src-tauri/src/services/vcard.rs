@@ -8,6 +8,14 @@
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ImportedContact {
     pub display_name: String,
+    /// 姓（構造化名）。
+    pub family_name: Option<String>,
+    /// 名。
+    pub given_name: Option<String>,
+    /// よみ（姓）。
+    pub phonetic_family: Option<String>,
+    /// よみ（名）。
+    pub phonetic_given: Option<String>,
     pub name_kana: Option<String>,
     pub email: Option<String>,
     /// 追加アドレス（JSON 配列文字列。主アドレス以外が 1 件以上あるときのみ）。
@@ -284,8 +292,21 @@ impl CardAcc {
 
         let source = detect_source(self.prodid.as_deref());
 
+        // 構造化名: N の 1つ目=姓、2つ目=名。よみは X-PHONETIC-*。
+        let (family_name, given_name) = match &self.n {
+            Some(n) => (
+                non_empty(n.first().cloned().unwrap_or_default()),
+                non_empty(n.get(1).cloned().unwrap_or_default()),
+            ),
+            None => (None, None),
+        };
+
         Some(ImportedContact {
             display_name,
+            family_name,
+            given_name,
+            phonetic_family: self.kana_last,
+            phonetic_given: self.kana_first,
             name_kana,
             email,
             emails_json,
@@ -371,6 +392,8 @@ mod tests {
         let vcf = "BEGIN:VCARD\nVERSION:3.0\nN:愛川翼;;;;\nFN:愛川翼\nX-PHONETIC-LAST-NAME:アイカワ\nORG:有限会社愛建工業;\nTITLE:専務取締役\nEMAIL;type=INTERNET;type=pref:rabbit@key.ocn.ne.jp\nEMAIL:second@example.com\nTEL;type=pref:0997-52-4187\nTEL:090-7929-9937\nADR;type=pref:;;;;鹿児島県奄美市名瀬佐大熊町17-10AKビル2F;8940005;\nUID:ABC-123\nEND:VCARD\n";
         let c = &parse(vcf).contacts[0];
         assert_eq!(c.display_name, "愛川翼");
+        assert_eq!(c.family_name.as_deref(), Some("愛川翼")); // N の1つ目
+        assert_eq!(c.phonetic_family.as_deref(), Some("アイカワ"));
         assert_eq!(c.name_kana.as_deref(), Some("アイカワ"));
         assert_eq!(c.email.as_deref(), Some("rabbit@key.ocn.ne.jp"));
         assert_eq!(c.emails_json.as_deref(), Some("[\"second@example.com\"]"));

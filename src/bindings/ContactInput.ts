@@ -2,5 +2,22 @@
 
 /**
  * 連絡先の作成・更新入力（フロントから受け取る）。`id` が None なら新規作成。
+ * 姓/名・よみ姓/よみ名は任意（省略時はフロント旧実装との後方互換）。
  */
-export type ContactInput = { id: number | null, display_name: string, name_kana: string | null, email: string | null, phone: string | null, organization: string | null, address: string | null, birthday: string | null, note: string | null, is_favorite: boolean, is_business: boolean, allow_remote_images: boolean, };
+export type ContactInput = { id: number | null, display_name: string, 
+/**
+ * 姓（構造化名）。
+ */
+family_name: string | null, 
+/**
+ * 名。
+ */
+given_name: string | null, 
+/**
+ * よみ（姓）。
+ */
+phonetic_family: string | null, 
+/**
+ * よみ（名）。
+ */
+phonetic_given: string | null, name_kana: string | null, email: string | null, phone: string | null, organization: string | null, address: string | null, birthday: string | null, note: string | null, is_favorite: boolean, is_business: boolean, allow_remote_images: boolean, };

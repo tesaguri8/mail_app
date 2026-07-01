@@ -137,6 +137,10 @@ fn build_contact(idx: &HashMap<String, usize>, row: &[String]) -> Option<Importe
 
     Some(ImportedContact {
         display_name,
+        family_name: non_empty(last),
+        given_name: non_empty(first),
+        phonetic_family: non_empty(get(idx, row, "Phonetic Last Name")),
+        phonetic_given: non_empty(get(idx, row, "Phonetic First Name")),
         name_kana,
         email,
         emails_json,
@@ -246,6 +250,9 @@ mod tests {
         let row = "翼,,愛川,アイカワ,,,,,,,有限会社愛建工業,,,1987-10-06,memo,,* myContacts,,rabbit@key.ocn.ne.jp ::: second@x.jp,,,,,,0997-52-4187";
         let c = parse_one(row);
         assert_eq!(c.display_name, "愛川翼");
+        assert_eq!(c.family_name.as_deref(), Some("愛川")); // Last Name
+        assert_eq!(c.given_name.as_deref(), Some("翼")); // First Name
+        assert_eq!(c.phonetic_given.as_deref(), Some("アイカワ")); // Phonetic First 列にある
         assert_eq!(c.name_kana.as_deref(), Some("アイカワ"));
         assert_eq!(c.email.as_deref(), Some("rabbit@key.ocn.ne.jp"));
         assert_eq!(c.emails_json.as_deref(), Some("[\"second@x.jp\"]"));

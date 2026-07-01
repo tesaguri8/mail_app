@@ -195,11 +195,24 @@ pub struct ContactSummary {
 }
 
 /// 連絡先の作成・更新入力（フロントから受け取る）。`id` が None なら新規作成。
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+/// 姓/名・よみ姓/よみ名は任意（省略時はフロント旧実装との後方互換）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]
 pub struct ContactInput {
     pub id: Option<i32>,
     pub display_name: String,
+    /// 姓（構造化名）。
+    #[serde(default)]
+    pub family_name: Option<String>,
+    /// 名。
+    #[serde(default)]
+    pub given_name: Option<String>,
+    /// よみ（姓）。
+    #[serde(default)]
+    pub phonetic_family: Option<String>,
+    /// よみ（名）。
+    #[serde(default)]
+    pub phonetic_given: Option<String>,
     pub name_kana: Option<String>,
     pub email: Option<String>,
     pub phone: Option<String>,

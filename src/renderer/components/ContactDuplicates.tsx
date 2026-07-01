@@ -270,12 +270,37 @@ export function ContactDuplicates({
                       onChange={(e) => patch({ display_name: e.target.value })}
                     />
                   </EditField>
-                  <EditField icon={<User size={14} />} label={t('contact.nameKana')}>
-                    <input
-                      className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                      value={draft.name_kana ?? ''}
-                      onChange={(e) => patch({ name_kana: nullify(e.target.value) })}
-                    />
+                  <EditField icon={<User size={14} />} label={t('contact.nameLabel')}>
+                    <div className="flex gap-2">
+                      <input
+                        className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
+                        placeholder={t('contact.familyName')}
+                        value={draft.family_name ?? ''}
+                        onChange={(e) => patch({ family_name: nullify(e.target.value) })}
+                      />
+                      <input
+                        className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
+                        placeholder={t('contact.givenName')}
+                        value={draft.given_name ?? ''}
+                        onChange={(e) => patch({ given_name: nullify(e.target.value) })}
+                      />
+                    </div>
+                  </EditField>
+                  <EditField icon={<User size={14} />} label={t('contact.phoneticLabel')}>
+                    <div className="flex gap-2">
+                      <input
+                        className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
+                        placeholder={t('contact.familyName')}
+                        value={draft.phonetic_family ?? ''}
+                        onChange={(e) => patch({ phonetic_family: nullify(e.target.value) })}
+                      />
+                      <input
+                        className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
+                        placeholder={t('contact.givenName')}
+                        value={draft.phonetic_given ?? ''}
+                        onChange={(e) => patch({ phonetic_given: nullify(e.target.value) })}
+                      />
+                    </div>
                   </EditField>
                   <EditField icon={<Mail size={14} />} label={t('contact.email')}>
                     <input
@@ -467,6 +492,10 @@ function buildDraft(members: ContactSummary[], representative: ContactSummary): 
   return {
     id: null,
     display_name: representative.display_name,
+    family_name: pick((c) => c.family_name),
+    given_name: pick((c) => c.given_name),
+    phonetic_family: pick((c) => c.phonetic_family),
+    phonetic_given: pick((c) => c.phonetic_given),
     name_kana: pick((c) => c.name_kana),
     email: pick((c) => c.email),
     phone: pick((c) => c.phone),

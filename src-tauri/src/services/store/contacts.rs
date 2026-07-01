@@ -87,13 +87,19 @@ impl Store {
             Some(id) => {
                 conn.execute(
                     "UPDATE contacts SET \
-                         display_name = ?1, name_kana = ?2, email = ?3, phone = ?4, \
-                         organization = ?5, address = ?6, birthday = ?7, note = ?8, \
-                         is_favorite = ?9, is_business = ?10, allow_remote_images = ?11, \
+                         display_name = ?1, family_name = ?2, given_name = ?3, \
+                         phonetic_family = ?4, phonetic_given = ?5, name_kana = ?6, \
+                         email = ?7, phone = ?8, organization = ?9, address = ?10, \
+                         birthday = ?11, note = ?12, \
+                         is_favorite = ?13, is_business = ?14, allow_remote_images = ?15, \
                          updated_at = CURRENT_TIMESTAMP \
-                     WHERE id = ?12",
+                     WHERE id = ?16",
                     params![
                         input.display_name,
+                        input.family_name,
+                        input.given_name,
+                        input.phonetic_family,
+                        input.phonetic_given,
                         input.name_kana,
                         input.email,
                         input.phone,
@@ -112,11 +118,16 @@ impl Store {
             None => {
                 conn.execute(
                     "INSERT INTO contacts \
-                         (display_name, name_kana, email, phone, organization, address, \
+                         (display_name, family_name, given_name, phonetic_family, phonetic_given, \
+                          name_kana, email, phone, organization, address, \
                           birthday, note, is_favorite, is_business, allow_remote_images) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                     params![
                         input.display_name,
+                        input.family_name,
+                        input.given_name,
+                        input.phonetic_family,
+                        input.phonetic_given,
                         input.name_kana,
                         input.email,
                         input.phone,
@@ -393,11 +404,16 @@ type MergeRow = (
 fn insert_from_import(tx: &rusqlite::Transaction, c: &ImportedContact) -> rusqlite::Result<()> {
     tx.execute(
         "INSERT INTO contacts \
-             (display_name, name_kana, email, emails, phone, organization, address, \
+             (display_name, family_name, given_name, phonetic_family, phonetic_given, \
+              name_kana, email, emails, phone, organization, address, \
               birthday, note, source, external_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             c.display_name,
+            c.family_name,
+            c.given_name,
+            c.phonetic_family,
+            c.phonetic_given,
             c.name_kana,
             c.email,
             c.emails_json,
@@ -573,6 +589,7 @@ mod tests {
             is_favorite: false,
             is_business: false,
             allow_remote_images: false,
+            ..Default::default()
         })
         .unwrap();
         let after = s.get_contact(c.id as i64).unwrap();
@@ -611,6 +628,7 @@ mod tests {
             is_favorite: true,
             is_business: true,
             allow_remote_images: false,
+            ..Default::default()
         })
         .unwrap();
 
@@ -661,6 +679,7 @@ mod tests {
                 is_favorite: true,
                 is_business: false,
                 allow_remote_images: false,
+                ..Default::default()
             })
             .unwrap()
             .id as i64;
@@ -678,6 +697,7 @@ mod tests {
                 is_favorite: false,
                 is_business: true,
                 allow_remote_images: false,
+                ..Default::default()
             })
             .unwrap()
             .id as i64;
@@ -718,6 +738,7 @@ mod tests {
                 is_favorite: false,
                 is_business: false,
                 allow_remote_images: false,
+                ..Default::default()
             })
             .unwrap()
             .id;
@@ -749,6 +770,7 @@ mod tests {
             is_favorite: false,
             is_business: false,
             allow_remote_images: false,
+            ..Default::default()
         })
         .unwrap();
         assert_eq!(s.list_contacts(None).unwrap().len(), 2);
@@ -773,6 +795,7 @@ mod tests {
             is_favorite: false,
             is_business: false,
             allow_remote_images: false,
+            ..Default::default()
         };
         let keep = s.upsert_contact(&mk("同姓同名")).unwrap().id as i64;
         let drop = s.upsert_contact(&mk("同姓同名")).unwrap().id as i64;
@@ -819,21 +842,29 @@ fn update_from_import(
 ) -> rusqlite::Result<()> {
     tx.execute(
         "UPDATE contacts SET \
-             display_name = ?1, \
-             name_kana    = COALESCE(?2, name_kana), \
-             email        = COALESCE(?3, email), \
-             emails       = COALESCE(?4, emails), \
-             phone        = COALESCE(?5, phone), \
-             organization = COALESCE(?6, organization), \
-             address      = COALESCE(?7, address), \
-             birthday     = COALESCE(?8, birthday), \
-             note         = COALESCE(?9, note), \
-             source       = ?10, \
-             external_id  = COALESCE(?11, external_id), \
-             updated_at   = CURRENT_TIMESTAMP \
-         WHERE id = ?12",
+             display_name    = ?1, \
+             family_name     = COALESCE(?2, family_name), \
+             given_name      = COALESCE(?3, given_name), \
+             phonetic_family = COALESCE(?4, phonetic_family), \
+             phonetic_given  = COALESCE(?5, phonetic_given), \
+             name_kana       = COALESCE(?6, name_kana), \
+             email           = COALESCE(?7, email), \
+             emails          = COALESCE(?8, emails), \
+             phone           = COALESCE(?9, phone), \
+             organization    = COALESCE(?10, organization), \
+             address         = COALESCE(?11, address), \
+             birthday        = COALESCE(?12, birthday), \
+             note            = COALESCE(?13, note), \
+             source          = ?14, \
+             external_id     = COALESCE(?15, external_id), \
+             updated_at      = CURRENT_TIMESTAMP \
+         WHERE id = ?16",
         params![
             c.display_name,
+            c.family_name,
+            c.given_name,
+            c.phonetic_family,
+            c.phonetic_given,
             c.name_kana,
             c.email,
             c.emails_json,

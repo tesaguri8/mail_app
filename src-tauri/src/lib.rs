@@ -40,6 +40,7 @@ pub fn run() {
             commands::mail_sync,
             commands::mail_list,
             commands::mail_get,
+            commands::mail_refetch,
             commands::mail_attachments,
             commands::attachment_download,
             commands::attachment_view,

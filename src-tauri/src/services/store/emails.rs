@@ -279,6 +279,45 @@ impl Store {
         .optional()
     }
 
+    /// 全文再取得に必要な情報（親メールの account_id と IMAP UID）。
+    /// UID が None のメールは再取得不可（要再同期）。
+    pub fn email_refetch_info(&self, email_id: i64) -> rusqlite::Result<Option<(i64, Option<i64>)>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT account_id, uid FROM emails WHERE id = ?1",
+            params![email_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+    }
+
+    /// 本文を上書きして全文キャッシュを復元する（要約保存の解除）。
+    /// HTML は再圧縮して body_html_z に格納し、body_compacted=0 に戻す。FTS も更新。
+    pub fn update_email_body(
+        &self,
+        id: i64,
+        body_plain: Option<&str>,
+        clean_body: Option<&str>,
+        body_html: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        let body_html_z = body_html
+            .filter(|s| !s.is_empty())
+            .map(crate::services::compress::compress_text);
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE emails
+             SET body_plain = ?1, clean_body = ?2, body_html_z = ?3, body_html = NULL, body_compacted = 0
+             WHERE id = ?4",
+            params![body_plain, clean_body, body_html_z, id],
+        )?;
+        // FTS5（clean_body 索引）も更新する。
+        conn.execute(
+            "UPDATE email_fts SET clean_body = ?1 WHERE rowid = ?2",
+            params![clean_body, id],
+        )?;
+        Ok(())
+    }
+
     /// 既読にする。
     pub fn mark_read(&self, id: i64) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();

@@ -102,12 +102,19 @@ impl Store {
     }
 
     /// full_window より古い（スター以外の）メールの添付ファイルを削除する（メタは残す）。
+    ///
+    /// ただし範囲外でも**最終アクセスから GRACE_DAYS 日以内**の添付は残す。古い添付を
+    /// 一時的に開いた／再ダウンロードした直後に消えないための猶予。放置すれば次回以降の
+    /// 適用で削除される（アクセスのたびに accessed_at が更新され猶予は延びる）。
+    /// `accessed_at` が NULL（accessed_at 列導入前の旧DLなど）は猶予対象外＝削除する。
     /// 返り値: (削除した添付数, 解放バイト)。
     fn evict_attachments_outside_window(
         &self,
         account_id: i64,
         days: i64,
     ) -> rusqlite::Result<(i32, i64)> {
+        /// 範囲外の添付をDL後に残す猶予（日）。この期間は開いたファイルを使い回せる。
+        const GRACE_DAYS: i64 = 3;
         let candidates: Vec<(i64, i64, String)> = {
             let conn = self.conn.lock().unwrap();
             let mut stmt = conn.prepare(
@@ -115,10 +122,12 @@ impl Store {
                  FROM attachments a JOIN emails e ON e.id = a.email_id
                  WHERE e.account_id = ?1 AND a.file_path IS NOT NULL AND e.is_flagged = 0
                    AND e.date IS NOT NULL
-                   AND datetime(e.date) < datetime('now', ?2)",
+                   AND datetime(e.date) < datetime('now', ?2)
+                   AND (a.accessed_at IS NULL OR datetime(a.accessed_at) < datetime('now', ?3))",
             )?;
-            let modifier = format!("-{} days", days);
-            let rows = stmt.query_map(params![account_id, modifier], |r| {
+            let window_mod = format!("-{} days", days);
+            let grace_mod = format!("-{} days", GRACE_DAYS);
+            let rows = stmt.query_map(params![account_id, window_mod, grace_mod], |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
                     r.get::<_, i64>(1)?,
@@ -423,5 +432,55 @@ mod tests {
         assert_eq!(r.evicted, 0);
         assert_eq!(r.compacted, 0);
         assert!(store.attachment_has_file(1), "既定では添付を消さない");
+    }
+
+    /// 範囲外でも最終アクセスから3日以内の添付は残す（一時的に開いた古い添付の猶予）。
+    #[test]
+    fn retention_grace_keeps_recently_accessed_out_of_window_attachments() {
+        let store = test_store();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO accounts (id, email, imap_host, smtp_host, full_window)
+                 VALUES (1,'a@b','i','s','30d')",
+                [],
+            )
+            .unwrap();
+            // 3件とも範囲外（100日前）でDL済み。accessed_at だけ変える。
+            for id in 1..=3 {
+                conn.execute(
+                    "INSERT INTO emails (id, account_id, canonical_key, date)
+                     VALUES (?1, 1, ?2, datetime('now','-100 days'))",
+                    params![id, format!("k{id}")],
+                )
+                .unwrap();
+            }
+            // 1: 今アクセス（猶予内）→残る / 2: 10日前（猶予切れ）→削除 / 3: NULL（旧DL）→削除
+            conn.execute(
+                "INSERT INTO attachments (id, email_id, filename, size, file_path, accessed_at)
+                 VALUES (1,1,'a.pdf',1000,'/nonexistent/1.pdf',datetime('now'))",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO attachments (id, email_id, filename, size, file_path, accessed_at)
+                 VALUES (2,2,'b.pdf',1000,'/nonexistent/2.pdf',datetime('now','-10 days'))",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO attachments (id, email_id, filename, size, file_path, accessed_at)
+                 VALUES (3,3,'c.pdf',1000,'/nonexistent/3.pdf',NULL)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let r = store.apply_retention(1).unwrap();
+
+        assert!(store.attachment_has_file(1), "3日以内にアクセスした添付は残す");
+        assert!(!store.attachment_has_file(2), "猶予切れの添付は削除");
+        assert!(!store.attachment_has_file(3), "旧DL(accessed_at NULL)は削除");
+        assert_eq!(r.evicted, 2);
     }
 }

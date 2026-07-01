@@ -100,8 +100,8 @@
   "storage": {
     "title": "Local storage (attachments)",
     "limit": "Storage limit",
-    "fullWindow": "Full-data range (body + attachments)",
-    "fullWindowHint": "Keep the full body and attachments within this range. Older mail has its attachment files removed locally (metadata stays and can be re-downloaded on demand). Starred mail is always kept.",
+    "fullWindow": "Range to keep attachments locally",
+    "fullWindowHint": "Attachment files are only stored locally when you download them. Within this range, downloaded attachments are kept; for older mail their files are removed locally (metadata stays; open/download re-fetches on demand, and an opened attachment lingers ~3 days). Starred mail is always kept.",
     "bodyWindow": "Keep full body",
     "bodyWindowHint": "Mail older than this is reduced to a compact form (only the new, unquoted part is kept; the heavy full body is dropped). Quoted history is reconstructed from the thread, and the full text can be re-fetched from the server.",
     "keepAll": "Always keep",
@@ -213,6 +213,7 @@
     "w_1y": "1 year",
     "w_2y": "2 years",
     "w_all": "All",
-    "bodyCompacted": "To save space, this message's body is stored in compact form (only the new, unquoted part). Sync or re-fetch from the server when you need the full text."
+    "refetch": "Re-fetch full text",
+    "bodyCompacted": "To save space, this message's body is stored in compact form (only the new, unquoted part). Use \"Re-fetch full text\" to get the full body from the server."
   }
 }

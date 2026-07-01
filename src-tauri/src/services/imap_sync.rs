@@ -321,3 +321,35 @@ pub fn fetch_attachment(
         content_type,
     })
 }
+
+/// 指定 UID のメッセージ全体を再取得して解析する（本文の全文キャッシュ復元用）。
+/// 要約保存に落とした本文をサーバーから取り直すときに使う。
+pub fn fetch_message(
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    uid: u32,
+) -> Result<parser::ParsedEmail, String> {
+    let tls = native_tls::TlsConnector::builder()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let client = imap::connect((host, port), host, &tls).map_err(|e| e.to_string())?;
+    let mut session = client
+        .login(user, password)
+        .map_err(|(e, _)| e.to_string())?;
+    session.select("INBOX").map_err(|e| e.to_string())?;
+
+    let msgs = session
+        .uid_fetch(uid.to_string(), "(BODY[])")
+        .map_err(|e| e.to_string())?;
+    let raw = msgs
+        .iter()
+        .next()
+        .and_then(|m| m.body())
+        .ok_or_else(|| "メッセージが見つかりませんでした".to_string())?;
+    let parsed =
+        parser::parse_message(raw).ok_or_else(|| "メッセージを解析できませんでした".to_string())?;
+    let _ = session.logout();
+    Ok(parsed)
+}

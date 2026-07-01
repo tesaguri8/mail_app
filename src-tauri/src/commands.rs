@@ -363,6 +363,53 @@ pub fn mail_get(store: State<Store>, id: i64) -> Result<MailDetail, String> {
     Ok(detail)
 }
 
+/// 1通の全文をサーバーから再取得して本文キャッシュを復元する（要約保存の解除）。
+/// emails.uid で該当メッセージだけを取り直すので、アカウント全体の再同期は不要。
+/// 復元後の本文（body_compacted=false）を返す。
+#[tauri::command]
+pub async fn mail_refetch(
+    app: AppHandle,
+    store: State<'_, Store>,
+    id: i64,
+) -> Result<MailDetail, String> {
+    let (account_id, uid) = store
+        .email_refetch_info(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "メールが見つかりません".to_string())?;
+    let uid = uid.ok_or_else(|| {
+        "再取得に必要な情報がありません。アカウントを再同期してください。".to_string()
+    })?;
+
+    let (email, login_user, host, port) = store
+        .get_account_imap(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "アカウントが見つかりません".to_string())?;
+    let service = app.config().identifier.clone();
+    let password = keyring::Entry::new(&service, &email)
+        .and_then(|e| e.get_password())
+        .map_err(|e| format!("資格情報を取得できません: {e}"))?;
+
+    let parsed = tauri::async_runtime::spawn_blocking(move || {
+        imap_sync::fetch_message(&host, port, &login_user, &password, uid as u32)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    store
+        .update_email_body(
+            id,
+            parsed.body_plain.as_deref(),
+            parsed.clean_body.as_deref(),
+            parsed.body_html.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
+
+    store
+        .get_email(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "メールが見つかりません".to_string())
+}
+
 /// メールの添付メタ一覧を返す（本体未取得のものは is_downloaded=false）。
 #[tauri::command]
 pub fn mail_attachments(

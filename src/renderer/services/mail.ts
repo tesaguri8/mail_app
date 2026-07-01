@@ -14,6 +14,9 @@ export const mailList = (accountId: number, limit: number) =>
 
 export const mailGet = (id: number) => invoke<MailDetail>('mail_get', { id });
 
+// 1通の全文をサーバーから再取得して本文キャッシュを復元（要約保存の解除）。復元後の本文を返す。
+export const mailRefetch = (id: number) => invoke<MailDetail>('mail_refetch', { id });
+
 // 添付メタ一覧（本体未取得のものは is_downloaded=false）。
 export const mailAttachments = (emailId: number) =>
   invoke<AttachmentSummary[]>('mail_attachments', { emailId });

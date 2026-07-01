@@ -3,4 +3,12 @@
 /**
  * メール一覧表示用（軽量）。
  */
-export type MailSummary = { id: number, subject: string | null, from_address: string | null, date: string | null, preview: string, is_read: boolean, has_attachments: boolean, is_starred: boolean, is_bookmarked: boolean, };
+export type MailSummary = { id: number, subject: string | null, from_address: string | null, date: string | null, preview: string, is_read: boolean, 
+/**
+ * 添付の有無（旧データ由来のヒント。inline を含む場合がある）。
+ */
+has_attachments: boolean, 
+/**
+ * 実ファイルの添付行（kind='attachment'）が手元にあるか。フィルタ用。
+ */
+has_real_attachments: boolean, is_starred: boolean, is_bookmarked: boolean, };

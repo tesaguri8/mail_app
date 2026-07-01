@@ -97,7 +97,10 @@ pub struct MailSummary {
     pub date: Option<String>,
     pub preview: String,
     pub is_read: bool,
+    /// 添付の有無（旧データ由来のヒント。inline を含む場合がある）。
     pub has_attachments: bool,
+    /// 実ファイルの添付行（kind='attachment'）が手元にあるか。フィルタ用。
+    pub has_real_attachments: bool,
     pub is_starred: bool,
     pub is_bookmarked: bool,
 }

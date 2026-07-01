@@ -45,7 +45,7 @@ const FILTERS: { key: string; Icon: LucideIcon }[] = [
 
 function matchesFilters(m: MailSummary, filters: Set<string>): boolean {
   if (filters.has('unread') && m.is_read) return false;
-  if (filters.has('attachment') && !m.has_attachments) return false;
+  if (filters.has('attachment') && !m.has_real_attachments) return false;
   if (filters.has('star') && !m.is_starred) return false;
   // known/flag は対応データが入るまでフィルタしない（空表示で混乱させない）
   return true;
@@ -277,7 +277,7 @@ export function MailboxView({
               </span>
             </div>
             <div className="truncate text-sm text-white/80">
-              {m.subject ?? '(no subject)'} {m.has_attachments && '📎'}
+              {m.subject ?? '(no subject)'} {m.has_real_attachments && '📎'}
             </div>
             <div className="line-clamp-1 text-xs text-white/40">{m.preview}</div>
           </li>

@@ -168,7 +168,8 @@ impl Store {
         let mut stmt = conn.prepare(
             "SELECT id, subject, from_address, date, is_read, has_attachments,
                     substr(COALESCE(clean_body, body_plain, ''), 1, 140) AS preview,
-                    is_flagged, is_bookmarked
+                    is_flagged, is_bookmarked,
+                    EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = emails.id AND a.kind = 'attachment') AS has_real
              FROM emails WHERE account_id = ?1 ORDER BY date DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![account_id, limit], |r| {
@@ -182,6 +183,7 @@ impl Store {
                 preview: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
                 is_starred: r.get::<_, i64>(7)? != 0,
                 is_bookmarked: r.get::<_, i64>(8)? != 0,
+                has_real_attachments: r.get::<_, i64>(9)? != 0,
             })
         })?;
         rows.collect()

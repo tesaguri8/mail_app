@@ -93,7 +93,9 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
                 .map(|c| c.trim_matches(|ch| ch == '<' || ch == '>').to_string()),
         })
         .collect();
-    let has_attachments = !attachments.is_empty();
+    // 📎 は「実ファイルの添付」があるときだけ立てる。
+    // 本文埋め込み画像（inline）だけの HTML メールでは立てない。
+    let has_attachments = attachments.iter().any(|a| a.kind == "attachment");
 
     let clean_body = body_plain.as_deref().map(strip_quotes);
     let preview: String = clean_body

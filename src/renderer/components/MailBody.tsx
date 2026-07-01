@@ -63,6 +63,7 @@ export function MailBody({ detail }: { detail: MailDetail }) {
   // チェックした添付（まとめて保存用）
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [savingAll, setSavingAll] = useState(false);
+  const [attachmentsLoaded, setAttachmentsLoaded] = useState(false);
 
   // 設定（インライン画像の自動取得）の変更に追従する。
   useEffect(() => {
@@ -79,10 +80,18 @@ export function MailBody({ detail }: { detail: MailDetail }) {
     setPreviews({});
     setAttachmentsOpen(true);
     setSelected(new Set());
+    setAttachmentsLoaded(false);
     if (detail.has_attachments) {
       mailAttachments(detail.id)
-        .then((a) => active && setAttachments(a))
-        .catch(() => {});
+        .then((a) => {
+          if (active) {
+            setAttachments(a);
+            setAttachmentsLoaded(true);
+          }
+        })
+        .catch(() => active && setAttachmentsLoaded(true));
+    } else {
+      setAttachmentsLoaded(true);
     }
     return () => {
       active = false;
@@ -286,19 +295,21 @@ export function MailBody({ detail }: { detail: MailDetail }) {
         )}
       </div>
 
-      {fileAttachments.length > 0 && (
+      {detail.has_attachments && (
         <div className="border-t border-white/10">
           <div className="flex items-center gap-2 px-5 py-2 text-xs font-medium text-white/50">
-            <input
-              type="checkbox"
-              checked={allSelected}
-              ref={(el) => {
-                if (el) el.indeterminate = someSelected;
-              }}
-              onChange={toggleAll}
-              title={t('mailbox.attachmentSelectAll')}
-              className="h-3.5 w-3.5 shrink-0 accent-sky-400"
-            />
+            {fileAttachments.length > 0 && (
+              <input
+                type="checkbox"
+                checked={allSelected}
+                ref={(el) => {
+                  if (el) el.indeterminate = someSelected;
+                }}
+                onChange={toggleAll}
+                title={t('mailbox.attachmentSelectAll')}
+                className="h-3.5 w-3.5 shrink-0 accent-sky-400"
+              />
+            )}
             <button
               onClick={() => setAttachmentsOpen((o) => !o)}
               className="flex flex-1 items-center gap-1 hover:text-white/75"
@@ -322,7 +333,16 @@ export function MailBody({ detail }: { detail: MailDetail }) {
               </button>
             )}
           </div>
-          {attachmentsOpen && (
+          {attachmentsOpen && fileAttachments.length === 0 && (
+            <div className="px-5 pb-3 text-xs text-white/40">
+              {!attachmentsLoaded
+                ? t('mailbox.attachmentBusy')
+                : attachments.length > 0
+                  ? t('mailbox.attachmentsInlineOnly')
+                  : t('mailbox.attachmentsUnfetched')}
+            </div>
+          )}
+          {attachmentsOpen && fileAttachments.length > 0 && (
             <ul className="max-h-64 space-y-1.5 overflow-y-auto px-5 pb-3">
               {fileAttachments.map((a) => {
                 const image = isImage(a);

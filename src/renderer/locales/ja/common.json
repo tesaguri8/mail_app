@@ -160,6 +160,8 @@
     "attachmentSavedN": "{{count}} 件を保存しました",
     "attachmentSelectAll": "すべて選択／解除",
     "attachmentSaveSelected": "選択を保存 ({{count}})",
+    "attachmentsInlineOnly": "本文に埋め込まれた画像のみで、添付ファイルはありません。",
+    "attachmentsUnfetched": "添付情報は未取得です。設定 → アカウント → 「点検再取り込み」で取得できます。",
     "more": "もっと読む →",
     "selectMail": "メールを選択してください",
     "side": "左右",

@@ -160,6 +160,8 @@
     "attachmentSavedN": "Saved {{count}} files",
     "attachmentSelectAll": "Select / clear all",
     "attachmentSaveSelected": "Save selected ({{count}})",
+    "attachmentsInlineOnly": "Only images embedded in the body; no attached files.",
+    "attachmentsUnfetched": "Attachment details not fetched yet. Get them via Settings → Accounts → \"Repair re-import\".",
     "more": "Read more →",
     "selectMail": "Select a message",
     "side": "Side",

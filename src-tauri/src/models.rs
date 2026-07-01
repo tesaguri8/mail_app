@@ -123,6 +123,83 @@ pub struct TagSummary {
     pub count: i32,
 }
 
+/// 連絡先（住所録）。一覧・詳細・編集で共通に使う（連絡先はメールほど大量でないため軽量/詳細を分けない）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ContactSummary {
+    pub id: i32,
+    pub display_name: String,
+    /// 読み（並び替え用）。
+    pub name_kana: Option<String>,
+    /// 主メールアドレス。
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub organization: Option<String>,
+    pub address: Option<String>,
+    /// 誕生日（YYYY-MM-DD 等の文字列。ホーム/ウィジェット通知用）。
+    pub birthday: Option<String>,
+    pub note: Option<String>,
+    /// お気に入り（先頭に固定表示）。
+    pub is_favorite: bool,
+    /// 取引先の手動フラグ（docs/FILTERING.md）。
+    pub is_business: bool,
+    /// この相手からのメールで外部画像を許可（docs/MAIL_SECURITY.md）。
+    pub allow_remote_images: bool,
+}
+
+/// 連絡先の作成・更新入力（フロントから受け取る）。`id` が None なら新規作成。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ContactInput {
+    pub id: Option<i32>,
+    pub display_name: String,
+    pub name_kana: Option<String>,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub organization: Option<String>,
+    pub address: Option<String>,
+    pub birthday: Option<String>,
+    pub note: Option<String>,
+    pub is_favorite: bool,
+    pub is_business: bool,
+    pub allow_remote_images: bool,
+}
+
+/// 連絡先インポートの結果（vCard 取り込み。docs/IMPORT_EXPORT.md）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ImportReport {
+    /// ファイル内の vCard 総数。
+    pub total: i32,
+    /// 新規追加した件数。
+    pub imported: i32,
+    /// 既存（UID かメール一致）を更新した件数。
+    pub updated: i32,
+    /// 連絡先として成立せず飛ばした件数（名前・メール・電話いずれも無い等）。
+    pub skipped: i32,
+}
+
+/// 重複候補のグループ（整理 UI 用）。同一の正規化表示名でまとめる。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct DuplicateGroup {
+    /// グループの見出し（代表の表示名）。
+    pub label: String,
+    /// 重複候補の連絡先（2 件以上）。
+    pub contacts: Vec<ContactSummary>,
+}
+
+/// 連絡先グループ（所属件数つき。編集 UI は後続）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ContactGroupSummary {
+    pub id: i32,
+    pub name: String,
+    pub color: Option<String>,
+    /// 所属している連絡先の件数。
+    pub count: i32,
+}
+
 /// メール詳細（本文表示用）。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]
@@ -190,6 +267,21 @@ pub struct RetentionReport {
     pub compacted: i32,
     /// 解放したバイト数（添付＋本文の概算）。
     pub freed_bytes: f64,
+}
+
+/// データ保存先（mail.db と添付キャッシュのフォルダ）と使用量。
+/// バイト数は f64（TS の number）で大きな値も安全に渡す。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct DataLocation {
+    /// 現在のデータフォルダ（絶対パス）。
+    pub dir: String,
+    /// 既定の場所を使っているか（移動していない）。
+    pub is_default: bool,
+    /// mail.db（＋WAL/SHM）の合計バイト。
+    pub db_bytes: f64,
+    /// 添付キャッシュの合計バイト。
+    pub attachments_bytes: f64,
 }
 
 /// 同期結果。

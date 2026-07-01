@@ -1,6 +1,9 @@
 pub mod autoconfig;
 pub mod compress;
+pub mod datadir;
+pub mod gcsv;
 pub mod imap_sync;
 pub mod media;
 pub mod parser;
 pub mod store;
+pub mod vcard;

@@ -3,6 +3,7 @@ import { TitleBar, type AppView } from './components/TitleBar';
 import { BottomBar } from './components/BottomBar';
 import { Home } from './components/Home';
 import { MailboxView } from './components/MailboxView';
+import { ContactsView } from './components/ContactsView';
 import { StubView } from './components/StubView';
 import { Settings } from './components/Settings';
 import { accountList } from './services/accounts';
@@ -66,7 +67,7 @@ export default function App() {
             initialMailId={mailOpenId}
           />
         )}
-        {view === 'contacts' && <StubView titleKey="nav.contacts" />}
+        {view === 'contacts' && <ContactsView />}
         {view === 'calendar' && <StubView titleKey="nav.calendar" />}
         {view === 'settings' && <Settings accounts={accounts} onChanged={refreshAccounts} />}
       </main>

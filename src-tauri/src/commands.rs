@@ -1,12 +1,16 @@
 use crate::models::{
-    AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult, DbInfo, MailDetail,
-    MailSummary, RetentionReport, ServerAccountSummary, SignatureSummary, StorageInfo, SyncResult,
-    TagSummary,
+    AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult,
+    ContactGroupSummary, ContactInput, ContactSummary, DataLocation, DbInfo, DuplicateGroup,
+    ImportReport, MailDetail, MailSummary, RetentionReport, ServerAccountSummary, SignatureSummary,
+    StorageInfo, SyncResult, TagSummary,
 };
 use crate::services::autoconfig;
+use crate::services::datadir;
+use crate::services::gcsv;
 use crate::services::imap_sync;
 use crate::services::media;
 use crate::services::store::{NewAccount, NewServerAccount, Store};
+use crate::services::vcard;
 use tauri::{AppHandle, Manager, State};
 
 /// アプリ識別情報を返す（identifier はハードコードせず Tauri 設定から取得）。
@@ -26,7 +30,7 @@ pub fn db_info(store: State<Store>) -> Result<DbInfo, String> {
     let version = store.schema_version().map_err(|e| e.to_string())?;
     Ok(DbInfo {
         schema_version: version as i32,
-        path: store.path.to_string_lossy().to_string(),
+        path: store.path().to_string_lossy().to_string(),
     })
 }
 
@@ -199,7 +203,7 @@ pub async fn mail_sync(
     let password = keyring::Entry::new(&service, &email)
         .and_then(|e| e.get_password())
         .map_err(|e| format!("資格情報を取得できません: {e}"))?;
-    let db_path = store.path.clone();
+    let db_path = store.path();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
         imap_sync::sync_account(&db_path, account_id, &host, port, &login_user, &password)
@@ -352,6 +356,112 @@ pub fn mail_remove_tag(store: State<Store>, ids: Vec<i64>, tag_id: i64) -> Resul
         .map_err(|e| e.to_string())
 }
 
+/// 連絡先一覧（`query` があれば名前/よみ/メール/組織で絞り込み）。
+#[tauri::command]
+pub fn contact_list(
+    store: State<Store>,
+    query: Option<String>,
+) -> Result<Vec<ContactSummary>, String> {
+    store
+        .list_contacts(query.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// 単一の連絡先を取得。
+#[tauri::command]
+pub fn contact_get(store: State<Store>, id: i64) -> Result<ContactSummary, String> {
+    store.get_contact(id).map_err(|e| e.to_string())
+}
+
+/// 連絡先を作成または更新（確定後の行を返す）。`input.id` が無ければ新規。
+#[tauri::command]
+pub fn contact_upsert(store: State<Store>, input: ContactInput) -> Result<ContactSummary, String> {
+    if input.display_name.trim().is_empty() {
+        return Err("名前を入力してください".to_string());
+    }
+    store.upsert_contact(&input).map_err(|e| e.to_string())
+}
+
+/// 連絡先を削除。
+#[tauri::command]
+pub fn contact_delete(store: State<Store>, id: i64) -> Result<(), String> {
+    store.delete_contact(id).map_err(|e| e.to_string())
+}
+
+/// 連絡先グループ一覧（所属件数つき）。
+#[tauri::command]
+pub fn contact_group_list(store: State<Store>) -> Result<Vec<ContactGroupSummary>, String> {
+    store.list_contact_groups().map_err(|e| e.to_string())
+}
+
+/// 連絡先ファイルを取り込む。拡張子で判定し vCard(.vcf) と Google CSV(.csv) に対応。
+/// 完全重複は取り込み時に集約し、件数レポートを返す。
+#[tauri::command]
+pub fn contact_import(store: State<Store>, path: String) -> Result<ImportReport, String> {
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("ファイルを読めません: {e}"))?;
+    let parsed = if path.to_lowercase().ends_with(".csv") {
+        gcsv::parse(&text)
+    } else {
+        vcard::parse(&text)
+    };
+    store.import_contacts(&parsed).map_err(|e| e.to_string())
+}
+
+/// 重複候補（同一の正規化表示名でまとめたグループ）を返す。整理 UI 用。
+#[tauri::command]
+pub fn contact_find_duplicates(store: State<Store>) -> Result<Vec<DuplicateGroup>, String> {
+    store.find_duplicate_groups().map_err(|e| e.to_string())
+}
+
+/// 複数の連絡先を 1 件（keep_id）に統合し、統合後の連絡先を返す。
+#[tauri::command]
+pub fn contact_merge(
+    store: State<Store>,
+    keep_id: i64,
+    drop_ids: Vec<i64>,
+) -> Result<ContactSummary, String> {
+    if drop_ids.is_empty() {
+        return store.get_contact(keep_id).map_err(|e| e.to_string());
+    }
+    store
+        .merge_contacts(keep_id, &drop_ids)
+        .map_err(|e| e.to_string())
+}
+
+/// 現在のデータ保存先と使用量を返す。
+#[tauri::command]
+pub fn data_location(app: AppHandle, store: State<Store>) -> Result<DataLocation, String> {
+    let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(build_data_location(&base, &store))
+}
+
+/// データ（mail.db + 添付）を指定フォルダへ移動する（再起動不要）。
+#[tauri::command]
+pub fn data_relocate(
+    app: AppHandle,
+    store: State<Store>,
+    dir: String,
+) -> Result<DataLocation, String> {
+    let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let pointer = datadir::pointer_file(&base);
+    store.relocate(std::path::Path::new(&dir), &pointer)?;
+    Ok(build_data_location(&base, &store))
+}
+
+/// データを既定の場所に戻す。
+#[tauri::command]
+pub fn data_reset_location(app: AppHandle, store: State<Store>) -> Result<DataLocation, String> {
+    let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let default_dir = datadir::default_data_dir(&base);
+    let pointer = datadir::pointer_file(&base);
+    if store.data_dir() != default_dir {
+        store.relocate(&default_dir, &pointer)?;
+    }
+    // ポインタを消して「既定」に戻す（既定と同じ場所なので解決結果は変わらない）。
+    let _ = std::fs::remove_file(&pointer);
+    Ok(build_data_location(&base, &store))
+}
+
 /// メール本文を取得し、既読にする。
 #[tauri::command]
 pub fn mail_get(store: State<Store>, id: i64) -> Result<MailDetail, String> {
@@ -468,12 +578,10 @@ async fn ensure_attachment_file(
     .await
     .map_err(|e| e.to_string())??;
 
-    // 保存先: <app_data>/data/attachments/<attachment_id>/<filename>
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("data")
+    // 保存先: <mail.db と同じフォルダ>/attachments/<attachment_id>/<filename>。
+    // DB パス（開発ビルドはワークツリー別）から導出し、DB と添付キャッシュを常に同じ場所に置く。
+    let dir = store
+        .data_dir()
         .join("attachments")
         .join(attachment_id.to_string());
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -646,7 +754,7 @@ pub async fn mail_resync(
     let password = keyring::Entry::new(&service, &email)
         .and_then(|e| e.get_password())
         .map_err(|e| format!("資格情報を取得できません: {e}"))?;
-    let db_path = store.path.clone();
+    let db_path = store.path();
 
     tauri::async_runtime::spawn_blocking(move || {
         imap_sync::sync_account(&db_path, account_id, &host, port, &login_user, &password)
@@ -656,6 +764,41 @@ pub async fn mail_resync(
 }
 
 /// ファイル名を保存に安全な形へ正規化する（パス区切り・禁止文字を除去）。
+/// DataLocation を組み立てる（現在の保存先・既定かどうか・使用量）。
+fn build_data_location(base: &std::path::Path, store: &Store) -> DataLocation {
+    let dir = store.data_dir();
+    let db = dir.join("mail.db");
+    let db_bytes =
+        file_len(&db) + file_len(&dir.join("mail.db-wal")) + file_len(&dir.join("mail.db-shm"));
+    let attachments_bytes = dir_size(&dir.join("attachments"));
+    DataLocation {
+        dir: dir.to_string_lossy().to_string(),
+        is_default: !datadir::pointer_file(base).exists(),
+        db_bytes: db_bytes as f64,
+        attachments_bytes: attachments_bytes as f64,
+    }
+}
+
+fn file_len(p: &std::path::Path) -> u64 {
+    std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+}
+
+/// ディレクトリ配下の合計バイト（再帰）。存在しなければ 0。
+fn dir_size(p: &std::path::Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(p) else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for e in entries.flatten() {
+        match e.file_type() {
+            Ok(t) if t.is_dir() => total += dir_size(&e.path()),
+            Ok(_) => total += e.metadata().map(|m| m.len()).unwrap_or(0),
+            Err(_) => {}
+        }
+    }
+    total
+}
+
 fn sanitize_filename(name: &str) -> String {
     let cleaned: String = name
         .chars()

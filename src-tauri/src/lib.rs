@@ -2,6 +2,7 @@ mod commands;
 pub mod models;
 pub mod services;
 
+use services::datadir;
 use services::store::Store;
 use tauri::Manager;
 
@@ -15,13 +16,10 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            // データルート配下に mail.db を開き、マイグレーションを適用（docs/DATA_STORAGE.md）
-            let db_path = app
-                .path()
-                .app_data_dir()
-                .expect("app_data_dir")
-                .join("data")
-                .join("mail.db");
+            // データルート配下に mail.db を開き、マイグレーションを適用（docs/DATA_STORAGE.md）。
+            let base = app.path().app_data_dir().expect("app_data_dir");
+            let db_path = datadir::db_path(&base);
+            log::info!("opening database at {}", db_path.display());
             let store = Store::open(&db_path).expect("failed to open database");
             app.manage(store);
             Ok(())
@@ -60,6 +58,17 @@ pub fn run() {
             commands::tag_delete,
             commands::mail_add_tag,
             commands::mail_remove_tag,
+            commands::contact_list,
+            commands::contact_get,
+            commands::contact_upsert,
+            commands::contact_delete,
+            commands::contact_group_list,
+            commands::contact_import,
+            commands::contact_find_duplicates,
+            commands::contact_merge,
+            commands::data_location,
+            commands::data_relocate,
+            commands::data_reset_location,
             commands::account_set_sync_window,
             commands::account_set_full_window,
             commands::account_set_body_window,

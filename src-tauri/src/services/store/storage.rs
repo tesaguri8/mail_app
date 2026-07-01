@@ -268,7 +268,6 @@ impl Store {
         )?;
         Ok(())
     }
-
 }
 
 #[cfg(test)]
@@ -285,7 +284,7 @@ mod tests {
         migrations::run(&conn).unwrap();
         Store {
             conn: Mutex::new(conn),
-            path: PathBuf::new(),
+            path: Mutex::new(PathBuf::new()),
         }
     }
 
@@ -481,9 +480,15 @@ mod tests {
 
         let r = store.apply_retention(1).unwrap();
 
-        assert!(store.attachment_has_file(1), "3日以内にアクセスした添付は残す");
+        assert!(
+            store.attachment_has_file(1),
+            "3日以内にアクセスした添付は残す"
+        );
         assert!(!store.attachment_has_file(2), "猶予切れの添付は削除");
-        assert!(!store.attachment_has_file(3), "旧DL(accessed_at NULL)は削除");
+        assert!(
+            !store.attachment_has_file(3),
+            "旧DL(accessed_at NULL)は削除"
+        );
         assert_eq!(r.evicted, 2);
     }
 }

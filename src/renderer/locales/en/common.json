@@ -66,6 +66,7 @@
     "subjectPlaceholder": "Enter a subject",
     "bodyPlaceholder": "Write your message…",
     "send": "Send",
+    "fly": "Fly",
     "sending": "Sending…",
     "quoteHeader": "On {{date}}, {{from}} wrote:",
     "forwardSep": "-------- Forwarded message --------"

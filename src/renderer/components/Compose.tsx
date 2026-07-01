@@ -1,9 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Send, X } from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailDetail } from '@bindings/MailDetail';
 import { mailSend } from '../services/mail';
+import { getFlyAnimation } from '../config/prefs';
+import { FlySwallow, type FlySwallowHandle } from './FlySwallow';
+import swallowUrl from '../assets/swallow.png';
 
 /** 作成モード。返信/転送は元メール（source）を伴う。 */
 export type ComposeTarget =
@@ -100,23 +103,34 @@ export function Compose({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
 
-  const canSend =
-    accountId != null && splitAddresses(to).length > 0 && !sending;
+  // 送信アニメーション（つばめ）を使うか（設定・既定オン）。開いた時点の値を採用。
+  const [flyOn] = useState(getFlyAnimation);
+  const flyRef = useRef<FlySwallowHandle>(null);
+  const sendBtnRef = useRef<HTMLButtonElement>(null);
+
+  const canSend = accountId != null && splitAddresses(to).length > 0 && !sending;
 
   const onSend = async () => {
     if (accountId == null) return;
     setSending(true);
     setError('');
+    // 送信リクエストは即開始し、その完了を待つ間つばめを飛ばす。
+    const send = mailSend({
+      account_id: accountId,
+      to: splitAddresses(to),
+      cc: splitAddresses(cc),
+      bcc: splitAddresses(bcc),
+      subject,
+      body,
+      in_reply_to: init.inReplyTo,
+    });
     try {
-      await mailSend({
-        account_id: accountId,
-        to: splitAddresses(to),
-        cc: splitAddresses(cc),
-        bcc: splitAddresses(bcc),
-        subject,
-        body,
-        in_reply_to: init.inReplyTo,
-      });
+      if (flyOn && flyRef.current && sendBtnRef.current) {
+        const r = sendBtnRef.current.getBoundingClientRect();
+        await flyRef.current.deliver({ x: r.left + r.width / 2, y: r.top + r.height / 2 }, send);
+      } else {
+        await send;
+      }
       onClose();
     } catch (e) {
       setError(String(e));
@@ -230,16 +244,23 @@ export function Compose({
 
         <div className="flex items-center gap-3 border-t border-white/10 px-4 py-2.5">
           <button
+            ref={sendBtnRef}
             onClick={onSend}
             disabled={!canSend}
             className="flex items-center gap-1.5 rounded-md bg-sky-500/90 px-4 py-1.5 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-40"
           >
-            <Send size={14} />
-            {sending ? t('compose.sending') : t('compose.send')}
+            {flyOn ? (
+              <img src={swallowUrl} alt="" className="h-4 w-auto" />
+            ) : (
+              <Send size={14} />
+            )}
+            {sending ? t('compose.sending') : flyOn ? t('compose.fly') : t('compose.send')}
           </button>
           {error && <span className="flex-1 truncate text-xs text-rose-300">{error}</span>}
         </div>
       </div>
+
+      {flyOn && <FlySwallow ref={flyRef} />}
     </div>
   );
 }

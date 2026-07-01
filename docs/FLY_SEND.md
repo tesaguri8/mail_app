@@ -1,6 +1,6 @@
 # Fly 送信演出（つばめが手紙を届ける）
 
-**ステータス:** 技術検証済み（プロトタイプあり）／本実装は未着手
+**ステータス:** 本体統合済み（実写1枚モード）／本物の羽ばたき連番は後日差し替え
 **目的:** 送信という日常操作を、Rondine（伊: つばめ）の世界観で「気持ちよい所有体験」に変える。送信ボタンにツバメを置き、押すとウィンドウ内を飛び回って手紙を届け、完了するとボタンへ戻って止まる。
 
 関連: [COMPOSE.md](COMPOSE.md)（送信取消/予約/署名）/ [UI_UX_DESIGN.md](UI_UX_DESIGN.md)（全面ビジュアル方針）/ [POSITIONING.md](POSITIONING.md)（世界観）
@@ -48,10 +48,13 @@
 **B の要点:** 羽ばたきは連番フレーム、飛行軌道はコード制御。両者を分離するので「写真クオリティの羽ばたき＋自由な経路＋ボタン帰還」が両立する。フレーム素材を差し替えてもハーネスは無改修。
 
 ### 実装スタック
-- **Framer Motion**（React）でスプライトの x/y/rotate/scale/scaleX をキーフレーム制御。
-- 本体では [Compose.tsx](../src/renderer/components/Compose.tsx) の送信ボタンを `FlyButton` 化し、飛行レイヤーをウィンドウ全面へオーバーレイ。
-- **飛行レイヤーは最前面**（カード・本文より上の z-index）。ツバメが文字の下に潜らないようにする。
-- フレーム描画は `<img>` 連番差し替え（またはスプライトシート＋CSS steps）。
+- **本体は Web Animations API（WAAPI）で実装**し、追加依存（framer-motion 等）を持たない。プロトタイプ（`docs/prototypes/`）のみ Framer Motion を CDN 利用。
+- スプライトの translate/rotate/scale/scaleX をキーフレームで制御（[FlySwallow.tsx](../src/renderer/components/FlySwallow.tsx)）。羽ばたきは内側要素の scaleY パルスを無限反復。
+- [Compose.tsx](../src/renderer/components/Compose.tsx) の送信ボタンが `getFlyAnimation()` を見て出し分け。飛行レイヤーは `<FlySwallow>`（`fixed inset-0` オーバーレイ）。
+- **飛行レイヤーは最前面**（`z-[60]`・カード/本文より上）。ツバメが文字の下に潜らないようにする。
+- 送信リクエストは即開始し、その完了を待つ間つばめを飛ばす（最低1周、長引けば周回追加、着地後に成否反映）。
+- `prefers-reduced-motion: reduce` のときは演出を省いて送信のみ実行。
+- 素材は現状「実写1枚（[assets/swallow.png](../src/renderer/assets/swallow.png)）」の滑空＋羽ばたきパルス。**本物の羽ばたきは連番素材に差し替え予定**（フレーム描画は `<img>` 連番 or スプライトシート＋CSS steps）。
 
 ---
 
@@ -92,15 +95,14 @@
 ## 6. 本実装 TODO（未着手）
 
 - [x] 設定トグル「送信アニメーション（つばめ）」（既定オン）＋i18n（[Settings.tsx](../src/renderer/components/Settings.tsx) / [prefs.ts](../src/renderer/config/prefs.ts)）
-- [ ] 実写羽ばたき連番の用意（AI動画ルートは後日）
-- [ ] `FlyButton` コンポーネント化＋全面オーバーレイ層を [Compose.tsx](../src/renderer/components/Compose.tsx) に統合。`getFlyAnimation()` で出し分け（オフ→通常「送信」ボタン）
-- [ ] framer-motion を正式依存に追加
-- [ ] error 状態（送信失敗）の演出＋再送導線
+- [x] `FlySwallow` オーバーレイ＋ [Compose.tsx](../src/renderer/components/Compose.tsx) 統合（**実写1枚モードで動作**）。`getFlyAnimation()` で出し分け（オフ→通常「送信」ボタン）。WAAPI 実装で追加依存なし
+- [x] `prefers-reduced-motion` フォールバック
+- [x] i18n（`compose.fly` 等・日/英）
+- [ ] 実写羽ばたき連番の用意（AI動画ルートは後日）→ `assets/swallow.png` 単枚を連番に差し替え
+- [ ] error 状態（送信失敗）の専用演出＋再送導線（現状は着地後にエラー表示）
 - [ ] 送信取消（Undo Send）待機中の表現（飛び立つ前に留めるか等）と整合（[COMPOSE.md](COMPOSE.md)）
-- [ ] アクセシビリティ: `prefers-reduced-motion` で簡易表現へフォールバック
-- [ ] i18n キー（`mail.fly` 等）と文言（日/英）
 - [ ] idle 用の「止まりポーズ」素材（横向き飛翔とは別に用意すると自然）
 
 ---
 
-最終更新: 2026-07-01（技術検証プロトタイプ作成）
+最終更新: 2026-07-01（実写1枚モードで本体統合）

@@ -1,11 +1,12 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult, DbInfo,
-    EvictionReport, MailDetail, MailSummary, ServerAccountSummary, SignatureSummary, StorageInfo,
-    SyncResult, TagSummary,
+    EvictionReport, MailDetail, MailSummary, ServerAccountSummary, SignatureSummary, SpamVerdict,
+    StorageInfo, SyncResult, TagSummary,
 };
 use crate::services::autoconfig;
 use crate::services::imap_sync;
 use crate::services::media;
+use crate::services::spam;
 use crate::services::store::{NewAccount, NewServerAccount, Store};
 use tauri::{AppHandle, Manager, State};
 
@@ -317,6 +318,67 @@ pub fn mail_remove_tag(store: State<Store>, ids: Vec<i64>, tag_id: i64) -> Resul
     store
         .remove_tag_from_emails(&ids, tag_id)
         .map_err(|e| e.to_string())
+}
+
+/// 迷惑としてマーク（学習＋隔離）。既存の一括操作規約に合わせ ids を受ける（docs/SPAM.md §7.5）。
+#[tauri::command]
+pub fn mail_mark_spam(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
+    for id in &ids {
+        if let Some((from, subject, body)) =
+            store.email_spam_text(*id).map_err(|e| e.to_string())?
+        {
+            let tokens = spam::tokenize(from.as_deref(), subject.as_deref(), &body);
+            store
+                .spam_learn(*id, &tokens, true)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    store.set_emails_junk(&ids, true).map_err(|e| e.to_string())
+}
+
+/// 非迷惑に戻す（学習＋隔離解除）。誤検知リカバリ（§8.4）から呼ぶ。
+#[tauri::command]
+pub fn mail_mark_not_spam(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
+    for id in &ids {
+        if let Some((from, subject, body)) =
+            store.email_spam_text(*id).map_err(|e| e.to_string())?
+        {
+            let tokens = spam::tokenize(from.as_deref(), subject.as_deref(), &body);
+            store
+                .spam_learn(*id, &tokens, false)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    store
+        .set_emails_junk(&ids, false)
+        .map_err(|e| e.to_string())
+}
+
+/// メールの迷惑スコアを算出して保存し、判定（バンド・根拠）を返す（§7.5）。
+/// しきい値は段階1の既定値。隔離（is_junk）は自動では変えず、手動マークを優先する（§8.3）。
+#[tauri::command]
+pub fn spam_score(store: State<Store>, id: i64) -> Result<SpamVerdict, String> {
+    let (from, subject, body) = store
+        .email_spam_text(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "メールが見つかりません".to_string())?;
+    let tokens = spam::tokenize(from.as_deref(), subject.as_deref(), &body);
+    let counts = store
+        .spam_token_counts(&tokens)
+        .map_err(|e| e.to_string())?;
+    let (n_spam, n_ham) = store.spam_totals().map_err(|e| e.to_string())?;
+    let (score, top_tokens) = spam::classifier::score(&counts, &tokens, n_spam, n_ham);
+    store.set_spam_score(id, score).map_err(|e| e.to_string())?;
+    let band = spam::band(
+        score,
+        spam::DEFAULT_THRESHOLD_LOW,
+        spam::DEFAULT_THRESHOLD_HIGH,
+    );
+    Ok(SpamVerdict {
+        score,
+        band: band.to_string(),
+        top_tokens,
+    })
 }
 
 /// メール本文を取得し、既読にする。

@@ -3,6 +3,7 @@ mod emails;
 mod migrations;
 mod server_accounts;
 mod signatures;
+mod spam;
 mod storage;
 mod tags;
 

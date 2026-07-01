@@ -174,6 +174,18 @@ pub struct EvictionReport {
     pub freed_bytes: f64,
 }
 
+/// 迷惑メール判定の結果（docs/SPAM.md §7.5）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct SpamVerdict {
+    /// 0..1 の spam スコア。
+    pub score: f64,
+    /// 3 バンド分類（§8.1）: "clean" | "uncertain" | "junk"。
+    pub band: String,
+    /// spam 寄りに効いた素性トークン（根拠表示用。§8.4）。
+    pub top_tokens: Vec<String>,
+}
+
 /// 同期結果。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

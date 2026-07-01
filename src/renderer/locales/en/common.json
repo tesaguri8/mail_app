@@ -80,6 +80,16 @@
     "inlineImages": "Show embedded images in body",
     "inlineImagesHint": "Automatically fetch inline images bundled in the message and show them in the body. Remote (external) images stay blocked."
   },
+  "storage": {
+    "title": "Local storage (attachments)",
+    "limit": "Storage limit",
+    "optimize": "Optimize storage",
+    "optimized": "Cleaned {{count}} attachments ({{size}} freed)",
+    "resync": "Repair re-import",
+    "resyncHint": "Re-fetch the import range from the server and backfill attachment info (uid) for older mail too.",
+    "resyncing": "Re-importing…",
+    "resynced": "Fetched {{fetched}} / New {{stored}} / Backfilled {{backfilled}}"
+  },
   "lang": {
     "switch": "JP"
   },

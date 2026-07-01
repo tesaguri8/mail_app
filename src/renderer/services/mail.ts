@@ -3,6 +3,8 @@ import type { MailSummary } from '@bindings/MailSummary';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { SyncResult } from '@bindings/SyncResult';
 import type { AttachmentSummary } from '@bindings/AttachmentSummary';
+import type { StorageInfo } from '@bindings/StorageInfo';
+import type { EvictionReport } from '@bindings/EvictionReport';
 
 // Tauri v2 は camelCase の引数キーを snake_case の Rust 引数へ自動変換する。
 export const mailSync = (accountId: number) => invoke<SyncResult>('mail_sync', { accountId });
@@ -41,3 +43,18 @@ export const mailDelete = (ids: number[]) => invoke<void>('mail_delete', { ids }
 
 export const accountSetSyncWindow = (accountId: number, window: string) =>
   invoke<void>('account_set_sync_window', { accountId, window });
+
+// 点検つき再取り込み（フル再取得＋既存メールへ uid/添付メタを埋め戻し）。
+export const mailResync = (accountId: number) => invoke<SyncResult>('mail_resync', { accountId });
+
+// アカウントのローカル保存容量（使用量・上限）。
+export const accountStorageInfo = (accountId: number) =>
+  invoke<StorageInfo>('account_storage_info', { accountId });
+
+// 容量上限を設定（バイト）。
+export const accountSetStorageLimit = (accountId: number, bytes: number) =>
+  invoke<void>('account_set_storage_limit', { accountId, bytes });
+
+// ストレージ最適化（上限超過分の古い添付を追い出す）。
+export const storageOptimize = (accountId: number) =>
+  invoke<EvictionReport>('storage_optimize', { accountId });

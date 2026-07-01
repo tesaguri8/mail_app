@@ -364,7 +364,7 @@ impl Store {
         .optional()
     }
 
-    /// ダウンロード完了を記録（保存先と簡易チェックサム）。
+    /// ダウンロード完了を記録（保存先・簡易チェックサム・最終アクセス時刻）。
     pub fn set_attachment_downloaded(
         &self,
         attachment_id: i64,
@@ -373,8 +373,18 @@ impl Store {
     ) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE attachments SET file_path = ?1, checksum = ?2 WHERE id = ?3",
+            "UPDATE attachments SET file_path = ?1, checksum = ?2, accessed_at = datetime('now') WHERE id = ?3",
             params![path, checksum, attachment_id],
+        )?;
+        Ok(())
+    }
+
+    /// 添付の最終アクセス時刻を更新（表示/オープン時。LRU エビクションの保護に使う）。
+    pub fn touch_attachment(&self, attachment_id: i64) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE attachments SET accessed_at = datetime('now') WHERE id = ?1",
+            params![attachment_id],
         )?;
         Ok(())
     }

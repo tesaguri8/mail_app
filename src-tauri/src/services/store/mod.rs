@@ -3,6 +3,7 @@ mod emails;
 mod migrations;
 mod server_accounts;
 mod signatures;
+mod storage;
 
 pub use accounts::NewAccount;
 pub use emails::{insert_email, AttachmentFetchInfo, InsertOutcome, NewAttachment, NewEmail};

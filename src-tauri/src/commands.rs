@@ -1,6 +1,7 @@
 use crate::models::{
-    AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult, DbInfo, MailDetail,
-    MailSummary, ServerAccountSummary, SignatureSummary, SyncResult,
+    AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult, DbInfo,
+    EvictionReport, MailDetail, MailSummary, ServerAccountSummary, SignatureSummary, StorageInfo,
+    SyncResult,
 };
 use crate::services::autoconfig;
 use crate::services::imap_sync;
@@ -289,10 +290,11 @@ async fn ensure_attachment_file(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "添付が見つかりません".to_string())?;
 
-    // 取得済みでファイルが残っていればそのまま使う
+    // 取得済みでファイルが残っていればそのまま使う（LRU の最終アクセスを更新）。
     if let Some(path) = info.file_path.as_ref() {
         let p = std::path::PathBuf::from(path);
         if p.exists() {
+            let _ = store.touch_attachment(attachment_id);
             return Ok(p);
         }
     }
@@ -349,6 +351,7 @@ async fn ensure_attachment_file(
 }
 
 /// 添付ファイルをオンデマンドで取得して保存する（既に取得済みならそれを返す）。
+/// 取得後、アカウントの容量上限を超えていれば古い添付を自動で追い出す。
 #[tauri::command]
 pub async fn attachment_download(
     app: AppHandle,
@@ -356,6 +359,10 @@ pub async fn attachment_download(
     attachment_id: i64,
 ) -> Result<AttachmentSummary, String> {
     ensure_attachment_file(&app, &store, attachment_id).await?;
+    // 容量超過時は古い添付を追い出す（best-effort）。
+    if let Ok(Some(info)) = store.attachment_fetch_info(attachment_id) {
+        let _ = store.evict_over_limit(info.account_id);
+    }
     store
         .get_attachment(attachment_id)
         .map_err(|e| e.to_string())?
@@ -432,6 +439,66 @@ pub async fn attachment_open(
     app.opener()
         .open_path(to_open.to_string_lossy().to_string(), None::<&str>)
         .map_err(|e| e.to_string())
+}
+
+/// アカウントのローカル保存容量（使用量と上限）。
+#[tauri::command]
+pub fn account_storage_info(store: State<Store>, account_id: i64) -> Result<StorageInfo, String> {
+    let used = store.storage_used(account_id).map_err(|e| e.to_string())?;
+    let limit = store.storage_limit(account_id).map_err(|e| e.to_string())?;
+    Ok(StorageInfo {
+        used_bytes: used as f64,
+        limit_bytes: limit as f64,
+    })
+}
+
+/// アカウントの容量上限を設定する（バイト）。
+#[tauri::command]
+pub fn account_set_storage_limit(
+    store: State<Store>,
+    account_id: i64,
+    bytes: f64,
+) -> Result<(), String> {
+    let bytes = bytes.max(0.0) as i64;
+    store
+        .set_storage_limit(account_id, bytes)
+        .map_err(|e| e.to_string())
+}
+
+/// ストレージ最適化: 上限超過分の古い添付バイトを追い出す（メタは残す）。
+#[tauri::command]
+pub fn storage_optimize(store: State<Store>, account_id: i64) -> Result<EvictionReport, String> {
+    store
+        .evict_over_limit(account_id)
+        .map_err(|e| e.to_string())
+}
+
+/// 点検つき再取り込み: 同期状態をリセットして取り込み範囲をフル再取得し、
+/// 既存メールに uid・添付メタを埋め戻す（古いメールの添付を後付け対応）。
+#[tauri::command]
+pub async fn mail_resync(
+    app: AppHandle,
+    store: State<'_, Store>,
+    account_id: i64,
+) -> Result<SyncResult, String> {
+    store
+        .reset_sync_state(account_id)
+        .map_err(|e| e.to_string())?;
+    let (email, login_user, host, port) = store
+        .get_account_imap(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "アカウントが見つかりません".to_string())?;
+    let service = app.config().identifier.clone();
+    let password = keyring::Entry::new(&service, &email)
+        .and_then(|e| e.get_password())
+        .map_err(|e| format!("資格情報を取得できません: {e}"))?;
+    let db_path = store.path.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        imap_sync::sync_account(&db_path, account_id, &host, port, &login_user, &password)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// ファイル名を保存に安全な形へ正規化する（パス区切り・禁止文字を除去）。

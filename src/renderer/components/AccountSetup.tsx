@@ -14,13 +14,29 @@ import {
   serverAccountList,
 } from '../services/accounts';
 import { signatureList } from '../services/signatures';
-import { accountSetSyncWindow } from '../services/mail';
+import {
+  accountSetStorageLimit,
+  accountSetSyncWindow,
+  accountStorageInfo,
+  mailResync,
+  storageOptimize,
+} from '../services/mail';
+import type { StorageInfo } from '@bindings/StorageInfo';
 
 type ConnState = { state: 'checking' | 'ok' | 'error'; msg?: string };
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 const WINDOWS = ['n50', 'n200', '3d', '7d', '30d', '3m', '6m', 'all'] as const;
+
+const GB = 1024 * 1024 * 1024;
+const LIMIT_GB = [1, 2, 5, 10, 20, 50] as const;
+
+function formatBytes(b: number): string {
+  if (b < 1024 * 1024) return `${Math.round(b / 1024)} KB`;
+  if (b < GB) return `${(b / 1024 / 1024).toFixed(0)} MB`;
+  return `${(b / GB).toFixed(2)} GB`;
+}
 
 const inputCls =
   'w-full rounded-md bg-white/10 px-3 py-2 text-sm text-white placeholder-white/40 outline-none focus:bg-white/20';
@@ -45,6 +61,10 @@ export function AccountSetup({
   const [editSig, setEditSig] = useState<number | null>(null);
   const [editWindow, setEditWindow] = useState('6m');
   const [editStatus, setEditStatus] = useState('');
+  // ストレージ（容量）状態
+  const [storage, setStorage] = useState<StorageInfo | null>(null);
+  const [storageBusy, setStorageBusy] = useState(false);
+  const [storageMsg, setStorageMsg] = useState('');
 
   // form state
   const [email, setEmail] = useState('');
@@ -93,6 +113,58 @@ export function AccountSetup({
     setEditSig(a.signature_id ?? null);
     setEditWindow(a.sync_window ?? '6m');
     setEditStatus('');
+    setStorage(null);
+    setStorageMsg('');
+    loadStorage(a.id);
+  };
+
+  const loadStorage = (id: number) => {
+    if (!isTauri) return;
+    accountStorageInfo(id)
+      .then(setStorage)
+      .catch(() => undefined);
+  };
+
+  const changeLimit = async (id: number, gb: number) => {
+    setStorage((s) => (s ? { ...s, limit_bytes: gb * GB } : s));
+    try {
+      await accountSetStorageLimit(id, gb * GB);
+      await storageOptimize(id); // 新上限で超過分があれば即整理
+      loadStorage(id);
+    } catch (e) {
+      setStorageMsg(String(e));
+    }
+  };
+
+  const optimize = async (id: number) => {
+    setStorageBusy(true);
+    setStorageMsg('');
+    try {
+      const r = await storageOptimize(id);
+      setStorageMsg(t('storage.optimized', { count: r.evicted, size: formatBytes(r.freed_bytes) }));
+      loadStorage(id);
+    } catch (e) {
+      setStorageMsg(String(e));
+    } finally {
+      setStorageBusy(false);
+    }
+  };
+
+  const resync = async (id: number) => {
+    setStorageBusy(true);
+    setStorageMsg(t('storage.resyncing'));
+    try {
+      const r = await mailResync(id);
+      setStorageMsg(
+        t('storage.resynced', { fetched: r.fetched, stored: r.stored, backfilled: r.backfilled }),
+      );
+      onChanged();
+      loadStorage(id);
+    } catch (e) {
+      setStorageMsg(String(e));
+    } finally {
+      setStorageBusy(false);
+    }
   };
 
   const saveEdit = async (id: number) => {
@@ -305,6 +377,61 @@ export function AccountSetup({
                       ))}
                     </select>
                   </label>
+
+                  {/* ストレージ（容量上限とエビクション） */}
+                  <div className="rounded-md border border-white/10 p-3">
+                    <div className="mb-1 flex items-center justify-between">
+                      <span className="text-xs text-white/55">{t('storage.title')}</span>
+                      <span className="text-xs text-white/70">
+                        {storage
+                          ? `${formatBytes(storage.used_bytes)} / ${formatBytes(storage.limit_bytes)}`
+                          : '—'}
+                      </span>
+                    </div>
+                    {storage && (
+                      <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+                        <div
+                          className="h-full rounded-full bg-sky-400"
+                          style={{
+                            width: `${Math.min(100, storage.limit_bytes > 0 ? (storage.used_bytes / storage.limit_bytes) * 100 : 0)}%`,
+                          }}
+                        />
+                      </div>
+                    )}
+                    <label className="mb-2 block">
+                      <span className="mb-1 block text-xs text-white/55">{t('storage.limit')}</span>
+                      <select
+                        className={inputCls}
+                        value={storage ? Math.round(storage.limit_bytes / GB) : 2}
+                        onChange={(e) => changeLimit(a.id, Number(e.target.value))}
+                      >
+                        {LIMIT_GB.map((g) => (
+                          <option key={g} value={g} className="text-black">
+                            {g} GB
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        className={btnCls}
+                        disabled={storageBusy}
+                        onClick={() => optimize(a.id)}
+                      >
+                        {t('storage.optimize')}
+                      </button>
+                      <button
+                        className={btnCls}
+                        disabled={storageBusy}
+                        onClick={() => resync(a.id)}
+                        title={t('storage.resyncHint')}
+                      >
+                        {t('storage.resync')}
+                      </button>
+                      {storageMsg && <span className="text-xs text-white/70">{storageMsg}</span>}
+                    </div>
+                  </div>
+
                   <div className="flex items-center gap-3">
                     <button className={btnCls} onClick={() => saveEdit(a.id)}>
                       {t('account.save')}

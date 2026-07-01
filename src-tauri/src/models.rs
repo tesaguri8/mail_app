@@ -136,6 +136,27 @@ pub struct AttachmentSummary {
     pub content_id: Option<String>,
 }
 
+/// アカウントのローカル保存容量（添付キャッシュの使用量と上限）。
+/// バイト数は f64（TS の number）で扱い、2GB 超でも安全に渡す。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct StorageInfo {
+    /// ダウンロード済み添付の合計バイト。
+    pub used_bytes: f64,
+    /// 上限バイト。
+    pub limit_bytes: f64,
+}
+
+/// エビクション（添付バイトの追い出し）結果。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct EvictionReport {
+    /// 追い出した添付の件数。
+    pub evicted: i32,
+    /// 解放したバイト数。
+    pub freed_bytes: f64,
+}
+
 /// 同期結果。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

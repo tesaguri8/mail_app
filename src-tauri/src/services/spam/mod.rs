@@ -2,6 +2,7 @@
 //! フェーズA（端末内のみ）: トークン化 + Bayesian 分類 + 学習フィードバック。
 //! TSG One 共有（フェーズB）は本モジュールには含めない（共有を切っても動く設計）。
 
+pub mod apply;
 pub mod classifier;
 pub mod tokenize;
 

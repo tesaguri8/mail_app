@@ -116,7 +116,12 @@
     "rescan": "再スキャン",
     "count": "{{count}} 件",
     "merge": "統合",
-    "keep": "残す"
+    "keep": "残す",
+    "conf": {
+      "high": "ほぼ確実",
+      "medium": "候補",
+      "low": "要確認"
+    }
   },
   "greeting": {
     "morning": "おはようございます",

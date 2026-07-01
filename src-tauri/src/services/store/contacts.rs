@@ -4,7 +4,6 @@ use crate::models::{
 };
 use crate::services::vcard::{ImportedContact, ParseResult};
 use rusqlite::{params, OptionalExtension, Row};
-use std::collections::BTreeMap;
 
 /// contacts の 1 行を ContactSummary に写す（列順は SELECT と対応）。
 fn row_to_contact(r: &Row) -> rusqlite::Result<ContactSummary> {
@@ -192,35 +191,10 @@ impl Store {
         })
     }
 
-    /// 重複候補を「正規化した表示名」でグループ化して返す（2 件以上のみ）。
-    /// メール共有の同僚を誤って束ねないよう、メールではなく氏名でまとめて目視レビューに回す。
-    /// 件数の多い順 → 名前順。
+    /// 重複候補を record linkage で束ねて返す（2 件以上のみ、確信度順）。
+    /// 検出ロジックは services::dedupe（正規化＋ブロッキング＋Union-Find）。
     pub fn find_duplicate_groups(&self) -> rusqlite::Result<Vec<DuplicateGroup>> {
-        let all = self.list_contacts(None)?;
-        let mut groups: BTreeMap<String, Vec<ContactSummary>> = BTreeMap::new();
-        for c in all {
-            let key = normalize_name(&c.display_name);
-            if key.is_empty() {
-                continue;
-            }
-            groups.entry(key).or_default().push(c);
-        }
-        let mut out: Vec<DuplicateGroup> = groups
-            .into_values()
-            .filter(|v| v.len() > 1)
-            .map(|v| DuplicateGroup {
-                label: v[0].display_name.clone(),
-                contacts: v,
-            })
-            .collect();
-        // 多い順、同数なら見出し名順。
-        out.sort_by(|a, b| {
-            b.contacts
-                .len()
-                .cmp(&a.contacts.len())
-                .then_with(|| a.label.cmp(&b.label))
-        });
-        Ok(out)
+        Ok(crate::services::dedupe::group(&self.list_contacts(None)?))
     }
 
     /// 複数の連絡先を 1 件（keep_id）に統合する。メール/電話などを寄せ集め、
@@ -389,15 +363,6 @@ type MergeRow = (
     i64,
     i64,
 );
-
-/// 表示名を突き合わせ用に正規化（前後空白除去・空白/全角空白を畳む・小文字化）。
-fn normalize_name(name: &str) -> String {
-    name.split_whitespace()
-        .collect::<Vec<_>>()
-        .join("")
-        .replace('\u{3000}', "")
-        .to_lowercase()
-}
 
 /// インポート 1 件を新規挿入。
 fn insert_from_import(tx: &rusqlite::Transaction, c: &ImportedContact) -> rusqlite::Result<()> {

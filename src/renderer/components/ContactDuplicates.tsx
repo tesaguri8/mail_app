@@ -81,7 +81,8 @@ export function ContactDuplicates({ onMerged }: { onMerged: () => void }) {
           return (
             <li key={gid} className="rounded-lg bg-white/5 p-3">
               <div className="mb-2 flex items-center justify-between">
-                <span className="text-sm font-medium">
+                <span className="flex items-center gap-2 text-sm font-medium">
+                  <ConfidenceBadge confidence={group.confidence} />
                   {group.label}{' '}
                   <span className="text-white/40">
                     {t('dupes.count', { count: group.contacts.length })}
@@ -141,5 +142,21 @@ export function ContactDuplicates({ onMerged }: { onMerged: () => void }) {
         })}
       </ul>
     </div>
+  );
+}
+
+/** 確信度バッジ（high=緑 / medium=琥珀 / low=灰）。 */
+function ConfidenceBadge({ confidence }: { confidence: string }) {
+  const { t } = useTranslation();
+  const style =
+    confidence === 'high'
+      ? 'bg-emerald-400/20 text-emerald-200'
+      : confidence === 'medium'
+        ? 'bg-amber-400/20 text-amber-200'
+        : 'bg-white/10 text-white/50';
+  return (
+    <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${style}`}>
+      {t(`dupes.conf.${confidence}`)}
+    </span>
   );
 }

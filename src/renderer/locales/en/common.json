@@ -116,7 +116,12 @@
     "rescan": "Rescan",
     "count": "{{count}}",
     "merge": "Merge",
-    "keep": "Keep"
+    "keep": "Keep",
+    "conf": {
+      "high": "Near-certain",
+      "medium": "Likely",
+      "low": "Review"
+    }
   },
   "greeting": {
     "morning": "Good morning",

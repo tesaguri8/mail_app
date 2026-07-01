@@ -2,13 +2,17 @@
 import type { ContactSummary } from "./ContactSummary";
 
 /**
- * 重複候補のグループ（整理 UI 用）。同一の正規化表示名でまとめる。
+ * 重複候補のグループ（整理 UI 用）。record linkage で束ねた連結成分。
  */
 export type DuplicateGroup = { 
 /**
  * グループの見出し（代表の表示名）。
  */
 label: string, 
+/**
+ * 確信度: "high"（携帯/メール一致）| "medium"（同名＋組織/県）| "low"（同名のみ）。
+ */
+confidence: string, 
 /**
  * 重複候補の連絡先（2 件以上）。
  */

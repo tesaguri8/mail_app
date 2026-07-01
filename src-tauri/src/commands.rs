@@ -1,11 +1,12 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult, DbInfo, MailDetail,
-    MailSummary, RetentionReport, ServerAccountSummary, SignatureSummary, StorageInfo, SyncResult,
-    TagSummary,
+    MailSummary, RetentionReport, ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict,
+    StorageInfo, SyncResult, TagSummary,
 };
 use crate::services::autoconfig;
 use crate::services::imap_sync;
 use crate::services::media;
+use crate::services::spam;
 use crate::services::store::{NewAccount, NewServerAccount, Store};
 use tauri::{AppHandle, Manager, State};
 
@@ -349,6 +350,113 @@ pub fn mail_add_tag(store: State<Store>, ids: Vec<i64>, tag_id: i64) -> Result<(
 pub fn mail_remove_tag(store: State<Store>, ids: Vec<i64>, tag_id: i64) -> Result<(), String> {
     store
         .remove_tag_from_emails(&ids, tag_id)
+        .map_err(|e| e.to_string())
+}
+
+/// 迷惑としてマーク（学習＋隔離）。既存の一括操作規約に合わせ ids を受ける（docs/SPAM.md §7.5）。
+#[tauri::command]
+pub fn mail_mark_spam(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
+    for id in &ids {
+        if let Some(f) = store.email_spam_text(*id).map_err(|e| e.to_string())? {
+            let tokens = spam::tokenize(
+                f.from_address.as_deref(),
+                f.subject.as_deref(),
+                &f.body,
+                f.auth_result.as_deref(),
+                f.list_id.as_deref(),
+            );
+            store
+                .spam_learn(*id, &tokens, true)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    store.set_emails_junk(&ids, true).map_err(|e| e.to_string())
+}
+
+/// 非迷惑に戻す（学習＋隔離解除）。誤検知リカバリ（§8.4）から呼ぶ。
+#[tauri::command]
+pub fn mail_mark_not_spam(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
+    for id in &ids {
+        if let Some(f) = store.email_spam_text(*id).map_err(|e| e.to_string())? {
+            let tokens = spam::tokenize(
+                f.from_address.as_deref(),
+                f.subject.as_deref(),
+                &f.body,
+                f.auth_result.as_deref(),
+                f.list_id.as_deref(),
+            );
+            store
+                .spam_learn(*id, &tokens, false)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    store
+        .set_emails_junk(&ids, false)
+        .map_err(|e| e.to_string())
+}
+
+/// メールの迷惑スコアを算出して保存し、判定（バンド・根拠）を返す（§7.5）。
+/// 迷惑判定が無効（spam.enabled=false）なら中立を返す。しきい値はユーザー設定から読む（§9）。
+/// 隔離（is_junk）は自動では変えず、手動マークを優先する（§8.3）。
+#[tauri::command]
+pub fn spam_score(store: State<Store>, id: i64) -> Result<SpamVerdict, String> {
+    let settings = store.spam_settings().map_err(|e| e.to_string())?;
+    // 迷惑判定が無効なら中立（clean）を返し、スコアも保存しない（§9.1 spam.enabled）。
+    if !settings.enabled {
+        return Ok(SpamVerdict {
+            score: 0.0,
+            band: "clean".to_string(),
+            top_tokens: Vec::new(),
+        });
+    }
+    let f = store
+        .email_spam_text(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "メールが見つかりません".to_string())?;
+    let tokens = spam::tokenize(
+        f.from_address.as_deref(),
+        f.subject.as_deref(),
+        &f.body,
+        f.auth_result.as_deref(),
+        f.list_id.as_deref(),
+    );
+    let counts = store
+        .spam_token_counts(&tokens)
+        .map_err(|e| e.to_string())?;
+    let (n_spam, n_ham) = store.spam_totals().map_err(|e| e.to_string())?;
+    let (score, top_tokens) = spam::classifier::score(&counts, &tokens, n_spam, n_ham);
+    store.set_spam_score(id, score).map_err(|e| e.to_string())?;
+    let band = spam::band(score, settings.threshold_low, settings.threshold_high);
+    Ok(SpamVerdict {
+        score,
+        band: band.to_string(),
+        top_tokens,
+    })
+}
+
+/// 迷惑メール設定を取得する（未設定キーは既定値で補完。docs/SPAM.md §9）。
+#[tauri::command]
+pub fn spam_settings_get(store: State<Store>) -> Result<SpamSettings, String> {
+    store.spam_settings().map_err(|e| e.to_string())
+}
+
+/// 迷惑メール設定を保存する。しきい値は 0..1・low<=high に正規化してから保存する。
+#[tauri::command]
+pub fn spam_settings_set(store: State<Store>, settings: SpamSettings) -> Result<(), String> {
+    let low = settings.threshold_low.clamp(0.0, 1.0);
+    let high = settings.threshold_high.clamp(0.0, 1.0);
+    let (low, high) = if low <= high {
+        (low, high)
+    } else {
+        (high, low)
+    };
+    let normalized = SpamSettings {
+        enabled: settings.enabled,
+        threshold_low: low,
+        threshold_high: high,
+    };
+    store
+        .set_spam_settings(&normalized)
         .map_err(|e| e.to_string())
 }
 

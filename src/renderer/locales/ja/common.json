@@ -63,6 +63,7 @@
     "bookmark": "ブックマークに追加",
     "unbookmark": "ブックマークを解除",
     "tags": "タグ…",
+    "markSpam": "迷惑メールに設定",
     "delete": "削除",
     "selected": "{{count}} 件を選択中"
   },
@@ -93,9 +94,17 @@
     "signatures": "署名",
     "tags": "タグ",
     "display": "表示",
+    "spam": "迷惑メール",
     "about": "このアプリ",
     "inlineImages": "本文の埋め込み画像を表示",
-    "inlineImagesHint": "メールに同梱されたインライン画像を自動取得して本文に表示します。外部（リモート）画像は引き続きブロックします。"
+    "inlineImagesHint": "メールに同梱されたインライン画像を自動取得して本文に表示します。外部（リモート）画像は引き続きブロックします。",
+    "spamEnabled": "迷惑メール判定を有効にする",
+    "spamEnabledHint": "受信メールを端末内で自動判定します。学習は手元だけで行い、本文はサーバーに送信しません。",
+    "spamThresholdHigh": "迷惑として隔離するしきい値",
+    "spamThresholdHighHint": "このスコア以上を迷惑フォルダへ隔離します（高いほど安全側＝誤検知を抑えます）。",
+    "spamThresholdLow": "「迷惑かも」と表示するしきい値",
+    "spamThresholdLowHint": "このスコアから隔離しきい値までは受信トレイに残しつつ控えめに警告します。",
+    "spamPreviewNote": "プレビュー表示のため、変更はまだ保存されません（アプリで有効になります）。"
   },
   "storage": {
     "title": "ローカルキャッシュ（本文＋添付）",

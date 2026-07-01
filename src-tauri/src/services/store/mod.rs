@@ -2,13 +2,16 @@ mod accounts;
 mod emails;
 mod migrations;
 mod server_accounts;
+mod settings;
 mod signatures;
+mod spam;
 mod storage;
 mod tags;
 
 pub use accounts::NewAccount;
 pub use emails::{insert_email, AttachmentFetchInfo, InsertOutcome, NewAttachment, NewEmail};
 pub use server_accounts::NewServerAccount;
+pub use spam::SpamFeatures;
 
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};

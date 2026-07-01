@@ -14,6 +14,10 @@ pub struct NewEmail {
     pub body_plain: Option<String>,
     pub clean_body: Option<String>,
     pub body_html: Option<String>,
+    /// Authentication-Results 生テキスト（SPF/DKIM/DMARC。docs/SPAM.md §7.7）。
+    pub auth_result: Option<String>,
+    /// List-Id 生テキスト（メルマガ/ML 判定。docs/SPAM.md §7.7）。
+    pub list_id: Option<String>,
     pub has_attachments: bool,
     /// メッセージの IMAP UID（添付のオンデマンド再取得用）。
     pub uid: Option<i64>,
@@ -92,8 +96,8 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
         .map(crate::services::compress::compress_text);
     let changed = conn.execute(
         "INSERT OR IGNORE INTO emails
-           (account_id, message_id, canonical_key, subject, from_address, to_addresses, date, has_attachments, body_plain, clean_body, body_html_z, uid)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+           (account_id, message_id, canonical_key, subject, from_address, to_addresses, date, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             e.account_id,
             e.message_id,
@@ -107,6 +111,8 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
             e.clean_body,
             body_html_z,
             e.uid,
+            e.auth_result,
+            e.list_id,
         ],
     )?;
     if changed == 0 {
@@ -146,6 +152,21 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
         let n = conn.execute(
             "UPDATE emails SET uid = ?1 WHERE id = ?2 AND uid IS NULL",
             params![e.uid, id],
+        )?;
+        touched |= n > 0;
+    }
+    // ヘッダ素性（§7.7）を後付けする（機能追加前に取り込んだ古いメール向け）。
+    if e.auth_result.is_some() {
+        let n = conn.execute(
+            "UPDATE emails SET auth_result = ?1 WHERE id = ?2 AND auth_result IS NULL",
+            params![e.auth_result, id],
+        )?;
+        touched |= n > 0;
+    }
+    if e.list_id.is_some() {
+        let n = conn.execute(
+            "UPDATE emails SET list_id = ?1 WHERE id = ?2 AND list_id IS NULL",
+            params![e.list_id, id],
         )?;
         touched |= n > 0;
     }

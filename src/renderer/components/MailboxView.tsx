@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  Ban,
   Columns2,
   Flag,
   Mail,
@@ -24,6 +25,7 @@ import {
   mailDelete,
   mailGet,
   mailList,
+  mailMarkSpam,
   mailSetRead,
   mailSetStarred,
   mailSync,
@@ -257,6 +259,19 @@ export function MailboxView({
       /* noop */
     }
   };
+  // 迷惑としてマーク: 学習＋隔離。楽観更新で受信一覧から外す（迷惑フォルダへ）。
+  const actMarkSpam = async () => {
+    const ids = targetIds();
+    const idSet = new Set(ids);
+    setMails((prev) => prev.filter((m) => !idSet.has(m.id)));
+    if (opened && idSet.has(opened.id)) setOpened(null);
+    setSelectedIds(new Set());
+    try {
+      await mailMarkSpam(ids);
+    } catch {
+      /* noop */
+    }
+  };
 
   // 選択メール群へタグを付与/解除（楽観更新 → 永続化）。
   const applyTagDelta = async (ids: number[], tagId: number, add: boolean) => {
@@ -307,6 +322,7 @@ export function MailboxView({
           if (menu) setTagPicker({ x: menu.x, y: menu.y });
         },
       },
+      { key: 'spam', label: t('ctx.markSpam'), Icon: Ban, onClick: actMarkSpam },
       { key: 'delete', label: t('ctx.delete'), Icon: Trash2, danger: true, onClick: actDelete },
     ];
   };

@@ -13,8 +13,9 @@ export const mailSync = (accountId: number) => invoke<SyncResult>('mail_sync', {
 // メールを送信する（SMTP）。input は差出人アカウント・宛先・件名・本文など。
 export const mailSend = (input: SendInput) => invoke<void>('mail_send', { input });
 
-export const mailList = (accountId: number, limit: number) =>
-  invoke<MailSummary[]>('mail_list', { accountId, limit });
+// 指定フォルダ（'inbox' | 'sent' | 'drafts' | 'trash' | 'spam'）のメール一覧。
+export const mailList = (accountId: number, folder: string, limit: number) =>
+  invoke<MailSummary[]>('mail_list', { accountId, folder, limit });
 
 export const mailGet = (id: number) => invoke<MailDetail>('mail_get', { id });
 

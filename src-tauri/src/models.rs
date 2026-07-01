@@ -98,6 +98,8 @@ pub struct MailSummary {
     pub id: i32,
     pub subject: Option<String>,
     pub from_address: Option<String>,
+    /// 宛先（送信済・下書きフォルダで「To」を表示するのに使う）。
+    pub to_addresses: Option<String>,
     pub date: Option<String>,
     pub preview: String,
     pub is_read: bool,

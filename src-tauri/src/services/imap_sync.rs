@@ -3,7 +3,7 @@ use crate::services::parser;
 use crate::services::store::{insert_email, InsertOutcome, NewAttachment, NewEmail};
 use chrono::{Duration, Utc};
 use mail_parser::MessageParser;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 
 /// 初回取得の安全上限（日数/全期間でも一度に取りすぎない）。
@@ -55,6 +55,93 @@ fn since_date(days: i64) -> String {
 
 type ImapSession = imap::Session<native_tls::TlsStream<std::net::TcpStream>>;
 
+/// 同期する標準フォルダの定義（ローカルタグ／特殊用途属性／よくある名前候補）。
+/// 受信箱(INBOX)は固定なのでここには含めない。
+struct FolderSpec {
+    /// ローカルの保存タグ（emails.folder）。
+    tag: &'static str,
+    /// RFC 6154 の特殊用途属性（\Sent 等）。
+    special_use: &'static str,
+    /// 特殊用途で決まらない場合のよくあるフォルダ名（末端名で照合）。
+    names: &'static [&'static str],
+}
+
+const SYNC_FOLDERS: &[FolderSpec] = &[
+    FolderSpec {
+        tag: "sent",
+        special_use: "\\Sent",
+        names: &[
+            "Sent",
+            "Sent Messages",
+            "Sent Items",
+            "送信済みトレイ",
+            "送信済みメール",
+            "送信済み",
+        ],
+    },
+    FolderSpec {
+        tag: "drafts",
+        special_use: "\\Drafts",
+        names: &["Drafts", "Draft", "下書き", "草稿"],
+    },
+    FolderSpec {
+        tag: "trash",
+        special_use: "\\Trash",
+        names: &[
+            "Trash",
+            "Deleted",
+            "Deleted Messages",
+            "Deleted Items",
+            "ごみ箱",
+            "ゴミ箱",
+        ],
+    },
+    FolderSpec {
+        tag: "spam",
+        special_use: "\\Junk",
+        names: &[
+            "Junk",
+            "Spam",
+            "Junk E-mail",
+            "Junk Email",
+            "迷惑メール",
+            "迷惑",
+            "スパム",
+        ],
+    },
+];
+
+/// フォルダ一覧から該当メールボックス名を判定する。
+/// 1) 特殊用途属性（\Sent 等。RFC 6154 SPECIAL-USE。システム属性以外は Custom で来る）。
+/// 2) よくある名前（末端名 or フルネームで大小無視の一致）。
+fn detect_mailbox<'a>(
+    names: impl IntoIterator<Item = &'a imap::types::Name>,
+    spec: &FolderSpec,
+) -> Option<String> {
+    use imap::types::NameAttribute;
+    let list: Vec<&imap::types::Name> = names.into_iter().collect();
+    for n in &list {
+        let hit = n.attributes().iter().any(
+            |a| matches!(a, NameAttribute::Custom(c) if c.eq_ignore_ascii_case(spec.special_use)),
+        );
+        if hit {
+            return Some(n.name().to_string());
+        }
+    }
+    for n in &list {
+        let full = n.name();
+        let leaf = full.rsplit(['/', '.']).next().unwrap_or(full);
+        if spec
+            .names
+            .iter()
+            .any(|c| leaf.eq_ignore_ascii_case(c) || full.eq_ignore_ascii_case(c))
+        {
+            return Some(full.to_string());
+        }
+    }
+    None
+}
+
 /// 実際に IMAP ログインを試す（認証の確認）。成功なら Ok。
 pub fn test_login(host: &str, port: u16, user: &str, password: &str) -> Result<(), String> {
     log::info!(
@@ -80,7 +167,8 @@ pub fn test_login(host: &str, port: u16, user: &str, password: &str) -> Result<(
     Ok(())
 }
 
-/// IMAP に接続し、初回は sync_window の範囲、以降は新着 UID だけを取得して保存する。
+/// IMAP に接続し、受信箱＋標準フォルダ（送信済/下書き/ゴミ箱/迷惑）を同期する。
+/// 各フォルダは初回は sync_window の範囲、以降は新着 UID だけを取得して保存する。
 pub fn sync_account(
     db_path: &Path,
     account_id: i64,
@@ -92,12 +180,11 @@ pub fn sync_account(
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
     let _ = conn.execute_batch("PRAGMA foreign_keys=ON;");
 
-    // 同期状態を読む
-    let (window, stored_validity, stored_last_uid): (String, Option<i64>, Option<i64>) = conn
+    let window: String = conn
         .query_row(
-            "SELECT COALESCE(sync_window,'6m'), uid_validity, last_uid FROM accounts WHERE id=?1",
+            "SELECT COALESCE(sync_window,'6m') FROM accounts WHERE id=?1",
             params![account_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
 
@@ -111,9 +198,76 @@ pub fn sync_account(
         e.to_string()
     })?;
 
-    let mailbox = session.select("INBOX").map_err(|e| e.to_string())?;
+    let mut result = SyncResult {
+        fetched: 0,
+        stored: 0,
+        backfilled: 0,
+    };
+
+    // 受信箱（必須）。
+    sync_folder(
+        &mut session,
+        &conn,
+        account_id,
+        "INBOX",
+        "inbox",
+        &window,
+        &mut result,
+    )?;
+
+    // その他の標準フォルダ（存在すれば best-effort。無ければスキップ）。
+    match session.list(Some(""), Some("*")) {
+        Ok(names) => {
+            let targets: Vec<(String, &'static str)> = SYNC_FOLDERS
+                .iter()
+                .filter_map(|spec| detect_mailbox(names.iter(), spec).map(|n| (n, spec.tag)))
+                .collect();
+            drop(names);
+            for (mbox, tag) in targets {
+                if let Err(e) = sync_folder(
+                    &mut session,
+                    &conn,
+                    account_id,
+                    &mbox,
+                    tag,
+                    &window,
+                    &mut result,
+                ) {
+                    log::warn!("フォルダ '{mbox}' ({tag}) の同期に失敗: {e}");
+                }
+            }
+        }
+        Err(e) => log::warn!("フォルダ一覧の取得に失敗（受信箱のみ同期）: {e}"),
+    }
+
+    let _ = session.logout();
+    Ok(result)
+}
+
+/// 1 フォルダを同期する（select → folder_sync 状態確認 → 取得 → 状態更新）。
+/// 集計はアカウント全体の result に加算する。
+fn sync_folder(
+    session: &mut ImapSession,
+    conn: &Connection,
+    account_id: i64,
+    imap_name: &str,
+    tag: &str,
+    window: &str,
+    result: &mut SyncResult,
+) -> Result<(), String> {
+    let mailbox = session.select(imap_name).map_err(|e| e.to_string())?;
     let uid_validity = mailbox.uid_validity;
     let total = mailbox.exists;
+
+    let (stored_validity, stored_last_uid): (Option<i64>, Option<i64>) = conn
+        .query_row(
+            "SELECT uid_validity, last_uid FROM folder_sync WHERE account_id=?1 AND folder=?2",
+            params![account_id, tag],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or((None, None));
 
     let incremental = stored_validity.is_some()
         && stored_validity == uid_validity.map(|v| v as i64)
@@ -126,7 +280,6 @@ pub fn sync_account(
         max_uid: stored_last_uid.unwrap_or(0) as u32,
     };
 
-    // 取得対象を決める
     if incremental {
         // 新着のみ: UID > last_uid
         let last = stored_last_uid.unwrap() as u32;
@@ -137,9 +290,9 @@ pub fn sync_account(
             .filter(|&u| u > last)
             .collect();
         uids.sort_unstable();
-        fetch_uids(&mut session, &conn, account_id, &uids, &mut c)?;
+        fetch_uids(session, conn, account_id, tag, &uids, &mut c)?;
     } else {
-        match parse_scope(&window) {
+        match parse_scope(window) {
             Scope::Count(n) if total > 0 => {
                 // 最新 n 件（シーケンス範囲で効率的に）
                 let low = total.saturating_sub(n.saturating_sub(1)).max(1);
@@ -147,7 +300,7 @@ pub fn sync_account(
                 let msgs = session
                     .fetch(seq, "(UID FLAGS BODY[])")
                     .map_err(|e| e.to_string())?;
-                store_fetches(&conn, account_id, msgs.iter(), &mut c)?;
+                store_fetches(conn, account_id, tag, msgs.iter(), &mut c)?;
             }
             Scope::Count(_) => { /* 空 */ }
             scope => {
@@ -165,23 +318,30 @@ pub fn sync_account(
                 if uids.len() > SAFETY_MAX {
                     uids = uids.split_off(uids.len() - SAFETY_MAX); // 新しい方を残す
                 }
-                fetch_uids(&mut session, &conn, account_id, &uids, &mut c)?;
+                fetch_uids(session, conn, account_id, tag, &uids, &mut c)?;
             }
         }
     }
 
-    // 同期状態を更新
-    let _ = conn.execute(
-        "UPDATE accounts SET uid_validity=?1, last_uid=?2 WHERE id=?3",
-        params![uid_validity.map(|v| v as i64), c.max_uid as i64, account_id],
-    );
+    // フォルダ別の同期状態を更新（upsert）。
+    conn.execute(
+        "INSERT INTO folder_sync (account_id, folder, uid_validity, last_uid)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(account_id, folder)
+         DO UPDATE SET uid_validity=excluded.uid_validity, last_uid=excluded.last_uid",
+        params![
+            account_id,
+            tag,
+            uid_validity.map(|v| v as i64),
+            c.max_uid as i64
+        ],
+    )
+    .map_err(|e| e.to_string())?;
 
-    let _ = session.logout();
-    Ok(SyncResult {
-        fetched: c.fetched,
-        stored: c.stored,
-        backfilled: c.backfilled,
-    })
+    result.fetched += c.fetched;
+    result.stored += c.stored;
+    result.backfilled += c.backfilled;
+    Ok(())
 }
 
 /// 同期中の集計（取得/新規保存/埋め戻し/最大UID）。
@@ -196,6 +356,7 @@ fn fetch_uids(
     session: &mut ImapSession,
     conn: &Connection,
     account_id: i64,
+    folder: &str,
     uids: &[u32],
     c: &mut Counters,
 ) -> Result<(), String> {
@@ -208,7 +369,7 @@ fn fetch_uids(
         let msgs = session
             .uid_fetch(set, "(UID FLAGS BODY[])")
             .map_err(|e| e.to_string())?;
-        store_fetches(conn, account_id, msgs.iter(), c)?;
+        store_fetches(conn, account_id, folder, msgs.iter(), c)?;
     }
     Ok(())
 }
@@ -216,6 +377,7 @@ fn fetch_uids(
 fn store_fetches<'a>(
     conn: &Connection,
     account_id: i64,
+    folder: &str,
     msgs: impl Iterator<Item = &'a imap::types::Fetch>,
     c: &mut Counters,
 ) -> Result<(), String> {
@@ -259,6 +421,7 @@ fn store_fetches<'a>(
                 list_id: p.list_id,
                 has_attachments: p.has_attachments,
                 uid,
+                folder: folder.to_string(),
                 attachments,
             };
             match insert_email(conn, &ne).map_err(|e| e.to_string())? {
@@ -290,8 +453,16 @@ pub fn append_to_sent(
         .login(user, password)
         .map_err(|(e, _)| e.to_string())?;
 
-    let sent = find_sent_mailbox(&mut session)?
+    let names = session
+        .list(Some(""), Some("*"))
+        .map_err(|e| e.to_string())?;
+    let sent_spec = SYNC_FOLDERS
+        .iter()
+        .find(|s| s.tag == "sent")
+        .expect("sent spec");
+    let sent = detect_mailbox(names.iter(), sent_spec)
         .ok_or_else(|| "Sent（送信済み）フォルダが見つかりませんでした".to_string())?;
+    drop(names);
 
     // 送信控えは自分で送ったものなので既読(\Seen)で入れる。
     let result = session
@@ -301,48 +472,6 @@ pub fn append_to_sent(
     result.map(|_| {
         log::info!("送信控えを Sent フォルダ '{sent}' に保存しました");
     })
-}
-
-/// Sent（送信済み）フォルダ名を判定する。
-/// 1) 特殊用途属性 \Sent を持つメールボックス（RFC 6154 SPECIAL-USE）。
-/// 2) よくある名前（Sent / Sent Messages / 送信済み 等）に末端名で一致するもの。
-fn find_sent_mailbox(session: &mut ImapSession) -> Result<Option<String>, String> {
-    use imap::types::NameAttribute;
-    let names = session
-        .list(Some(""), Some("*"))
-        .map_err(|e| e.to_string())?;
-
-    // 1) \Sent 特殊用途属性（システム属性以外は Custom で来る）。
-    for n in names.iter() {
-        let has_sent = n
-            .attributes()
-            .iter()
-            .any(|a| matches!(a, NameAttribute::Custom(c) if c.eq_ignore_ascii_case("\\Sent")));
-        if has_sent {
-            return Ok(Some(n.name().to_string()));
-        }
-    }
-
-    // 2) よくある名前で判定（階層区切り '/' '.' を考慮して末端名も見る）。
-    const COMMON: &[&str] = &[
-        "Sent",
-        "Sent Messages",
-        "Sent Items",
-        "送信済みトレイ",
-        "送信済みメール",
-        "送信済み",
-    ];
-    for n in names.iter() {
-        let full = n.name();
-        let leaf = full.rsplit(['/', '.']).next().unwrap_or(full);
-        if COMMON
-            .iter()
-            .any(|c| leaf.eq_ignore_ascii_case(c) || full.eq_ignore_ascii_case(c))
-        {
-            return Ok(Some(full.to_string()));
-        }
-    }
-    Ok(None)
 }
 
 /// 取得した添付の本体（バイト列・ファイル名・MIME型）。

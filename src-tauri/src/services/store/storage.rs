@@ -260,10 +260,15 @@ impl Store {
     }
 
     /// 同期状態（uid_validity/last_uid）をリセットして次回フル再取得させる。
+    /// フォルダ別の同期状態（folder_sync）も消して、全フォルダを取り直せるようにする。
     pub fn reset_sync_state(&self, account_id: i64) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE accounts SET uid_validity = NULL, last_uid = NULL WHERE id = ?1",
+            params![account_id],
+        )?;
+        conn.execute(
+            "DELETE FROM folder_sync WHERE account_id = ?1",
             params![account_id],
         )?;
         Ok(())

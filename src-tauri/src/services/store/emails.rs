@@ -21,8 +21,21 @@ pub struct NewEmail {
     pub has_attachments: bool,
     /// メッセージの IMAP UID（添付のオンデマンド再取得用）。
     pub uid: Option<i64>,
+    /// 保存先フォルダ（'inbox' | 'sent' | 'drafts' | 'trash' | 'spam'）。
+    pub folder: String,
     /// 添付メタ（本体は未取得。ダウンロード時に再取得）。
     pub attachments: Vec<NewAttachment>,
+}
+
+/// フォルダをまたいで同じ Message-ID が存在する（自分宛て＝受信＋送信済 等）ため、
+/// 重複排除キー(canonical_key)は非 inbox フォルダでは "folder:key" と接頭辞を付けて
+/// フォルダごとに別レコードとして扱う（UNIQUE(account_id, canonical_key) を活かしたまま）。
+fn folder_key(folder: &str, canonical_key: &str) -> String {
+    if folder == "inbox" {
+        canonical_key.to_string()
+    } else {
+        format!("{folder}:{canonical_key}")
+    }
 }
 
 /// 添付メタ挿入用（内部）。
@@ -94,14 +107,16 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
         .as_deref()
         .filter(|s| !s.is_empty())
         .map(crate::services::compress::compress_text);
+    // フォルダごとに別レコードにするため canonical_key はフォルダ接頭辞付きで保存する。
+    let key = folder_key(&e.folder, &e.canonical_key);
     let changed = conn.execute(
         "INSERT OR IGNORE INTO emails
-           (account_id, message_id, canonical_key, subject, from_address, to_addresses, date, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+           (account_id, message_id, canonical_key, subject, from_address, to_addresses, date, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             e.account_id,
             e.message_id,
-            e.canonical_key,
+            key,
             e.subject,
             e.from_address,
             e.to_addresses,
@@ -113,6 +128,7 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
             e.uid,
             e.auth_result,
             e.list_id,
+            e.folder,
         ],
     )?;
     if changed == 0 {
@@ -137,10 +153,11 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
 /// 既存メールに uid と添付メタを埋め戻す（再同期で古いメールを後付け対応）。
 /// 何か変更したら true を返す。
 fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> {
+    let key = folder_key(&e.folder, &e.canonical_key);
     let id: Option<i64> = conn
         .query_row(
             "SELECT id FROM emails WHERE account_id = ?1 AND canonical_key = ?2",
-            params![e.account_id, e.canonical_key],
+            params![e.account_id, key],
             |r| r.get(0),
         )
         .optional()?;
@@ -184,7 +201,12 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
 }
 
 impl Store {
-    pub fn list_emails(&self, account_id: i64, limit: i64) -> rusqlite::Result<Vec<MailSummary>> {
+    pub fn list_emails(
+        &self,
+        account_id: i64,
+        folder: &str,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<MailSummary>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, subject, from_address, date, is_read, has_attachments,
@@ -192,11 +214,12 @@ impl Store {
                     is_flagged, is_bookmarked,
                     (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = emails.id) AS tag_ids,
                     (emails.has_attachments = 1
-                     OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = emails.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real
-             FROM emails WHERE account_id = ?1
-             ORDER BY datetime(date) DESC, id DESC LIMIT ?2",
+                     OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = emails.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real,
+                    to_addresses
+             FROM emails WHERE account_id = ?1 AND COALESCE(folder, 'inbox') = ?2
+             ORDER BY datetime(date) DESC, id DESC LIMIT ?3",
         )?;
-        let rows = stmt.query_map(params![account_id, limit], |r| {
+        let rows = stmt.query_map(params![account_id, folder, limit], |r| {
             // group_concat はカンマ区切り文字列。空（タグ無し）は None。
             let tag_ids = r
                 .get::<_, Option<String>>(9)?
@@ -206,6 +229,7 @@ impl Store {
                 id: r.get::<_, i64>(0)? as i32,
                 subject: r.get(1)?,
                 from_address: r.get(2)?,
+                to_addresses: r.get(11)?,
                 date: r.get(3)?,
                 is_read: r.get::<_, i64>(4)? != 0,
                 has_attachments: r.get::<_, i64>(5)? != 0,

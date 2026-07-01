@@ -3,7 +3,11 @@
 /**
  * メール一覧表示用（軽量）。
  */
-export type MailSummary = { id: number, subject: string | null, from_address: string | null, date: string | null, preview: string, is_read: boolean, 
+export type MailSummary = { id: number, subject: string | null, from_address: string | null, 
+/**
+ * 宛先（送信済・下書きフォルダで「To」を表示するのに使う）。
+ */
+to_addresses: string | null, date: string | null, preview: string, is_read: boolean, 
 /**
  * 添付の有無（旧データ由来のヒント。inline を含む場合がある）。
  */

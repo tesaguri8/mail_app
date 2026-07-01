@@ -64,6 +64,10 @@ const MIGRATIONS: &[Migration] = &[
         version: 14,
         sql: include_str!("migrations/0014_app_settings.sql"),
     },
+    Migration {
+        version: 15,
+        sql: include_str!("migrations/0015_folders.sql"),
+    },
 ];
 
 pub fn run(conn: &Connection) -> rusqlite::Result<()> {
@@ -92,7 +96,7 @@ mod tests {
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 14);
+        assert_eq!(v, 15);
 
         // emails テーブルが存在
         let n: i64 = conn

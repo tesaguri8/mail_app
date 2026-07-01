@@ -162,6 +162,7 @@ impl Store {
             params![id],
         )?;
         conn.execute("DELETE FROM emails WHERE account_id=?1", params![id])?;
+        conn.execute("DELETE FROM folder_sync WHERE account_id=?1", params![id])?;
         conn.execute("DELETE FROM accounts WHERE id=?1", params![id])?;
         Ok(())
     }
@@ -172,6 +173,8 @@ impl Store {
             "UPDATE accounts SET sync_window=?1, uid_validity=NULL, last_uid=NULL WHERE id=?2",
             params![window, id],
         )?;
+        // フォルダ別の同期状態も消し、新しい範囲で全フォルダを取り直す。
+        conn.execute("DELETE FROM folder_sync WHERE account_id=?1", params![id])?;
         Ok(())
     }
 }

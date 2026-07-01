@@ -26,8 +26,8 @@ export function AccountsOverview({
     }
     setExpanded(id);
     if (!previews[id]) {
-      // 一覧は多めに取得（表示はバー間いっぱいまで伸ばしてスクロール）
-      mailList(id, 100)
+      // 一覧は多めに取得（表示はバー間いっぱいまで伸ばしてスクロール）。ダッシュボードは受信箱。
+      mailList(id, 'inbox', 100)
         .then((m) => setPreviews((p) => ({ ...p, [id]: m })))
         .catch(() => undefined);
     }

@@ -346,15 +346,16 @@ pub fn account_set_body_window(
     store.apply_retention(account_id).map_err(|e| e.to_string())
 }
 
-/// メール一覧を返す。
+/// 指定フォルダ（'inbox' | 'sent' | 'drafts' | 'trash' | 'spam'）のメール一覧を返す。
 #[tauri::command]
 pub fn mail_list(
     store: State<Store>,
     account_id: i64,
+    folder: String,
     limit: i64,
 ) -> Result<Vec<MailSummary>, String> {
     store
-        .list_emails(account_id, limit)
+        .list_emails(account_id, &folder, limit)
         .map_err(|e| e.to_string())
 }
 

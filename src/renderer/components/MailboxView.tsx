@@ -131,7 +131,8 @@ export function MailboxView({
   }, []);
   const tagById = new Map(tags.map((tg) => [tg.id, tg]));
 
-  const loadMails = (id: number) => mailList(id, 200).then(setMails).catch(() => undefined);
+  const loadMails = (id: number) =>
+    mailList(id, folder, 200).then(setMails).catch(() => undefined);
   useEffect(() => {
     setOpened(null);
     setSelectedIds(new Set());
@@ -146,7 +147,7 @@ export function MailboxView({
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected]);
+  }, [selected, folder]);
 
   // 開いたメッセージをリスト内でフォーカス（スクロール）
   useEffect(() => {
@@ -349,12 +350,10 @@ export function MailboxView({
     setSelectedIds(allVisibleSelected ? new Set() : new Set(visibleMails.map((m) => m.id)));
   };
 
-  const listPane =
-    folder !== 'inbox' ? (
-      <div className="flex h-full items-center justify-center p-4 text-sm text-white/40">
-        {t('comingSoon')}
-      </div>
-    ) : (
+  // 送信済・下書きは自分が差出人なので、一覧では宛先(To)を主に見せる。
+  const outgoing = folder === 'sent' || folder === 'drafts';
+
+  const listPane = (
     <div className="flex h-full min-h-0 flex-col">
       {selecting && (
         <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2 text-xs text-white/60">
@@ -402,7 +401,9 @@ export function MailboxView({
             <div className="flex items-baseline justify-between gap-2">
               <span className="truncate text-sm font-medium">
                 {!m.is_read && <span className="mr-1 text-sky-300">●</span>}
-                {m.from_address ?? '(no sender)'}
+                {outgoing
+                  ? `${t('mailbox.to')}: ${m.to_addresses ?? '—'}`
+                  : (m.from_address ?? '(no sender)')}
               </span>
               <span className="flex shrink-0 items-center gap-1 text-[10px] text-white/40">
                 {m.is_starred && <Star size={12} className="fill-amber-300 text-amber-300" />}

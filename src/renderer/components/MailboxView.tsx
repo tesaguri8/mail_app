@@ -108,6 +108,12 @@ export function MailboxView({
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const anchorId = useRef<number | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // 選択モード（チェックボックス表示中）。1件でも明示選択したら on。
+  const [selecting, setSelecting] = useState(false);
+  // 選択が空になったら選択モードを抜ける。
+  useEffect(() => {
+    if (selectedIds.size === 0) setSelecting(false);
+  }, [selectedIds]);
 
   useEffect(() => {
     if (selected == null && accounts.length > 0) setSelected(accounts[0].id);
@@ -169,29 +175,28 @@ export function MailboxView({
     }
   };
 
-  // 行クリック: 通常=単一選択して開く / Ctrl(Cmd)=トグル / Shift=範囲
+  // 行クリック:
+  // - Shift=範囲選択 / Ctrl(Cmd)=トグル
+  // - 複数選択モード（チェックボックス表示中）は、修飾キーなしのクリックでもトグル
+  // - 通常時（単一）はクリックで開く
   const onRowClick = (e: React.MouseEvent, id: number) => {
-    if (e.ctrlKey || e.metaKey) {
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        if (next.has(id)) next.delete(id);
-        else next.add(id);
-        return next;
-      });
-      anchorId.current = id;
-      return;
-    }
     if (e.shiftKey && anchorId.current != null) {
       const order = visibleMails.map((m) => m.id);
       const a = order.indexOf(anchorId.current);
       const b = order.indexOf(id);
       if (a !== -1 && b !== -1) {
         const [lo, hi] = a < b ? [a, b] : [b, a];
+        setSelecting(true);
         setSelectedIds(new Set(order.slice(lo, hi + 1)));
         return;
       }
     }
-    setSelectedIds(new Set([id]));
+    if (e.ctrlKey || e.metaKey || selecting) {
+      toggleSelect(id);
+      return;
+    }
+    // 通常クリック: 選択をクリアして開く（ハイライトは opened で行う）
+    setSelectedIds(new Set());
     anchorId.current = id;
     openMail(id);
   };
@@ -203,6 +208,18 @@ export function MailboxView({
       anchorId.current = id;
     }
     setMenu({ x: e.clientX, y: e.clientY });
+  };
+
+  // チェックボックスでの単純トグル（開かない）。選択モードに入る。
+  const toggleSelect = (id: number) => {
+    setSelecting(true);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    anchorId.current = id;
   };
 
   const patchMails = (ids: Set<number>, patch: Partial<MailSummary>) =>
@@ -305,13 +322,40 @@ export function MailboxView({
       matchesTags(m.tag_ids, tagFilter)
   );
 
+  // 選択モード中はチェックボックスを表示して選択を簡単にする。
+  const allVisibleSelected =
+    visibleMails.length > 0 && visibleMails.every((m) => selectedIds.has(m.id));
+  const someVisibleSelected = selectedIds.size > 0 && !allVisibleSelected;
+  const toggleAllVisible = () => {
+    setSelectedIds(allVisibleSelected ? new Set() : new Set(visibleMails.map((m) => m.id)));
+  };
+
   const listPane =
     folder !== 'inbox' ? (
       <div className="flex h-full items-center justify-center p-4 text-sm text-white/40">
         {t('comingSoon')}
       </div>
     ) : (
-    <ul className="h-full space-y-1 overflow-y-auto p-2">
+    <div className="flex h-full min-h-0 flex-col">
+      {selecting && (
+        <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2 text-xs text-white/60">
+          <input
+            type="checkbox"
+            checked={allVisibleSelected}
+            ref={(el) => {
+              if (el) el.indeterminate = someVisibleSelected;
+            }}
+            onChange={toggleAllVisible}
+            title={t('mailbox.selectAll')}
+            className="h-3.5 w-3.5 shrink-0 accent-sky-400"
+          />
+          <span className="flex-1">{t('ctx.selected', { count: selectedIds.size })}</span>
+          <button onClick={() => setSelectedIds(new Set())} className="hover:text-white/90">
+            {t('mailbox.clearSelection')}
+          </button>
+        </div>
+      )}
+      <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
       {visibleMails.length === 0 ? (
         <li className="px-2 py-3 text-sm text-white/50">{t('mailbox.empty')}</li>
       ) : (
@@ -321,10 +365,21 @@ export function MailboxView({
             id={`mail-li-${m.id}`}
             onClick={(e) => onRowClick(e, m.id)}
             onContextMenu={(e) => onRowContextMenu(e, m.id)}
-            className={`cursor-pointer select-none rounded-md px-3 py-2 hover:bg-white/10 ${
+            className={`group flex cursor-pointer select-none gap-2 rounded-md px-3 py-2 hover:bg-white/10 ${
               selectedIds.has(m.id) ? 'bg-white/15' : ''
             } ${opened?.id === m.id ? 'ring-1 ring-sky-300/40' : ''}`}
           >
+            <input
+              type="checkbox"
+              checked={selectedIds.has(m.id)}
+              onChange={() => toggleSelect(m.id)}
+              onClick={(e) => e.stopPropagation()}
+              aria-label={t('mailbox.selectMailCheckbox')}
+              className={`mt-1 h-3.5 w-3.5 shrink-0 accent-sky-400 ${
+                selecting || selectedIds.has(m.id) ? '' : 'opacity-0 group-hover:opacity-100'
+              }`}
+            />
+            <div className="min-w-0 flex-1">
             <div className="flex items-baseline justify-between gap-2">
               <span className="truncate text-sm font-medium">
                 {!m.is_read && <span className="mr-1 text-sky-300">●</span>}
@@ -361,10 +416,12 @@ export function MailboxView({
                 })}
               </div>
             )}
+            </div>
           </li>
         ))
       )}
-    </ul>
+      </ul>
+    </div>
     );
 
   const bodyPane = opened ? (

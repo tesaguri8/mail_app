@@ -63,6 +63,7 @@
     "bookmark": "Add bookmark",
     "unbookmark": "Remove bookmark",
     "tags": "Tags…",
+    "markSpam": "Mark as spam",
     "delete": "Delete",
     "selected": "{{count}} selected"
   },
@@ -93,9 +94,17 @@
     "signatures": "Signatures",
     "tags": "Tags",
     "display": "Display",
+    "spam": "Spam",
     "about": "About",
     "inlineImages": "Show embedded images in body",
-    "inlineImagesHint": "Automatically fetch inline images bundled in the message and show them in the body. Remote (external) images stay blocked."
+    "inlineImagesHint": "Automatically fetch inline images bundled in the message and show them in the body. Remote (external) images stay blocked.",
+    "spamEnabled": "Enable spam filtering",
+    "spamEnabledHint": "Classify incoming mail locally on your device. Learning stays on your machine; message content is never sent to a server.",
+    "spamThresholdHigh": "Quarantine threshold",
+    "spamThresholdHighHint": "Scores at or above this move to the Spam folder (higher = safer, fewer false positives).",
+    "spamThresholdLow": "\"Maybe spam\" threshold",
+    "spamThresholdLowHint": "Scores from here up to the quarantine threshold stay in the inbox with a subtle warning.",
+    "spamUnavailable": "Spam settings are available in the desktop app."
   },
   "storage": {
     "title": "Local storage (attachments)",

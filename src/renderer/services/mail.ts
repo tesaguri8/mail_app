@@ -45,6 +45,11 @@ export const mailSetBookmarked = (ids: number[], value: boolean) =>
 
 export const mailDelete = (ids: number[]) => invoke<void>('mail_delete', { ids });
 
+// 迷惑としてマーク（学習＋隔離）／非迷惑に戻す（学習＋復帰）。docs/SPAM.md §7.5
+export const mailMarkSpam = (ids: number[]) => invoke<void>('mail_mark_spam', { ids });
+
+export const mailMarkNotSpam = (ids: number[]) => invoke<void>('mail_mark_not_spam', { ids });
+
 export const accountSetSyncWindow = (accountId: number, window: string) =>
   invoke<void>('account_set_sync_window', { accountId, window });
 

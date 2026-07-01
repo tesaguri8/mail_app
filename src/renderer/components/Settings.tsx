@@ -1,13 +1,17 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AccountSummary } from '@bindings/AccountSummary';
+import type { SpamSettings as SpamSettingsType } from '@bindings/SpamSettings';
 import { APP } from '../config/appIdentity';
 import { getInlineImages, setInlineImages } from '../config/prefs';
+import { spamSettingsGet, spamSettingsSet } from '../services/spam';
 import { AccountSetup } from './AccountSetup';
 import { SignatureManager } from './SignatureManager';
 import { TagManager } from './TagManager';
 
-type Section = 'accounts' | 'signatures' | 'tags' | 'display' | 'about';
+const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+type Section = 'accounts' | 'signatures' | 'tags' | 'display' | 'spam' | 'about';
 
 /**
  * 設定ページ: 左サイドバー（項目）＋右コンテンツの2カラム。
@@ -27,6 +31,7 @@ export function Settings({
     { key: 'signatures', label: t('settings.signatures') },
     { key: 'tags', label: t('settings.tags') },
     { key: 'display', label: t('settings.display') },
+    { key: 'spam', label: t('settings.spam') },
     { key: 'about', label: t('settings.about') },
   ];
 
@@ -52,6 +57,7 @@ export function Settings({
         {section === 'signatures' && <SignatureManager />}
         {section === 'tags' && <TagManager />}
         {section === 'display' && <DisplaySettings />}
+        {section === 'spam' && <SpamSettings />}
         {section === 'about' && (
           <div className="space-y-1 text-sm text-white/70">
             <div className="text-base font-semibold text-white">{APP.productName}</div>
@@ -103,5 +109,103 @@ function DisplaySettings() {
         </button>
       </label>
     </div>
+  );
+}
+
+/** 迷惑メール設定: オン/オフと隔離しきい値（docs/SPAM.md §9）。DB を単一ソースにする。 */
+function SpamSettings() {
+  const { t } = useTranslation();
+  const [settings, setSettings] = useState<SpamSettingsType | null>(null);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    spamSettingsGet()
+      .then(setSettings)
+      .catch(() => undefined);
+  }, []);
+
+  // 変更は即保存（ハードコードせず DB に単一ソースで持つ。§9.2）。
+  const save = (next: SpamSettingsType) => {
+    setSettings(next);
+    if (isTauri) spamSettingsSet(next).catch(() => undefined);
+  };
+
+  if (!settings) {
+    return <div className="text-sm text-white/50">{t('settings.spamUnavailable')}</div>;
+  }
+
+  return (
+    <div className="max-w-[460px] space-y-4">
+      <label className="flex cursor-pointer items-start justify-between gap-4">
+        <span>
+          <span className="block text-sm text-white/85">{t('settings.spamEnabled')}</span>
+          <span className="mt-0.5 block text-xs text-white/45">{t('settings.spamEnabledHint')}</span>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={settings.enabled}
+          onClick={() => save({ ...settings, enabled: !settings.enabled })}
+          className={`relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors ${
+            settings.enabled ? 'bg-sky-500' : 'bg-white/20'
+          }`}
+        >
+          <span
+            className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+              settings.enabled ? 'translate-x-4' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+      </label>
+
+      {settings.enabled && (
+        <div className="space-y-4 border-t border-white/10 pt-4">
+          <ThresholdSlider
+            label={t('settings.spamThresholdHigh')}
+            hint={t('settings.spamThresholdHighHint')}
+            value={settings.threshold_high}
+            onChange={(v) => save({ ...settings, threshold_high: v })}
+          />
+          <ThresholdSlider
+            label={t('settings.spamThresholdLow')}
+            hint={t('settings.spamThresholdLowHint')}
+            value={settings.threshold_low}
+            onChange={(v) => save({ ...settings, threshold_low: v })}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 0..1 のしきい値スライダー（％表示つき）。 */
+function ThresholdSlider({
+  label,
+  hint,
+  value,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="flex items-center justify-between text-sm text-white/85">
+        <span>{label}</span>
+        <span className="text-xs text-white/50">{Math.round(value * 100)}%</span>
+      </span>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.05}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="mt-1 w-full"
+      />
+      <span className="mt-0.5 block text-xs text-white/45">{hint}</span>
+    </label>
   );
 }

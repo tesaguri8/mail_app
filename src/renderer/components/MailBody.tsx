@@ -65,8 +65,8 @@ export function MailBody({ detail }: { detail: MailDetail }) {
   // 添付画像のアプリ内プレビュー（attachment id → data URL）
   const [previews, setPreviews] = useState<Record<number, string>>({});
   const [inlineEnabled, setInlineEnabled] = useState(getInlineImages());
-  // 添付セクションの開閉
-  const [attachmentsOpen, setAttachmentsOpen] = useState(true);
+  // 添付セクションの開閉（既定は閉じる）
+  const [attachmentsOpen, setAttachmentsOpen] = useState(false);
   // チェックした添付（まとめて保存用）
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [savingAll, setSavingAll] = useState(false);
@@ -85,7 +85,7 @@ export function MailBody({ detail }: { detail: MailDetail }) {
     setAttachments([]);
     setInlineImages({});
     setPreviews({});
-    setAttachmentsOpen(true);
+    setAttachmentsOpen(false);
     setSelected(new Set());
     setAttachmentsLoaded(false);
     setRefreshed(null);
@@ -179,6 +179,10 @@ export function MailBody({ detail }: { detail: MailDetail }) {
     setBusyId(a.id);
     try {
       await attachmentExport(a.id, dest);
+      // 保存時にローカルへも取得済みになる（開く/DLアイコンの表示を揃える）。
+      setAttachments((list) =>
+        list.map((x) => (x.id === a.id ? { ...x, is_downloaded: true } : x)),
+      );
       setNote(t('mailbox.attachmentSaved'));
     } catch (e) {
       setNote(String(e));
@@ -432,15 +436,18 @@ export function MailBody({ detail }: { detail: MailDetail }) {
                       >
                         <BookOpen size={13} />
                       </button>
-                      <button
-                        onClick={() => handleSave(a)}
-                        disabled={busyId === a.id}
-                        title={t('mailbox.attachmentDownload')}
-                        aria-label={t('mailbox.attachmentDownload')}
-                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/10 text-white/80 hover:bg-white/20 disabled:opacity-50"
-                      >
-                        <Download size={13} />
-                      </button>
+                      {/* ダウンロード（保存）は未取得のときだけ。取得済み＝手元にあるので「開く」で十分。 */}
+                      {!a.is_downloaded && (
+                        <button
+                          onClick={() => handleSave(a)}
+                          disabled={busyId === a.id}
+                          title={t('mailbox.attachmentDownload')}
+                          aria-label={t('mailbox.attachmentDownload')}
+                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/10 text-white/80 hover:bg-white/20 disabled:opacity-50"
+                        >
+                          <Download size={13} />
+                        </button>
+                      )}
                     </div>
                     {preview && (
                       <img

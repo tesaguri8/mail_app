@@ -161,7 +161,26 @@ CREATE TABLE IF NOT EXISTS spam_meta (
 
 ## 7. 段階1 実装スケッチ（フェーズA・端末内のみ）
 
-> 計画段階のスケッチ。実装時に [src-tauri/src/services/](../src-tauri/src/services/) 配下へ。型・命名は ts-rs 境界に合わせて調整。
+> 計画段階のスケッチ。**下記は現行コードベース（[src-tauri/src/](../src-tauri/src/)）の規約に合わせた具体構成**。型・命名は ts-rs 境界と既存 `impl Store` パターンに合わせる。
+
+### 7.0 モジュール構成（追加・変更するファイル）
+
+現行の「コマンド＝`commands.rs` ／ 業務ロジック＝`services/` ／ DB＝`services/store/` の `impl Store` ／ 境界型＝`models.rs`（ts-rs）／ マイグレーション＝連番 SQL」に素直に乗せる。
+
+| 追加・変更 | 役割 |
+|---|---|
+| `services/spam/mod.rs` | モジュール公開。[services/mod.rs](../src-tauri/src/services/mod.rs) に `pub mod spam;` |
+| `services/spam/tokenize.rs` | §7.1 トークン化（純ロジック・DB 非依存） |
+| `services/spam/classifier.rs` | §7.2 スコア計算（純関数・DB 非依存でテスト容易） |
+| `services/store/spam.rs` | §7.4 `impl Store`：`spam_tokens`/`spam_meta` の読み書きと学習トランザクション。[store/mod.rs](../src-tauri/src/services/store/mod.rs) に `mod spam;` |
+| `services/store/migrations/0011_spam.sql` | §7.6 スキーマ追加。[migrations.rs](../src-tauri/src/services/store/migrations.rs) の `MIGRATIONS` に version 11 を登録 |
+| `models.rs` | §7.5 `SpamVerdict`（ts-rs 境界型） |
+| `commands.rs` | §7.5 `mail_mark_spam` / `mail_mark_not_spam` / `spam_score` |
+| `lib.rs` | §7.5 `invoke_handler!` に 3 コマンド追記 |
+
+> **既存スキーマとの差分**: `emails.spam_score` / `emails.is_junk` は既に [0001_init.sql](../src-tauri/src/services/store/migrations/0001_init.sql) にある。0011 で足すのは `emails.spam_learned` 列と `spam_tokens` / `spam_meta` の 2 テーブルだけ（[DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) の迷惑メール列と整合）。
+
+> **入力データ（重要）**: `tokenize` は「同期時に保存済みの `emails` 行」を入力にする（`from_address` / `auth_result` / `list_id` / `clean_body`・`body_plain` / `raw_headers`）。ただし現行 [parser.rs](../src-tauri/src/services/parser.rs) は `auth_result` / `list_id` を**まだ抽出していない**。段階1の URL/from/N-gram 素性は既存データだけで動くが、ヘッダ素性（`hdr:spf_fail` 等）を効かせるには §7.7 のパーサ拡張が前提。
 
 ### 7.1 トークン化（言語非依存土台＋日本語 N-gram）
 
@@ -226,7 +245,89 @@ fn learn(tokens: &[String], is_spam: bool, db: &mut Stats) {
 }
 ```
 
-### 7.4 検証（公開コーパス）
+### 7.4 ストア層（`impl Store` ／ `services/store/spam.rs`）
+
+既存の [tags.rs](../src-tauri/src/services/store/tags.rs) と同じく `impl Store` に生やし、`self.conn.lock()` でアクセスする。カウンタ整合（§4.3）は**同一トランザクション**で担保する。
+
+```rust
+// services/store/spam.rs（スケッチ）
+use std::collections::HashMap;
+impl Store {
+    /// 学習: dedup 済みトークンを一括加算し、総数(n_spam/n_ham)を同一 tx で更新（§4.3）。
+    /// 再マーク時は emails.spam_learned を見て旧方向を打ち消してから付け替える（§7.3）。
+    pub fn spam_learn(&self, email_id: i64, tokens: &[String], is_spam: bool) -> rusqlite::Result<()> { todo!() }
+    /// スコア用: 対象トークンの (spam_count, ham_count) をまとめて引く。
+    pub fn spam_token_counts(&self, tokens: &[String]) -> rusqlite::Result<HashMap<String, (i64, i64)>> { todo!() }
+    /// 学習メール総数 (n_spam, n_ham)。§7.2 の平滑化に使う。
+    pub fn spam_totals(&self) -> rusqlite::Result<(i64, i64)> { todo!() }
+    /// 判定結果を保存（spam_score 列、隔離するなら is_junk も）。
+    pub fn set_spam_score(&self, email_id: i64, score: f64, is_junk: bool) -> rusqlite::Result<()> { todo!() }
+}
+```
+
+`classifier.rs`（§7.2）は `spam_token_counts` / `spam_totals` の戻り値だけを受け取る**純関数**にし、DB を触らない（ユニットテスト容易性を優先）。
+
+### 7.5 コマンド・境界型・配線
+
+コマンドは既存の一括操作規約（`mail_set_read(ids, ...)` / `mail_set_bookmarked(ids, ...)` 等）に合わせ `Vec<i64>` を受ける。しきい値（`τ_low`/`τ_high`）は §9 のユーザー設定（`tauri-plugin-store`）から読み、ハードコードしない。
+
+```rust
+// models.rs（ts-rs 境界型。f64/i32 は TS の number）
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct SpamVerdict {
+    pub score: f64,              // 0..1
+    pub band: String,            // "clean" | "uncertain" | "junk"（§8.1）
+    pub top_tokens: Vec<String>, // 効いた素性（§8.4 の根拠表示に使う）
+}
+
+// commands.rs（既存パターン: State<Store> を取り Result<_, String> を返す）
+#[tauri::command]
+pub fn mail_mark_spam(store: State<Store>, ids: Vec<i64>) -> Result<(), String> { /* spam_learn(.., true) */ Ok(()) }
+#[tauri::command]
+pub fn mail_mark_not_spam(store: State<Store>, ids: Vec<i64>) -> Result<(), String> { /* spam_learn(.., false) */ Ok(()) }
+#[tauri::command]
+pub fn spam_score(store: State<Store>, id: i64) -> Result<SpamVerdict, String> { todo!() }
+```
+
+[lib.rs](../src-tauri/src/lib.rs) の `invoke_handler![...]` に `commands::mail_mark_spam` / `mail_mark_not_spam` / `spam_score` を追記。境界型は `npm run gen:bindings` で `src/bindings/SpamVerdict.ts` に出力される。
+
+### 7.6 マイグレーション `0011_spam.sql`
+
+実列名に整合させる（`emails.spam_score` / `is_junk` は 0001 で既存のため触らない）。
+
+```sql
+-- 迷惑メールのローカル学習（docs/SPAM.md §4）。
+ALTER TABLE emails ADD COLUMN spam_learned INTEGER DEFAULT 0; -- -1=ham学習 / 0=未学習 / 1=spam学習
+
+CREATE TABLE spam_tokens (
+    token      TEXT PRIMARY KEY,   -- 名前空間付き: "w:無料" / "ng:振込" / "url:example.com" / "hdr:spf_fail" ...
+    spam_count INTEGER DEFAULT 0,
+    ham_count  INTEGER DEFAULT 0,
+    updated_at INTEGER DEFAULT 0   -- epoch 秒。刈り込み判断（§4.3）
+);
+
+CREATE TABLE spam_meta (
+    key   TEXT PRIMARY KEY,        -- "n_spam" / "n_ham" / "model_version"
+    value INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO spam_meta(key, value) VALUES ('n_spam', 0), ('n_ham', 0);
+
+CREATE INDEX idx_emails_junk ON emails(is_junk) WHERE is_junk = 1; -- 迷惑フォルダ一覧
+```
+
+[migrations.rs](../src-tauri/src/services/store/migrations.rs) の `MIGRATIONS` に `Migration { version: 11, sql: include_str!("migrations/0011_spam.sql") }` を追加し、同ファイルの `migrations_apply_and_fts_works` テストの想定バージョンを 11 に更新する。
+
+### 7.7 パーサ拡張の前提（ヘッダ素性）
+
+§3.2 の言語非依存シグナルの主力＝認証結果とメール種別。現行 [parser.rs](../src-tauri/src/services/parser.rs) の `ParsedEmail` はこれらを未抽出なので、以下を足す（[MAIL_SECURITY.md](MAIL_SECURITY.md) の認証バッジと素性を共有できる）。
+
+- `Authentication-Results` から SPF / DKIM / DMARC の pass/fail を抽出 → `emails.auth_result` に保存 → トークン `hdr:spf_fail` 等へ。
+- `List-Id` / `Precedence` を抽出 → `emails.list_id` 等へ → メルマガ/一斉配信の素性に。
+
+> 段階1はこの拡張なしでも（URL/from/N-gram で）動く。ただし誤検知抑制に効くヘッダ素性なので早期対応が望ましい。
+
+### 7.8 検証（公開コーパス）
 
 - **SpamAssassin Public Corpus**（生 `.eml`）で `mail-parser` → `tokenize` → 学習 → ホールドアウトで `spam_score` を評価。
 - 指標: 精度（accuracy）よりも **誤検知率（ham を spam と誤る率）を最重視**（正当なメールの隔離は実害が大きい）。閾値は誤検知を抑える側に倒す。

@@ -271,6 +271,80 @@ fn store_fetches<'a>(
     Ok(())
 }
 
+/// 送信済みメッセージを IMAP の Sent フォルダへ保存する（APPEND）。best-effort。
+/// Sent フォルダ名はサーバーで異なるため、特殊用途属性(\Sent)→よくある名前 の順で判定する。
+/// Sent が見つからないときはエラーを返す（呼び出し側で送信自体は成功扱いにする）。
+pub fn append_to_sent(
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    raw: &[u8],
+) -> Result<(), String> {
+    use imap::types::Flag;
+    let tls = native_tls::TlsConnector::builder()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let client = imap::connect((host, port), host, &tls).map_err(|e| e.to_string())?;
+    let mut session = client
+        .login(user, password)
+        .map_err(|(e, _)| e.to_string())?;
+
+    let sent = find_sent_mailbox(&mut session)?
+        .ok_or_else(|| "Sent（送信済み）フォルダが見つかりませんでした".to_string())?;
+
+    // 送信控えは自分で送ったものなので既読(\Seen)で入れる。
+    let result = session
+        .append_with_flags(&sent, raw, &[Flag::Seen])
+        .map_err(|e| e.to_string());
+    let _ = session.logout();
+    result.map(|_| {
+        log::info!("送信控えを Sent フォルダ '{sent}' に保存しました");
+    })
+}
+
+/// Sent（送信済み）フォルダ名を判定する。
+/// 1) 特殊用途属性 \Sent を持つメールボックス（RFC 6154 SPECIAL-USE）。
+/// 2) よくある名前（Sent / Sent Messages / 送信済み 等）に末端名で一致するもの。
+fn find_sent_mailbox(session: &mut ImapSession) -> Result<Option<String>, String> {
+    use imap::types::NameAttribute;
+    let names = session
+        .list(Some(""), Some("*"))
+        .map_err(|e| e.to_string())?;
+
+    // 1) \Sent 特殊用途属性（システム属性以外は Custom で来る）。
+    for n in names.iter() {
+        let has_sent = n
+            .attributes()
+            .iter()
+            .any(|a| matches!(a, NameAttribute::Custom(c) if c.eq_ignore_ascii_case("\\Sent")));
+        if has_sent {
+            return Ok(Some(n.name().to_string()));
+        }
+    }
+
+    // 2) よくある名前で判定（階層区切り '/' '.' を考慮して末端名も見る）。
+    const COMMON: &[&str] = &[
+        "Sent",
+        "Sent Messages",
+        "Sent Items",
+        "送信済みトレイ",
+        "送信済みメール",
+        "送信済み",
+    ];
+    for n in names.iter() {
+        let full = n.name();
+        let leaf = full.rsplit(['/', '.']).next().unwrap_or(full);
+        if COMMON
+            .iter()
+            .any(|c| leaf.eq_ignore_ascii_case(c) || full.eq_ignore_ascii_case(c))
+        {
+            return Ok(Some(full.to_string()));
+        }
+    }
+    Ok(None)
+}
+
 /// 取得した添付の本体（バイト列・ファイル名・MIME型）。
 pub struct FetchedAttachment {
     pub bytes: Vec<u8>,

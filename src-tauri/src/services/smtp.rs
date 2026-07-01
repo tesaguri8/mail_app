@@ -50,8 +50,8 @@ fn angle_wrap(id: &str) -> String {
     }
 }
 
-/// メッセージを組み立てて送信する。成功なら Ok(())。
-pub fn send(config: &SmtpConfig, msg: &OutgoingMessage) -> Result<(), String> {
+/// OutgoingMessage から lettre の Message を組み立てる（SMTP 送信と Sent 保存で共有）。
+pub fn build_message(msg: &OutgoingMessage) -> Result<Message, String> {
     let from = {
         let addr = msg
             .from_email
@@ -80,15 +80,18 @@ pub fn send(config: &SmtpConfig, msg: &OutgoingMessage) -> Result<(), String> {
     }
 
     // 本文: HTML があれば plain + HTML の multipart/alternative、無ければ plain のみ。
-    let email = match msg.body_html.as_ref().filter(|s| !s.trim().is_empty()) {
+    match msg.body_html.as_ref().filter(|s| !s.trim().is_empty()) {
         Some(html) => builder.multipart(MultiPart::alternative_plain_html(
             msg.body_plain.clone(),
             html.clone(),
         )),
         None => builder.body(msg.body_plain.clone()),
     }
-    .map_err(|e| format!("メッセージの組み立てに失敗しました: {e}"))?;
+    .map_err(|e| format!("メッセージの組み立てに失敗しました: {e}"))
+}
 
+/// 組み立て済みメッセージを SMTP で送信する。成功なら Ok(())。
+pub fn send(config: &SmtpConfig, email: &Message) -> Result<(), String> {
     let creds = Credentials::new(config.user.clone(), config.password.clone());
     let host = config.host.as_str();
     let builder = match config.security.as_str() {
@@ -102,7 +105,7 @@ pub fn send(config: &SmtpConfig, msg: &OutgoingMessage) -> Result<(), String> {
     let mailer = builder.port(config.port).credentials(creds).build();
 
     mailer
-        .send(&email)
+        .send(email)
         .map(|_| ())
         .map_err(|e| format!("送信に失敗しました: {e}"))
 }

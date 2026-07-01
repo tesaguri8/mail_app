@@ -270,7 +270,7 @@ pub async fn mail_send(
         port: acct.smtp_port,
         security: acct.smtp_security,
         user: acct.login_user,
-        password,
+        password: password.clone(),
     };
     let message = smtp::OutgoingMessage {
         from_name: acct.display_name,
@@ -284,9 +284,28 @@ pub async fn mail_send(
         in_reply_to: input.in_reply_to,
     };
 
-    tauri::async_runtime::spawn_blocking(move || smtp::send(&config, &message))
+    // 送信メッセージを 1 度だけ組み立て、SMTP 送信と Sent 保存で共有する。
+    let email = smtp::build_message(&message)?;
+    let raw = email.formatted(); // Sent へ APPEND する RFC822 バイト列（Bcc は含まれない）
+
+    tauri::async_runtime::spawn_blocking(move || smtp::send(&config, &email))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())??;
+
+    // 送信成功後、送信控えを IMAP の Sent フォルダへ保存する（best-effort）。
+    // 失敗しても送信自体は成功しているので、警告ログにとどめてエラーにはしない。
+    if let Ok(Some((_email, login, host, port))) = store.get_account_imap(input.account_id as i64) {
+        let res = tauri::async_runtime::spawn_blocking(move || {
+            imap_sync::append_to_sent(&host, port, &login, &password, &raw)
+        })
+        .await;
+        match res {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => log::warn!("送信は成功、Sent への保存に失敗: {e}"),
+            Err(e) => log::warn!("Sent 保存タスクに失敗: {e}"),
+        }
+    }
+    Ok(())
 }
 
 /// 同期範囲（取り込み期間/件数）を設定する。値: "n50" / "3d" / "30d" / "3m" / "all" 等。

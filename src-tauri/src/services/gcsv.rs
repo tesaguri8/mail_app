@@ -5,7 +5,7 @@
 //! 1 セルに複数値を ` ::: ` で連結、`E-mail 1/2/3`・`Phone 1〜4` の番号付き列を持つ点。
 //! UID 列は無いので external_id は付かない（重複整理は氏名＋メール/電話で扱う）。
 
-use super::vcard::{ImportedContact, ParseResult};
+use super::vcard::{ImportedAddress, ImportedContact, ImportedValue, ParseResult};
 use std::collections::HashMap;
 
 const MULTI_SEP: &str = ":::"; // Google の複数値区切り（実際は " ::: "）
@@ -63,59 +63,65 @@ fn build_contact(idx: &HashMap<String, usize>, row: &[String]) -> Option<Importe
     let last = get(idx, row, "Last Name");
     let org = get(idx, row, "Organization Name");
 
-    // メール（E-mail 1..3 - Value、各セルは ::: 複数可）。pref 概念は無いので出現順。
-    let mut emails: Vec<String> = Vec::new();
+    // メール（E-mail 1..3、各セルは ::: で複数、対の Label 列あり）。
+    let mut all_emails: Vec<ImportedValue> = Vec::new();
     for n in 1..=3 {
+        let label = non_empty(get(idx, row, &format!("E-mail {n} - Label")));
         for v in multi(get(idx, row, &format!("E-mail {n} - Value"))) {
             let v = v.to_lowercase();
-            if !emails.contains(&v) {
-                emails.push(v);
+            if !all_emails.iter().any(|x| x.value == v) {
+                all_emails.push(ImportedValue {
+                    label: label.clone(),
+                    value: v,
+                    is_primary: all_emails.is_empty(),
+                });
             }
         }
     }
-    let email = emails.first().cloned();
-    let emails_json = if emails.len() > 1 {
-        serde_json::to_string(&emails[1..]).ok()
-    } else {
-        None
-    };
+    let email = all_emails.first().map(|v| v.value.clone());
 
-    // 電話（Phone 1..4 - Value）。
-    let mut phone = None;
+    // 電話（Phone 1..4）。
+    let mut all_phones: Vec<ImportedValue> = Vec::new();
     for n in 1..=4 {
-        if let Some(p) = multi(get(idx, row, &format!("Phone {n} - Value")))
-            .into_iter()
-            .next()
-        {
-            phone = Some(p);
-            break;
-        }
-    }
-
-    // 住所（Address 1 - Formatted を優先。無ければ構成要素を連結）。
-    let address = {
-        let f = get(idx, row, "Address 1 - Formatted");
-        if !f.is_empty() {
-            Some(f.replace(['\n', '\r'], " ").trim().to_string())
-        } else {
-            let parts: Vec<&str> = [
-                "Address 1 - Postal Code",
-                "Address 1 - Region",
-                "Address 1 - City",
-                "Address 1 - Street",
-                "Address 1 - Extended Address",
-            ]
-            .iter()
-            .map(|k| get(idx, row, k))
-            .filter(|s| !s.is_empty())
-            .collect();
-            if parts.is_empty() {
-                None
-            } else {
-                Some(parts.join(" "))
+        let label = non_empty(get(idx, row, &format!("Phone {n} - Label")));
+        for v in multi(get(idx, row, &format!("Phone {n} - Value"))) {
+            if !all_phones.iter().any(|x| x.value == v) {
+                all_phones.push(ImportedValue {
+                    label: label.clone(),
+                    value: v,
+                    is_primary: all_phones.is_empty(),
+                });
             }
         }
-    };
+    }
+    let phone = all_phones.first().map(|v| v.value.clone());
+
+    // 住所（Address 1..2、構造化）。
+    let mut all_addresses: Vec<ImportedAddress> = Vec::new();
+    for n in 1..=2 {
+        let a = ImportedAddress {
+            label: non_empty(get(idx, row, &format!("Address {n} - Label"))),
+            postal: non_empty(get(idx, row, &format!("Address {n} - Postal Code"))),
+            region: non_empty(get(idx, row, &format!("Address {n} - Region"))),
+            city: non_empty(get(idx, row, &format!("Address {n} - City"))),
+            street: non_empty(get(idx, row, &format!("Address {n} - Street"))),
+            extended: non_empty(get(idx, row, &format!("Address {n} - Extended Address"))),
+            country: non_empty(get(idx, row, &format!("Address {n} - Country"))),
+            is_primary: all_addresses.is_empty(),
+        };
+        if a.postal.is_some()
+            || a.region.is_some()
+            || a.city.is_some()
+            || a.street.is_some()
+            || a.extended.is_some()
+            || a.country.is_some()
+        {
+            all_addresses.push(a);
+        }
+    }
+    let address = all_addresses
+        .first()
+        .map(crate::services::vcard::format_address);
 
     let name_kana = {
         let kl = get(idx, row, "Phonetic Last Name");
@@ -143,10 +149,14 @@ fn build_contact(idx: &HashMap<String, usize>, row: &[String]) -> Option<Importe
         phonetic_given: non_empty(get(idx, row, "Phonetic First Name")),
         name_kana,
         email,
-        emails_json,
         phone,
         organization: non_empty(org),
+        org_title: non_empty(get(idx, row, "Organization Title")),
+        org_department: non_empty(get(idx, row, "Organization Department")),
         address,
+        all_emails,
+        all_phones,
+        all_addresses,
         birthday: non_empty(get(idx, row, "Birthday")),
         note: non_empty(get(idx, row, "Notes")).map(|s| s.replace("\r\n", "\n")),
         source: "google".to_string(),
@@ -255,7 +265,8 @@ mod tests {
         assert_eq!(c.phonetic_given.as_deref(), Some("アイカワ")); // Phonetic First 列にある
         assert_eq!(c.name_kana.as_deref(), Some("アイカワ"));
         assert_eq!(c.email.as_deref(), Some("rabbit@key.ocn.ne.jp"));
-        assert_eq!(c.emails_json.as_deref(), Some("[\"second@x.jp\"]"));
+        assert_eq!(c.all_emails.len(), 2); // 1セル ::: の2件を保持
+        assert_eq!(c.all_emails[1].value, "second@x.jp");
         assert_eq!(c.phone.as_deref(), Some("0997-52-4187"));
         assert_eq!(c.organization.as_deref(), Some("有限会社愛建工業"));
         assert_eq!(c.birthday.as_deref(), Some("1987-10-06"));

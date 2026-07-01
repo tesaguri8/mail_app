@@ -241,25 +241,19 @@ impl Store {
             let mut conn = self.conn.lock().unwrap();
             let tx = conn.transaction()?;
             {
-                // keep と drop の全フィールドを集める。
+                // keep→drop の順に、子テーブルの全メール/電話/住所を value で重複排除して統合。
                 let ids: Vec<i64> = std::iter::once(keep_id)
                     .chain(drop_ids.iter().copied())
                     .collect();
+                let mut emails: Vec<(Option<String>, String)> = Vec::new();
+                let mut phones: Vec<(Option<String>, String)> = Vec::new();
+                let mut addresses: Vec<ContactAddress> = Vec::new();
 
-                // メール（主＋追加 JSON）を出現順で統合・重複排除。
-                let mut emails: Vec<String> = Vec::new();
-                let mut push_email = |e: &str| {
-                    let e = e.trim().to_string();
-                    if !e.is_empty() && !emails.iter().any(|x| x.eq_ignore_ascii_case(&e)) {
-                        emails.push(e);
-                    }
-                };
-
-                // keep を先頭にして順に走査し、空き項目を埋める。フラグは OR。
-                let mut phone: Option<String> = None;
+                // スカラー項目は keep を先頭に空き埋め。フラグは OR。
                 let mut name_kana: Option<String> = None;
                 let mut organization: Option<String> = None;
-                let mut address: Option<String> = None;
+                let mut org_title: Option<String> = None;
+                let mut org_department: Option<String> = None;
                 let mut birthday: Option<String> = None;
                 let mut note: Option<String> = None;
                 let mut fav = false;
@@ -267,11 +261,30 @@ impl Store {
                 let mut remote = false;
 
                 for id in &ids {
-                    let row: Option<MergeRow> = tx
+                    for v in load_values(&tx, "contact_emails", *id)? {
+                        if !emails.iter().any(|(_, x)| x.eq_ignore_ascii_case(&v.value)) {
+                            emails.push((v.label, v.value));
+                        }
+                    }
+                    for v in load_values(&tx, "contact_phones", *id)? {
+                        if !phones.iter().any(|(_, x)| x == &v.value) {
+                            phones.push((v.label, v.value));
+                        }
+                    }
+                    for a in load_addresses(&tx, *id)? {
+                        let same = addresses.iter().any(|x| {
+                            (&x.postal, &x.region, &x.city, &x.street)
+                                == (&a.postal, &a.region, &a.city, &a.street)
+                        });
+                        if !same {
+                            addresses.push(a);
+                        }
+                    }
+                    let row: Option<MergeScalars> = tx
                         .query_row(
-                            "SELECT email, emails, phone, name_kana, organization, address, \
+                            "SELECT name_kana, organization, org_title, org_department, \
                                 birthday, note, is_favorite, is_business, allow_remote_images \
-                         FROM contacts WHERE id = ?1",
+                             FROM contacts WHERE id = ?1",
                             params![id],
                             |r| {
                                 Ok((
@@ -284,56 +297,41 @@ impl Store {
                                     r.get(6)?,
                                     r.get(7)?,
                                     r.get(8)?,
-                                    r.get(9)?,
-                                    r.get(10)?,
                                 ))
                             },
                         )
                         .optional()?;
-                    let Some((em, ej, ph, kana, org, addr, bday, nt, f, b, rm)) = row else {
-                        continue;
-                    };
-                    if let Some(e) = em {
-                        push_email(&e);
+                    if let Some((kana, org, ot, od, bday, nt, f, b, rm)) = row {
+                        name_kana = name_kana.or(kana);
+                        organization = organization.or(org);
+                        org_title = org_title.or(ot);
+                        org_department = org_department.or(od);
+                        birthday = birthday.or(bday);
+                        note = note.or(nt);
+                        fav |= f != 0;
+                        biz |= b != 0;
+                        remote |= rm != 0;
                     }
-                    if let Some(j) = ej {
-                        if let Ok(list) = serde_json::from_str::<Vec<String>>(&j) {
-                            for e in list {
-                                push_email(&e);
-                            }
-                        }
-                    }
-                    phone = phone.or(ph);
-                    name_kana = name_kana.or(kana);
-                    organization = organization.or(org);
-                    address = address.or(addr);
-                    birthday = birthday.or(bday);
-                    note = note.or(nt);
-                    fav |= f != 0;
-                    biz |= b != 0;
-                    remote |= rm != 0;
                 }
 
-                let email = emails.first().cloned();
-                let emails_json = if emails.len() > 1 {
-                    serde_json::to_string(&emails[1..]).ok()
-                } else {
-                    None
-                };
+                let email = emails.first().map(|(_, v)| v.clone());
+                let phone = phones.first().map(|(_, v)| v.clone());
+                let address = addresses.first().map(address_string);
 
                 tx.execute(
                     "UPDATE contacts SET \
-                     email = ?1, emails = ?2, phone = ?3, name_kana = ?4, organization = ?5, \
-                     address = ?6, birthday = ?7, note = ?8, \
-                     is_favorite = ?9, is_business = ?10, allow_remote_images = ?11, \
+                     email = ?1, phone = ?2, organization = ?3, org_title = ?4, \
+                     org_department = ?5, name_kana = ?6, address = ?7, birthday = ?8, note = ?9, \
+                     is_favorite = ?10, is_business = ?11, allow_remote_images = ?12, \
                      updated_at = CURRENT_TIMESTAMP \
-                 WHERE id = ?12",
+                 WHERE id = ?13",
                     params![
                         email,
-                        emails_json,
                         phone,
-                        name_kana,
                         organization,
+                        org_title,
+                        org_department,
+                        name_kana,
                         address,
                         birthday,
                         note,
@@ -344,10 +342,33 @@ impl Store {
                     ],
                 )?;
 
-                // 統合後の値を keep の子テーブルへ反映（メールは全件、電話/住所は主のみ）。
-                rebuild_emails(&tx, keep_id, &emails)?;
-                set_primary_value(&tx, "contact_phones", keep_id, phone.as_deref())?;
-                set_primary_address(&tx, keep_id, address.as_deref())?;
+                // 統合後の全メール/電話/住所を keep の子テーブルへ書き直す。
+                rebuild_pairs(&tx, "contact_emails", keep_id, &emails)?;
+                rebuild_pairs(&tx, "contact_phones", keep_id, &phones)?;
+                tx.execute(
+                    "DELETE FROM contact_addresses WHERE contact_id = ?1",
+                    params![keep_id],
+                )?;
+                for (i, a) in addresses.iter().enumerate() {
+                    tx.execute(
+                        "INSERT INTO contact_addresses \
+                             (contact_id, label, postal, region, city, street, extended, country, \
+                              is_primary, position) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                        params![
+                            keep_id,
+                            a.label,
+                            a.postal,
+                            a.region,
+                            a.city,
+                            a.street,
+                            a.extended,
+                            a.country,
+                            (i == 0) as i64,
+                            i as i64,
+                        ],
+                    )?;
+                }
 
                 // drop 側のグループ所属を keep に移し、drop 行を削除（子テーブルは CASCADE）。
                 for id in drop_ids {
@@ -384,11 +405,9 @@ impl Store {
     }
 }
 
-/// merge_contacts で 1 行分を取り出すタプル（email, emails_json, phone, kana, org,
-/// address, birthday, note, is_favorite, is_business, allow_remote_images）。
-type MergeRow = (
-    Option<String>,
-    Option<String>,
+/// merge_contacts のスカラー行（name_kana, organization, org_title, org_department,
+/// birthday, note, is_favorite, is_business, allow_remote_images）。
+type MergeScalars = (
     Option<String>,
     Option<String>,
     Option<String>,
@@ -400,14 +419,54 @@ type MergeRow = (
     i64,
 );
 
-/// インポート 1 件を新規挿入。
+/// (label, value) の列で子テーブルを作り直す（先頭を primary）。
+fn rebuild_pairs(
+    tx: &rusqlite::Transaction,
+    table: &str,
+    cid: i64,
+    values: &[(Option<String>, String)],
+) -> rusqlite::Result<()> {
+    tx.execute(
+        &format!("DELETE FROM {table} WHERE contact_id = ?1"),
+        params![cid],
+    )?;
+    for (i, (label, value)) in values.iter().enumerate() {
+        tx.execute(
+            &format!(
+                "INSERT INTO {table} (contact_id, label, value, is_primary, position) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)"
+            ),
+            params![cid, label, value, (i == 0) as i64, i as i64],
+        )?;
+    }
+    Ok(())
+}
+
+/// 構造化住所を1行の文字列へ（flat 保存・一覧用）。
+fn address_string(a: &ContactAddress) -> String {
+    [
+        a.postal.as_deref(),
+        a.region.as_deref(),
+        a.city.as_deref(),
+        a.street.as_deref(),
+        a.extended.as_deref(),
+        a.country.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|s| !s.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
+/// インポート 1 件を新規挿入。flat 列は主(primary)値、子テーブルへ全件を保存。
 fn insert_from_import(tx: &rusqlite::Transaction, c: &ImportedContact) -> rusqlite::Result<()> {
     tx.execute(
         "INSERT INTO contacts \
              (display_name, family_name, given_name, phonetic_family, phonetic_given, \
-              name_kana, email, emails, phone, organization, address, \
+              name_kana, email, phone, organization, org_title, org_department, address, \
               birthday, note, source, external_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             c.display_name,
             c.family_name,
@@ -416,9 +475,10 @@ fn insert_from_import(tx: &rusqlite::Transaction, c: &ImportedContact) -> rusqli
             c.phonetic_given,
             c.name_kana,
             c.email,
-            c.emails_json,
             c.phone,
             c.organization,
+            c.org_title,
+            c.org_department,
             c.address,
             c.birthday,
             c.note,
@@ -427,20 +487,65 @@ fn insert_from_import(tx: &rusqlite::Transaction, c: &ImportedContact) -> rusqli
         ],
     )?;
     let id = tx.last_insert_rowid();
-    // 子テーブルへ: メールは主＋追加(JSON)を全件、電話/住所は主のみ（Stage1）。
-    let mut emails: Vec<String> = c.email.iter().cloned().collect();
-    if let Some(j) = &c.emails_json {
-        if let Ok(extra) = serde_json::from_str::<Vec<String>>(j) {
-            for e in extra {
-                if !emails.iter().any(|x| x.eq_ignore_ascii_case(&e)) {
-                    emails.push(e);
-                }
-            }
-        }
+    write_import_children(tx, id, c)?;
+    Ok(())
+}
+
+/// ImportedContact のラベル付き複数値を子テーブルへ書き込む（全件置き換え）。
+fn write_import_children(
+    tx: &rusqlite::Transaction,
+    id: i64,
+    c: &ImportedContact,
+) -> rusqlite::Result<()> {
+    rebuild_labeled(tx, "contact_emails", id, &c.all_emails)?;
+    rebuild_labeled(tx, "contact_phones", id, &c.all_phones)?;
+    tx.execute(
+        "DELETE FROM contact_addresses WHERE contact_id = ?1",
+        params![id],
+    )?;
+    for (i, a) in c.all_addresses.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO contact_addresses \
+                 (contact_id, label, postal, region, city, street, extended, country, \
+                  is_primary, position) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                id,
+                a.label,
+                a.postal,
+                a.region,
+                a.city,
+                a.street,
+                a.extended,
+                a.country,
+                (i == 0) as i64,
+                i as i64,
+            ],
+        )?;
     }
-    rebuild_emails(tx, id, &emails)?;
-    set_primary_value(tx, "contact_phones", id, c.phone.as_deref())?;
-    set_primary_address(tx, id, c.address.as_deref())?;
+    Ok(())
+}
+
+/// ラベル付き値（メール/電話）で子テーブルを作り直す。
+fn rebuild_labeled(
+    tx: &rusqlite::Transaction,
+    table: &str,
+    cid: i64,
+    values: &[crate::services::vcard::ImportedValue],
+) -> rusqlite::Result<()> {
+    tx.execute(
+        &format!("DELETE FROM {table} WHERE contact_id = ?1"),
+        params![cid],
+    )?;
+    for (i, v) in values.iter().enumerate() {
+        tx.execute(
+            &format!(
+                "INSERT INTO {table} (contact_id, label, value, is_primary, position) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)"
+            ),
+            params![cid, v.label, v.value, (i == 0) as i64, i as i64],
+        )?;
+    }
     Ok(())
 }
 
@@ -529,22 +634,6 @@ fn set_primary_address(conn: &Connection, cid: i64, street: Option<&str>) -> rus
     Ok(())
 }
 
-/// メールの子テーブルを与えたリストで作り直す（先頭を primary）。
-fn rebuild_emails(conn: &Connection, cid: i64, emails: &[String]) -> rusqlite::Result<()> {
-    conn.execute(
-        "DELETE FROM contact_emails WHERE contact_id = ?1",
-        params![cid],
-    )?;
-    for (i, e) in emails.iter().enumerate() {
-        conn.execute(
-            "INSERT INTO contact_emails (contact_id, value, is_primary, position) \
-             VALUES (?1, ?2, ?3, ?4)",
-            params![cid, e, (i == 0) as i64, i as i64],
-        )?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -600,6 +689,30 @@ mod tests {
             after.emails.iter().any(|e| e.value == "b@x.jp"),
             "追加メールは残る"
         );
+    }
+
+    #[test]
+    fn import_keeps_all_phones_and_structured_address() {
+        let s = store();
+        let p = vcard::parse(
+            "BEGIN:VCARD\nVERSION:3.0\nFN:多値 太郎\nTEL;type=CELL:090-1111\nTEL;type=WORK:03-2222\nTEL:03-3333\nADR;type=HOME:;;番地1;那覇市;沖縄県;9000001;日本\nTITLE:部長\nORG:テスト社;営業部\nEND:VCARD\n",
+        );
+        s.import_contacts(&p).unwrap();
+        let id = s.list_contacts(None).unwrap()[0].id as i64;
+        let c = s.get_contact(id).unwrap();
+        // 電話3件（1件目=CELL が主）。
+        assert_eq!(c.phones.len(), 3, "全電話を保持");
+        assert!(c.phones[0].is_primary);
+        assert_eq!(c.phones[0].label.as_deref(), Some("携帯"));
+        // 住所は構造化。
+        assert_eq!(c.addresses.len(), 1);
+        assert_eq!(c.addresses[0].region.as_deref(), Some("沖縄県"));
+        assert_eq!(c.addresses[0].city.as_deref(), Some("那覇市"));
+        assert_eq!(c.addresses[0].postal.as_deref(), Some("9000001"));
+        assert_eq!(c.addresses[0].label.as_deref(), Some("自宅"));
+        // 組織の役職・部署。
+        assert_eq!(c.org_title.as_deref(), Some("部長"));
+        assert_eq!(c.org_department.as_deref(), Some("営業部"));
     }
 
     #[test]
@@ -849,16 +962,17 @@ fn update_from_import(
              phonetic_given  = COALESCE(?5, phonetic_given), \
              name_kana       = COALESCE(?6, name_kana), \
              email           = COALESCE(?7, email), \
-             emails          = COALESCE(?8, emails), \
-             phone           = COALESCE(?9, phone), \
-             organization    = COALESCE(?10, organization), \
-             address         = COALESCE(?11, address), \
-             birthday        = COALESCE(?12, birthday), \
-             note            = COALESCE(?13, note), \
-             source          = ?14, \
-             external_id     = COALESCE(?15, external_id), \
+             phone           = COALESCE(?8, phone), \
+             organization    = COALESCE(?9, organization), \
+             org_title       = COALESCE(?10, org_title), \
+             org_department  = COALESCE(?11, org_department), \
+             address         = COALESCE(?12, address), \
+             birthday        = COALESCE(?13, birthday), \
+             note            = COALESCE(?14, note), \
+             source          = ?15, \
+             external_id     = COALESCE(?16, external_id), \
              updated_at      = CURRENT_TIMESTAMP \
-         WHERE id = ?16",
+         WHERE id = ?17",
         params![
             c.display_name,
             c.family_name,
@@ -867,9 +981,10 @@ fn update_from_import(
             c.phonetic_given,
             c.name_kana,
             c.email,
-            c.emails_json,
             c.phone,
             c.organization,
+            c.org_title,
+            c.org_department,
             c.address,
             c.birthday,
             c.note,
@@ -878,5 +993,9 @@ fn update_from_import(
             id,
         ],
     )?;
+    // 子テーブルは取り込み値で作り直す（このソースの最新値を反映）。
+    if !c.all_emails.is_empty() || !c.all_phones.is_empty() || !c.all_addresses.is_empty() {
+        write_import_children(tx, id, c)?;
+    }
     Ok(())
 }

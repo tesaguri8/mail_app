@@ -4,7 +4,30 @@
 //! 複数 EMAIL/TEL（type=pref を優先）・N（姓;名;…）・X-PHONETIC-*（よみ）・ADR・BDAY・NOTE・UID。
 //! PHOTO やその他 X- プロパティは無視する。
 
+/// ラベル付きの値（メール・電話）。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ImportedValue {
+    pub label: Option<String>,
+    pub value: String,
+    pub is_primary: bool,
+}
+
+/// ラベル付きの構造化住所。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ImportedAddress {
+    pub label: Option<String>,
+    pub postal: Option<String>,
+    pub region: Option<String>,
+    pub city: Option<String>,
+    pub street: Option<String>,
+    pub extended: Option<String>,
+    pub country: Option<String>,
+    pub is_primary: bool,
+}
+
 /// 取り込んだ 1 件の連絡先（DB 投入前の中間表現）。
+/// flat な email/phone/address は主(primary)値（一覧・重複判定・後方互換用）、
+/// all_* が全件のラベル付き値（子テーブルへ保存）。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ImportedContact {
     pub display_name: String,
@@ -18,13 +41,21 @@ pub struct ImportedContact {
     pub phonetic_given: Option<String>,
     pub name_kana: Option<String>,
     pub email: Option<String>,
-    /// 追加アドレス（JSON 配列文字列。主アドレス以外が 1 件以上あるときのみ）。
-    pub emails_json: Option<String>,
     pub phone: Option<String>,
     pub organization: Option<String>,
+    /// 役職。
+    pub org_title: Option<String>,
+    /// 部署。
+    pub org_department: Option<String>,
     pub address: Option<String>,
     pub birthday: Option<String>,
     pub note: Option<String>,
+    /// 全メール（ラベル付き）。
+    pub all_emails: Vec<ImportedValue>,
+    /// 全電話（ラベル付き）。
+    pub all_phones: Vec<ImportedValue>,
+    /// 全住所（ラベル付き・構造化）。
+    pub all_addresses: Vec<ImportedAddress>,
     /// 'icloud' | 'google' | 'local'（PRODID から推定）。
     pub source: String,
     /// vCard UID（あれば。後日の同期の突き合わせキー）。
@@ -174,11 +205,13 @@ struct CardAcc {
     n: Option<Vec<String>>,
     kana_last: Option<String>,
     kana_first: Option<String>,
-    /// (value, is_pref)
-    emails: Vec<(String, bool)>,
-    tels: Vec<(String, bool)>,
+    /// (value, label, is_pref)
+    emails: Vec<(String, Option<String>, bool)>,
+    tels: Vec<(String, Option<String>, bool)>,
+    addresses: Vec<(ImportedAddress, bool)>,
     org: Option<String>,
-    address: Option<(String, bool)>,
+    org_department: Option<String>,
+    org_title: Option<String>,
     birthday: Option<String>,
     note: Option<String>,
     uid: Option<String>,
@@ -202,37 +235,54 @@ impl CardAcc {
             "X-PHONETIC-FIRST-NAME" => self.kana_first = non_empty(value),
             "EMAIL" => {
                 if let Some(v) = non_empty(value) {
-                    self.emails.push((v, is_pref(params)));
+                    self.emails.push((v, type_label(params), is_pref(params)));
                 }
             }
             "TEL" => {
                 if let Some(v) = non_empty(value) {
-                    self.tels.push((v, is_pref(params)));
+                    self.tels.push((v, type_label(params), is_pref(params)));
                 }
             }
+            "TITLE" if self.org_title.is_none() => self.org_title = non_empty(value),
             "ORG" => {
-                // 先頭コンポーネント（会社名）を採用。
-                let first = split_unescaped(raw_value, ';')
+                // 1つ目=会社名、2つ目=部署。
+                let parts: Vec<String> = split_unescaped(raw_value, ';')
                     .into_iter()
                     .map(|p| unescape(&p).trim().to_string())
-                    .find(|s| !s.is_empty());
+                    .collect();
                 if self.org.is_none() {
-                    self.org = first;
+                    self.org = parts.iter().find(|s| !s.is_empty()).cloned();
+                }
+                if self.org_department.is_none() {
+                    self.org_department = parts.get(1).filter(|s| !s.is_empty()).cloned();
                 }
             }
             "ADR" => {
-                // 空でない構成要素を vCard 並びで連結。pref を優先採用。
-                let joined = split_unescaped(raw_value, ';')
+                // 構造化: PO;拡張;番地;市区町村;都道府県;郵便番号;国。
+                let p = split_unescaped(raw_value, ';')
                     .iter()
-                    .map(|p| unescape(p).trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                if let Some(addr) = non_empty(joined) {
-                    let pref = is_pref(params);
-                    if self.address.is_none() || (pref && !self.address.as_ref().unwrap().1) {
-                        self.address = Some((addr, pref));
-                    }
+                    .map(|s| unescape(s).trim().to_string())
+                    .collect::<Vec<_>>();
+                let get = |i: usize| p.get(i).cloned().filter(|s| !s.is_empty());
+                let addr = ImportedAddress {
+                    label: type_label(params),
+                    extended: get(1),
+                    street: get(2),
+                    city: get(3),
+                    region: get(4),
+                    postal: get(5),
+                    country: get(6),
+                    is_primary: false,
+                };
+                // いずれかの要素が非空なら採用。
+                if addr.street.is_some()
+                    || addr.city.is_some()
+                    || addr.region.is_some()
+                    || addr.postal.is_some()
+                    || addr.extended.is_some()
+                    || addr.country.is_some()
+                {
+                    self.addresses.push((addr, is_pref(params)));
                 }
             }
             "BDAY" => {
@@ -253,27 +303,27 @@ impl CardAcc {
     }
 
     fn finish(self) -> Option<ImportedContact> {
-        // 主/追加メールを pref 優先で並べ替え。
-        let mut emails: Vec<String> = Vec::new();
-        for (v, pref) in &self.emails {
-            if *pref {
-                emails.insert(0, v.clone());
+        // pref を先頭にして全メール/全電話をラベル付きで整える。
+        let all_emails = order_values(&self.emails);
+        let all_phones = order_values(&self.tels);
+        let email = all_emails.first().map(|v| v.value.clone());
+        let phone = all_phones.first().map(|v| v.value.clone());
+
+        // 住所も pref 先頭で並べ、先頭を主住所（flat）に整形。
+        let mut all_addresses: Vec<ImportedAddress> = Vec::new();
+        for (a, pref) in self.addresses {
+            let mut a = a;
+            a.is_primary = false;
+            if pref {
+                all_addresses.insert(0, a);
             } else {
-                emails.push(v.clone());
+                all_addresses.push(a);
             }
         }
-        emails.dedup();
-        let email = emails.first().cloned();
-        let emails_json = if emails.len() > 1 {
-            serde_json::to_string(&emails[1..]).ok()
-        } else {
-            None
-        };
-
-        let phone = {
-            let pref = self.tels.iter().find(|(_, p)| *p).map(|(v, _)| v.clone());
-            pref.or_else(|| self.tels.first().map(|(v, _)| v.clone()))
-        };
+        if let Some(a) = all_addresses.first_mut() {
+            a.is_primary = true;
+        }
+        let address = all_addresses.first().map(format_address);
 
         // よみは並び替え・読み上げのため常に空白区切りで連結。
         let name_kana = match (self.kana_last.as_deref(), self.kana_first.as_deref()) {
@@ -309,16 +359,80 @@ impl CardAcc {
             phonetic_given: self.kana_first,
             name_kana,
             email,
-            emails_json,
             phone,
             organization: self.org,
-            address: self.address.map(|(a, _)| a),
+            org_title: self.org_title,
+            org_department: self.org_department,
+            address,
             birthday: self.birthday,
             note: self.note,
+            all_emails,
+            all_phones,
+            all_addresses,
             source,
             external_id: self.uid,
         })
     }
+}
+
+/// (value, label, is_pref) の列を pref 先頭・重複排除の ImportedValue 列にする。
+fn order_values(items: &[(String, Option<String>, bool)]) -> Vec<ImportedValue> {
+    let mut out: Vec<ImportedValue> = Vec::new();
+    for (v, label, pref) in items {
+        if out.iter().any(|x| x.value.eq_ignore_ascii_case(v)) {
+            continue;
+        }
+        let iv = ImportedValue {
+            label: label.clone(),
+            value: v.clone(),
+            is_primary: false,
+        };
+        if *pref {
+            out.insert(0, iv);
+        } else {
+            out.push(iv);
+        }
+    }
+    if let Some(first) = out.first_mut() {
+        first.is_primary = true;
+    }
+    out
+}
+
+/// 構造化住所を1行の文字列へ（flat 保存・一覧用）。
+pub fn format_address(a: &ImportedAddress) -> String {
+    [
+        a.postal.as_deref(),
+        a.region.as_deref(),
+        a.city.as_deref(),
+        a.street.as_deref(),
+        a.extended.as_deref(),
+        a.country.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|s| !s.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
+/// TYPE パラメータから見出しラベルを作る（HOME→自宅 等。INTERNET/PREF/VOICE は無視）。
+fn type_label(params: &[(String, String)]) -> Option<String> {
+    for (k, v) in params {
+        if k != "TYPE" {
+            continue;
+        }
+        match v.to_ascii_uppercase().as_str() {
+            "INTERNET" | "PREF" | "VOICE" => continue,
+            "HOME" => return Some("自宅".to_string()),
+            "WORK" => return Some("職場".to_string()),
+            "CELL" | "IPHONE" | "MOBILE" => return Some("携帯".to_string()),
+            "FAX" => return Some("FAX".to_string()),
+            "MAIN" => return Some("代表".to_string()),
+            other => return Some(other.to_string()),
+        }
+    }
+    None
 }
 
 fn non_empty(s: String) -> Option<String> {
@@ -396,12 +510,23 @@ mod tests {
         assert_eq!(c.phonetic_family.as_deref(), Some("アイカワ"));
         assert_eq!(c.name_kana.as_deref(), Some("アイカワ"));
         assert_eq!(c.email.as_deref(), Some("rabbit@key.ocn.ne.jp"));
-        assert_eq!(c.emails_json.as_deref(), Some("[\"second@example.com\"]"));
-        assert_eq!(c.phone.as_deref(), Some("0997-52-4187")); // pref 優先
+        // メールは全件保持（主＋追加）。
+        assert_eq!(c.all_emails.len(), 2);
+        assert_eq!(c.all_emails[0].value, "rabbit@key.ocn.ne.jp");
+        assert!(c.all_emails[0].is_primary);
+        assert_eq!(c.all_emails[1].value, "second@example.com");
+        // 電話も全件（pref を主に）。
+        assert_eq!(c.phone.as_deref(), Some("0997-52-4187"));
+        assert_eq!(c.all_phones.len(), 2);
+        // 組織の役職・部署。
+        assert_eq!(c.org_title.as_deref(), Some("専務取締役"));
+        // 住所は構造化（都道府県・郵便番号）。
+        assert_eq!(c.all_addresses.len(), 1);
         assert_eq!(
-            c.address.as_deref(),
-            Some("鹿児島県奄美市名瀬佐大熊町17-10AKビル2F 8940005")
+            c.all_addresses[0].region.as_deref(),
+            Some("鹿児島県奄美市名瀬佐大熊町17-10AKビル2F")
         );
+        assert_eq!(c.all_addresses[0].postal.as_deref(), Some("8940005"));
         assert_eq!(c.external_id.as_deref(), Some("ABC-123"));
     }
 

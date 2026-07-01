@@ -186,6 +186,18 @@ pub struct SpamVerdict {
     pub top_tokens: Vec<String>,
 }
 
+/// 迷惑メール判定のユーザー設定（docs/SPAM.md §9）。既定値は spam モジュールの定数。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct SpamSettings {
+    /// 迷惑判定の有効/無効（§9.1 spam.enabled）。
+    pub enabled: bool,
+    /// uncertain 帯の下限 τ_low（§8.1）。
+    pub threshold_low: f64,
+    /// junk 隔離の τ_high（§8.1）。
+    pub threshold_high: f64,
+}
+
 /// 同期結果。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

@@ -62,6 +62,8 @@ pub fn run() {
             commands::mail_mark_spam,
             commands::mail_mark_not_spam,
             commands::spam_score,
+            commands::spam_settings_get,
+            commands::spam_settings_set,
             commands::account_set_sync_window,
             commands::account_update,
             commands::signature_list,

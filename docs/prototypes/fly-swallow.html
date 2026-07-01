@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rondine — Fly 送信アニメーション プロトタイプ（連番スプライト）</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; font-family: "Segoe UI", system-ui, sans-serif; }
+      body { display: flex; align-items: center; justify-content: center; background: #0e1220; }
+
+      /* アプリのフレームレス全面パネルを模したステージ（背景は実写写真） */
+      #stage {
+        position: relative;
+        width: min(94vw, 1100px);
+        height: min(90vh, 700px);
+        border-radius: 18px;
+        overflow: hidden;
+        background: #7ea6d8 center/cover no-repeat;
+        box-shadow: 0 30px 80px rgba(0,0,0,.55);
+      }
+      #stage::after { /* うっすら空を明るく（逆光シルエットが映える） */
+        content: ""; position: absolute; inset: 0;
+        background: linear-gradient(180deg, rgba(255,255,255,.10), rgba(0,0,0,.10));
+        pointer-events: none;
+      }
+
+      #card {
+        position: absolute; left: 50%; bottom: 34px; transform: translateX(-50%);
+        width: min(560px, 82%);
+        background: rgba(255,255,255,.86); backdrop-filter: blur(10px);
+        border: 1px solid rgba(255,255,255,.6); border-radius: 16px;
+        padding: 16px 18px; box-shadow: 0 12px 40px rgba(30,42,68,.28); z-index: 3;
+      }
+      #card .to { font-size: 13px; opacity: .7; margin-bottom: 8px; color:#1f2a44; }
+      #card .subject { font-size: 15px; font-weight: 650; margin-bottom: 4px; color:#1f2a44; }
+      #card .preview { font-size: 13px; opacity: .6; line-height: 1.5; margin-bottom: 14px; color:#1f2a44; white-space: pre-line; }
+      #card .actions { display: flex; align-items: center; justify-content: space-between; }
+      .status { font-size: 12px; color: #1f2a44; opacity: .6; min-height: 16px; }
+
+      .fly-btn {
+        position: relative; display: inline-flex; align-items: center; gap: 8px;
+        padding: 10px 20px 10px 14px; border: none; border-radius: 999px; cursor: pointer;
+        font-size: 15px; font-weight: 700; letter-spacing: .3px; color: white;
+        background: linear-gradient(135deg, #3a5cc4, #2b3f86);
+        box-shadow: 0 8px 20px rgba(43,63,134,.45);
+        transition: transform .12s ease, box-shadow .12s ease, opacity .2s;
+      }
+      .fly-btn:hover { transform: translateY(-1px); }
+      .fly-btn[disabled] { opacity: .55; cursor: default; }
+      .fly-btn .perch { width: 30px; height: 24px; display: inline-flex; align-items: center; justify-content: center; }
+      .fly-btn .perch img { width: 30px; height: auto; }
+
+      #flight { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+      .hint { position: absolute; top: 14px; left: 16px; color: rgba(255,255,255,.9);
+        font-size: 12px; letter-spacing: .3px; text-shadow: 0 1px 3px rgba(0,0,0,.4); z-index: 3; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="module">
+      import React, { useState, useRef, useCallback, useEffect } from "https://esm.sh/react@18.3.1";
+      import { createRoot } from "https://esm.sh/react-dom@18.3.1/client";
+      import { motion, useAnimationControls } from "https://esm.sh/framer-motion@11.3.0?deps=react@18.3.1,react-dom@18.3.1";
+
+      const h = React.createElement;
+
+      // ── 素材設定 ────────────────────────────────────────────────
+      // USE_REAL=true: 実写切り抜き1枚(swallow_real.png)を滑空させる（写真クオリティ確認用）
+      // USE_REAL=false: シルエット連番(swallow_00..)で羽ばたき
+      const USE_REAL = true;
+      const REAL = "./frames/swallow_real.png";
+      const FRAME_COUNT = 12;
+      const framePath = (i) => `./frames/swallow_${String(i).padStart(2, "0")}.png`;
+      const FLAP_MS = 45;          // 1 フレームの表示時間（羽ばたき速度）
+      const SPRITE = USE_REAL ? 140 : 120;  // 飛行スプライトの基準サイズ(px)
+      const BG = "../../src/renderer/assets/background.jpg"; // アプリの実写背景
+
+      // 先読み
+      if (USE_REAL) { const im = new Image(); im.src = REAL; }
+      else { for (let i = 0; i < FRAME_COUNT; i++) { const im = new Image(); im.src = framePath(i); } }
+
+      const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+      const lerp = (a, b, t) => a + (b - a) * t;
+
+      /* 自由飛行の軌道を生成（origin=ボタン発着点）。毎回ゆらぎで微妙に変わる。
+         各点で: scaleX=進行方向へ反転 / rotate=上下でバンク / scale=奥行き    */
+      function buildRoam(W, H, origin) {
+        const j = (n) => (Math.random() - 0.5) * n;
+        const pts = [
+          { x: origin.x,            y: origin.y },
+          { x: W * 0.30 + j(70),    y: H * 0.50 + j(50) },
+          { x: W * 0.14 + j(50),    y: H * 0.26 + j(40) },
+          { x: W * 0.45 + j(90),    y: H * 0.14 + j(30) },
+          { x: W * 0.80 + j(70),    y: H * 0.20 + j(40) },
+          { x: W * 0.88 + j(50),    y: H * 0.48 + j(40) },
+          { x: W * 0.60 + j(90),    y: H * 0.40 + j(40) },
+          { x: origin.x,            y: origin.y },  // 帰還
+        ];
+        const x = [], y = [], rot = [], sx = [], sc = [];
+        for (let i = 0; i < pts.length; i++) {
+          const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const len = Math.hypot(dx, dy) || 1;
+          x.push(pts[i].x); y.push(pts[i].y);
+          sx.push(dx < 0 ? 1 : -1);                         // 既定は左向き
+          const bank = clamp((dy / len) * 26, -22, 22);
+          rot.push(dx < 0 ? bank : -bank);                  // 反転時はバンクも反転
+          sc.push(lerp(0.5, 1.05, clamp(pts[i].y / H, 0, 1))); // 上=遠い=小さい
+        }
+        // ゆったり緩急（等間隔でない times）
+        const times = [0, 0.16, 0.30, 0.46, 0.64, 0.80, 0.92, 1];
+        return { x, y, rotate: rot, scaleX: sx, scale: sc, times };
+      }
+
+      function FlightSprite({ frame, alive }) {
+        const imgStyle = { width: "100%", height: "auto", display: "block",
+                           filter: "drop-shadow(0 8px 12px rgba(0,0,0,.28))" };
+        if (USE_REAL) {
+          // 実写1枚。翼の付け根あたりを軸に微妙な羽ばたきパルスで“生き物感”を出す
+          return h(
+            motion.div,
+            {
+              style: { transformOrigin: "44% 42%" },
+              animate: alive ? { scaleY: [1, 0.9, 1], rotate: [0, -1.5, 0] } : { scaleY: 1, rotate: 0 },
+              transition: { duration: 0.16, repeat: Infinity, ease: "easeInOut" },
+            },
+            h("img", { src: REAL, draggable: false, style: imgStyle })
+          );
+        }
+        return h("img", { src: framePath(frame), draggable: false, style: imgStyle });
+      }
+
+      function App() {
+        const stageRef = useRef(null);
+        const controls = useAnimationControls();
+        const [phase, setPhase] = useState("idle");  // idle | flying | success
+        const [status, setStatus] = useState("");
+        const [frame, setFrame] = useState(0);
+        const flapTimer = useRef(null);
+
+        // 羽ばたきフレーム送り（flying の間だけ回す。実写モードはパルスで代替）
+        useEffect(() => {
+          if (USE_REAL) return;
+          if (phase === "flying") {
+            flapTimer.current = setInterval(() => setFrame((f) => (f + 1) % FRAME_COUNT), FLAP_MS);
+          } else {
+            clearInterval(flapTimer.current);
+          }
+          return () => clearInterval(flapTimer.current);
+        }, [phase]);
+
+        const onFly = useCallback(async () => {
+          if (phase !== "idle") return;
+          const stage = stageRef.current.getBoundingClientRect();
+          const btn = document.getElementById("fly-btn").getBoundingClientRect();
+          const origin = {
+            x: btn.left - stage.left + 18,
+            y: btn.top - stage.top + btn.height / 2,
+          };
+
+          setPhase("flying");
+          setStatus("送信中… ツバメが手紙を届けています");
+
+          await controls.set({ x: origin.x, y: origin.y, rotate: 0, scale: 0.85, scaleX: -1, opacity: 1 });
+
+          // 実送信(ダミー2.4s)と最低飛行時間を並走
+          const send = new Promise((r) => setTimeout(r, 2400));
+          const roam = buildRoam(stage.width, stage.height, origin);
+          const lap = controls.start({
+            x: roam.x, y: roam.y, rotate: roam.rotate, scaleX: roam.scaleX, scale: roam.scale,
+            transition: { duration: 2.8, ease: "easeInOut", times: roam.times },
+          });
+          await Promise.all([send, lap]);
+
+          // 着地（ボタンへ戻ってふわっと止まる）
+          setStatus("送信しました ✓");
+          await controls.start({
+            x: origin.x, y: origin.y, rotate: [null, -10, 0], scale: 0.72, scaleX: -1,
+            transition: { duration: 0.5, ease: "easeOut" },
+          });
+          setPhase("success");
+          setFrame(0);
+          setTimeout(() => { setStatus(""); setPhase("idle"); }, 1500);
+        }, [phase, controls]);
+
+        // 背景写真をセット（無ければ青空グラデにフォールバック）
+        useEffect(() => {
+          const el = stageRef.current;
+          const probe = new Image();
+          probe.onload = () => { el.style.backgroundImage = `url("${BG}")`; };
+          probe.onerror = () => {
+            el.style.background = "radial-gradient(1200px 600px at 70% -10%, #cfe0f5, #7ea6d8 60%, #5a83bd)";
+          };
+          probe.src = BG;
+        }, []);
+
+        return h(
+          "div", { id: "stage", ref: stageRef },
+          h("div", { className: "hint" }, "Rondine — Fly 送信プロトタイプ（連番スプライト）/ Fly を押すとツバメが飛びます"),
+
+          h(
+            "div", { id: "flight" },
+            h(
+              motion.div,
+              {
+                animate: controls,
+                initial: { opacity: 0 },
+                style: {
+                  position: "absolute", left: 0, top: 0,
+                  width: SPRITE, height: SPRITE,
+                  marginLeft: -SPRITE / 2, marginTop: -SPRITE / 2,
+                },
+              },
+              phase !== "idle" ? h(FlightSprite, { frame, alive: phase === "flying" }) : null
+            )
+          ),
+
+          h(
+            "div", { id: "card" },
+            h("div", { className: "to" }, "To: taro@example.com"),
+            h("div", { className: "subject" }, "先日はありがとうございました"),
+            h("div", { className: "preview" },
+              "松末様\n\n昨日はお時間をいただきありがとうございました。頂いた資料を拝見し、改めてご連絡いたします。"),
+            h(
+              "div", { className: "actions" },
+              h("div", { className: "status" }, status),
+              h(
+                "button",
+                { id: "fly-btn", className: "fly-btn", onClick: onFly, disabled: phase !== "idle" },
+                h(
+                  motion.span,
+                  { className: "perch",
+                    animate: phase === "idle" ? { y: [0, -1.5, 0] } : { y: 0 },
+                    transition: { duration: 2.4, repeat: Infinity, ease: "easeInOut" } },
+                  phase === "idle" ? h("img", { src: USE_REAL ? REAL : framePath(6), alt: "" }) : null
+                ),
+                phase === "flying" ? "Flying…" : "Fly"
+              )
+            )
+          )
+        );
+      }
+
+      createRoot(document.getElementById("root")).render(h(App));
+    </script>
+  </body>
+</html>

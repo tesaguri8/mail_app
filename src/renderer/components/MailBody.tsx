@@ -359,7 +359,7 @@ export function MailBody({ detail }: { detail: MailDetail }) {
                 }}
                 onChange={toggleAll}
                 title={t('mailbox.attachmentSelectAll')}
-                className="h-3.5 w-3.5 shrink-0 accent-sky-400"
+                className="h-3.5 w-3.5 shrink-0 accent-sky-400 opacity-60"
               />
             )}
             <button
@@ -406,9 +406,8 @@ export function MailBody({ detail }: { detail: MailDetail }) {
                         type="checkbox"
                         checked={selected.has(a.id)}
                         onChange={() => toggleOne(a.id)}
-                        className="h-3.5 w-3.5 shrink-0 accent-sky-400"
+                        className="h-3.5 w-3.5 shrink-0 accent-sky-400 opacity-60"
                       />
-                      <Paperclip size={14} className="shrink-0 text-white/40" />
                       <span
                         className="min-w-0 flex-1 truncate text-sm text-white/85"
                         title={a.filename}

@@ -170,7 +170,8 @@ impl Store {
                     substr(COALESCE(clean_body, body_plain, ''), 1, 140) AS preview,
                     is_flagged, is_bookmarked,
                     (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = emails.id) AS tag_ids,
-                    EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = emails.id AND COALESCE(a.kind, 'attachment') <> 'inline') AS has_real
+                    (emails.has_attachments = 1
+                     OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = emails.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real
              FROM emails WHERE account_id = ?1 ORDER BY date DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![account_id, limit], |r| {

@@ -123,18 +123,59 @@ pub struct TagSummary {
     pub count: i32,
 }
 
+/// ラベル付きの値（メール・電話）。Apple/Google のラベル付き複数値に対応。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ContactValue {
+    pub id: i32,
+    /// 見出し（自宅/職場/携帯/カスタム＝会社名など）。
+    pub label: Option<String>,
+    pub value: String,
+    pub is_primary: bool,
+}
+
+/// ラベル付きの構造化住所。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ContactAddress {
+    pub id: i32,
+    pub label: Option<String>,
+    pub postal: Option<String>,
+    pub region: Option<String>,
+    pub city: Option<String>,
+    pub street: Option<String>,
+    pub extended: Option<String>,
+    pub country: Option<String>,
+    pub is_primary: bool,
+}
+
 /// 連絡先（住所録）。一覧・詳細・編集で共通に使う（連絡先はメールほど大量でないため軽量/詳細を分けない）。
+/// メール/電話/住所は子テーブル由来のラベル付き複数値（arrays）。flat な email/phone/address は
+/// 主(primary)値の写しで、一覧表示や後方互換のために保持する。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]
 pub struct ContactSummary {
     pub id: i32,
     pub display_name: String,
-    /// 読み（並び替え用）。
+    /// 姓（構造化名。表示名とは別）。
+    pub family_name: Option<String>,
+    /// 名。
+    pub given_name: Option<String>,
+    /// よみ（姓）。
+    pub phonetic_family: Option<String>,
+    /// よみ（名）。
+    pub phonetic_given: Option<String>,
+    /// 読み（並び替え用。よみ姓＋よみ名の結合など）。
     pub name_kana: Option<String>,
-    /// 主メールアドレス。
+    /// 主メールアドレス（primary の写し）。
     pub email: Option<String>,
     pub phone: Option<String>,
     pub organization: Option<String>,
+    /// 役職。
+    pub org_title: Option<String>,
+    /// 部署。
+    pub org_department: Option<String>,
+    /// 主住所の整形文字列（primary の写し。一覧用）。
     pub address: Option<String>,
     /// 誕生日（YYYY-MM-DD 等の文字列。ホーム/ウィジェット通知用）。
     pub birthday: Option<String>,
@@ -145,6 +186,12 @@ pub struct ContactSummary {
     pub is_business: bool,
     /// この相手からのメールで外部画像を許可（docs/MAIL_SECURITY.md）。
     pub allow_remote_images: bool,
+    /// ラベル付き複数メール（詳細取得時のみ充填。一覧では空）。
+    pub emails: Vec<ContactValue>,
+    /// ラベル付き複数電話（同上）。
+    pub phones: Vec<ContactValue>,
+    /// ラベル付き複数住所（同上）。
+    pub addresses: Vec<ContactAddress>,
 }
 
 /// 連絡先の作成・更新入力（フロントから受け取る）。`id` が None なら新規作成。

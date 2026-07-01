@@ -426,16 +426,25 @@ mod tests {
         ContactSummary {
             id,
             display_name: name.into(),
+            family_name: None,
+            given_name: None,
+            phonetic_family: None,
+            phonetic_given: None,
             name_kana: None,
             email: email.map(str::to_string),
             phone: phone.map(str::to_string),
             organization: org.map(str::to_string),
+            org_title: None,
+            org_department: None,
             address: None,
             birthday: None,
             note: None,
             is_favorite: false,
             is_business: false,
             allow_remote_images: false,
+            emails: Vec::new(),
+            phones: Vec::new(),
+            addresses: Vec::new(),
         }
     }
 

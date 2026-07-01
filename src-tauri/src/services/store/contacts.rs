@@ -1,29 +1,41 @@
 use super::Store;
 use crate::models::{
-    ContactGroupSummary, ContactInput, ContactSummary, DuplicateGroup, ImportReport,
+    ContactAddress, ContactGroupSummary, ContactInput, ContactSummary, ContactValue,
+    DuplicateGroup, ImportReport,
 };
 use crate::services::vcard::{ImportedContact, ParseResult};
-use rusqlite::{params, OptionalExtension, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 
-/// contacts の 1 行を ContactSummary に写す（列順は SELECT と対応）。
+/// contacts の 1 行を ContactSummary に写す（列順は CONTACT_COLS と対応）。
+/// 複数値（emails/phones/addresses）は空で返し、詳細取得時に別途充填する。
 fn row_to_contact(r: &Row) -> rusqlite::Result<ContactSummary> {
     Ok(ContactSummary {
         id: r.get::<_, i64>(0)? as i32,
         display_name: r.get(1)?,
-        name_kana: r.get(2)?,
-        email: r.get(3)?,
-        phone: r.get(4)?,
-        organization: r.get(5)?,
-        address: r.get(6)?,
-        birthday: r.get(7)?,
-        note: r.get(8)?,
-        is_favorite: r.get::<_, i64>(9)? != 0,
-        is_business: r.get::<_, i64>(10)? != 0,
-        allow_remote_images: r.get::<_, i64>(11)? != 0,
+        family_name: r.get(2)?,
+        given_name: r.get(3)?,
+        phonetic_family: r.get(4)?,
+        phonetic_given: r.get(5)?,
+        name_kana: r.get(6)?,
+        email: r.get(7)?,
+        phone: r.get(8)?,
+        organization: r.get(9)?,
+        org_title: r.get(10)?,
+        org_department: r.get(11)?,
+        address: r.get(12)?,
+        birthday: r.get(13)?,
+        note: r.get(14)?,
+        is_favorite: r.get::<_, i64>(15)? != 0,
+        is_business: r.get::<_, i64>(16)? != 0,
+        allow_remote_images: r.get::<_, i64>(17)? != 0,
+        emails: Vec::new(),
+        phones: Vec::new(),
+        addresses: Vec::new(),
     })
 }
 
-const CONTACT_COLS: &str = "id, display_name, name_kana, email, phone, organization, \
+const CONTACT_COLS: &str = "id, display_name, family_name, given_name, phonetic_family, \
+     phonetic_given, name_kana, email, phone, organization, org_title, org_department, \
      address, birthday, note, is_favorite, is_business, allow_remote_images";
 
 impl Store {
@@ -57,11 +69,15 @@ impl Store {
         }
     }
 
-    /// 単一の連絡先を取得。
+    /// 単一の連絡先を取得（メール/電話/住所の複数値も充填する）。
     pub fn get_contact(&self, id: i64) -> rusqlite::Result<ContactSummary> {
         let conn = self.conn.lock().unwrap();
         let sql = format!("SELECT {CONTACT_COLS} FROM contacts WHERE id = ?1");
-        conn.query_row(&sql, params![id], row_to_contact)
+        let mut c = conn.query_row(&sql, params![id], row_to_contact)?;
+        c.emails = load_values(&conn, "contact_emails", id)?;
+        c.phones = load_values(&conn, "contact_phones", id)?;
+        c.addresses = load_addresses(&conn, id)?;
+        Ok(c)
     }
 
     /// 連絡先を作成または更新し、確定後の行を返す。`input.id` が None なら新規。
@@ -116,8 +132,12 @@ impl Store {
                 conn.last_insert_rowid()
             }
         };
-        let sql = format!("SELECT {CONTACT_COLS} FROM contacts WHERE id = ?1");
-        conn.query_row(&sql, params![id], row_to_contact)
+        // 主(primary)値を子テーブルへ反映（追加値＝非primary は温存）。
+        set_primary_value(&conn, "contact_emails", id, input.email.as_deref())?;
+        set_primary_value(&conn, "contact_phones", id, input.phone.as_deref())?;
+        set_primary_address(&conn, id, input.address.as_deref())?;
+        drop(conn);
+        self.get_contact(id)
     }
 
     /// 連絡先を削除（グループ所属も外れる。ON DELETE CASCADE）。
@@ -313,7 +333,12 @@ impl Store {
                     ],
                 )?;
 
-                // drop 側のグループ所属を keep に移し、drop 行を削除。
+                // 統合後の値を keep の子テーブルへ反映（メールは全件、電話/住所は主のみ）。
+                rebuild_emails(&tx, keep_id, &emails)?;
+                set_primary_value(&tx, "contact_phones", keep_id, phone.as_deref())?;
+                set_primary_address(&tx, keep_id, address.as_deref())?;
+
+                // drop 側のグループ所属を keep に移し、drop 行を削除（子テーブルは CASCADE）。
                 for id in drop_ids {
                     tx.execute(
                     "UPDATE OR IGNORE contact_group_members SET contact_id = ?1 WHERE contact_id = ?2",
@@ -385,6 +410,122 @@ fn insert_from_import(tx: &rusqlite::Transaction, c: &ImportedContact) -> rusqli
             c.external_id,
         ],
     )?;
+    let id = tx.last_insert_rowid();
+    // 子テーブルへ: メールは主＋追加(JSON)を全件、電話/住所は主のみ（Stage1）。
+    let mut emails: Vec<String> = c.email.iter().cloned().collect();
+    if let Some(j) = &c.emails_json {
+        if let Ok(extra) = serde_json::from_str::<Vec<String>>(j) {
+            for e in extra {
+                if !emails.iter().any(|x| x.eq_ignore_ascii_case(&e)) {
+                    emails.push(e);
+                }
+            }
+        }
+    }
+    rebuild_emails(tx, id, &emails)?;
+    set_primary_value(tx, "contact_phones", id, c.phone.as_deref())?;
+    set_primary_address(tx, id, c.address.as_deref())?;
+    Ok(())
+}
+
+/// ラベル付き複数値（メール/電話）を読み出す（主→position→id 順）。
+fn load_values(conn: &Connection, table: &str, cid: i64) -> rusqlite::Result<Vec<ContactValue>> {
+    let sql = format!(
+        "SELECT id, label, value, is_primary FROM {table} \
+         WHERE contact_id = ?1 ORDER BY is_primary DESC, position, id"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![cid], |r| {
+        Ok(ContactValue {
+            id: r.get::<_, i64>(0)? as i32,
+            label: r.get(1)?,
+            value: r.get(2)?,
+            is_primary: r.get::<_, i64>(3)? != 0,
+        })
+    })?;
+    rows.collect()
+}
+
+/// 構造化住所を読み出す。
+fn load_addresses(conn: &Connection, cid: i64) -> rusqlite::Result<Vec<ContactAddress>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, label, postal, region, city, street, extended, country, is_primary \
+         FROM contact_addresses WHERE contact_id = ?1 ORDER BY is_primary DESC, position, id",
+    )?;
+    let rows = stmt.query_map(params![cid], |r| {
+        Ok(ContactAddress {
+            id: r.get::<_, i64>(0)? as i32,
+            label: r.get(1)?,
+            postal: r.get(2)?,
+            region: r.get(3)?,
+            city: r.get(4)?,
+            street: r.get(5)?,
+            extended: r.get(6)?,
+            country: r.get(7)?,
+            is_primary: r.get::<_, i64>(8)? != 0,
+        })
+    })?;
+    rows.collect()
+}
+
+/// 主(primary)値を1件だけ張り替える（既存 primary を消して入れ直す。追加値は温存）。
+fn set_primary_value(
+    conn: &Connection,
+    table: &str,
+    cid: i64,
+    value: Option<&str>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        &format!("DELETE FROM {table} WHERE contact_id = ?1 AND is_primary = 1"),
+        params![cid],
+    )?;
+    if let Some(v) = value {
+        let v = v.trim();
+        if !v.is_empty() {
+            conn.execute(
+                &format!(
+                    "INSERT INTO {table} (contact_id, value, is_primary, position) \
+                     VALUES (?1, ?2, 1, 0)"
+                ),
+                params![cid, v],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// 主住所を1件だけ張り替える（単一文字列は street に格納）。
+fn set_primary_address(conn: &Connection, cid: i64, street: Option<&str>) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM contact_addresses WHERE contact_id = ?1 AND is_primary = 1",
+        params![cid],
+    )?;
+    if let Some(s) = street {
+        let s = s.trim();
+        if !s.is_empty() {
+            conn.execute(
+                "INSERT INTO contact_addresses (contact_id, street, is_primary, position) \
+                 VALUES (?1, ?2, 1, 0)",
+                params![cid, s],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// メールの子テーブルを与えたリストで作り直す（先頭を primary）。
+fn rebuild_emails(conn: &Connection, cid: i64, emails: &[String]) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM contact_emails WHERE contact_id = ?1",
+        params![cid],
+    )?;
+    for (i, e) in emails.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO contact_emails (contact_id, value, is_primary, position) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![cid, e, (i == 0) as i64, i as i64],
+        )?;
+    }
     Ok(())
 }
 
@@ -401,6 +542,47 @@ mod tests {
             conn: std::sync::Mutex::new(conn),
             path: std::sync::Mutex::new(std::path::PathBuf::from(":memory:")),
         }
+    }
+
+    #[test]
+    fn child_tables_populated_on_import_and_upsert() {
+        let s = store();
+        // 追加メール2件を持つ vCard を取り込み → contact_emails に3件、うち1件が primary。
+        let p = vcard::parse(
+            "BEGIN:VCARD\nVERSION:3.0\nFN:多重 花子\nEMAIL;type=pref:a@x.jp\nEMAIL:b@x.jp\nEMAIL:c@x.jp\nTEL:090-1\nEND:VCARD\n",
+        );
+        s.import_contacts(&p).unwrap();
+        let c = s.list_contacts(None).unwrap().remove(0);
+        let got = s.get_contact(c.id as i64).unwrap();
+        assert_eq!(got.emails.len(), 3, "追加メールも子テーブルに入る");
+        assert!(got.emails[0].is_primary);
+        assert_eq!(got.emails[0].value, "a@x.jp");
+        assert_eq!(got.phones.len(), 1);
+
+        // 編集で主メールを変更しても追加メールは温存される。
+        s.upsert_contact(&ContactInput {
+            id: Some(c.id),
+            display_name: got.display_name.clone(),
+            name_kana: None,
+            email: Some("new@x.jp".into()),
+            phone: got.phone.clone(),
+            organization: None,
+            address: None,
+            birthday: None,
+            note: None,
+            is_favorite: false,
+            is_business: false,
+            allow_remote_images: false,
+        })
+        .unwrap();
+        let after = s.get_contact(c.id as i64).unwrap();
+        let primaries: Vec<_> = after.emails.iter().filter(|e| e.is_primary).collect();
+        assert_eq!(primaries.len(), 1);
+        assert_eq!(primaries[0].value, "new@x.jp");
+        assert!(
+            after.emails.iter().any(|e| e.value == "b@x.jp"),
+            "追加メールは残る"
+        );
     }
 
     #[test]

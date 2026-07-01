@@ -60,6 +60,8 @@ pub fn run() {
             commands::mail_add_tag,
             commands::mail_remove_tag,
             commands::account_set_sync_window,
+            commands::account_set_full_window,
+            commands::account_set_body_window,
             commands::account_update,
             commands::signature_list,
             commands::signature_create,

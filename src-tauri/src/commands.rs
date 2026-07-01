@@ -1,7 +1,7 @@
 use crate::models::{
-    AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult, DbInfo,
-    EvictionReport, MailDetail, MailSummary, ServerAccountSummary, SignatureSummary, StorageInfo,
-    SyncResult, TagSummary,
+    AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult, DbInfo, MailDetail,
+    MailSummary, RetentionReport, ServerAccountSummary, SignatureSummary, StorageInfo, SyncResult,
+    TagSummary,
 };
 use crate::services::autoconfig;
 use crate::services::imap_sync;
@@ -102,6 +102,8 @@ pub fn account_add(
         imap_host: input.imap_host,
         smtp_host: input.smtp_host,
         sync_window: "6m".to_string(),
+        full_window: "all".to_string(),
+        body_window: "off".to_string(),
         signature_id: None,
         unread_count: 0,
         total_count: 0,
@@ -199,11 +201,16 @@ pub async fn mail_sync(
         .map_err(|e| format!("資格情報を取得できません: {e}"))?;
     let db_path = store.path.clone();
 
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         imap_sync::sync_account(&db_path, account_id, &host, port, &login_user, &password)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    // 同期後に保持ポリシーを適用（古い添付の削除・本文の要約保存・容量保険）。best-effort。
+    if result.is_ok() {
+        let _ = store.apply_retention(account_id);
+    }
+    result
 }
 
 /// 同期範囲（取り込み期間/件数）を設定する。値: "n50" / "3d" / "30d" / "3m" / "all" 等。
@@ -216,6 +223,32 @@ pub fn account_set_sync_window(
     store
         .set_sync_window(account_id, &window)
         .map_err(|e| e.to_string())
+}
+
+/// フルデータ保持期間を設定する（'7d'/'30d'/…/'all'）。設定後すぐ保持ポリシーを適用。
+#[tauri::command]
+pub fn account_set_full_window(
+    store: State<Store>,
+    account_id: i64,
+    window: String,
+) -> Result<RetentionReport, String> {
+    store
+        .set_full_window(account_id, &window)
+        .map_err(|e| e.to_string())?;
+    store.apply_retention(account_id).map_err(|e| e.to_string())
+}
+
+/// 本文の全文保持期間を設定する（'off'/'3m'/…/'2y'）。設定後すぐ保持ポリシーを適用。
+#[tauri::command]
+pub fn account_set_body_window(
+    store: State<Store>,
+    account_id: i64,
+    window: String,
+) -> Result<RetentionReport, String> {
+    store
+        .set_body_window(account_id, &window)
+        .map_err(|e| e.to_string())?;
+    store.apply_retention(account_id).map_err(|e| e.to_string())
 }
 
 /// メール一覧を返す。
@@ -540,12 +573,11 @@ pub fn account_set_storage_limit(
         .map_err(|e| e.to_string())
 }
 
-/// ストレージ最適化: 上限超過分の古い添付バイトを追い出す（メタは残す）。
+/// ストレージ最適化: 保持ポリシー（期間ベースの3ティア＋容量上限の保険）を適用する。
+/// 古い添付ファイルを削除し、さらに古い本文を要約保存に落とす。メタは常に残す。
 #[tauri::command]
-pub fn storage_optimize(store: State<Store>, account_id: i64) -> Result<EvictionReport, String> {
-    store
-        .evict_over_limit(account_id)
-        .map_err(|e| e.to_string())
+pub fn storage_optimize(store: State<Store>, account_id: i64) -> Result<RetentionReport, String> {
+    store.apply_retention(account_id).map_err(|e| e.to_string())
 }
 
 /// 点検つき再取り込み: 同期状態をリセットして取り込み範囲をフル再取得し、

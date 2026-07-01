@@ -5,6 +5,14 @@
  */
 export type AccountSummary = { id: number, email: string, display_name: string | null, imap_host: string, smtp_host: string, sync_window: string, 
 /**
+ * フルデータ（本文＋添付）を保持する期間。これより古いと添付を削除。'all'=常に保持。
+ */
+full_window: string, 
+/**
+ * 本文の全文を保持する期間。これより古いと要約保存に落とす。'off'=しない。
+ */
+body_window: string, 
+/**
  * 既定署名の ID（未設定なら None）。
  */
 signature_id: number | null, unread_count: number, total_count: number, };

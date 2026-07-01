@@ -252,7 +252,7 @@ impl Store {
     pub fn get_email(&self, id: i64) -> rusqlite::Result<Option<MailDetail>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments
+            "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted
              FROM emails WHERE id = ?1",
             params![id],
             |r| {
@@ -272,6 +272,7 @@ impl Store {
                     body_plain: r.get(6)?,
                     body_html,
                     has_attachments: r.get::<_, i64>(9)? != 0,
+                    body_compacted: r.get::<_, i64>(10)? != 0,
                 })
             },
         )

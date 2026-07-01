@@ -100,8 +100,14 @@
   "storage": {
     "title": "Local storage (attachments)",
     "limit": "Storage limit",
+    "fullWindow": "Full-data range (body + attachments)",
+    "fullWindowHint": "Keep the full body and attachments within this range. Older mail has its attachment files removed locally (metadata stays and can be re-downloaded on demand). Starred mail is always kept.",
+    "bodyWindow": "Keep full body",
+    "bodyWindowHint": "Mail older than this is reduced to a compact form (only the new, unquoted part is kept; the heavy full body is dropped). Quoted history is reconstructed from the thread, and the full text can be re-fetched from the server.",
+    "keepAll": "Always keep",
+    "bodyOff": "Off",
     "optimize": "Optimize storage",
-    "optimized": "Cleaned {{count}} attachments ({{size}} freed)",
+    "optimized": "Cleaned {{count}} attachments, compacted {{compacted}} bodies ({{size}} freed)",
     "resync": "Repair re-import",
     "resyncHint": "Re-fetch the import range from the server and backfill attachment info (uid) for older mail too.",
     "resyncing": "Re-importing…",
@@ -204,6 +210,9 @@
     "w_30d": "30 days",
     "w_3m": "3 months",
     "w_6m": "6 months",
-    "w_all": "All"
+    "w_1y": "1 year",
+    "w_2y": "2 years",
+    "w_all": "All",
+    "bodyCompacted": "To save space, this message's body is stored in compact form (only the new, unquoted part). Sync or re-fetch from the server when you need the full text."
   }
 }

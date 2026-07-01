@@ -287,6 +287,11 @@ export function MailBody({ detail }: { detail: MailDetail }) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+        {detail.body_compacted && (
+          <div className="mb-3 rounded-md border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-[11px] leading-snug text-amber-100/80">
+            {t('mailbox.bodyCompacted')}
+          </div>
+        )}
         {hasHtml ? (
           <HtmlText html={html} inlineImages={inlineImages} />
         ) : body.trim() ? (

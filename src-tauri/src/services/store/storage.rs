@@ -5,8 +5,37 @@
 //! UI ではボタンが「ダウンロード」に戻り、必要時に再取得できる。正本はサーバー。
 
 use super::Store;
-use crate::models::EvictionReport;
+use crate::models::{EvictionReport, RetentionReport};
 use rusqlite::params;
+
+/// 保持期間ウィンドウ（'7d'/'30d'/'3m'/'6m'/'1y'/'2y'）を日数に変換する。
+/// 'all'（常に保持）/'off'（無効）や未知値は None（＝そのティアを働かせない）。
+fn window_days(w: &str) -> Option<i64> {
+    match w.trim().to_lowercase().as_str() {
+        "all" | "off" | "" => None,
+        "7d" => Some(7),
+        "30d" => Some(30),
+        "3m" => Some(90),
+        "6m" => Some(180),
+        "1y" => Some(365),
+        "2y" => Some(730),
+        other => {
+            // 汎用パース: "<n>d" / "<n>m" / "<n>y"。
+            let parse = |suffix: char| {
+                other
+                    .strip_suffix(suffix)
+                    .and_then(|s| s.parse::<i64>().ok())
+            };
+            if let Some(n) = parse('d') {
+                Some(n)
+            } else if let Some(n) = parse('m') {
+                Some(n * 30)
+            } else {
+                parse('y').map(|n| n * 365)
+            }
+        }
+    }
+}
 
 impl Store {
     /// アカウントのダウンロード済み添付の合計バイト。
@@ -39,6 +68,163 @@ impl Store {
             params![bytes, account_id],
         )?;
         Ok(())
+    }
+
+    /// フルデータ保持期間を設定する（'7d'/'30d'/…/'all'）。取り込み範囲は変えない。
+    pub fn set_full_window(&self, account_id: i64, window: &str) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE accounts SET full_window = ?1 WHERE id = ?2",
+            params![window, account_id],
+        )?;
+        Ok(())
+    }
+
+    /// 本文の全文保持期間を設定する（'off'/'3m'/…/'2y'）。これより古い本文は要約保存に落とす。
+    pub fn set_body_window(&self, account_id: i64, window: &str) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE accounts SET body_window = ?1 WHERE id = ?2",
+            params![window, account_id],
+        )?;
+        Ok(())
+    }
+
+    /// アカウントの保持設定（full_window, body_window）を読む。
+    fn retention_windows(&self, account_id: i64) -> rusqlite::Result<(String, String)> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COALESCE(full_window,'all'), COALESCE(body_window,'off')
+             FROM accounts WHERE id = ?1",
+            params![account_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+    }
+
+    /// full_window より古い（スター以外の）メールの添付ファイルを削除する（メタは残す）。
+    /// 返り値: (削除した添付数, 解放バイト)。
+    fn evict_attachments_outside_window(
+        &self,
+        account_id: i64,
+        days: i64,
+    ) -> rusqlite::Result<(i32, i64)> {
+        let candidates: Vec<(i64, i64, String)> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare(
+                "SELECT a.id, COALESCE(a.size, 0), a.file_path
+                 FROM attachments a JOIN emails e ON e.id = a.email_id
+                 WHERE e.account_id = ?1 AND a.file_path IS NOT NULL AND e.is_flagged = 0
+                   AND e.date IS NOT NULL
+                   AND datetime(e.date) < datetime('now', ?2)",
+            )?;
+            let modifier = format!("-{} days", days);
+            let rows = stmt.query_map(params![account_id, modifier], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        let mut evicted = 0i32;
+        let mut freed = 0i64;
+        for (id, size, path) in candidates {
+            let _ = std::fs::remove_file(&path);
+            let conn = self.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE attachments SET file_path = NULL, checksum = NULL WHERE id = ?1",
+                params![id],
+            )?;
+            drop(conn);
+            freed += size;
+            evicted += 1;
+        }
+        Ok((evicted, freed))
+    }
+
+    /// body_window より古い（スター以外の）メールの本文を要約保存に落とす。
+    /// clean_body（引用除去済みの新規部分）だけ残し、重い body_html_z / body_plain を破棄。
+    /// clean_body が空のメールは対象外（全文が失われるため落とさない）。
+    /// 返り値: (要約した件数, 解放バイト概算)。
+    fn compact_bodies_outside_window(
+        &self,
+        account_id: i64,
+        days: i64,
+    ) -> rusqlite::Result<(i32, i64)> {
+        let mut conn = self.conn.lock().unwrap();
+        let modifier = format!("-{} days", days);
+        // 解放バイトの概算（圧縮HTML＋plainの長さ合計）を先に集計。
+        let freed: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(COALESCE(length(body_html_z),0) + COALESCE(length(body_plain),0)), 0)
+                 FROM emails
+                 WHERE account_id = ?1 AND is_flagged = 0 AND body_compacted = 0
+                   AND clean_body IS NOT NULL AND clean_body <> ''
+                   AND date IS NOT NULL AND datetime(date) < datetime('now', ?2)
+                   AND (body_html_z IS NOT NULL OR body_plain IS NOT NULL)",
+                params![account_id, modifier],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        let tx = conn.transaction()?;
+        let compacted = tx.execute(
+            "UPDATE emails SET body_html_z = NULL, body_plain = NULL, body_compacted = 1
+             WHERE account_id = ?1 AND is_flagged = 0 AND body_compacted = 0
+               AND clean_body IS NOT NULL AND clean_body <> ''
+               AND date IS NOT NULL AND datetime(date) < datetime('now', ?2)
+               AND (body_html_z IS NOT NULL OR body_plain IS NOT NULL)",
+            params![account_id, modifier],
+        )? as i32;
+        tx.commit()?;
+        Ok((compacted, freed))
+    }
+
+    /// 保持ポリシーを適用する（期間ベースの3ティア＋容量上限の保険）。
+    /// 1) full_window より古い添付ファイルを削除（Tier2）。
+    /// 2) body_window より古い本文を要約保存に落とす（Tier3）。
+    /// 3) それでも容量上限を超えていれば LRU で追い出す（保険）。
+    pub fn apply_retention(&self, account_id: i64) -> rusqlite::Result<RetentionReport> {
+        let (full_w, body_w) = self.retention_windows(account_id)?;
+
+        let (mut evicted, mut freed) = (0i32, 0i64);
+        if let Some(days) = window_days(&full_w) {
+            let (e, f) = self.evict_attachments_outside_window(account_id, days)?;
+            evicted += e;
+            freed += f;
+        }
+
+        let (mut compacted, mut body_freed) = (0i32, 0i64);
+        if let Some(days) = window_days(&body_w) {
+            let (c, f) = self.compact_bodies_outside_window(account_id, days)?;
+            compacted += c;
+            body_freed += f;
+        }
+
+        // 容量上限の保険（期間内でも上限超過なら古い添付を LRU で追い出す）。
+        let over = self.evict_over_limit(account_id)?;
+        evicted += over.evicted;
+        freed += over.freed_bytes as i64;
+
+        Ok(RetentionReport {
+            evicted,
+            compacted,
+            freed_bytes: (freed + body_freed) as f64,
+        })
+    }
+
+    /// 添付が「ダウンロード済み扱い」かどうか（file_path が非 NULL）。テスト補助。
+    #[cfg(test)]
+    fn attachment_has_file(&self, id: i64) -> bool {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT file_path FROM attachments WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .unwrap()
+        .is_some()
     }
 
     /// 同期状態（uid_validity/last_uid）をリセットして次回フル再取得させる。
@@ -106,5 +292,136 @@ impl Store {
             evicted,
             freed_bytes: freed as f64,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::store::migrations;
+    use rusqlite::Connection;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    fn test_store() -> Store {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        migrations::run(&conn).unwrap();
+        Store {
+            conn: Mutex::new(conn),
+            path: PathBuf::new(),
+        }
+    }
+
+    #[test]
+    fn window_days_parses_vocab_and_generic() {
+        assert_eq!(window_days("all"), None);
+        assert_eq!(window_days("off"), None);
+        assert_eq!(window_days(""), None);
+        assert_eq!(window_days("7d"), Some(7));
+        assert_eq!(window_days("30d"), Some(30));
+        assert_eq!(window_days("3m"), Some(90));
+        assert_eq!(window_days("6m"), Some(180));
+        assert_eq!(window_days("1y"), Some(365));
+        assert_eq!(window_days("2y"), Some(730));
+        // 汎用パース（辞書外）。
+        assert_eq!(window_days("45d"), Some(45));
+        assert_eq!(window_days("nonsense"), None);
+    }
+
+    /// full_window より古い添付は削除、body_window より古い本文は要約、スターは保護。
+    #[test]
+    fn retention_tiers_evict_attachments_and_compact_bodies() {
+        let store = test_store();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO accounts (id, email, imap_host, smtp_host, full_window, body_window)
+                 VALUES (1,'a@b','i','s','30d','1y')",
+                [],
+            )
+            .unwrap();
+            // (id, 経過日数, is_flagged) の各メールに本文＋ダウンロード済み添付を用意。
+            let seed = [(1, 5, 0), (2, 100, 0), (3, 400, 0), (4, 400, 1)];
+            for (id, days, flagged) in seed {
+                conn.execute(
+                    "INSERT INTO emails (id, account_id, canonical_key, date, clean_body, body_plain, body_html_z, is_flagged)
+                     VALUES (?1, 1, ?2, datetime('now', ?3), 'new part', 'plain body', x'01020304', ?4)",
+                    params![id, format!("k{id}"), format!("-{days} days"), flagged],
+                )
+                .unwrap();
+                conn.execute(
+                    "INSERT INTO attachments (id, email_id, filename, size, file_path)
+                     VALUES (?1, ?1, 'f.pdf', 1000, ?2)",
+                    params![id, format!("/nonexistent/{id}.pdf")],
+                )
+                .unwrap();
+            }
+        }
+
+        let r = store.apply_retention(1).unwrap();
+
+        // 添付: 5日前=保持 / 100日・400日=削除 / スター付き400日=保護。
+        assert!(store.attachment_has_file(1), "フル期間内は添付保持");
+        assert!(!store.attachment_has_file(2), "期間外の添付は削除");
+        assert!(!store.attachment_has_file(3), "期間外の添付は削除");
+        assert!(store.attachment_has_file(4), "スター付きは添付保護");
+        assert_eq!(r.evicted, 2, "削除した添付は2件");
+
+        // 本文: 400日前(非スター)のみ要約。100日前は保持、スター付きは保護。
+        let conn = store.conn.lock().unwrap();
+        let compacted = |id: i64| -> i64 {
+            conn.query_row(
+                "SELECT body_compacted FROM emails WHERE id=?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(compacted(2), 0, "body_window 内は本文保持");
+        assert_eq!(compacted(3), 1, "body_window 外は要約");
+        assert_eq!(compacted(4), 0, "スター付き本文は保護");
+        assert_eq!(r.compacted, 1, "要約した本文は1件");
+
+        // 要約後: 重い列は NULL、clean_body は残る。
+        let (hz, bp, cb): (Option<Vec<u8>>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT body_html_z, body_plain, clean_body FROM emails WHERE id=3",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert!(hz.is_none() && bp.is_none(), "重い本文は破棄");
+        assert!(cb.is_some(), "clean_body は残る");
+    }
+
+    /// 既定（full='all' / body='off'）では何も落とさない（非破壊）。
+    #[test]
+    fn retention_defaults_are_non_destructive() {
+        let store = test_store();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1,'a@b','i','s')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO emails (id, account_id, canonical_key, date, clean_body, body_html_z)
+                 VALUES (1,1,'k1',datetime('now','-999 days'),'x',x'0102')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO attachments (id, email_id, filename, size, file_path)
+                 VALUES (1,1,'f.pdf',1000,'/nonexistent/1.pdf')",
+                [],
+            )
+            .unwrap();
+        }
+        let r = store.apply_retention(1).unwrap();
+        assert_eq!(r.evicted, 0);
+        assert_eq!(r.compacted, 0);
+        assert!(store.attachment_has_file(1), "既定では添付を消さない");
     }
 }

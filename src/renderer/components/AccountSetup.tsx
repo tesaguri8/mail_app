@@ -15,6 +15,8 @@ import {
 } from '../services/accounts';
 import { signatureList } from '../services/signatures';
 import {
+  accountSetBodyWindow,
+  accountSetFullWindow,
   accountSetStorageLimit,
   accountSetSyncWindow,
   accountStorageInfo,
@@ -22,12 +24,17 @@ import {
   storageOptimize,
 } from '../services/mail';
 import type { StorageInfo } from '@bindings/StorageInfo';
+import type { RetentionReport } from '@bindings/RetentionReport';
 
 type ConnState = { state: 'checking' | 'ok' | 'error'; msg?: string };
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 const WINDOWS = ['n50', 'n200', '3d', '7d', '30d', '3m', '6m', 'all'] as const;
+// フルデータ（本文＋添付）保持: これより古いと添付をローカル削除。'all'=常に保持。
+const FULL_WINDOWS = ['7d', '30d', '3m', '6m', '1y', 'all'] as const;
+// 本文の全文保持: これより古いと要約保存に落とす。'off'=しない。
+const BODY_WINDOWS = ['off', '3m', '6m', '1y', '2y'] as const;
 
 const GB = 1024 * 1024 * 1024;
 const LIMIT_GB = [1, 2, 5, 10, 20, 50] as const;
@@ -36,6 +43,13 @@ function formatBytes(b: number): string {
   if (b < 1024 * 1024) return `${Math.round(b / 1024)} KB`;
   if (b < GB) return `${(b / 1024 / 1024).toFixed(0)} MB`;
   return `${(b / GB).toFixed(2)} GB`;
+}
+
+/** 保持期間ウィンドウ値の表示ラベル（'all'=常に保持 / 'off'=しない / それ以外は期間）。 */
+function windowLabel(t: (k: string) => string, w: string): string {
+  if (w === 'all') return t('storage.keepAll');
+  if (w === 'off') return t('storage.bodyOff');
+  return t(`mailbox.w_${w}`);
 }
 
 const inputCls =
@@ -60,6 +74,8 @@ export function AccountSetup({
   const [editName, setEditName] = useState('');
   const [editSig, setEditSig] = useState<number | null>(null);
   const [editWindow, setEditWindow] = useState('6m');
+  const [editFullWindow, setEditFullWindow] = useState('all');
+  const [editBodyWindow, setEditBodyWindow] = useState('off');
   const [editStatus, setEditStatus] = useState('');
   // ストレージ（容量）状態
   const [storage, setStorage] = useState<StorageInfo | null>(null);
@@ -113,6 +129,8 @@ export function AccountSetup({
     setEditName(a.display_name ?? '');
     setEditSig(a.signature_id ?? null);
     setEditWindow(a.sync_window ?? '6m');
+    setEditFullWindow(a.full_window ?? 'all');
+    setEditBodyWindow(a.body_window ?? 'off');
     setEditStatus('');
     setStorage(null);
     setStorageMsg('');
@@ -137,12 +155,20 @@ export function AccountSetup({
     }
   };
 
+  // 保持レポート（削除した添付・要約した本文・解放量）を1行のメッセージにする。
+  const retentionMsg = (r: RetentionReport): string =>
+    t('storage.optimized', {
+      count: r.evicted,
+      compacted: r.compacted,
+      size: formatBytes(r.freed_bytes),
+    });
+
   const optimize = async (id: number) => {
     setStorageBusy(true);
     setStorageMsg('');
     try {
       const r = await storageOptimize(id);
-      setStorageMsg(t('storage.optimized', { count: r.evicted, size: formatBytes(r.freed_bytes) }));
+      setStorageMsg(retentionMsg(r));
       loadStorage(id);
     } catch (e) {
       setStorageMsg(String(e));
@@ -187,6 +213,34 @@ export function AccountSetup({
       onChanged();
     } catch {
       /* noop */
+    }
+  };
+
+  // フルデータ保持期間の変更（設定後すぐ保持ポリシーを適用し、結果を表示）。
+  const changeFullWindow = async (id: number, w: string) => {
+    setEditFullWindow(w);
+    setStorageMsg('');
+    try {
+      const r = await accountSetFullWindow(id, w);
+      setStorageMsg(retentionMsg(r));
+      loadStorage(id);
+      onChanged();
+    } catch (e) {
+      setStorageMsg(String(e));
+    }
+  };
+
+  // 本文の全文保持期間の変更（設定後すぐ要約保存を適用し、結果を表示）。
+  const changeBodyWindow = async (id: number, w: string) => {
+    setEditBodyWindow(w);
+    setStorageMsg('');
+    try {
+      const r = await accountSetBodyWindow(id, w);
+      setStorageMsg(retentionMsg(r));
+      loadStorage(id);
+      onChanged();
+    } catch (e) {
+      setStorageMsg(String(e));
     }
   };
 
@@ -401,6 +455,45 @@ export function AccountSetup({
                         />
                       </div>
                     )}
+                    {/* 期間ベースの3ティア: フルデータ → 添付削除 → 本文要約 */}
+                    <label className="mb-2 block">
+                      <span className="mb-1 block text-xs text-white/55">
+                        {t('storage.fullWindow')}
+                      </span>
+                      <select
+                        className={inputCls}
+                        value={editFullWindow}
+                        onChange={(e) => changeFullWindow(a.id, e.target.value)}
+                      >
+                        {FULL_WINDOWS.map((w) => (
+                          <option key={w} value={w} className="text-black">
+                            {windowLabel(t, w)}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="mt-1 block text-[11px] leading-snug text-white/40">
+                        {t('storage.fullWindowHint')}
+                      </span>
+                    </label>
+                    <label className="mb-2 block">
+                      <span className="mb-1 block text-xs text-white/55">
+                        {t('storage.bodyWindow')}
+                      </span>
+                      <select
+                        className={inputCls}
+                        value={editBodyWindow}
+                        onChange={(e) => changeBodyWindow(a.id, e.target.value)}
+                      >
+                        {BODY_WINDOWS.map((w) => (
+                          <option key={w} value={w} className="text-black">
+                            {windowLabel(t, w)}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="mt-1 block text-[11px] leading-snug text-white/40">
+                        {t('storage.bodyWindowHint')}
+                      </span>
+                    </label>
                     <label className="mb-2 block">
                       <span className="mb-1 block text-xs text-white/55">{t('storage.limit')}</span>
                       <select

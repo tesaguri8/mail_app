@@ -53,6 +53,7 @@ CREATE TABLE emails (
     -- 迷惑メール（docs/SPAM.md）
     spam_score REAL,                      -- 0–1
     is_junk BOOLEAN DEFAULT FALSE,        -- 迷惑として隔離
+    spam_learned INTEGER DEFAULT 0,       -- 最後に学習した向き: -1=ham学習 / 0=未学習 / 1=spam学習（再マーク訂正用）
     folder_id INTEGER,
     raw_headers TEXT,
     body_plain TEXT,
@@ -304,11 +305,18 @@ CREATE TABLE templates (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 迷惑メールのローカル学習（docs/SPAM.md）。モデルファイルでも可。
+-- 迷惑メールのローカル学習（docs/SPAM.md）。名前空間付きトークンで衝突回避。
 CREATE TABLE spam_tokens (
-    token TEXT PRIMARY KEY,
-    spam_count INTEGER DEFAULT 0,
-    ham_count INTEGER DEFAULT 0
+    token TEXT PRIMARY KEY,             -- 名前空間付き: "w:無料" / "ng:振込" / "url:example.com" / "hdr:spf_fail" ...
+    spam_count INTEGER DEFAULT 0,       -- 同一メール内の重複は dedup 後に1カウント
+    ham_count INTEGER DEFAULT 0,
+    updated_at INTEGER DEFAULT 0        -- epoch秒。古い語の刈り込み（vacuum）判断に使用
+);
+
+-- 迷惑メール学習のメタ（総数カウンタ等）。1行 key-value でスキーマ追加に強くする（docs/SPAM.md §4.2）
+CREATE TABLE spam_meta (
+    key TEXT PRIMARY KEY,              -- "n_spam" / "n_ham" / "model_version" ...
+    value INTEGER NOT NULL             -- スコア計算（ラプラス平滑化）に必須の学習メール総数
 );
 
 -- 保存フィルタ（スマートフォルダ。docs/FILTERING.md）

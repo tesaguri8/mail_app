@@ -93,7 +93,19 @@
     "signatures": "署名",
     "tags": "タグ",
     "display": "表示",
-    "about": "このアプリ"
+    "about": "このアプリ",
+    "inlineImages": "本文の埋め込み画像を表示",
+    "inlineImagesHint": "メールに同梱されたインライン画像を自動取得して本文に表示します。外部（リモート）画像は引き続きブロックします。"
+  },
+  "storage": {
+    "title": "ローカル保存容量（添付）",
+    "limit": "容量の上限",
+    "optimize": "ストレージ最適化",
+    "optimized": "{{count}} 件の添付を整理（{{size}} 解放）",
+    "resync": "点検再取り込み",
+    "resyncHint": "取り込み範囲をサーバーから取り直し、古いメールにも添付情報（uid）を補完します。",
+    "resyncing": "再取り込み中…",
+    "resynced": "取得 {{fetched}} / 新規 {{stored}} / 補完 {{backfilled}}"
   },
   "lang": {
     "switch": "EN"
@@ -155,6 +167,18 @@
     "hideQuotes": "引用を隠す",
     "close": "閉じる",
     "noBody": "本文がありません",
+    "attachments": "添付ファイル",
+    "attachmentDownload": "ダウンロード",
+    "attachmentOpen": "開く",
+    "attachmentPreview": "プレビュー",
+    "attachmentHide": "閉じる",
+    "attachmentBusy": "処理中…",
+    "attachmentSaved": "保存しました",
+    "attachmentSavedN": "{{count}} 件を保存しました",
+    "attachmentSelectAll": "すべて選択／解除",
+    "attachmentSaveSelected": "選択を保存 ({{count}})",
+    "attachmentsInlineOnly": "本文に埋め込まれた画像のみで、添付ファイルはありません。",
+    "attachmentsUnfetched": "添付情報は未取得です。設定 → アカウント → 「点検再取り込み」で取得できます。",
     "more": "もっと読む →",
     "selectMail": "メールを選択してください",
     "side": "左右",

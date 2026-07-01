@@ -3,10 +3,11 @@ mod emails;
 mod migrations;
 mod server_accounts;
 mod signatures;
+mod storage;
 mod tags;
 
 pub use accounts::NewAccount;
-pub use emails::{insert_email, NewEmail};
+pub use emails::{insert_email, AttachmentFetchInfo, InsertOutcome, NewAttachment, NewEmail};
 pub use server_accounts::NewServerAccount;
 
 use rusqlite::Connection;
@@ -29,10 +30,28 @@ impl Store {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
         migrations::run(&conn)?;
-        Ok(Self {
+        let store = Self {
             conn: Mutex::new(conn),
             path: path.to_path_buf(),
-        })
+        };
+        // 旧 TEXT 本文を一度だけ圧縮列へ移す（初回のみ実行、以降は no-op）。
+        match store.compress_legacy_bodies() {
+            Ok(n) if n > 0 => {
+                log::info!("compressed {n} legacy HTML bodies");
+                // 解放ページを実ファイルに反映（圧縮した初回だけ実行）。
+                // WAL モードでは VACUUM だけだと主ファイルが縮まないので、
+                // チェックポイントで WAL を反映・切り詰めてから VACUUM し、再度切り詰める。
+                let conn = store.conn.lock().unwrap();
+                if let Err(e) = conn.execute_batch(
+                    "PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA wal_checkpoint(TRUNCATE);",
+                ) {
+                    log::warn!("compaction after compression failed: {e}");
+                }
+            }
+            Ok(_) => {}
+            Err(e) => log::warn!("legacy body compression skipped: {e}"),
+        }
+        Ok(store)
     }
 
     /// 現在のスキーマバージョン（PRAGMA user_version）。

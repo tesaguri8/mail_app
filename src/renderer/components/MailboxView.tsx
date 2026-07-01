@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  BookmarkMinus,
-  Bookmark,
-  BookmarkPlus,
   Columns2,
   Flag,
   Mail,
@@ -27,7 +24,6 @@ import {
   mailDelete,
   mailGet,
   mailList,
-  mailSetBookmarked,
   mailSetRead,
   mailSetStarred,
   mailSync,
@@ -44,21 +40,19 @@ import { TagPicker } from './TagPicker';
 const iconBtn =
   'flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80 disabled:opacity-40';
 
-/** リスト絞り込みのトグル。star/known/bookmark/flag はバックエンド実装まで非適用（並びのみ）。 */
+/** リスト絞り込みのトグル。known/flag はバックエンド実装まで非適用（並びのみ）。 */
 const FILTERS: { key: string; Icon: LucideIcon }[] = [
   { key: 'unread', Icon: Mail },
   { key: 'star', Icon: Star },
   { key: 'known', Icon: UserRound },
-  { key: 'bookmark', Icon: Bookmark },
   { key: 'attachment', Icon: Paperclip },
   { key: 'flag', Icon: Flag },
 ];
 
 function matchesFilters(m: MailSummary, filters: Set<string>): boolean {
   if (filters.has('unread') && m.is_read) return false;
-  if (filters.has('attachment') && !m.has_attachments) return false;
+  if (filters.has('attachment') && !m.has_real_attachments) return false;
   if (filters.has('star') && !m.is_starred) return false;
-  if (filters.has('bookmark') && !m.is_bookmarked) return false;
   // known/flag は対応データが入るまでフィルタしない（空表示で混乱させない）
   return true;
 }
@@ -234,15 +228,6 @@ export function MailboxView({
       /* noop */
     }
   };
-  const actBookmark = async (value: boolean) => {
-    const ids = targetIds();
-    patchMails(selectedIds, { is_bookmarked: value });
-    try {
-      await mailSetBookmarked(ids, value);
-    } catch {
-      /* noop */
-    }
-  };
   const actDelete = async () => {
     const ids = targetIds();
     const idSet = new Set(ids);
@@ -291,26 +276,12 @@ export function MailboxView({
   const buildMenuItems = (): MenuItem[] => {
     const sel = mails.filter((m) => selectedIds.has(m.id));
     const allStarred = sel.length > 0 && sel.every((m) => m.is_starred);
-    const allBookmarked = sel.length > 0 && sel.every((m) => m.is_bookmarked);
     return [
       { key: 'read', label: t('ctx.markRead'), Icon: MailOpen, onClick: () => actRead(true) },
       { key: 'unread', label: t('ctx.markUnread'), Icon: Mail, onClick: () => actRead(false) },
       allStarred
         ? { key: 'unstar', label: t('ctx.unstar'), Icon: StarOff, onClick: () => actStar(false) }
         : { key: 'star', label: t('ctx.star'), Icon: Star, onClick: () => actStar(true) },
-      allBookmarked
-        ? {
-            key: 'unbookmark',
-            label: t('ctx.unbookmark'),
-            Icon: BookmarkMinus,
-            onClick: () => actBookmark(false),
-          }
-        : {
-            key: 'bookmark',
-            label: t('ctx.bookmark'),
-            Icon: BookmarkPlus,
-            onClick: () => actBookmark(true),
-          },
       {
         key: 'tags',
         label: t('ctx.tags'),
@@ -361,12 +332,11 @@ export function MailboxView({
               </span>
               <span className="flex shrink-0 items-center gap-1 text-[10px] text-white/40">
                 {m.is_starred && <Star size={12} className="fill-amber-300 text-amber-300" />}
-                {m.is_bookmarked && <Bookmark size={12} className="fill-sky-300 text-sky-300" />}
                 {formatDate(m.date)}
               </span>
             </div>
             <div className="truncate text-sm text-white/80">
-              {m.subject ?? '(no subject)'} {m.has_attachments && '📎'}
+              {m.subject ?? '(no subject)'} {m.has_real_attachments && '📎'}
             </div>
             <div className="line-clamp-1 text-xs text-white/40">{m.preview}</div>
             {m.tag_ids.length > 0 && (

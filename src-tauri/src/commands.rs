@@ -1,11 +1,13 @@
 use crate::models::{
-    AccountInput, AccountSummary, AppInfo, AutoconfigResult, DbInfo, MailDetail, MailSummary,
-    ServerAccountSummary, SignatureSummary, SyncResult, TagSummary,
+    AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult, DbInfo,
+    EvictionReport, MailDetail, MailSummary, ServerAccountSummary, SignatureSummary, StorageInfo,
+    SyncResult, TagSummary,
 };
 use crate::services::autoconfig;
 use crate::services::imap_sync;
+use crate::services::media;
 use crate::services::store::{NewAccount, NewServerAccount, Store};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 /// アプリ識別情報を返す（identifier はハードコードせず Tauri 設定から取得）。
 #[tauri::command]
@@ -326,6 +328,280 @@ pub fn mail_get(store: State<Store>, id: i64) -> Result<MailDetail, String> {
         .ok_or_else(|| "メールが見つかりません".to_string())?;
     let _ = store.mark_read(id);
     Ok(detail)
+}
+
+/// メールの添付メタ一覧を返す（本体未取得のものは is_downloaded=false）。
+#[tauri::command]
+pub fn mail_attachments(
+    store: State<Store>,
+    email_id: i64,
+) -> Result<Vec<AttachmentSummary>, String> {
+    store.list_attachments(email_id).map_err(|e| e.to_string())
+}
+
+/// 添付本体をディスクに用意して保存先パスを返す（既に取得済みならそれを再利用）。
+/// emails.uid + attachments.part_index で IMAP から該当パートだけを再取得する。
+async fn ensure_attachment_file(
+    app: &AppHandle,
+    store: &Store,
+    attachment_id: i64,
+) -> Result<std::path::PathBuf, String> {
+    let info = store
+        .attachment_fetch_info(attachment_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "添付が見つかりません".to_string())?;
+
+    // 取得済みでファイルが残っていればそのまま使う（LRU の最終アクセスを更新）。
+    if let Some(path) = info.file_path.as_ref() {
+        let p = std::path::PathBuf::from(path);
+        if p.exists() {
+            let _ = store.touch_attachment(attachment_id);
+            return Ok(p);
+        }
+    }
+
+    let uid = info.email_uid.ok_or_else(|| {
+        "再取得に必要な情報がありません。アカウントを再同期してください。".to_string()
+    })?;
+    let part_index = info.part_index;
+    let filename = info.filename;
+
+    let (email, login, host, port) = store
+        .get_account_imap(info.account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "アカウントが見つかりません".to_string())?;
+    let service = app.config().identifier.clone();
+    let password = keyring::Entry::new(&service, &email)
+        .and_then(|e| e.get_password())
+        .map_err(|e| format!("資格情報を取得できません: {e}"))?;
+
+    let fetched = tauri::async_runtime::spawn_blocking(move || {
+        imap_sync::fetch_attachment(
+            &host,
+            port,
+            &login,
+            &password,
+            uid as u32,
+            part_index as usize,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // 保存先: <app_data>/data/attachments/<attachment_id>/<filename>
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("data")
+        .join("attachments")
+        .join(attachment_id.to_string());
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    let safe = sanitize_filename(&filename);
+    let path = dir.join(&safe);
+    std::fs::write(&path, &fetched.bytes).map_err(|e| e.to_string())?;
+
+    let checksum = simple_checksum(&fetched.bytes);
+    let path_str = path.to_string_lossy().to_string();
+    store
+        .set_attachment_downloaded(attachment_id, &path_str, Some(&checksum))
+        .map_err(|e| e.to_string())?;
+
+    Ok(path)
+}
+
+/// 添付ファイルをオンデマンドで取得して保存する（既に取得済みならそれを返す）。
+/// 取得後、アカウントの容量上限を超えていれば古い添付を自動で追い出す。
+#[tauri::command]
+pub async fn attachment_download(
+    app: AppHandle,
+    store: State<'_, Store>,
+    attachment_id: i64,
+) -> Result<AttachmentSummary, String> {
+    ensure_attachment_file(&app, &store, attachment_id).await?;
+    // 容量超過時は古い添付を追い出す（best-effort）。
+    if let Ok(Some(info)) = store.attachment_fetch_info(attachment_id) {
+        let _ = store.evict_over_limit(info.account_id);
+    }
+    store
+        .get_attachment(attachment_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "添付が見つかりません".to_string())
+}
+
+/// 画像の添付/インラインを web 表示用に変換し、data URL を返す。
+/// HEIC は WebView 非対応のため JPEG へ変換し、大きすぎる画像は縮小する。
+/// `thumb=true` なら一覧サムネイル用に小さめのレンディションを返す。
+#[tauri::command]
+pub async fn attachment_view(
+    app: AppHandle,
+    store: State<'_, Store>,
+    attachment_id: i64,
+    thumb: bool,
+) -> Result<String, String> {
+    let att = store
+        .get_attachment(attachment_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "添付が見つかりません".to_string())?;
+    let ct = att.content_type.as_deref();
+    if !media::is_image(ct, &att.filename) {
+        return Err("画像ではありません".to_string());
+    }
+
+    let path = ensure_attachment_file(&app, &store, attachment_id).await?;
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let max = if thumb {
+        media::THUMB_MAX
+    } else {
+        media::VIEW_MAX
+    };
+
+    let filename = att.filename.clone();
+    let content_type = att.content_type.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        media::to_web_data_url(&bytes, content_type.as_deref(), &filename, max)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 添付を OS の関連アプリで開く（未取得なら先に取得）。
+/// HEIC は Windows 標準で開けないことがあるため、JPEG レンディションを作って開く。
+#[tauri::command]
+pub async fn attachment_open(
+    app: AppHandle,
+    store: State<'_, Store>,
+    attachment_id: i64,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let att = store
+        .get_attachment(attachment_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "添付が見つかりません".to_string())?;
+
+    let original = ensure_attachment_file(&app, &store, attachment_id).await?;
+
+    // HEIC はそのままだと Windows で開けない場合があるので JPEG 版を作って開く。
+    let to_open = if media::is_heic(att.content_type.as_deref(), &att.filename) {
+        let bytes = std::fs::read(&original).map_err(|e| e.to_string())?;
+        let jpeg = tauri::async_runtime::spawn_blocking(move || {
+            media::heic_to_jpeg_bytes(&bytes, media::VIEW_MAX)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        let jpeg_path = original.with_extension("jpg");
+        std::fs::write(&jpeg_path, &jpeg).map_err(|e| e.to_string())?;
+        jpeg_path
+    } else {
+        original
+    };
+
+    app.opener()
+        .open_path(to_open.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// 添付をユーザー指定の場所へ保存する（ダウンロード）。未取得なら先に取得してから複製。
+/// `dest` は保存先のフルパス（フロントの保存ダイアログで決める）。
+#[tauri::command]
+pub async fn attachment_export(
+    app: AppHandle,
+    store: State<'_, Store>,
+    attachment_id: i64,
+    dest: String,
+) -> Result<(), String> {
+    let src = ensure_attachment_file(&app, &store, attachment_id).await?;
+    std::fs::copy(&src, &dest).map_err(|e| format!("保存に失敗しました: {e}"))?;
+    Ok(())
+}
+
+/// アカウントのローカル保存容量（使用量と上限）。
+#[tauri::command]
+pub fn account_storage_info(store: State<Store>, account_id: i64) -> Result<StorageInfo, String> {
+    let used = store.storage_used(account_id).map_err(|e| e.to_string())?;
+    let limit = store.storage_limit(account_id).map_err(|e| e.to_string())?;
+    Ok(StorageInfo {
+        used_bytes: used as f64,
+        limit_bytes: limit as f64,
+    })
+}
+
+/// アカウントの容量上限を設定する（バイト）。
+#[tauri::command]
+pub fn account_set_storage_limit(
+    store: State<Store>,
+    account_id: i64,
+    bytes: f64,
+) -> Result<(), String> {
+    let bytes = bytes.max(0.0) as i64;
+    store
+        .set_storage_limit(account_id, bytes)
+        .map_err(|e| e.to_string())
+}
+
+/// ストレージ最適化: 上限超過分の古い添付バイトを追い出す（メタは残す）。
+#[tauri::command]
+pub fn storage_optimize(store: State<Store>, account_id: i64) -> Result<EvictionReport, String> {
+    store
+        .evict_over_limit(account_id)
+        .map_err(|e| e.to_string())
+}
+
+/// 点検つき再取り込み: 同期状態をリセットして取り込み範囲をフル再取得し、
+/// 既存メールに uid・添付メタを埋め戻す（古いメールの添付を後付け対応）。
+#[tauri::command]
+pub async fn mail_resync(
+    app: AppHandle,
+    store: State<'_, Store>,
+    account_id: i64,
+) -> Result<SyncResult, String> {
+    store
+        .reset_sync_state(account_id)
+        .map_err(|e| e.to_string())?;
+    let (email, login_user, host, port) = store
+        .get_account_imap(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "アカウントが見つかりません".to_string())?;
+    let service = app.config().identifier.clone();
+    let password = keyring::Entry::new(&service, &email)
+        .and_then(|e| e.get_password())
+        .map_err(|e| format!("資格情報を取得できません: {e}"))?;
+    let db_path = store.path.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        imap_sync::sync_account(&db_path, account_id, &host, port, &login_user, &password)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// ファイル名を保存に安全な形へ正規化する（パス区切り・禁止文字を除去）。
+fn sanitize_filename(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim().trim_matches('.').trim();
+    if trimmed.is_empty() {
+        "attachment".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// 非暗号の簡易チェックサム（キャッシュ整合の目安。改ざん検知用ではない）。
+fn simple_checksum(bytes: &[u8]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    format!("{:016x}", h.finish())
 }
 
 /// 実際に IMAP ログインを試す（ユーザー名/パスワードの検証）。

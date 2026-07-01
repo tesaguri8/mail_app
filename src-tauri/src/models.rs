@@ -97,7 +97,10 @@ pub struct MailSummary {
     pub date: Option<String>,
     pub preview: String,
     pub is_read: bool,
+    /// 添付の有無（旧データ由来のヒント。inline を含む場合がある）。
     pub has_attachments: bool,
+    /// 実ファイルの添付行（kind='attachment'）が手元にあるか。フィルタ用。
+    pub has_real_attachments: bool,
     pub is_starred: bool,
     pub is_bookmarked: bool,
     /// 付与されているタグの ID 群（表示・絞り込み用）。
@@ -132,10 +135,51 @@ pub struct MailDetail {
     pub has_attachments: bool,
 }
 
+/// 添付ファイル（一覧/ダウンロード状態）。
+/// `is_downloaded` が false のときは本体未取得（メタのみ）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct AttachmentSummary {
+    pub id: i32,
+    pub filename: String,
+    pub content_type: Option<String>,
+    pub size: i32,
+    pub is_downloaded: bool,
+    /// ダウンロード済みの保存先（未取得なら None）。
+    pub file_path: Option<String>,
+    /// 'attachment'（本来の添付）| 'inline'（本文埋め込み画像）。
+    pub kind: String,
+    /// Content-ID（cid: 参照の解決用。山括弧除去済み）。
+    pub content_id: Option<String>,
+}
+
+/// アカウントのローカル保存容量（添付キャッシュの使用量と上限）。
+/// バイト数は f64（TS の number）で扱い、2GB 超でも安全に渡す。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct StorageInfo {
+    /// ダウンロード済み添付の合計バイト。
+    pub used_bytes: f64,
+    /// 上限バイト。
+    pub limit_bytes: f64,
+}
+
+/// エビクション（添付バイトの追い出し）結果。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct EvictionReport {
+    /// 追い出した添付の件数。
+    pub evicted: i32,
+    /// 解放したバイト数。
+    pub freed_bytes: f64,
+}
+
 /// 同期結果。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]
 pub struct SyncResult {
     pub fetched: i32,
     pub stored: i32,
+    /// 既存メールに uid/添付メタを埋め戻した件数（点検つき再取り込み時に意味を持つ）。
+    pub backfilled: i32,
 }

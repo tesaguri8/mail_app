@@ -9,6 +9,7 @@ import {
   Forward,
   Image as ImageIcon,
   Paperclip,
+  RefreshCw,
   Reply,
   ReplyAll,
 } from 'lucide-react';
@@ -19,6 +20,7 @@ import {
   attachmentOpen,
   attachmentView,
   mailAttachments,
+  mailRefetch,
 } from '../services/mail';
 import { getInlineImages, PREFS_EVENT } from '../config/prefs';
 import { HtmlText } from './HtmlText';
@@ -51,6 +53,11 @@ export function MailBody({ detail }: { detail: MailDetail }) {
   const { t } = useTranslation();
   const [showQuotes, setShowQuotes] = useState(false);
   const [note, setNote] = useState('');
+  // 全文再取得（要約保存の解除）の結果でこのメールだけ本文を差し替える。
+  const [refreshed, setRefreshed] = useState<MailDetail | null>(null);
+  const [refetching, setRefetching] = useState(false);
+  // 表示に使う本文（再取得済みがあればそれ、無ければ props の detail）。
+  const d = refreshed ?? detail;
   const [attachments, setAttachments] = useState<AttachmentSummary[]>([]);
   const [busyId, setBusyId] = useState<number | null>(null);
   // 本文埋め込み画像（content_id → data URL）
@@ -58,8 +65,8 @@ export function MailBody({ detail }: { detail: MailDetail }) {
   // 添付画像のアプリ内プレビュー（attachment id → data URL）
   const [previews, setPreviews] = useState<Record<number, string>>({});
   const [inlineEnabled, setInlineEnabled] = useState(getInlineImages());
-  // 添付セクションの開閉
-  const [attachmentsOpen, setAttachmentsOpen] = useState(true);
+  // 添付セクションの開閉（既定は閉じる）
+  const [attachmentsOpen, setAttachmentsOpen] = useState(false);
   // チェックした添付（まとめて保存用）
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [savingAll, setSavingAll] = useState(false);
@@ -78,9 +85,10 @@ export function MailBody({ detail }: { detail: MailDetail }) {
     setAttachments([]);
     setInlineImages({});
     setPreviews({});
-    setAttachmentsOpen(true);
+    setAttachmentsOpen(false);
     setSelected(new Set());
     setAttachmentsLoaded(false);
+    setRefreshed(null);
     if (detail.has_attachments) {
       mailAttachments(detail.id)
         .then((a) => {
@@ -98,7 +106,7 @@ export function MailBody({ detail }: { detail: MailDetail }) {
     };
   }, [detail.id, detail.has_attachments]);
 
-  const hasHtmlBody = (detail.body_html?.trim()?.length ?? 0) > 0;
+  const hasHtmlBody = (d.body_html?.trim()?.length ?? 0) > 0;
 
   // HTML 本文＋設定オンのとき、インライン画像を取得して cid マップを作る。
   useEffect(() => {
@@ -171,6 +179,10 @@ export function MailBody({ detail }: { detail: MailDetail }) {
     setBusyId(a.id);
     try {
       await attachmentExport(a.id, dest);
+      // 保存時にローカルへも取得済みになる（開く/DLアイコンの表示を揃える）。
+      setAttachments((list) =>
+        list.map((x) => (x.id === a.id ? { ...x, is_downloaded: true } : x)),
+      );
       setNote(t('mailbox.attachmentSaved'));
     } catch (e) {
       setNote(String(e));
@@ -223,6 +235,20 @@ export function MailBody({ detail }: { detail: MailDetail }) {
     setSavingAll(false);
   };
 
+  // 全文をサーバーから再取得して要約保存を解除する（このメールだけ本文キャッシュを復元）。
+  const handleRefetch = async () => {
+    setRefetching(true);
+    setNote('');
+    try {
+      const fresh = await mailRefetch(detail.id);
+      setRefreshed(fresh);
+    } catch (e) {
+      setNote(String(e));
+    } finally {
+      setRefetching(false);
+    }
+  };
+
   // 作成機能は後続。今はアイコン配置とフィードバックのみ。
   const composeStub = () => setNote(t('comingSoon'));
   const COMPOSE_ACTIONS = [
@@ -231,9 +257,9 @@ export function MailBody({ detail }: { detail: MailDetail }) {
     { key: 'forward', Icon: Forward },
   ] as const;
 
-  const clean = detail.clean_body ?? '';
-  const full = detail.body_plain ?? '';
-  const html = detail.body_html?.trim() ?? '';
+  const clean = d.clean_body ?? '';
+  const full = d.body_plain ?? '';
+  const html = d.body_html?.trim() ?? '';
   const hasHtml = html.length > 0;
   const hasQuotedExtra = !hasHtml && full.trim().length > clean.trim().length;
   const body = showQuotes ? full : clean || full;
@@ -243,7 +269,7 @@ export function MailBody({ detail }: { detail: MailDetail }) {
       <div className="border-b border-white/10 px-5 py-3">
         <div className="flex items-start justify-between gap-3">
           <h3 className="min-w-0 truncate text-base font-semibold">
-            {detail.subject ?? '(no subject)'}
+            {d.subject ?? '(no subject)'}
           </h3>
           <div className="flex shrink-0 items-center gap-1">
             {COMPOSE_ACTIONS.map(({ key, Icon }) => (
@@ -257,6 +283,16 @@ export function MailBody({ detail }: { detail: MailDetail }) {
                 <Icon size={16} />
               </button>
             ))}
+            {/* 全文をサーバーから再取得（要約保存の解除・本文キャッシュの復元） */}
+            <button
+              onClick={handleRefetch}
+              disabled={refetching}
+              title={t('mailbox.refetch')}
+              aria-label={t('mailbox.refetch')}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80 disabled:opacity-50"
+            >
+              <RefreshCw size={16} className={refetching ? 'animate-spin' : ''} />
+            </button>
             {/* 添付トグル: 転送アイコンの後に配置 */}
             {detail.has_attachments && (
               <button
@@ -274,19 +310,32 @@ export function MailBody({ detail }: { detail: MailDetail }) {
         <div className="mt-1 text-xs text-white/50">
           <div className="flex items-baseline justify-between gap-3">
             <span className="min-w-0 truncate">
-              {t('mailbox.from')}: {detail.from_address ?? '—'}
+              {t('mailbox.from')}: {d.from_address ?? '—'}
             </span>
-            <span className="shrink-0">{formatDate(detail.date)}</span>
+            <span className="shrink-0">{formatDate(d.date)}</span>
           </div>
-          {detail.to_addresses && (
+          {d.to_addresses && (
             <div>
-              {t('mailbox.to')}: {detail.to_addresses}
+              {t('mailbox.to')}: {d.to_addresses}
             </div>
           )}
         </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+        {d.body_compacted && (
+          <div className="mb-3 flex items-center gap-2 rounded-md border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-[11px] leading-snug text-amber-100/80">
+            <span className="flex-1">{t('mailbox.bodyCompacted')}</span>
+            <button
+              onClick={handleRefetch}
+              disabled={refetching}
+              className="flex shrink-0 items-center gap-1 rounded bg-white/10 px-2 py-1 text-amber-50 hover:bg-white/20 disabled:opacity-50"
+            >
+              <RefreshCw size={12} className={refetching ? 'animate-spin' : ''} />
+              {t('mailbox.refetch')}
+            </button>
+          </div>
+        )}
         {hasHtml ? (
           <HtmlText html={html} inlineImages={inlineImages} />
         ) : body.trim() ? (
@@ -310,7 +359,7 @@ export function MailBody({ detail }: { detail: MailDetail }) {
                 }}
                 onChange={toggleAll}
                 title={t('mailbox.attachmentSelectAll')}
-                className="h-3.5 w-3.5 shrink-0 accent-sky-400"
+                className="h-3.5 w-3.5 shrink-0 accent-sky-400 opacity-60"
               />
             )}
             <button
@@ -357,9 +406,8 @@ export function MailBody({ detail }: { detail: MailDetail }) {
                         type="checkbox"
                         checked={selected.has(a.id)}
                         onChange={() => toggleOne(a.id)}
-                        className="h-3.5 w-3.5 shrink-0 accent-sky-400"
+                        className="h-3.5 w-3.5 shrink-0 accent-sky-400 opacity-60"
                       />
-                      <Paperclip size={14} className="shrink-0 text-white/40" />
                       <span
                         className="min-w-0 flex-1 truncate text-sm text-white/85"
                         title={a.filename}
@@ -387,15 +435,18 @@ export function MailBody({ detail }: { detail: MailDetail }) {
                       >
                         <BookOpen size={13} />
                       </button>
-                      <button
-                        onClick={() => handleSave(a)}
-                        disabled={busyId === a.id}
-                        title={t('mailbox.attachmentDownload')}
-                        aria-label={t('mailbox.attachmentDownload')}
-                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/10 text-white/80 hover:bg-white/20 disabled:opacity-50"
-                      >
-                        <Download size={13} />
-                      </button>
+                      {/* ダウンロード（保存）は未取得のときだけ。取得済み＝手元にあるので「開く」で十分。 */}
+                      {!a.is_downloaded && (
+                        <button
+                          onClick={() => handleSave(a)}
+                          disabled={busyId === a.id}
+                          title={t('mailbox.attachmentDownload')}
+                          aria-label={t('mailbox.attachmentDownload')}
+                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/10 text-white/80 hover:bg-white/20 disabled:opacity-50"
+                        >
+                          <Download size={13} />
+                        </button>
+                      )}
                     </div>
                     {preview && (
                       <img

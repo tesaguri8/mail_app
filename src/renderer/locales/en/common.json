@@ -98,10 +98,16 @@
     "inlineImagesHint": "Automatically fetch inline images bundled in the message and show them in the body. Remote (external) images stay blocked."
   },
   "storage": {
-    "title": "Local storage (attachments)",
+    "title": "Local cache (body + attachments)",
     "limit": "Storage limit",
+    "overLimit": "Not enough space. The body/attachments you guarantee exceed the limit. Increase the limit or shorten the retention periods (the original is on the server).",
+    "fullWindow": "Keep attachment files for",
+    "fullWindowHint": "Attachment files are only stored locally when you download them. Within this period, downloaded attachments are kept; for older mail their files are removed locally (metadata stays; open/download re-fetches on demand, and an opened attachment lingers ~3 days). Starred mail is always kept.",
+    "bodyWindow": "Guarantee full body text for",
+    "bodyWindowHint": "Within this period the full body is always kept. Older bodies are summarized (oldest first) only when the local cache exceeds the limit — the new, unquoted part is kept and the heavy full body is dropped (re-fetchable from the server). \"Always keep\" never summarizes.",
+    "keepAll": "Always keep",
     "optimize": "Optimize storage",
-    "optimized": "Cleaned {{count}} attachments ({{size}} freed)",
+    "optimized": "Cleaned {{count}} attachments, compacted {{compacted}} bodies ({{size}} freed)",
     "resync": "Repair re-import",
     "resyncHint": "Re-fetch the import range from the server and backfill attachment info (uid) for older mail too.",
     "resyncing": "Re-importing…",
@@ -204,6 +210,10 @@
     "w_30d": "30 days",
     "w_3m": "3 months",
     "w_6m": "6 months",
-    "w_all": "All"
+    "w_1y": "1 year",
+    "w_2y": "2 years",
+    "w_all": "All",
+    "refetch": "Re-fetch full text",
+    "bodyCompacted": "To save space, this message's body is stored in compact form (only the new, unquoted part). Use \"Re-fetch full text\" to get the full body from the server."
   }
 }

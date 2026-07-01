@@ -170,7 +170,8 @@ impl Store {
                     substr(COALESCE(clean_body, body_plain, ''), 1, 140) AS preview,
                     is_flagged, is_bookmarked,
                     (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = emails.id) AS tag_ids,
-                    EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = emails.id AND a.kind = 'attachment') AS has_real
+                    (emails.has_attachments = 1
+                     OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = emails.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real
              FROM emails WHERE account_id = ?1 ORDER BY date DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![account_id, limit], |r| {
@@ -252,7 +253,7 @@ impl Store {
     pub fn get_email(&self, id: i64) -> rusqlite::Result<Option<MailDetail>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments
+            "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted
              FROM emails WHERE id = ?1",
             params![id],
             |r| {
@@ -272,10 +273,50 @@ impl Store {
                     body_plain: r.get(6)?,
                     body_html,
                     has_attachments: r.get::<_, i64>(9)? != 0,
+                    body_compacted: r.get::<_, i64>(10)? != 0,
                 })
             },
         )
         .optional()
+    }
+
+    /// 全文再取得に必要な情報（親メールの account_id と IMAP UID）。
+    /// UID が None のメールは再取得不可（要再同期）。
+    pub fn email_refetch_info(&self, email_id: i64) -> rusqlite::Result<Option<(i64, Option<i64>)>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT account_id, uid FROM emails WHERE id = ?1",
+            params![email_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+    }
+
+    /// 本文を上書きして全文キャッシュを復元する（要約保存の解除）。
+    /// HTML は再圧縮して body_html_z に格納し、body_compacted=0 に戻す。FTS も更新。
+    pub fn update_email_body(
+        &self,
+        id: i64,
+        body_plain: Option<&str>,
+        clean_body: Option<&str>,
+        body_html: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        let body_html_z = body_html
+            .filter(|s| !s.is_empty())
+            .map(crate::services::compress::compress_text);
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE emails
+             SET body_plain = ?1, clean_body = ?2, body_html_z = ?3, body_html = NULL, body_compacted = 0
+             WHERE id = ?4",
+            params![body_plain, clean_body, body_html_z, id],
+        )?;
+        // FTS5（clean_body 索引）も更新する。
+        conn.execute(
+            "UPDATE email_fts SET clean_body = ?1 WHERE rowid = ?2",
+            params![clean_body, id],
+        )?;
+        Ok(())
     }
 
     /// 既読にする。

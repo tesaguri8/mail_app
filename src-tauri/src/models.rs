@@ -59,6 +59,10 @@ pub struct AccountSummary {
     pub imap_host: String,
     pub smtp_host: String,
     pub sync_window: String,
+    /// フルデータ（本文＋添付）を保持する期間。これより古いと添付を削除。'all'=常に保持。
+    pub full_window: String,
+    /// 本文の全文を保持する期間。これより古いと要約保存に落とす。'off'=しない。
+    pub body_window: String,
     /// 既定署名の ID（未設定なら None）。
     pub signature_id: Option<i32>,
     pub unread_count: i32,
@@ -133,6 +137,8 @@ pub struct MailDetail {
     /// HTML 本文（あれば）。レンダラ側でテキスト＋リンクのみ安全描画する。
     pub body_html: Option<String>,
     pub has_attachments: bool,
+    /// 容量節約のため本文を要約保存に落としてある（clean_body のみ）。全文はサーバー再取得可。
+    pub body_compacted: bool,
 }
 
 /// 添付ファイル（一覧/ダウンロード状態）。
@@ -171,6 +177,18 @@ pub struct EvictionReport {
     /// 追い出した添付の件数。
     pub evicted: i32,
     /// 解放したバイト数。
+    pub freed_bytes: f64,
+}
+
+/// 保持ポリシー適用（期間ベースの3ティア＋容量上限の保険）の結果。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct RetentionReport {
+    /// ローカルから削除した添付ファイルの件数（Tier2＋容量保険）。
+    pub evicted: i32,
+    /// 要約保存に落とした本文の件数（Tier3）。
+    pub compacted: i32,
+    /// 解放したバイト数（添付＋本文の概算）。
     pub freed_bytes: f64,
 }
 

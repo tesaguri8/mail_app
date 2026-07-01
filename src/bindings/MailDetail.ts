@@ -7,4 +7,8 @@ export type MailDetail = { id: number, subject: string | null, from_address: str
 /**
  * HTML 本文（あれば）。レンダラ側でテキスト＋リンクのみ安全描画する。
  */
-body_html: string | null, has_attachments: boolean, };
+body_html: string | null, has_attachments: boolean, 
+/**
+ * 容量節約のため本文を要約保存に落としてある（clean_body のみ）。全文はサーバー再取得可。
+ */
+body_compacted: boolean, };

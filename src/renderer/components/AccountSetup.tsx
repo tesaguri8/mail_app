@@ -15,19 +15,24 @@ import {
 } from '../services/accounts';
 import { signatureList } from '../services/signatures';
 import {
+  accountSetBodyWindow,
+  accountSetFullWindow,
   accountSetStorageLimit,
-  accountSetSyncWindow,
   accountStorageInfo,
   mailResync,
   storageOptimize,
 } from '../services/mail';
 import type { StorageInfo } from '@bindings/StorageInfo';
+import type { RetentionReport } from '@bindings/RetentionReport';
 
 type ConnState = { state: 'checking' | 'ok' | 'error'; msg?: string };
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
-const WINDOWS = ['n50', 'n200', '3d', '7d', '30d', '3m', '6m', 'all'] as const;
+// 添付ファイルを手元に残す期間: これより古いと添付ファイルをローカル削除。'all'=常に残す。
+const FULL_WINDOWS = ['7d', '30d', '3m', '6m', '1y', 'all'] as const;
+// テキスト全文を確実に残す期間（保証）: これより古い本文は容量オーバー時に要約対象。'all'=常に全文保持。
+const BODY_WINDOWS = ['3m', '6m', '1y', '2y', 'all'] as const;
 
 const GB = 1024 * 1024 * 1024;
 const LIMIT_GB = [1, 2, 5, 10, 20, 50] as const;
@@ -36,6 +41,12 @@ function formatBytes(b: number): string {
   if (b < 1024 * 1024) return `${Math.round(b / 1024)} KB`;
   if (b < GB) return `${(b / 1024 / 1024).toFixed(0)} MB`;
   return `${(b / GB).toFixed(2)} GB`;
+}
+
+/** 保持期間ウィンドウ値の表示ラベル（'all'=常に保持 / それ以外は期間）。 */
+function windowLabel(t: (k: string) => string, w: string): string {
+  if (w === 'all') return t('storage.keepAll');
+  return t(`mailbox.w_${w}`);
 }
 
 const inputCls =
@@ -59,7 +70,8 @@ export function AccountSetup({
   const [editing, setEditing] = useState<number | null>(null);
   const [editName, setEditName] = useState('');
   const [editSig, setEditSig] = useState<number | null>(null);
-  const [editWindow, setEditWindow] = useState('6m');
+  const [editFullWindow, setEditFullWindow] = useState('all');
+  const [editBodyWindow, setEditBodyWindow] = useState('all');
   const [editStatus, setEditStatus] = useState('');
   // ストレージ（容量）状態
   const [storage, setStorage] = useState<StorageInfo | null>(null);
@@ -112,7 +124,8 @@ export function AccountSetup({
     setEditing(a.id);
     setEditName(a.display_name ?? '');
     setEditSig(a.signature_id ?? null);
-    setEditWindow(a.sync_window ?? '6m');
+    setEditFullWindow(a.full_window ?? 'all');
+    setEditBodyWindow(a.body_window ?? 'all');
     setEditStatus('');
     setStorage(null);
     setStorageMsg('');
@@ -137,12 +150,20 @@ export function AccountSetup({
     }
   };
 
+  // 保持レポート（削除した添付・要約した本文・解放量）を1行のメッセージにする。
+  const retentionMsg = (r: RetentionReport): string =>
+    t('storage.optimized', {
+      count: r.evicted,
+      compacted: r.compacted,
+      size: formatBytes(r.freed_bytes),
+    });
+
   const optimize = async (id: number) => {
     setStorageBusy(true);
     setStorageMsg('');
     try {
       const r = await storageOptimize(id);
-      setStorageMsg(t('storage.optimized', { count: r.evicted, size: formatBytes(r.freed_bytes) }));
+      setStorageMsg(retentionMsg(r));
       loadStorage(id);
     } catch (e) {
       setStorageMsg(String(e));
@@ -180,13 +201,31 @@ export function AccountSetup({
     }
   };
 
-  const changeWindow = async (id: number, w: string) => {
-    setEditWindow(w);
+  // 添付を手元に残す期間の変更（設定後すぐ保持ポリシーを適用し、結果を表示）。
+  const changeFullWindow = async (id: number, w: string) => {
+    setEditFullWindow(w);
+    setStorageMsg('');
     try {
-      await accountSetSyncWindow(id, w);
+      const r = await accountSetFullWindow(id, w);
+      setStorageMsg(retentionMsg(r));
+      loadStorage(id);
       onChanged();
-    } catch {
-      /* noop */
+    } catch (e) {
+      setStorageMsg(String(e));
+    }
+  };
+
+  // 本文の全文保持期間の変更（設定後すぐ要約保存を適用し、結果を表示）。
+  const changeBodyWindow = async (id: number, w: string) => {
+    setEditBodyWindow(w);
+    setStorageMsg('');
+    try {
+      const r = await accountSetBodyWindow(id, w);
+      setStorageMsg(retentionMsg(r));
+      loadStorage(id);
+      onChanged();
+    } catch (e) {
+      setStorageMsg(String(e));
     }
   };
 
@@ -366,41 +405,85 @@ export function AccountSetup({
                       ))}
                     </select>
                   </label>
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-white/55">{t('mailbox.window')}</span>
-                    <select
-                      className={inputCls}
-                      value={editWindow}
-                      onChange={(e) => changeWindow(a.id, e.target.value)}
-                    >
-                      {WINDOWS.map((w) => (
-                        <option key={w} value={w} className="text-black">
-                          {t(`mailbox.w_${w}`)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
                   {/* ストレージ（容量上限とエビクション） */}
                   <div className="rounded-md border border-white/10 p-3">
                     <div className="mb-1 flex items-center justify-between">
                       <span className="text-xs text-white/55">{t('storage.title')}</span>
                       <span className="text-xs text-white/70">
-                        {storage
-                          ? `${formatBytes(storage.used_bytes)} / ${formatBytes(storage.limit_bytes)}`
-                          : '—'}
+                        {storage ? (
+                          <>
+                            {formatBytes(storage.used_bytes)} /{' '}
+                            <span
+                              className={
+                                storage.used_bytes > storage.limit_bytes * 1.05
+                                  ? 'font-semibold text-red-400'
+                                  : ''
+                              }
+                              title={
+                                storage.used_bytes > storage.limit_bytes * 1.05
+                                  ? t('storage.overLimit')
+                                  : undefined
+                              }
+                            >
+                              {formatBytes(storage.limit_bytes)}
+                            </span>
+                          </>
+                        ) : (
+                          '—'
+                        )}
                       </span>
                     </div>
                     {storage && (
                       <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-white/10">
                         <div
-                          className="h-full rounded-full bg-sky-400"
+                          className={`h-full rounded-full ${
+                            storage.used_bytes > storage.limit_bytes * 1.05 ? 'bg-red-400' : 'bg-sky-400'
+                          }`}
                           style={{
                             width: `${Math.min(100, storage.limit_bytes > 0 ? (storage.used_bytes / storage.limit_bytes) * 100 : 0)}%`,
                           }}
                         />
                       </div>
                     )}
+                    {/* 期間ベースの3ティア: フルデータ → 添付削除 → 本文要約 */}
+                    <label className="mb-2 block">
+                      <span className="mb-1 block text-xs text-white/55">
+                        {t('storage.fullWindow')}
+                      </span>
+                      <select
+                        className={inputCls}
+                        value={editFullWindow}
+                        onChange={(e) => changeFullWindow(a.id, e.target.value)}
+                      >
+                        {FULL_WINDOWS.map((w) => (
+                          <option key={w} value={w} className="text-black">
+                            {windowLabel(t, w)}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="mt-1 block text-[11px] leading-snug text-white/40">
+                        {t('storage.fullWindowHint')}
+                      </span>
+                    </label>
+                    <label className="mb-2 block">
+                      <span className="mb-1 block text-xs text-white/55">
+                        {t('storage.bodyWindow')}
+                      </span>
+                      <select
+                        className={inputCls}
+                        value={editBodyWindow}
+                        onChange={(e) => changeBodyWindow(a.id, e.target.value)}
+                      >
+                        {BODY_WINDOWS.map((w) => (
+                          <option key={w} value={w} className="text-black">
+                            {windowLabel(t, w)}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="mt-1 block text-[11px] leading-snug text-white/40">
+                        {t('storage.bodyWindowHint')}
+                      </span>
+                    </label>
                     <label className="mb-2 block">
                       <span className="mb-1 block text-xs text-white/55">{t('storage.limit')}</span>
                       <select

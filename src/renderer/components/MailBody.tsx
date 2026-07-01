@@ -242,18 +242,8 @@ export function MailBody({ detail }: { detail: MailDetail }) {
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b border-white/10 px-5 py-3">
         <div className="flex items-start justify-between gap-3">
-          <h3 className="flex min-w-0 items-center gap-1.5 text-base font-semibold">
-            <span className="truncate">{detail.subject ?? '(no subject)'}</span>
-            {detail.has_attachments && (
-              <button
-                onClick={() => setAttachmentsOpen((o) => !o)}
-                title={t('mailbox.attachments')}
-                aria-label={t('mailbox.attachments')}
-                className="shrink-0 text-white/50 hover:text-white/80"
-              >
-                <Paperclip size={15} />
-              </button>
-            )}
+          <h3 className="min-w-0 truncate text-base font-semibold">
+            {detail.subject ?? '(no subject)'}
           </h3>
           <div className="flex shrink-0 items-center gap-1">
             {COMPOSE_ACTIONS.map(({ key, Icon }) => (
@@ -267,6 +257,17 @@ export function MailBody({ detail }: { detail: MailDetail }) {
                 <Icon size={16} />
               </button>
             ))}
+            {/* 添付トグル: 転送アイコンの後に配置 */}
+            {detail.has_attachments && (
+              <button
+                onClick={() => setAttachmentsOpen((o) => !o)}
+                title={t('mailbox.attachments')}
+                aria-label={t('mailbox.attachments')}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80"
+              >
+                <Paperclip size={16} />
+              </button>
+            )}
             {note && <span className="ml-1 text-[10px] text-white/45">{note}</span>}
           </div>
         </div>

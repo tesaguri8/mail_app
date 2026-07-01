@@ -23,6 +23,12 @@
 | **success** | 送信完了→スッとボタンへ戻り、ふわっと着地 |
 | **error** | 失敗→しょんぼり戻る＋再送導線（[COMPOSE.md](COMPOSE.md) の送信取消/予約と接続） |
 
+### オン/オフ設定
+- 設定 →「表示」に **送信アニメーション（つばめ）** トグルを用意（**既定: オン**）。派手さを好まない人向けにオフにできる。
+- **オフ時**は送信ボタンを通常の **「送信」** ボタンにし、つばめの止まり・飛行演出を一切出さない（送信自体は同じ `mail_send`）。
+- 保存: フロントの設定（`localStorage` キー `rondine.flyAnimation`、[config/prefs.ts](../src/renderer/config/prefs.ts) の `getFlyAnimation` / `setFlyAnimation`）。変更は `rondine:prefs` イベントで通知。
+- 実装済み: 設定トグル本体（[Settings.tsx](../src/renderer/components/Settings.tsx) の表示設定）＋i18n（ja/en）。※送信ボタン側での出し分けは FlyButton 統合時に接続。
+
 **設計の肝: 送信の実時間とアニメの尺を分離する。** 最低表示時間（例 1.2〜2.8s）を設け、実送信が速すぎても一瞬で終わらせず、遅ければ飛行ループで待たせる。プロトタイプでは実送信（ダミー）と最低飛行を `Promise.all` で並走させている。
 
 飛び方は「自由に飛ぶ」感を出すため、ベジェ的ウェイポイント＋毎回のゆらぎ（jitter）で軌道を微妙に変える。進行方向へ機首を向け（左右反転 scaleX）、上下でバンク（rotate）、奥は小さく手前は大きく（scale＝奥行き）。
@@ -85,8 +91,9 @@
 
 ## 6. 本実装 TODO（未着手）
 
+- [x] 設定トグル「送信アニメーション（つばめ）」（既定オン）＋i18n（[Settings.tsx](../src/renderer/components/Settings.tsx) / [prefs.ts](../src/renderer/config/prefs.ts)）
 - [ ] 実写羽ばたき連番の用意（AI動画ルートは後日）
-- [ ] `FlyButton` コンポーネント化＋全面オーバーレイ層を [Compose.tsx](../src/renderer/components/Compose.tsx) に統合
+- [ ] `FlyButton` コンポーネント化＋全面オーバーレイ層を [Compose.tsx](../src/renderer/components/Compose.tsx) に統合。`getFlyAnimation()` で出し分け（オフ→通常「送信」ボタン）
 - [ ] framer-motion を正式依存に追加
 - [ ] error 状態（送信失敗）の演出＋再送導線
 - [ ] 送信取消（Undo Send）待機中の表現（飛び立つ前に留めるか等）と整合（[COMPOSE.md](COMPOSE.md)）

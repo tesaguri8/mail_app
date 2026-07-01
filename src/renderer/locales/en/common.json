@@ -113,6 +113,8 @@
     "about": "About",
     "inlineImages": "Show embedded images in body",
     "inlineImagesHint": "Automatically fetch inline images bundled in the message and show them in the body. Remote (external) images stay blocked.",
+    "flyAnimation": "Send animation (swallow)",
+    "flyAnimationHint": "Turns the send button into a swallow that flies across the window to deliver your letter while sending. When off, a plain \"Send\" button is used.",
     "spamEnabled": "Enable spam filtering",
     "spamEnabledHint": "Classify incoming mail locally on your device. Learning stays on your machine; message content is never sent to a server.",
     "spamThresholdHigh": "Quarantine threshold",

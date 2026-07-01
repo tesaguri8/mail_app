@@ -3,7 +3,12 @@ import { useTranslation } from 'react-i18next';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { SpamSettings as SpamSettingsType } from '@bindings/SpamSettings';
 import { APP } from '../config/appIdentity';
-import { getInlineImages, setInlineImages } from '../config/prefs';
+import {
+  getFlyAnimation,
+  getInlineImages,
+  setFlyAnimation,
+  setInlineImages,
+} from '../config/prefs';
 import { spamSettingsGet, spamSettingsSet } from '../services/spam';
 import { AccountSetup } from './AccountSetup';
 import { SignatureManager } from './SignatureManager';
@@ -76,10 +81,11 @@ export function Settings({
   );
 }
 
-/** 表示設定: インライン画像の自動取得など。 */
+/** 表示設定: インライン画像の自動取得、送信アニメーション（つばめ）など。 */
 function DisplaySettings() {
   const { t } = useTranslation();
   const [inline, setInline] = useState(getInlineImages());
+  const [fly, setFly] = useState(getFlyAnimation());
 
   const toggleInline = () => {
     const next = !inline;
@@ -87,32 +93,64 @@ function DisplaySettings() {
     setInlineImages(next);
   };
 
+  const toggleFly = () => {
+    const next = !fly;
+    setFly(next);
+    setFlyAnimation(next);
+  };
+
   return (
     <div className="space-y-4">
-      <label className="flex cursor-pointer items-start justify-between gap-4">
-        <span>
-          <span className="block text-sm text-white/85">{t('settings.inlineImages')}</span>
-          <span className="mt-0.5 block text-xs text-white/45">
-            {t('settings.inlineImagesHint')}
-          </span>
-        </span>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={inline}
-          onClick={toggleInline}
-          className={`relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors ${
-            inline ? 'bg-sky-500' : 'bg-white/20'
-          }`}
-        >
-          <span
-            className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-              inline ? 'translate-x-4' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
-      </label>
+      <ToggleRow
+        label={t('settings.inlineImages')}
+        hint={t('settings.inlineImagesHint')}
+        checked={inline}
+        onToggle={toggleInline}
+      />
+      <ToggleRow
+        label={t('settings.flyAnimation')}
+        hint={t('settings.flyAnimationHint')}
+        checked={fly}
+        onToggle={toggleFly}
+      />
     </div>
+  );
+}
+
+/** ラベル＋説明＋スイッチの1行（設定トグルの共通形）。 */
+function ToggleRow({
+  label,
+  hint,
+  checked,
+  onToggle,
+}: {
+  label: string;
+  hint: string;
+  checked: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start justify-between gap-4">
+      <span>
+        <span className="block text-sm text-white/85">{label}</span>
+        <span className="mt-0.5 block text-xs text-white/45">{hint}</span>
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={onToggle}
+        className={`relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors ${
+          checked ? 'bg-sky-500' : 'bg-white/20'
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+            checked ? 'translate-x-4' : 'translate-x-0.5'
+          }`}
+        />
+      </button>
+    </label>
   );
 }
 

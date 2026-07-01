@@ -6,11 +6,23 @@ use std::collections::{HashMap, HashSet};
 /// スコア合算に採用する「偏りの強い語」の上限（Paul Graham 方式）。
 const MOST_INFORMATIVE: usize = 15;
 
-/// 単語 1 語の spam らしさ（ラプラス平滑化つき、0.01..0.99 にクランプ）。
+/// この回数（spam+ham の学習出現数）に満たない語は判定に使わない。
+/// 学習の少ない語は推定が不安定で、特にクラス不均衡下では未知語が
+/// 一方のクラスへ偏る（例: spam<ham だと未知語が spam 寄りに出る）。
+/// 公開コーパス検証（§7.8）で誤検知の主因と判明したためのガード。
+const MIN_TOKEN_COUNT: i64 = 5;
+
+/// 単語 1 語の spam らしさ（0.01..0.99 にクランプ）。
+/// クラス別の「出現率」で比較し、クラス不均衡（ham≫spam 等）に依存しないようにする。
+/// さらに ham 側を 2 倍に重み付けする（Paul Graham 方式）。誤検知（正当メールの
+/// 隔離）は実害が大きいため、ham 寄りに倒して false positive を抑える（§7.4 / §7.8）。
 pub fn token_spamliness(spam: i64, ham: i64, n_spam: i64, n_ham: i64) -> f64 {
-    let ps = (spam as f64 + 1.0) / (n_spam as f64 + 2.0);
-    let ph = (ham as f64 + 1.0) / (n_ham as f64 + 2.0);
-    (ps / (ps + ph)).clamp(0.01, 0.99)
+    let b = (spam as f64 / n_spam.max(1) as f64).min(1.0); // spam 出現率
+    let g = (2.0 * ham as f64 / n_ham.max(1) as f64).min(1.0); // ham 出現率（誤検知回避で2倍重み）
+    if b + g == 0.0 {
+        return 0.5; // 学習の手掛かりなし＝中立
+    }
+    (b / (b + g)).clamp(0.01, 0.99)
 }
 
 /// トークン群から spam_score(0..1) と「効いた素性（spam 寄りの語）上位」を返す。
@@ -34,6 +46,11 @@ pub fn score(
             continue;
         }
         let (s, h) = counts.get(t).copied().unwrap_or((0, 0));
+        // 学習の乏しい語（未知語含む）は判定に使わない（§7.8 の誤検知対策）。
+        // ham は 2 倍重みに合わせて閾値判定する（token_spamliness と同じ扱い）。
+        if s + 2 * h < MIN_TOKEN_COUNT {
+            continue;
+        }
         let p = token_spamliness(s, h, n_spam, n_ham);
         let logodds = (p / (1.0 - p)).ln();
         scored.push((t.clone(), logodds));

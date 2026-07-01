@@ -272,15 +272,17 @@ export function MailBody({ detail }: { detail: MailDetail }) {
           </div>
         </div>
         <div className="mt-1 text-xs text-white/50">
-          <div>
-            {t('mailbox.from')}: {detail.from_address ?? '—'}
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="min-w-0 truncate">
+              {t('mailbox.from')}: {detail.from_address ?? '—'}
+            </span>
+            <span className="shrink-0">{formatDate(detail.date)}</span>
           </div>
           {detail.to_addresses && (
             <div>
               {t('mailbox.to')}: {detail.to_addresses}
             </div>
           )}
-          <div>{formatDate(detail.date)}</div>
         </div>
       </div>
 

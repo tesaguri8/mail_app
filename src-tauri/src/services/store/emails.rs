@@ -193,7 +193,8 @@ impl Store {
                     (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = emails.id) AS tag_ids,
                     (emails.has_attachments = 1
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = emails.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real
-             FROM emails WHERE account_id = ?1 ORDER BY date DESC LIMIT ?2",
+             FROM emails WHERE account_id = ?1
+             ORDER BY datetime(date) DESC, id DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![account_id, limit], |r| {
             // group_concat はカンマ区切り文字列。空（タグ無し）は None。
@@ -274,7 +275,7 @@ impl Store {
     pub fn get_email(&self, id: i64) -> rusqlite::Result<Option<MailDetail>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted
+            "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id
              FROM emails WHERE id = ?1",
             params![id],
             |r| {
@@ -286,6 +287,7 @@ impl Store {
                 };
                 Ok(MailDetail {
                     id: r.get::<_, i64>(0)? as i32,
+                    message_id: r.get(11)?,
                     subject: r.get(1)?,
                     from_address: r.get(2)?,
                     to_addresses: r.get(3)?,
@@ -303,7 +305,10 @@ impl Store {
 
     /// 全文再取得に必要な情報（親メールの account_id と IMAP UID）。
     /// UID が None のメールは再取得不可（要再同期）。
-    pub fn email_refetch_info(&self, email_id: i64) -> rusqlite::Result<Option<(i64, Option<i64>)>> {
+    pub fn email_refetch_info(
+        &self,
+        email_id: i64,
+    ) -> rusqlite::Result<Option<(i64, Option<i64>)>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
             "SELECT account_id, uid FROM emails WHERE id = ?1",

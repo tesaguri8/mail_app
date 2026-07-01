@@ -1,6 +1,6 @@
 use super::Store;
 use crate::models::AccountSummary;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
 /// アカウント挿入用（内部）。資格情報は含めない（keyring で別管理）。
 pub struct NewAccount {
@@ -12,6 +12,20 @@ pub struct NewAccount {
     pub smtp_host: String,
     pub smtp_port: u16,
     pub server_account_id: Option<i64>,
+}
+
+/// 送信に必要なアカウント情報。email は keyring のキー、from_* は差出人ヘッダ用。
+pub struct SmtpAccount {
+    /// 資格情報キー（keyring のユーザー名）＝アカウントのメールアドレス。
+    pub email: String,
+    /// ログイン用サーバーユーザー名（未設定なら email）。
+    pub login_user: String,
+    /// 差出人の表示名（未設定なら None）。
+    pub display_name: Option<String>,
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    /// 'ssl' | 'starttls' | その他。server_accounts から取得（既定 'starttls'）。
+    pub smtp_security: String,
 }
 
 impl Store {
@@ -62,6 +76,30 @@ impl Store {
                 Err(e)
             }
         })
+    }
+
+    /// 送信に必要な SMTP 接続情報を取得。smtp_security は紐づく server_accounts から。
+    pub fn get_account_smtp(&self, id: i64) -> rusqlite::Result<Option<SmtpAccount>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT a.email, COALESCE(NULLIF(a.username, ''), a.email), a.display_name,
+                    a.smtp_host, a.smtp_port, COALESCE(s.smtp_security, 'starttls')
+             FROM accounts a
+             LEFT JOIN server_accounts s ON s.id = a.server_account_id
+             WHERE a.id = ?1",
+            params![id],
+            |r| {
+                Ok(SmtpAccount {
+                    email: r.get(0)?,
+                    login_user: r.get(1)?,
+                    display_name: r.get(2)?,
+                    smtp_host: r.get(3)?,
+                    smtp_port: r.get::<_, i64>(4)? as u16,
+                    smtp_security: r.get(5)?,
+                })
+            },
+        )
+        .optional()
     }
 
     pub fn list_accounts(&self) -> rusqlite::Result<Vec<AccountSummary>> {

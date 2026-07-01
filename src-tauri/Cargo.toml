@@ -52,6 +52,16 @@ keyring = { version = "3", features = [
 imap = "2"
 native-tls = "0.2"
 
+# SMTP 送信。IMAP と同じく native-tls を使い OpenSSL 依存を避ける。
+# ブロッキング版 SmtpTransport を spawn_blocking で回す（tokio 機能は無効）。
+lettre = { version = "0.11", default-features = false, features = [
+    "smtp-transport",
+    "native-tls",
+    "builder",
+    "hostname",
+    "pool",
+] }
+
 # MIME 解析（堅牢・純Rust）。docs/THREADING.md
 mail-parser = "0.9"
 

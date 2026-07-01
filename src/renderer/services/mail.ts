@@ -5,9 +5,13 @@ import type { SyncResult } from '@bindings/SyncResult';
 import type { AttachmentSummary } from '@bindings/AttachmentSummary';
 import type { StorageInfo } from '@bindings/StorageInfo';
 import type { RetentionReport } from '@bindings/RetentionReport';
+import type { SendInput } from '@bindings/SendInput';
 
 // Tauri v2 は camelCase の引数キーを snake_case の Rust 引数へ自動変換する。
 export const mailSync = (accountId: number) => invoke<SyncResult>('mail_sync', { accountId });
+
+// メールを送信する（SMTP）。input は差出人アカウント・宛先・件名・本文など。
+export const mailSend = (input: SendInput) => invoke<void>('mail_send', { input });
 
 export const mailList = (accountId: number, limit: number) =>
   invoke<MailSummary[]>('mail_list', { accountId, limit });

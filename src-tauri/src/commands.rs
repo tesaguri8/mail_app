@@ -1,11 +1,12 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult, DbInfo, MailDetail,
-    MailSummary, RetentionReport, ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict,
-    StorageInfo, SyncResult, TagSummary,
+    MailSummary, RetentionReport, SendInput, ServerAccountSummary, SignatureSummary, SpamSettings,
+    SpamVerdict, StorageInfo, SyncResult, TagSummary,
 };
 use crate::services::autoconfig;
 use crate::services::imap_sync;
 use crate::services::media;
+use crate::services::smtp;
 use crate::services::spam;
 use crate::services::store::{NewAccount, NewServerAccount, Store};
 use tauri::{AppHandle, Manager, State};
@@ -212,6 +213,80 @@ pub async fn mail_sync(
         let _ = store.apply_retention(account_id);
     }
     result
+}
+
+/// プレーン本文から最小限の HTML を作る（エスケープ＋改行を <br> 化）。
+/// multipart/alternative の HTML パート用。改行は CSS(pre-wrap) ではなく <br> で表現する
+/// （テキスト主体の安全描画でも確実に改行されるように）。リンク化などは後続。
+fn plain_to_html(plain: &str) -> String {
+    let escaped = plain
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    let with_breaks = escaped.replace("\r\n", "\n").replace('\n', "<br>\n");
+    format!(
+        "<!DOCTYPE html><html><body>\
+         <div style=\"font-family:sans-serif;font-size:14px;line-height:1.5\">{with_breaks}</div>\
+         </body></html>"
+    )
+}
+
+/// メールを送信する（SMTP）。差出人アカウントの設定と keyring の資格情報を使う。
+/// ブロッキング送信は spawn_blocking に載せ、UI を止めない（docs/COMPOSE.md）。
+#[tauri::command]
+pub async fn mail_send(
+    app: AppHandle,
+    store: State<'_, Store>,
+    input: SendInput,
+) -> Result<(), String> {
+    // 宛先の正規化（空白のみの行を除去）。To は最低 1 件必須。
+    let norm = |v: Vec<String>| -> Vec<String> {
+        v.into_iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    };
+    let to = norm(input.to);
+    let cc = norm(input.cc);
+    let bcc = norm(input.bcc);
+    if to.is_empty() {
+        return Err("宛先（To）を 1 件以上入力してください".to_string());
+    }
+
+    let acct = store
+        .get_account_smtp(input.account_id as i64)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "アカウントが見つかりません".to_string())?;
+
+    // 資格情報は email をキーに keyring から取得（IMAP と同じ規約）。
+    let service = app.config().identifier.clone();
+    let password = keyring::Entry::new(&service, &acct.email)
+        .and_then(|e| e.get_password())
+        .map_err(|e| format!("資格情報を取得できません: {e}"))?;
+
+    let body_html = plain_to_html(&input.body);
+    let config = smtp::SmtpConfig {
+        host: acct.smtp_host,
+        port: acct.smtp_port,
+        security: acct.smtp_security,
+        user: acct.login_user,
+        password,
+    };
+    let message = smtp::OutgoingMessage {
+        from_name: acct.display_name,
+        from_email: acct.email,
+        to,
+        cc,
+        bcc,
+        subject: input.subject,
+        body_plain: input.body,
+        body_html: Some(body_html),
+        in_reply_to: input.in_reply_to,
+    };
+
+    tauri::async_runtime::spawn_blocking(move || smtp::send(&config, &message))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// 同期範囲（取り込み期間/件数）を設定する。値: "n50" / "3d" / "30d" / "3m" / "all" 等。

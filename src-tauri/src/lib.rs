@@ -38,6 +38,7 @@ pub fn run() {
             commands::account_check,
             commands::account_delete,
             commands::mail_sync,
+            commands::mail_send,
             commands::mail_list,
             commands::mail_get,
             commands::mail_refetch,

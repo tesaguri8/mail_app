@@ -8,7 +8,7 @@ mod spam;
 mod storage;
 mod tags;
 
-pub use accounts::NewAccount;
+pub use accounts::{NewAccount, SmtpAccount};
 pub use emails::{insert_email, AttachmentFetchInfo, InsertOutcome, NewAttachment, NewEmail};
 pub use server_accounts::NewServerAccount;
 pub use spam::SpamFeatures;

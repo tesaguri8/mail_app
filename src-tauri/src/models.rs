@@ -128,6 +128,8 @@ pub struct TagSummary {
 #[ts(export, export_to = "../../src/bindings/")]
 pub struct MailDetail {
     pub id: i32,
+    /// 元メッセージの Message-ID（返信のスレッド化 In-Reply-To 用。無ければ None）。
+    pub message_id: Option<String>,
     pub subject: Option<String>,
     pub from_address: Option<String>,
     pub to_addresses: Option<String>,
@@ -214,6 +216,23 @@ pub struct SpamSettings {
     pub threshold_low: f64,
     /// junk 隔離の τ_high（§8.1）。
     pub threshold_high: f64,
+}
+
+/// メール送信の入力（フロントから受け取る。docs/COMPOSE.md）。
+/// 本文はプレーンで作成し、送信時に HTML を自動生成して plain+HTML を同梱する。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct SendInput {
+    /// 差出人アカウント（accounts.id）。
+    pub account_id: i32,
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    pub bcc: Vec<String>,
+    pub subject: String,
+    /// プレーン本文（作成はプレーン。HTML は送信時に自動生成）。
+    pub body: String,
+    /// 返信元の Message-ID（スレッド化用。新規なら None）。
+    pub in_reply_to: Option<String>,
 }
 
 /// 同期結果。

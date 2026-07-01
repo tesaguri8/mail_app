@@ -33,6 +33,7 @@ import {
 import { mailAddTag, mailRemoveTag, tagCreate, tagList } from '../services/tags';
 import { pickTagColor, DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import { MailBody } from './MailBody';
+import { Compose, type ComposeTarget } from './Compose';
 import { FolderCombobox } from './FolderCombobox';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { DateFilter, matchesDate, type DateRange } from './DateFilter';
@@ -88,6 +89,8 @@ export function MailboxView({
   const [syncing, setSyncing] = useState(false);
   const [status, setStatus] = useState('');
   const [layout, setLayout] = useState<'side' | 'top'>('side');
+  // メール作成モーダル（新規／返信／転送）。null なら閉じている。
+  const [compose, setCompose] = useState<ComposeTarget | null>(null);
   // 表示するフォルダ/グループ（受信箱以外は後続実装）
   const [folder, setFolder] = useState('inbox');
   // リスト絞り込みトグル
@@ -441,7 +444,10 @@ export function MailboxView({
     );
 
   const bodyPane = opened ? (
-    <MailBody detail={opened} />
+    <MailBody
+      detail={opened}
+      onReply={(mode) => setCompose({ mode, source: opened })}
+    />
   ) : (
     <div className="flex h-full items-center justify-center text-sm text-white/40">
       {t('mailbox.selectMail')}
@@ -468,7 +474,7 @@ export function MailboxView({
         {/* 新規作成（新規｜未読 のように配置） */}
         <button
           className={iconBtn}
-          onClick={() => setStatus(t('comingSoon'))}
+          onClick={() => setCompose({ mode: 'new' })}
           title={t('compose.new')}
           aria-label={t('compose.new')}
         >
@@ -543,6 +549,15 @@ export function MailboxView({
           header={selectedIds.size > 1 ? t('ctx.selected', { count: selectedIds.size }) : undefined}
           items={buildMenuItems()}
           onClose={() => setMenu(null)}
+        />
+      )}
+
+      {compose && (
+        <Compose
+          accounts={accounts}
+          defaultAccountId={selected}
+          target={compose}
+          onClose={() => setCompose(null)}
         />
       )}
 

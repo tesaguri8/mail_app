@@ -53,7 +53,22 @@
     "new": "Compose",
     "reply": "Reply",
     "replyAll": "Reply all",
-    "forward": "Forward"
+    "forward": "Forward",
+    "from": "From",
+    "to": "To",
+    "cc": "Cc",
+    "bcc": "Bcc",
+    "addCc": "Cc / Bcc",
+    "subject": "Subject",
+    "toPlaceholder": "Recipient address (comma-separated)",
+    "ccPlaceholder": "Cc address (comma-separated)",
+    "bccPlaceholder": "Bcc address (comma-separated)",
+    "subjectPlaceholder": "Enter a subject",
+    "bodyPlaceholder": "Write your message…",
+    "send": "Send",
+    "sending": "Sending…",
+    "quoteHeader": "On {{date}}, {{from}} wrote:",
+    "forwardSep": "-------- Forwarded message --------"
   },
   "ctx": {
     "markRead": "Mark as read",

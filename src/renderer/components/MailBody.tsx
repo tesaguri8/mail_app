@@ -49,7 +49,13 @@ function isImage(a: AttachmentSummary): boolean {
  * メール本文の表示（インライン）。Phase: プレーン本文のみ（HTML/リモート画像は
  * 後続でサニタイズ＋ブロック。docs/MAIL_SECURITY.md）。既定は引用除去後の clean_body。
  */
-export function MailBody({ detail }: { detail: MailDetail }) {
+export function MailBody({
+  detail,
+  onReply,
+}: {
+  detail: MailDetail;
+  onReply?: (mode: 'reply' | 'replyAll' | 'forward') => void;
+}) {
   const { t } = useTranslation();
   const [showQuotes, setShowQuotes] = useState(false);
   const [note, setNote] = useState('');
@@ -249,8 +255,6 @@ export function MailBody({ detail }: { detail: MailDetail }) {
     }
   };
 
-  // 作成機能は後続。今はアイコン配置とフィードバックのみ。
-  const composeStub = () => setNote(t('comingSoon'));
   const COMPOSE_ACTIONS = [
     { key: 'reply', Icon: Reply },
     { key: 'replyAll', Icon: ReplyAll },
@@ -275,7 +279,7 @@ export function MailBody({ detail }: { detail: MailDetail }) {
             {COMPOSE_ACTIONS.map(({ key, Icon }) => (
               <button
                 key={key}
-                onClick={composeStub}
+                onClick={() => onReply?.(key)}
                 title={t(`compose.${key}`)}
                 aria-label={t(`compose.${key}`)}
                 className="flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80"

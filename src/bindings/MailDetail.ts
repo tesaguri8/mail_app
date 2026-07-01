@@ -3,7 +3,11 @@
 /**
  * メール詳細（本文表示用）。
  */
-export type MailDetail = { id: number, subject: string | null, from_address: string | null, to_addresses: string | null, date: string | null, clean_body: string | null, body_plain: string | null, 
+export type MailDetail = { id: number, 
+/**
+ * 元メッセージの Message-ID（返信のスレッド化 In-Reply-To 用。無ければ None）。
+ */
+message_id: string | null, subject: string | null, from_address: string | null, to_addresses: string | null, date: string | null, clean_body: string | null, body_plain: string | null, 
 /**
  * HTML 本文（あれば）。レンダラ側でテキスト＋リンクのみ安全描画する。
  */

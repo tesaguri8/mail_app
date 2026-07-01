@@ -237,6 +237,19 @@ pub struct SendInput {
     pub in_reply_to: Option<String>,
 }
 
+/// 同期の進捗（Tauri イベント "sync:progress" のペイロード）。
+/// フォルダごとに current/total を通知する（total は取得予定件数の目安）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct SyncProgress {
+    /// 'inbox' | 'sent' | 'drafts' | 'trash' | 'spam'。
+    pub folder: String,
+    /// これまでに取得した件数。
+    pub current: i32,
+    /// このフォルダで取得予定の件数（目安）。
+    pub total: i32,
+}
+
 /// 同期結果。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

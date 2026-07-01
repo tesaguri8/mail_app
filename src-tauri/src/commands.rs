@@ -1,7 +1,7 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult, DbInfo, MailDetail,
     MailSummary, RetentionReport, SendInput, ServerAccountSummary, SignatureSummary, SpamSettings,
-    SpamVerdict, StorageInfo, SyncResult, TagSummary,
+    SpamVerdict, StorageInfo, SyncProgress, SyncResult, TagSummary,
 };
 use crate::services::autoconfig;
 use crate::services::imap_sync;
@@ -9,7 +9,7 @@ use crate::services::media;
 use crate::services::smtp;
 use crate::services::spam;
 use crate::services::store::{NewAccount, NewServerAccount, Store};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// アプリ識別情報を返す（identifier はハードコードせず Tauri 設定から取得）。
 #[tauri::command]
@@ -203,8 +203,28 @@ pub async fn mail_sync(
         .map_err(|e| format!("資格情報を取得できません: {e}"))?;
     let db_path = store.path.clone();
 
+    // 進捗を "sync:progress" イベントで UI に通知する（フォルダ / 取得済み / 予定）。
+    let app_ev = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        imap_sync::sync_account(&db_path, account_id, &host, port, &login_user, &password)
+        let progress = |folder: &str, current: i32, total: i32| {
+            let _ = app_ev.emit(
+                "sync:progress",
+                SyncProgress {
+                    folder: folder.to_string(),
+                    current,
+                    total,
+                },
+            );
+        };
+        imap_sync::sync_account(
+            &db_path,
+            account_id,
+            &host,
+            port,
+            &login_user,
+            &password,
+            &progress,
+        )
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -851,8 +871,27 @@ pub async fn mail_resync(
         .map_err(|e| format!("資格情報を取得できません: {e}"))?;
     let db_path = store.path.clone();
 
+    let app_ev = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        imap_sync::sync_account(&db_path, account_id, &host, port, &login_user, &password)
+        let progress = |folder: &str, current: i32, total: i32| {
+            let _ = app_ev.emit(
+                "sync:progress",
+                SyncProgress {
+                    folder: folder.to_string(),
+                    current,
+                    total,
+                },
+            );
+        };
+        imap_sync::sync_account(
+            &db_path,
+            account_id,
+            &host,
+            port,
+            &login_user,
+            &password,
+            &progress,
+        )
     })
     .await
     .map_err(|e| e.to_string())?

@@ -176,6 +176,7 @@ pub fn sync_account(
     port: u16,
     user: &str,
     password: &str,
+    progress: &dyn Fn(&str, i32, i32),
 ) -> Result<SyncResult, String> {
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
     let _ = conn.execute_batch("PRAGMA foreign_keys=ON;");
@@ -213,6 +214,7 @@ pub fn sync_account(
         "inbox",
         &window,
         &mut result,
+        progress,
     )?;
 
     // その他の標準フォルダ（存在すれば best-effort。無ければスキップ）。
@@ -232,6 +234,7 @@ pub fn sync_account(
                     tag,
                     &window,
                     &mut result,
+                    progress,
                 ) {
                     log::warn!("フォルダ '{mbox}' ({tag}) の同期に失敗: {e}");
                 }
@@ -246,6 +249,7 @@ pub fn sync_account(
 
 /// 1 フォルダを同期する（select → folder_sync 状態確認 → 取得 → 状態更新）。
 /// 集計はアカウント全体の result に加算する。
+#[allow(clippy::too_many_arguments)]
 fn sync_folder(
     session: &mut ImapSession,
     conn: &Connection,
@@ -254,6 +258,7 @@ fn sync_folder(
     tag: &str,
     window: &str,
     result: &mut SyncResult,
+    progress: &dyn Fn(&str, i32, i32),
 ) -> Result<(), String> {
     let mailbox = session.select(imap_name).map_err(|e| e.to_string())?;
     let uid_validity = mailbox.uid_validity;
@@ -281,7 +286,7 @@ fn sync_folder(
     };
 
     if incremental {
-        // 新着のみ: UID > last_uid
+        // 新着のみ: UID > last_uid。新しい方を先に取得・表示する（降順）。
         let last = stored_last_uid.unwrap() as u32;
         let mut uids: Vec<u32> = session
             .uid_search(format!("UID {}:*", last + 1))
@@ -290,21 +295,25 @@ fn sync_folder(
             .filter(|&u| u > last)
             .collect();
         uids.sort_unstable();
-        fetch_uids(session, conn, account_id, tag, &uids, &mut c)?;
+        uids.reverse(); // 降順（新しい UID から）
+        fetch_uids(session, conn, account_id, tag, &uids, &mut c, progress)?;
     } else {
         match parse_scope(window) {
             Scope::Count(n) if total > 0 => {
-                // 最新 n 件（シーケンス範囲で効率的に）
+                // 最新 n 件（シーケンス範囲で効率的に）。新しい順に保存する。
                 let low = total.saturating_sub(n.saturating_sub(1)).max(1);
                 let seq = format!("{}:{}", low, total);
                 let msgs = session
                     .fetch(seq, "(UID FLAGS BODY[])")
                     .map_err(|e| e.to_string())?;
-                store_fetches(conn, account_id, tag, msgs.iter(), &mut c)?;
+                let planned = msgs.len() as i32;
+                progress(tag, 0, planned);
+                store_fetches(conn, account_id, tag, msgs.iter().rev(), &mut c)?;
+                progress(tag, c.fetched, planned);
             }
             Scope::Count(_) => { /* 空 */ }
             scope => {
-                // 日付/全期間: UID SEARCH → 新しい順に上限まで → チャンク取得
+                // 日付/全期間: UID SEARCH → 新しい順に上限まで → チャンク取得（降順）。
                 let criterion = match scope {
                     Scope::Days(d) => format!("SINCE {}", since_date(d)),
                     _ => "ALL".to_string(),
@@ -318,7 +327,8 @@ fn sync_folder(
                 if uids.len() > SAFETY_MAX {
                     uids = uids.split_off(uids.len() - SAFETY_MAX); // 新しい方を残す
                 }
-                fetch_uids(session, conn, account_id, tag, &uids, &mut c)?;
+                uids.reverse(); // 降順（新しい UID から取得・表示）
+                fetch_uids(session, conn, account_id, tag, &uids, &mut c, progress)?;
             }
         }
     }
@@ -359,7 +369,10 @@ fn fetch_uids(
     folder: &str,
     uids: &[u32],
     c: &mut Counters,
+    progress: &dyn Fn(&str, i32, i32),
 ) -> Result<(), String> {
+    let total = uids.len() as i32;
+    progress(folder, 0, total);
     for chunk in uids.chunks(CHUNK) {
         let set = chunk
             .iter()
@@ -370,6 +383,8 @@ fn fetch_uids(
             .uid_fetch(set, "(UID FLAGS BODY[])")
             .map_err(|e| e.to_string())?;
         store_fetches(conn, account_id, folder, msgs.iter(), c)?;
+        // チャンクごとに進捗を通知（取得済み / 予定件数）。
+        progress(folder, c.fetched, total);
     }
     Ok(())
 }

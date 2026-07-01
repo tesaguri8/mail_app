@@ -17,10 +17,12 @@ import {
   UserRound,
   type LucideIcon,
 } from 'lucide-react';
+import { listen } from '@tauri-apps/api/event';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailSummary } from '@bindings/MailSummary';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { TagSummary } from '@bindings/TagSummary';
+import type { SyncProgress } from '@bindings/SyncProgress';
 import {
   mailDelete,
   mailGet,
@@ -87,6 +89,7 @@ export function MailboxView({
   const [mails, setMails] = useState<MailSummary[]>([]);
   const [opened, setOpened] = useState<MailDetail | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [progress, setProgress] = useState<SyncProgress | null>(null);
   const [status, setStatus] = useState('');
   const [layout, setLayout] = useState<'side' | 'top'>('side');
   // メール作成モーダル（新規／返信／転送）。null なら閉じている。
@@ -159,7 +162,10 @@ export function MailboxView({
   const onSync = async () => {
     if (selected == null) return;
     setSyncing(true);
+    setProgress(null);
     setStatus(t('mailbox.syncing'));
+    // Rust からの "sync:progress" を購読して、フォルダ別の取得状況を表示する。
+    const unlisten = await listen<SyncProgress>('sync:progress', (e) => setProgress(e.payload));
     try {
       const r = await mailSync(selected);
       setStatus(t('mailbox.result', { fetched: r.fetched, stored: r.stored }));
@@ -167,6 +173,8 @@ export function MailboxView({
     } catch (e) {
       setStatus('✕ ' + String(e));
     } finally {
+      unlisten();
+      setProgress(null);
       setSyncing(false);
     }
   };
@@ -528,7 +536,24 @@ export function MailboxView({
         >
           {layout === 'side' ? <Columns2 size={15} /> : <Rows2 size={15} />}
         </button>
-        {status && <span className="text-xs text-white/60">{status}</span>}
+        {syncing && progress ? (
+          <span className="flex items-center gap-2 text-xs text-white/60">
+            <span className="tabular-nums">
+              {t(`mailbox.f_${progress.folder}`, progress.folder)}: {progress.current}/
+              {progress.total}
+            </span>
+            <span className="h-1 w-24 overflow-hidden rounded bg-white/15">
+              <span
+                className="block h-full bg-sky-400 transition-[width]"
+                style={{
+                  width: `${progress.total > 0 ? Math.min(100, Math.round((progress.current / progress.total) * 100)) : 0}%`,
+                }}
+              />
+            </span>
+          </span>
+        ) : (
+          status && <span className="text-xs text-white/60">{status}</span>
+        )}
       </div>
 
       {layout === 'side' ? (

@@ -39,9 +39,21 @@ pub struct ParsedEmail {
     pub body_plain: Option<String>,
     pub clean_body: Option<String>,
     pub body_html: Option<String>,
+    /// Authentication-Results の生テキスト（SPF/DKIM/DMARC 判定。docs/MAIL_SECURITY.md / SPAM.md §7.7）。
+    pub auth_result: Option<String>,
+    /// List-Id の生テキスト（メルマガ/ML 判定。docs/SPAM.md §7.7）。
+    pub list_id: Option<String>,
     pub has_attachments: bool,
     pub attachments: Vec<ParsedAttachment>,
     pub preview: String,
+}
+
+/// 指定ヘッダの生テキストを取り出す（無い/空なら None）。
+/// List-Id のように構造化されて as_text() が効かないヘッダも拾えるよう、生値（header_raw）を使う。
+fn header_text(msg: &mail_parser::Message, name: &str) -> Option<String> {
+    msg.header_raw(name)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// 添付パートの MIME 型を "type/subtype" 文字列に整形する。
@@ -78,6 +90,9 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
     let date = msg.date().map(|d| d.to_rfc3339());
     let body_plain = msg.body_text(0).map(|c| c.to_string());
     let body_html = msg.body_html(0).map(|c| c.to_string());
+    // ヘッダ素性（§7.7）: 認証結果・メール種別。トークン化と認証バッジで共有する。
+    let auth_result = header_text(&msg, "Authentication-Results");
+    let list_id = header_text(&msg, "List-Id");
     let attachments: Vec<ParsedAttachment> = msg
         .attachments()
         .enumerate()
@@ -126,6 +141,8 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
         body_plain,
         clean_body,
         body_html,
+        auth_result,
+        list_id,
         has_attachments,
         attachments,
         preview,
@@ -162,5 +179,18 @@ This is the new part.\r\n\
         assert_eq!(p.message_id.as_deref(), Some("abc123@example.com"));
         assert!(p.clean_body.as_deref().unwrap().contains("new part"));
         assert!(!p.clean_body.as_deref().unwrap().contains("quoted old line"));
+    }
+
+    #[test]
+    fn extracts_auth_result_and_list_id() {
+        let raw = b"From: News <news@example.com>\r\n\
+Subject: Bulletin\r\n\
+Authentication-Results: mx.example.com; spf=fail smtp.mailfrom=example.com; dkim=pass\r\n\
+List-Id: Example News <news.example.com>\r\n\
+\r\n\
+body\r\n";
+        let p = parse_message(raw).expect("should parse");
+        assert!(p.auth_result.as_deref().unwrap().contains("spf=fail"));
+        assert!(p.list_id.as_deref().unwrap().contains("news.example.com"));
     }
 }

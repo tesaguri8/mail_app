@@ -324,10 +324,14 @@ pub fn mail_remove_tag(store: State<Store>, ids: Vec<i64>, tag_id: i64) -> Resul
 #[tauri::command]
 pub fn mail_mark_spam(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
     for id in &ids {
-        if let Some((from, subject, body)) =
-            store.email_spam_text(*id).map_err(|e| e.to_string())?
-        {
-            let tokens = spam::tokenize(from.as_deref(), subject.as_deref(), &body);
+        if let Some(f) = store.email_spam_text(*id).map_err(|e| e.to_string())? {
+            let tokens = spam::tokenize(
+                f.from_address.as_deref(),
+                f.subject.as_deref(),
+                &f.body,
+                f.auth_result.as_deref(),
+                f.list_id.as_deref(),
+            );
             store
                 .spam_learn(*id, &tokens, true)
                 .map_err(|e| e.to_string())?;
@@ -340,10 +344,14 @@ pub fn mail_mark_spam(store: State<Store>, ids: Vec<i64>) -> Result<(), String> 
 #[tauri::command]
 pub fn mail_mark_not_spam(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
     for id in &ids {
-        if let Some((from, subject, body)) =
-            store.email_spam_text(*id).map_err(|e| e.to_string())?
-        {
-            let tokens = spam::tokenize(from.as_deref(), subject.as_deref(), &body);
+        if let Some(f) = store.email_spam_text(*id).map_err(|e| e.to_string())? {
+            let tokens = spam::tokenize(
+                f.from_address.as_deref(),
+                f.subject.as_deref(),
+                &f.body,
+                f.auth_result.as_deref(),
+                f.list_id.as_deref(),
+            );
             store
                 .spam_learn(*id, &tokens, false)
                 .map_err(|e| e.to_string())?;
@@ -368,11 +376,17 @@ pub fn spam_score(store: State<Store>, id: i64) -> Result<SpamVerdict, String> {
             top_tokens: Vec::new(),
         });
     }
-    let (from, subject, body) = store
+    let f = store
         .email_spam_text(id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "メールが見つかりません".to_string())?;
-    let tokens = spam::tokenize(from.as_deref(), subject.as_deref(), &body);
+    let tokens = spam::tokenize(
+        f.from_address.as_deref(),
+        f.subject.as_deref(),
+        &f.body,
+        f.auth_result.as_deref(),
+        f.list_id.as_deref(),
+    );
     let counts = store
         .spam_token_counts(&tokens)
         .map_err(|e| e.to_string())?;

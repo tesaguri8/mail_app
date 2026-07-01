@@ -7,6 +7,18 @@ use rusqlite::{params, OptionalExtension, Transaction};
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// 迷惑判定・学習に使うメールの素性（保存済み emails 行から取り出す）。
+pub struct SpamFeatures {
+    pub from_address: Option<String>,
+    pub subject: Option<String>,
+    /// clean_body（引用除去後）優先、無ければ body_plain。
+    pub body: String,
+    /// Authentication-Results 生テキスト（§7.7）。
+    pub auth_result: Option<String>,
+    /// List-Id 生テキスト（§7.7）。
+    pub list_id: Option<String>,
+}
+
 /// spam_tokens への加算/打ち消しを 1 文字列（upsert）で行う。
 /// `dir`: 1=spam 方向 / -1=ham 方向。`sign`: +1=加算 / -1=打ち消し。
 /// カウントは MAX(0, ...) で負に落ちないようにする。
@@ -42,19 +54,23 @@ fn bump_total(tx: &Transaction, dir: i64, sign: i64) -> rusqlite::Result<()> {
 }
 
 impl Store {
-    /// 判定・学習の入力になる素性（差出人・件名・本文）を取得する。
+    /// 判定・学習の入力になる素性（差出人・件名・本文・認証結果・List-Id）を取得する。
     /// 本文は clean_body（引用除去後）を優先し、無ければ body_plain。
-    #[allow(clippy::type_complexity)]
-    pub fn email_spam_text(
-        &self,
-        id: i64,
-    ) -> rusqlite::Result<Option<(Option<String>, Option<String>, String)>> {
+    pub fn email_spam_text(&self, id: i64) -> rusqlite::Result<Option<SpamFeatures>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT from_address, subject, COALESCE(clean_body, body_plain, '')
+            "SELECT from_address, subject, COALESCE(clean_body, body_plain, ''), auth_result, list_id
              FROM emails WHERE id = ?1",
             params![id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, String>(2)?)),
+            |r| {
+                Ok(SpamFeatures {
+                    from_address: r.get(0)?,
+                    subject: r.get(1)?,
+                    body: r.get::<_, String>(2)?,
+                    auth_result: r.get(3)?,
+                    list_id: r.get(4)?,
+                })
+            },
         )
         .optional()
     }

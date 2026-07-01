@@ -7,9 +7,15 @@
 //! NFKC・全角半角統一（§3.1）と日本語形態素（Lindera。§3.3 段階2）は後続で追加する。
 
 /// 保存済みメールの素性からトークン列を作る。
-/// 名前空間付き（`from:` / `url:` / `w:` / `ng:`）で衝突を防ぐ（§4.1）。
+/// 名前空間付き（`from:` / `url:` / `hdr:` / `w:` / `ng:`）で衝突を防ぐ（§4.1）。
 /// 重複は呼び出し側（学習・スコア）で dedup する。
-pub fn tokenize(from_address: Option<&str>, subject: Option<&str>, body: &str) -> Vec<String> {
+pub fn tokenize(
+    from_address: Option<&str>,
+    subject: Option<&str>,
+    body: &str,
+    auth_result: Option<&str>,
+    list_id: Option<&str>,
+) -> Vec<String> {
     let mut toks = Vec::new();
 
     // (1) 言語非依存シグナル：最優先（本文の分割精度に依存しない）。
@@ -18,6 +24,23 @@ pub fn tokenize(from_address: Option<&str>, subject: Option<&str>, body: &str) -
     }
     for d in extract_url_domains(body) {
         toks.push(format!("url:{d}"));
+    }
+
+    // (1b) ヘッダ素性（§3.2 / §7.7）: 認証失敗・一斉配信。
+    if let Some(ar) = auth_result {
+        let ar = ar.to_ascii_lowercase();
+        if ar.contains("spf=fail") || ar.contains("spf=softfail") {
+            toks.push("hdr:spf_fail".into());
+        }
+        if ar.contains("dkim=fail") {
+            toks.push("hdr:dkim_fail".into());
+        }
+        if ar.contains("dmarc=fail") {
+            toks.push("hdr:dmarc_fail".into());
+        }
+    }
+    if list_id.is_some() {
+        toks.push("hdr:list".into());
     }
 
     // (2) 本文＋件名：正規化 → 言語ざっくり判定 → 分割。
@@ -152,6 +175,8 @@ mod tests {
             Some("Sender <promo@example.com>"),
             None,
             "Visit https://spam.example.net/win now",
+            None,
+            None,
         );
         assert!(toks.iter().any(|t| t == "from:example.com"));
         assert!(toks.iter().any(|t| t == "url:spam.example.net"));
@@ -159,7 +184,7 @@ mod tests {
 
     #[test]
     fn japanese_uses_char_ngrams() {
-        let toks = tokenize(None, Some("無料"), "当選しました");
+        let toks = tokenize(None, Some("無料"), "当選しました", None, None);
         // 2-gram "無料" が生成される（件名も本文と同じ名前空間で語になる）。
         assert!(toks.iter().any(|t| t == "ng:無料"));
         assert!(toks.iter().all(|t| !t.starts_with("w:")));
@@ -167,10 +192,26 @@ mod tests {
 
     #[test]
     fn latin_uses_word_split() {
-        let toks = tokenize(None, None, "Free money now");
+        let toks = tokenize(None, None, "Free money now", None, None);
         assert!(toks.iter().any(|t| t == "w:free"));
         assert!(toks.iter().any(|t| t == "w:money"));
         // N-gram は使わない。
         assert!(toks.iter().all(|t| !t.starts_with("ng:")));
+    }
+
+    #[test]
+    fn header_signals_from_auth_and_list() {
+        let toks = tokenize(
+            None,
+            None,
+            "hi",
+            Some("mx.example.com; spf=fail; dkim=pass; dmarc=fail"),
+            Some("<news.example.com>"),
+        );
+        assert!(toks.iter().any(|t| t == "hdr:spf_fail"));
+        assert!(toks.iter().any(|t| t == "hdr:dmarc_fail"));
+        // dkim は pass なので出さない。
+        assert!(toks.iter().all(|t| t != "hdr:dkim_fail"));
+        assert!(toks.iter().any(|t| t == "hdr:list"));
     }
 }

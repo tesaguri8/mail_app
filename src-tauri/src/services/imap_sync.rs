@@ -255,6 +255,8 @@ fn store_fetches<'a>(
                 body_plain: p.body_plain,
                 clean_body: p.clean_body,
                 body_html: p.body_html,
+                auth_result: p.auth_result,
+                list_id: p.list_id,
                 has_attachments: p.has_attachments,
                 uid,
                 attachments,

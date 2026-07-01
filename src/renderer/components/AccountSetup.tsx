@@ -65,6 +65,7 @@ export function AccountSetup({
   const [storage, setStorage] = useState<StorageInfo | null>(null);
   const [storageBusy, setStorageBusy] = useState(false);
   const [storageMsg, setStorageMsg] = useState('');
+  const [resyncing, setResyncing] = useState(false);
 
   // form state
   const [email, setEmail] = useState('');
@@ -152,6 +153,7 @@ export function AccountSetup({
 
   const resync = async (id: number) => {
     setStorageBusy(true);
+    setResyncing(true);
     setStorageMsg(t('storage.resyncing'));
     try {
       const r = await mailResync(id);
@@ -164,6 +166,7 @@ export function AccountSetup({
       setStorageMsg(String(e));
     } finally {
       setStorageBusy(false);
+      setResyncing(false);
     }
   };
 
@@ -430,6 +433,11 @@ export function AccountSetup({
                       </button>
                       {storageMsg && <span className="text-xs text-white/70">{storageMsg}</span>}
                     </div>
+                    {resyncing && (
+                      <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-white/10">
+                        <div className="h-full w-1/3 animate-pulse rounded-full bg-sky-400" />
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-3">

@@ -1,9 +1,25 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Download, Forward, Image as ImageIcon, Paperclip, Reply, ReplyAll } from 'lucide-react';
+import { open, save } from '@tauri-apps/plugin-dialog';
+import { downloadDir, join } from '@tauri-apps/api/path';
+import {
+  BookOpen,
+  ChevronDown,
+  Download,
+  Forward,
+  Image as ImageIcon,
+  Paperclip,
+  Reply,
+  ReplyAll,
+} from 'lucide-react';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { AttachmentSummary } from '@bindings/AttachmentSummary';
-import { attachmentOpen, attachmentView, mailAttachments } from '../services/mail';
+import {
+  attachmentExport,
+  attachmentOpen,
+  attachmentView,
+  mailAttachments,
+} from '../services/mail';
 import { getInlineImages, PREFS_EVENT } from '../config/prefs';
 import { HtmlText } from './HtmlText';
 
@@ -42,6 +58,11 @@ export function MailBody({ detail }: { detail: MailDetail }) {
   // 添付画像のアプリ内プレビュー（attachment id → data URL）
   const [previews, setPreviews] = useState<Record<number, string>>({});
   const [inlineEnabled, setInlineEnabled] = useState(getInlineImages());
+  // 添付セクションの開閉
+  const [attachmentsOpen, setAttachmentsOpen] = useState(true);
+  // チェックした添付（まとめて保存用）
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [savingAll, setSavingAll] = useState(false);
 
   // 設定（インライン画像の自動取得）の変更に追従する。
   useEffect(() => {
@@ -56,6 +77,8 @@ export function MailBody({ detail }: { detail: MailDetail }) {
     setAttachments([]);
     setInlineImages({});
     setPreviews({});
+    setAttachmentsOpen(true);
+    setSelected(new Set());
     if (detail.has_attachments) {
       mailAttachments(detail.id)
         .then((a) => active && setAttachments(a))
@@ -109,7 +132,7 @@ export function MailBody({ detail }: { detail: MailDetail }) {
     }
   };
 
-  // 未取得なら取得してから、OS の関連アプリで開く（HEIC は変換して開く）。
+  // 「開く」: 未取得なら取得してから OS の関連アプリで開く（HEIC は変換して開く）。
   const handleOpen = async (a: AttachmentSummary) => {
     setBusyId(a.id);
     setNote('');
@@ -125,8 +148,71 @@ export function MailBody({ detail }: { detail: MailDetail }) {
     }
   };
 
+  // 「ダウンロード」: 保存先を選び（既定はダウンロードフォルダ）、その場所へ保存する。
+  const handleSave = async (a: AttachmentSummary) => {
+    setNote('');
+    let defaultPath = a.filename;
+    try {
+      defaultPath = await join(await downloadDir(), a.filename);
+    } catch {
+      /* ダウンロードフォルダを解決できなければファイル名だけ既定にする */
+    }
+    const dest = await save({ defaultPath }).catch(() => null);
+    if (!dest) return;
+    setBusyId(a.id);
+    try {
+      await attachmentExport(a.id, dest);
+      setNote(t('mailbox.attachmentSaved'));
+    } catch (e) {
+      setNote(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   // 一覧に出すのは本来の添付のみ（inline 画像は本文側に表示）。
   const fileAttachments = attachments.filter((a) => a.kind !== 'inline');
+
+  const toggleOne = (id: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const allSelected = fileAttachments.length > 0 && selected.size === fileAttachments.length;
+  const someSelected = selected.size > 0 && !allSelected;
+  const toggleAll = () => {
+    setSelected(allSelected ? new Set() : new Set(fileAttachments.map((a) => a.id)));
+  };
+
+  // チェックした添付をまとめて、選んだフォルダへ保存する。
+  const handleSaveSelected = async () => {
+    let dir: string | null = null;
+    try {
+      const picked = await open({ directory: true, defaultPath: await downloadDir() });
+      dir = typeof picked === 'string' ? picked : null;
+    } catch {
+      dir = null;
+    }
+    if (!dir) return;
+    setSavingAll(true);
+    setNote('');
+    const targets = fileAttachments.filter((a) => selected.has(a.id));
+    let ok = 0;
+    for (const a of targets) {
+      try {
+        await attachmentExport(a.id, await join(dir, a.filename));
+        ok += 1;
+      } catch {
+        /* 個別の失敗はスキップ */
+      }
+    }
+    setNote(t('mailbox.attachmentSavedN', { count: ok }));
+    setSavingAll(false);
+  };
 
   // 作成機能は後続。今はアイコン配置とフィードバックのみ。
   const composeStub = () => setNote(t('comingSoon'));
@@ -147,8 +233,18 @@ export function MailBody({ detail }: { detail: MailDetail }) {
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b border-white/10 px-5 py-3">
         <div className="flex items-start justify-between gap-3">
-          <h3 className="min-w-0 text-base font-semibold">
-            {detail.subject ?? '(no subject)'} {detail.has_attachments && '📎'}
+          <h3 className="flex min-w-0 items-center gap-1.5 text-base font-semibold">
+            <span className="truncate">{detail.subject ?? '(no subject)'}</span>
+            {detail.has_attachments && (
+              <button
+                onClick={() => setAttachmentsOpen((o) => !o)}
+                title={t('mailbox.attachments')}
+                aria-label={t('mailbox.attachments')}
+                className="shrink-0 text-white/50 hover:text-white/80"
+              >
+                <Paperclip size={15} />
+              </button>
+            )}
           </h3>
           <div className="flex shrink-0 items-center gap-1">
             {COMPOSE_ACTIONS.map(({ key, Icon }) => (
@@ -191,61 +287,105 @@ export function MailBody({ detail }: { detail: MailDetail }) {
       </div>
 
       {fileAttachments.length > 0 && (
-        <div className="border-t border-white/10 px-5 py-3">
-          <div className="mb-2 text-xs font-medium text-white/50">
-            {t('mailbox.attachments')} ({fileAttachments.length})
+        <div className="border-t border-white/10">
+          <div className="flex items-center gap-2 px-5 py-2 text-xs font-medium text-white/50">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              ref={(el) => {
+                if (el) el.indeterminate = someSelected;
+              }}
+              onChange={toggleAll}
+              title={t('mailbox.attachmentSelectAll')}
+              className="h-3.5 w-3.5 shrink-0 accent-sky-400"
+            />
+            <button
+              onClick={() => setAttachmentsOpen((o) => !o)}
+              className="flex flex-1 items-center gap-1 hover:text-white/75"
+            >
+              <span>
+                {t('mailbox.attachments')} ({fileAttachments.length})
+              </span>
+              <ChevronDown
+                size={14}
+                className={`transition-transform ${attachmentsOpen ? '' : '-rotate-90'}`}
+              />
+            </button>
+            {selected.size > 0 && (
+              <button
+                onClick={handleSaveSelected}
+                disabled={savingAll}
+                className="flex shrink-0 items-center gap-1 rounded-md bg-white/10 px-2 py-1 text-white/80 hover:bg-white/20 disabled:opacity-50"
+              >
+                <Download size={12} />
+                {t('mailbox.attachmentSaveSelected', { count: selected.size })}
+              </button>
+            )}
           </div>
-          <ul className="space-y-1.5">
-            {fileAttachments.map((a) => {
-              const image = isImage(a);
-              const preview = previews[a.id];
-              return (
-                <li key={a.id} className="rounded-md bg-white/5 px-3 py-2">
-                  <div className="flex items-center gap-3">
-                    <Paperclip size={14} className="shrink-0 text-white/40" />
-                    <span
-                      className="min-w-0 flex-1 truncate text-sm text-white/85"
-                      title={a.filename}
-                    >
-                      {a.filename}
-                    </span>
-                    <span className="shrink-0 text-xs text-white/40">{formatSize(a.size)}</span>
-                    {image && (
-                      <button
-                        onClick={() => togglePreview(a)}
-                        disabled={busyId === a.id}
-                        className="flex shrink-0 items-center gap-1 rounded-md bg-white/10 px-2.5 py-1 text-xs text-white/80 hover:bg-white/20 disabled:opacity-50"
+          {attachmentsOpen && (
+            <ul className="max-h-64 space-y-1.5 overflow-y-auto px-5 pb-3">
+              {fileAttachments.map((a) => {
+                const image = isImage(a);
+                const preview = previews[a.id];
+                return (
+                  <li key={a.id} className="rounded-md bg-white/5 px-3 py-2">
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(a.id)}
+                        onChange={() => toggleOne(a.id)}
+                        className="h-3.5 w-3.5 shrink-0 accent-sky-400"
+                      />
+                      <Paperclip size={14} className="shrink-0 text-white/40" />
+                      <span
+                        className="min-w-0 flex-1 truncate text-sm text-white/85"
+                        title={a.filename}
                       >
-                        <ImageIcon size={12} />
-                        {preview ? t('mailbox.attachmentHide') : t('mailbox.attachmentPreview')}
-                      </button>
-                    )}
-                    <button
-                      onClick={() => handleOpen(a)}
-                      disabled={busyId === a.id}
-                      className="flex shrink-0 items-center gap-1 rounded-md bg-white/10 px-2.5 py-1 text-xs text-white/80 hover:bg-white/20 disabled:opacity-50"
-                    >
-                      {busyId === a.id ? (
-                        t('mailbox.attachmentBusy')
-                      ) : (
-                        <>
-                          <Download size={12} />
-                          {t('mailbox.attachmentOpen')}
-                        </>
+                        {a.filename}
+                      </span>
+                      <span className="shrink-0 text-xs text-white/40">{formatSize(a.size)}</span>
+                      {image && (
+                        <button
+                          onClick={() => togglePreview(a)}
+                          disabled={busyId === a.id}
+                          title={preview ? t('mailbox.attachmentHide') : t('mailbox.attachmentPreview')}
+                          aria-label={t('mailbox.attachmentPreview')}
+                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/10 text-white/80 hover:bg-white/20 disabled:opacity-50"
+                        >
+                          <ImageIcon size={13} />
+                        </button>
                       )}
-                    </button>
-                  </div>
-                  {preview && (
-                    <img
-                      src={preview}
-                      alt={a.filename}
-                      className="mt-2 max-h-[480px] max-w-full rounded-md"
-                    />
-                  )}
-                </li>
-              );
-            })}
-          </ul>
+                      <button
+                        onClick={() => handleOpen(a)}
+                        disabled={busyId === a.id}
+                        title={t('mailbox.attachmentOpen')}
+                        aria-label={t('mailbox.attachmentOpen')}
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/10 text-white/80 hover:bg-white/20 disabled:opacity-50"
+                      >
+                        <BookOpen size={13} />
+                      </button>
+                      <button
+                        onClick={() => handleSave(a)}
+                        disabled={busyId === a.id}
+                        title={t('mailbox.attachmentDownload')}
+                        aria-label={t('mailbox.attachmentDownload')}
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/10 text-white/80 hover:bg-white/20 disabled:opacity-50"
+                      >
+                        <Download size={13} />
+                      </button>
+                    </div>
+                    {preview && (
+                      <img
+                        src={preview}
+                        alt={a.filename}
+                        className="mt-2 max-h-[480px] max-w-full rounded-md"
+                      />
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
       )}
 

@@ -44,6 +44,7 @@ pub fn run() {
             commands::attachment_download,
             commands::attachment_view,
             commands::attachment_open,
+            commands::attachment_export,
             commands::account_storage_info,
             commands::account_set_storage_limit,
             commands::storage_optimize,

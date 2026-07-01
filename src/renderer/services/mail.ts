@@ -30,6 +30,10 @@ export const attachmentView = (attachmentId: number, thumb = false) =>
 export const attachmentOpen = (attachmentId: number) =>
   invoke<void>('attachment_open', { attachmentId });
 
+// 添付を指定の場所へ保存（ダウンロード）。dest は保存先フルパス。
+export const attachmentExport = (attachmentId: number, dest: string) =>
+  invoke<void>('attachment_export', { attachmentId, dest });
+
 export const mailSetRead = (ids: number[], read: boolean) =>
   invoke<void>('mail_set_read', { ids, read });
 

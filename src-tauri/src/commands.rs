@@ -441,6 +441,20 @@ pub async fn attachment_open(
         .map_err(|e| e.to_string())
 }
 
+/// 添付をユーザー指定の場所へ保存する（ダウンロード）。未取得なら先に取得してから複製。
+/// `dest` は保存先のフルパス（フロントの保存ダイアログで決める）。
+#[tauri::command]
+pub async fn attachment_export(
+    app: AppHandle,
+    store: State<'_, Store>,
+    attachment_id: i64,
+    dest: String,
+) -> Result<(), String> {
+    let src = ensure_attachment_file(&app, &store, attachment_id).await?;
+    std::fs::copy(&src, &dest).map_err(|e| format!("保存に失敗しました: {e}"))?;
+    Ok(())
+}
+
 /// アカウントのローカル保存容量（使用量と上限）。
 #[tauri::command]
 pub fn account_storage_info(store: State<Store>, account_id: i64) -> Result<StorageInfo, String> {

@@ -101,7 +101,7 @@ pub fn account_add(
         display_name: input.display_name,
         imap_host: input.imap_host,
         smtp_host: input.smtp_host,
-        sync_window: "6m".to_string(),
+        sync_window: "all".to_string(),
         full_window: "all".to_string(),
         body_window: "off".to_string(),
         signature_id: None,
@@ -500,9 +500,9 @@ pub async fn attachment_download(
     attachment_id: i64,
 ) -> Result<AttachmentSummary, String> {
     ensure_attachment_file(&app, &store, attachment_id).await?;
-    // 容量超過時は古い添付を追い出す（best-effort）。
+    // ダウンロード後に保持ポリシーを適用（best-effort）。
     if let Ok(Some(info)) = store.attachment_fetch_info(attachment_id) {
-        let _ = store.evict_over_limit(info.account_id);
+        let _ = store.apply_retention(info.account_id);
     }
     store
         .get_attachment(attachment_id)

@@ -3,7 +3,7 @@
 **ステータス:** 計画（実装未着手）
 **目的:** 安心して気持ちよく書いて送れる「現代のメール」の作法を揃える。
 
-関連: [FEATURE_SPEC.md](FEATURE_SPEC.md)（作成モード）/ [PROTECTED_REGIONS.md](PROTECTED_REGIONS.md)（保護領域）/ [FILTERING.md](FILTERING.md)
+関連: [FEATURE_SPEC.md](FEATURE_SPEC.md)（作成モード）/ [PROTECTED_REGIONS.md](PROTECTED_REGIONS.md)（保護領域）/ [FILTERING.md](FILTERING.md)/ [FLY_SEND.md](FLY_SEND.md)（Fly 送信演出）
 
 ---
 

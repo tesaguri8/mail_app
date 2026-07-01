@@ -51,7 +51,8 @@
       .fly-btn .perch { width: 30px; height: 24px; display: inline-flex; align-items: center; justify-content: center; }
       .fly-btn .perch img { width: 30px; height: auto; }
 
-      #flight { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+      /* ツバメは常に最前面（カード/文字より上を飛ぶ） */
+      #flight { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
       .hint { position: absolute; top: 14px; left: 16px; color: rgba(255,255,255,.9);
         font-size: 12px; letter-spacing: .3px; text-shadow: 0 1px 3px rgba(0,0,0,.4); z-index: 3; }
     </style>

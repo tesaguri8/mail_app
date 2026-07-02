@@ -191,7 +191,12 @@
     "tabContactsHint": "人の住所録",
     "emptyWarn": "この組織に所属している連絡先がありません。不要なら削除できます。",
     "delete": "組織を削除",
-    "deleteConfirm": "組織「{{name}}」を削除しますか？（所属 0 名）"
+    "deleteConfirm": "組織「{{name}}」を削除しますか？（所属 0 名）",
+    "willMerge": "保存すると既存の「{{name}}」に統合されます",
+    "mergeTitle": "組織を統合しますか？",
+    "mergeBody": "「{{from}}」を既存の「{{to}}」に統合します。所属 {{count}} 名がこの組織へ移り、「{{from}}」は削除されます。",
+    "mergeConfirm": "統合する",
+    "cancel": "キャンセル"
   },
   "dupes": {
     "title": "重複の整理",

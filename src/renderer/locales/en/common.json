@@ -191,7 +191,12 @@
     "tabContactsHint": "People",
     "emptyWarn": "No contacts belong to this organization. You can delete it if it's unneeded.",
     "delete": "Delete organization",
-    "deleteConfirm": "Delete the organization \"{{name}}\"? (0 members)"
+    "deleteConfirm": "Delete the organization \"{{name}}\"? (0 members)",
+    "willMerge": "Saving will merge into the existing \"{{name}}\"",
+    "mergeTitle": "Merge organizations?",
+    "mergeBody": "\"{{from}}\" will be merged into the existing \"{{to}}\". Its {{count}} members move to this organization and \"{{from}}\" is deleted.",
+    "mergeConfirm": "Merge",
+    "cancel": "Cancel"
   },
   "dupes": {
     "title": "Clean up duplicates",

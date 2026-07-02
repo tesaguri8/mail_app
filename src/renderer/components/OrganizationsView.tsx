@@ -21,8 +21,10 @@ import {
   organizationDelete,
   organizationDetail,
   organizationList,
+  organizationMerge,
   organizationUpsert,
 } from '../services/organizations';
+import { OrgAutocomplete } from './OrgCombobox';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -48,6 +50,9 @@ export function OrganizationsView({
   const [note, setNote] = useState('');
   const [creating, setCreating] = useState(false);
   const [saved, setSaved] = useState(false);
+  // 会社名オートコンプリートの候補（自分自身は除外）と、統合確認ダイアログの表示。
+  const [orgResults, setOrgResults] = useState<OrganizationSummary[]>([]);
+  const [confirmMerge, setConfirmMerge] = useState(false);
 
   const load = useCallback((q: string) => {
     if (!isTauri) return;
@@ -66,6 +71,7 @@ export function OrganizationsView({
     setSelectedId(id);
     setCreating(false);
     setSaved(false);
+    setOrgResults([]); // 前の検索結果による誤った統合判定を避ける
     organizationDetail(id)
       .then((d) => {
         setDetail(d);
@@ -88,14 +94,20 @@ export function OrganizationsView({
     setNote('');
     setCreating(true);
     setSaved(false);
+    setOrgResults([]);
   };
 
   const dirty = detail
     ? name.trim() !== detail.org.name || note.trim() !== (detail.org.note ?? '').trim()
     : creating && name.trim() !== '';
 
-  const save = async () => {
-    if (name.trim() === '' || !isTauri) return;
+  // 会社名が別の既存組織の名前に一致するか（候補は自分自身を除外済み）。
+  const nameMatch =
+    orgResults.find((o) => o.name.trim().toLowerCase() === name.trim().toLowerCase()) ?? null;
+  // 既存組織を編集していて別組織名に一致したら「統合」になる。
+  const mergeTarget = detail && !creating ? nameMatch : null;
+
+  const doSave = async () => {
     try {
       const result = await organizationUpsert(
         selectedId,
@@ -110,6 +122,34 @@ export function OrganizationsView({
     } catch {
       /* noop */
     }
+  };
+
+  // 現在の組織を mergeTarget に統合（keep=統合先, drop=現在, 統一名=入力名）。
+  const doMerge = async () => {
+    if (!detail || !mergeTarget || !isTauri) return;
+    try {
+      await organizationMerge(mergeTarget.id, [detail.org.id], name.trim());
+      setConfirmMerge(false);
+      load(query);
+      open(mergeTarget.id);
+    } catch {
+      /* noop */
+    }
+  };
+
+  const save = () => {
+    if (name.trim() === '' || !isTauri) return;
+    if (mergeTarget) {
+      // 別組織名に一致 → 統合。確定前に確認する。
+      setConfirmMerge(true);
+      return;
+    }
+    if (creating && nameMatch) {
+      // 新規作成で既存名に一致 → 重複作成を避け、その組織を開く。
+      open(nameMatch.id);
+      return;
+    }
+    void doSave();
   };
 
   // 削除できるのは、所属している連絡先が 0 の既存組織だけ。
@@ -203,17 +243,26 @@ export function OrganizationsView({
           </div>
         ) : (
           <div className="mx-auto max-w-xl p-6">
-            <div className="mb-5 flex items-center gap-2">
+            <div className="mb-1 flex items-center gap-2">
               <Building2 size={22} className="shrink-0 text-white/50" />
-              <input
-                className="min-w-0 flex-1 rounded bg-transparent px-1 py-1 text-xl font-semibold outline-none focus:bg-white/10"
-                placeholder={t('org.namePlaceholder')}
-                value={name}
-                onChange={(e) => {
-                  setName(e.target.value);
-                  setSaved(false);
-                }}
-              />
+              <div className="min-w-0 flex-1">
+                <OrgAutocomplete
+                  value={name}
+                  excludeId={detail?.org.id ?? null}
+                  placeholder={t('org.namePlaceholder')}
+                  ariaLabel={t('org.namePlaceholder')}
+                  inputClassName="w-full rounded bg-transparent px-1 py-1 pr-9 text-xl font-semibold outline-none focus:bg-white/10"
+                  onResults={setOrgResults}
+                  onChange={(text) => {
+                    setName(text);
+                    setSaved(false);
+                  }}
+                  onSelect={(o) => {
+                    setName(o.name);
+                    setSaved(false);
+                  }}
+                />
+              </div>
               <button
                 onClick={save}
                 disabled={name.trim() === '' || !dirty}
@@ -228,6 +277,15 @@ export function OrganizationsView({
                 <span className="shrink-0 text-sm text-emerald-300">{t('contact.saved')}</span>
               )}
             </div>
+
+            {/* 別の既存組織名に一致 → 保存すると統合になる旨をその場で知らせる */}
+            {mergeTarget && (
+              <div className="mb-4 mt-1 flex items-center gap-1.5 text-[11px] text-amber-200">
+                <AlertTriangle size={12} className="shrink-0" />
+                {t('org.willMerge', { name: mergeTarget.name })}
+              </div>
+            )}
+            {!mergeTarget && <div className="mb-4" />}
 
             {/* 所属 0 名: 注意を促し、削除できるようにする（削除は所属 0 のときだけ） */}
             {canDelete && (
@@ -336,6 +394,45 @@ export function OrganizationsView({
           </div>
         )}
       </section>
+
+      {/* 統合の確認（別の既存組織名に一致した会社名で保存したとき） */}
+      {confirmMerge && detail && mergeTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setConfirmMerge(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-lg border border-white/15 bg-[#141a2e] p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-2 flex items-center gap-2 text-amber-200">
+              <AlertTriangle size={18} />
+              <h3 className="text-base font-semibold">{t('org.mergeTitle')}</h3>
+            </div>
+            <p className="mb-4 text-sm text-white/70">
+              {t('org.mergeBody', {
+                from: detail.org.name,
+                to: mergeTarget.name,
+                count: detail.members.length,
+              })}
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmMerge(false)}
+                className="rounded-md border border-white/20 px-3 py-1.5 text-sm text-white/70 hover:bg-white/10"
+              >
+                {t('org.cancel')}
+              </button>
+              <button
+                onClick={doMerge}
+                className="rounded-md bg-emerald-500/80 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500"
+              >
+                {t('org.mergeConfirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

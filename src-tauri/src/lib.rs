@@ -79,6 +79,7 @@ pub fn run() {
             commands::organization_list,
             commands::organization_detail,
             commands::organization_upsert,
+            commands::organization_delete,
             commands::organization_find_duplicates,
             commands::organization_merge,
             commands::contact_import,

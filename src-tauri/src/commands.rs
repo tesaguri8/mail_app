@@ -717,6 +717,16 @@ pub fn organization_detail(store: State<Store>, id: i64) -> Result<OrganizationD
     store.organization_detail(id).map_err(|e| e.to_string())
 }
 
+/// 組織を削除する。所属している連絡先があるときは削除しない（安全側）。
+#[tauri::command]
+pub fn organization_delete(store: State<Store>, id: i64) -> Result<(), String> {
+    if store.delete_organization(id).map_err(|e| e.to_string())? {
+        Ok(())
+    } else {
+        Err("所属している連絡先がある組織は削除できません".to_string())
+    }
+}
+
 /// 組織を作成/編集する（名前・メモ）。id 指定で更新、無ければ新規。
 #[tauri::command]
 pub fn organization_upsert(

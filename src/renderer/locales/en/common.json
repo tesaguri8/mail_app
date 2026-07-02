@@ -188,7 +188,10 @@
     "noMembers": "No contacts belong to this organization.",
     "sharedValues": "Shared addresses (main email, main phone, etc.)",
     "sharedCount": "shared by {{count}}",
-    "tabContactsHint": "People"
+    "tabContactsHint": "People",
+    "emptyWarn": "No contacts belong to this organization. You can delete it if it's unneeded.",
+    "delete": "Delete organization",
+    "deleteConfirm": "Delete the organization \"{{name}}\"? (0 members)"
   },
   "dupes": {
     "title": "Clean up duplicates",

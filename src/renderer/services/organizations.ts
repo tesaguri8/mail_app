@@ -19,6 +19,9 @@ export const organizationUpsert = (
   note: string | null,
 ) => invoke<OrganizationSummary>('organization_upsert', { id, name, nameKana, note });
 
+/** 組織を削除（所属している連絡先があるときはバックエンド側で拒否される）。 */
+export const organizationDelete = (id: number) => invoke<void>('organization_delete', { id });
+
 /** 組織名の重複候補（正規化名で束ねたグループ）を取得。 */
 export const organizationFindDuplicates = () =>
   invoke<OrgDuplicateGroup[]>('organization_find_duplicates');

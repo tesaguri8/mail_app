@@ -750,6 +750,22 @@ impl Store {
         self.get_organization(oid)
     }
 
+    /// 組織を削除する。所属連絡先があるときは削除せず false を返す（安全側）。
+    /// 削除できたら true。
+    pub fn delete_organization(&self, id: i64) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT count(*) FROM contacts WHERE org_id = ?1",
+            params![id],
+            |r| r.get(0),
+        )?;
+        if count > 0 {
+            return Ok(false);
+        }
+        conn.execute("DELETE FROM organizations WHERE id = ?1", params![id])?;
+        Ok(true)
+    }
+
     /// 組織の詳細（所属連絡先＋共有アドレスを件数つきで）。住所録の「組織」タブ用。
     pub fn organization_detail(&self, id: i64) -> rusqlite::Result<OrganizationDetail> {
         let org = self.get_organization(id)?;
@@ -1649,6 +1665,26 @@ mod tests {
             .unwrap();
         assert_eq!(c.org_id, Some(orgs[0].id));
         assert_eq!(c.organization.as_deref(), Some("株式会社テスト"));
+    }
+
+    #[test]
+    fn delete_organization_only_when_no_members() {
+        let s = store();
+        let a = s
+            .upsert_contact(&ContactInput {
+                display_name: "田中".into(),
+                organization: Some("テスト社".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let oid = a.org_id.unwrap() as i64;
+        // 所属があるうちは削除しない（false）。
+        assert!(!s.delete_organization(oid).unwrap());
+        assert_eq!(s.list_organizations(None).unwrap().len(), 1);
+        // 連絡先を消して所属 0 にすると削除できる。
+        s.delete_contact(a.id as i64).unwrap();
+        assert!(s.delete_organization(oid).unwrap());
+        assert_eq!(s.list_organizations(None).unwrap().len(), 0);
     }
 
     #[test]

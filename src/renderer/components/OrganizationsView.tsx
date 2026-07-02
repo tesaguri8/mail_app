@@ -1,9 +1,28 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Building2, Gem, Mail, Phone, Plus, Save, Search, StickyNote, User, Users, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  Building2,
+  Gem,
+  Mail,
+  Phone,
+  Plus,
+  Save,
+  Search,
+  StickyNote,
+  Trash2,
+  User,
+  Users,
+  X,
+} from 'lucide-react';
 import type { OrganizationSummary } from '@bindings/OrganizationSummary';
 import type { OrganizationDetail } from '@bindings/OrganizationDetail';
-import { organizationDetail, organizationList, organizationUpsert } from '../services/organizations';
+import {
+  organizationDelete,
+  organizationDetail,
+  organizationList,
+  organizationUpsert,
+} from '../services/organizations';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -88,6 +107,24 @@ export function OrganizationsView({
       setCreating(false);
       load(query);
       open(result.id);
+    } catch {
+      /* noop */
+    }
+  };
+
+  // 削除できるのは、所属している連絡先が 0 の既存組織だけ。
+  const canDelete = detail !== null && detail.members.length === 0;
+  const remove = async () => {
+    if (!detail || !canDelete || !isTauri) return;
+    if (!window.confirm(t('org.deleteConfirm', { name: detail.org.name }))) return;
+    try {
+      await organizationDelete(detail.org.id);
+      setSelectedId(null);
+      setDetail(null);
+      setName('');
+      setNote('');
+      setCreating(false);
+      load(query);
     } catch {
       /* noop */
     }
@@ -191,6 +228,21 @@ export function OrganizationsView({
                 <span className="shrink-0 text-sm text-emerald-300">{t('contact.saved')}</span>
               )}
             </div>
+
+            {/* 所属 0 名: 注意を促し、削除できるようにする（削除は所属 0 のときだけ） */}
+            {canDelete && (
+              <div className="mb-4 flex items-center gap-2 rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-2.5">
+                <AlertTriangle size={16} className="shrink-0 text-amber-300" />
+                <span className="flex-1 text-xs text-amber-100">{t('org.emptyWarn')}</span>
+                <button
+                  onClick={remove}
+                  className="flex shrink-0 items-center gap-1 rounded-md border border-red-400/50 bg-red-500/20 px-2.5 py-1 text-xs text-red-100 hover:bg-red-500/40"
+                >
+                  <Trash2 size={13} />
+                  {t('org.delete')}
+                </button>
+              </div>
+            )}
 
             {/* 共有アドレス（組織 ＋ 値 ＋ 共有件数） */}
             {detail && detail.shared_values.length > 0 && (

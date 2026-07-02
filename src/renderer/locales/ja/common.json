@@ -188,7 +188,10 @@
     "noMembers": "所属している連絡先はありません。",
     "sharedValues": "共有アドレス（代表メール・代表電話など）",
     "sharedCount": "{{count}} 名で共有",
-    "tabContactsHint": "人の住所録"
+    "tabContactsHint": "人の住所録",
+    "emptyWarn": "この組織に所属している連絡先がありません。不要なら削除できます。",
+    "delete": "組織を削除",
+    "deleteConfirm": "組織「{{name}}」を削除しますか？（所属 0 名）"
   },
   "dupes": {
     "title": "重複の整理",

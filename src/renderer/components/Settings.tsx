@@ -353,27 +353,12 @@ function SpamSettings() {
 
   return (
     <div className="max-w-[460px] space-y-4">
-      <label className="flex cursor-pointer items-start justify-between gap-4">
-        <span>
-          <span className="block text-sm text-white/85">{t('settings.spamEnabled')}</span>
-          <span className="mt-0.5 block text-xs text-white/45">{t('settings.spamEnabledHint')}</span>
-        </span>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={settings.enabled}
-          onClick={() => save({ ...settings, enabled: !settings.enabled })}
-          className={`relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors ${
-            settings.enabled ? 'bg-sky-500' : 'bg-white/20'
-          }`}
-        >
-          <span
-            className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-              settings.enabled ? 'translate-x-4' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
-      </label>
+      <Toggle
+        checked={settings.enabled}
+        onChange={() => save({ ...settings, enabled: !settings.enabled })}
+        title={t('settings.spamEnabled')}
+        hint={t('settings.spamEnabledHint')}
+      />
 
       {settings.enabled && (
         <div className="space-y-4 border-t border-white/10 pt-4">

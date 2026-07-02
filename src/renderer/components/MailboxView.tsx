@@ -141,6 +141,23 @@ export function MailboxView({
     if (selectedIds.size === 0) setSelecting(false);
   }, [selectedIds]);
 
+  // Esc で複数選択を解除する。重なり UI（メニュー/タグピッカー/作成モーダル）が
+  // 開いている間はそちらの Esc を優先し、入力欄フォーカス中（検索クリア等）も対象外。
+  useEffect(() => {
+    if (selectedIds.size === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      if (menu || tagPicker || compose) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))
+        return;
+      setSelectedIds(new Set());
+      anchorId.current = null;
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedIds.size, menu, tagPicker, compose]);
+
   useEffect(() => {
     if (selected == null && accounts.length > 0) setSelected(accounts[0].id);
   }, [accounts, selected]);

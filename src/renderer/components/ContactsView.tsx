@@ -429,6 +429,11 @@ export function ContactsView() {
             </div>
 
             <div className="space-y-3">
+              <TagInput
+                tags={draft.tags}
+                onChange={(tags) => patch({ tags })}
+                suggestions={tags.map((tg) => tg.name)}
+              />
               <Field icon={<User size={15} />} label={t('contact.nameLabel')}>
                 <div className="flex gap-2">
                   <input
@@ -519,11 +524,6 @@ export function ContactsView() {
                   onChange={(e) => patch({ note: nullify(e.target.value) })}
                 />
               </Field>
-              <TagInput
-                tags={draft.tags}
-                onChange={(tags) => patch({ tags })}
-                suggestions={tags.map((tg) => tg.name)}
-              />
             </div>
 
             <div className="mt-4 space-y-2">

@@ -30,6 +30,12 @@
     "attachment": "Has attachment",
     "flag": "Follow-up"
   },
+  "search": {
+    "placeholder": "Search mail",
+    "clear": "Clear search",
+    "searching": "Searching…",
+    "noResults": "No matching mail"
+  },
   "date": {
     "filter": "Filter by date",
     "after": "On/after",

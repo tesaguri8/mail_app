@@ -9,12 +9,14 @@ import {
   Paperclip,
   RefreshCw,
   Rows2,
+  Search,
   SquarePen,
   Star,
   StarOff,
   Tag,
   Trash2,
   UserRound,
+  X,
   type LucideIcon,
 } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
@@ -28,6 +30,7 @@ import {
   mailGet,
   mailList,
   mailMarkSpam,
+  mailSearch,
   mailSetRead,
   mailSetStarred,
   mailSync,
@@ -104,6 +107,11 @@ export function MailboxView({
   const [tags, setTags] = useState<TagSummary[]>([]);
   const [tagFilter, setTagFilter] = useState<Set<number>>(new Set());
   const [tagPicker, setTagPicker] = useState<{ x: number; y: number } | null>(null);
+  // 全文検索（件名・差出人・本文）。query が空でなければ検索モード。
+  const [query, setQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<MailSummary[]>([]);
+  const [searching, setSearching] = useState(false);
+  const searchMode = query.trim().length > 0;
   const toggleFilter = (key: string) =>
     setFilters((prev) => {
       const next = new Set(prev);
@@ -152,6 +160,30 @@ export function MailboxView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, folder]);
 
+  // 通常一覧・検索結果の両方へ同じ更新（既読/スター/削除/タグ）を反映する。
+  const updateLists = (fn: (list: MailSummary[]) => MailSummary[]) => {
+    setMails(fn);
+    setSearchResults(fn);
+  };
+
+  // 全文検索: 入力を 250ms デバウンスして呼ぶ。アカウント/フォルダ切替でも再実行。
+  useEffect(() => {
+    const q = query.trim();
+    if (!q || selected == null) {
+      setSearchResults([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const h = setTimeout(() => {
+      mailSearch(selected, folder, q, 200)
+        .then(setSearchResults)
+        .catch(() => setSearchResults([]))
+        .finally(() => setSearching(false));
+    }, 250);
+    return () => clearTimeout(h);
+  }, [query, selected, folder]);
+
   // 開いたメッセージをリスト内でフォーカス（スクロール）
   useEffect(() => {
     if (opened?.id != null) {
@@ -183,7 +215,7 @@ export function MailboxView({
     try {
       const d = await mailGet(id);
       setOpened(d);
-      setMails((prev) => prev.map((m) => (m.id === id ? { ...m, is_read: true } : m)));
+      updateLists((prev) => prev.map((m) => (m.id === id ? { ...m, is_read: true } : m)));
     } catch {
       /* noop */
     }
@@ -237,7 +269,7 @@ export function MailboxView({
   };
 
   const patchMails = (ids: Set<number>, patch: Partial<MailSummary>) =>
-    setMails((prev) => prev.map((m) => (ids.has(m.id) ? { ...m, ...patch } : m)));
+    updateLists((prev) => prev.map((m) => (ids.has(m.id) ? { ...m, ...patch } : m)));
 
   const targetIds = () => [...selectedIds];
 
@@ -262,7 +294,7 @@ export function MailboxView({
   const actDelete = async () => {
     const ids = targetIds();
     const idSet = new Set(ids);
-    setMails((prev) => prev.filter((m) => !idSet.has(m.id)));
+    updateLists((prev) => prev.filter((m) => !idSet.has(m.id)));
     if (opened && idSet.has(opened.id)) setOpened(null);
     setSelectedIds(new Set());
     try {
@@ -275,7 +307,7 @@ export function MailboxView({
   const actMarkSpam = async () => {
     const ids = targetIds();
     const idSet = new Set(ids);
-    setMails((prev) => prev.filter((m) => !idSet.has(m.id)));
+    updateLists((prev) => prev.filter((m) => !idSet.has(m.id)));
     if (opened && idSet.has(opened.id)) setOpened(null);
     setSelectedIds(new Set());
     try {
@@ -288,7 +320,7 @@ export function MailboxView({
   // 選択メール群へタグを付与/解除（楽観更新 → 永続化）。
   const applyTagDelta = async (ids: number[], tagId: number, add: boolean) => {
     const idSet = new Set(ids);
-    setMails((prev) =>
+    updateLists((prev) =>
       prev.map((m) => {
         if (!idSet.has(m.id)) return m;
         const has = m.tag_ids.includes(tagId);
@@ -343,7 +375,9 @@ export function MailboxView({
     return <div className="p-8 text-white/60">{t('mailbox.addInSettings')}</div>;
   }
 
-  const visibleMails = mails.filter(
+  // 検索モードでは FTS 結果を、通常は読み込み済み一覧を対象に、
+  // 既存の絞り込み（トグル/期間/タグ）を重ねて表示する。
+  const visibleMails = (searchMode ? searchResults : mails).filter(
     (m) =>
       matchesFilters(m, filters) &&
       matchesDate(m.date, dateFilter) &&
@@ -383,7 +417,9 @@ export function MailboxView({
       )}
       <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
       {visibleMails.length === 0 ? (
-        <li className="px-2 py-3 text-sm text-white/50">{t('mailbox.empty')}</li>
+        <li className="px-2 py-3 text-sm text-white/50">
+          {searchMode ? (searching ? t('search.searching') : t('search.noResults')) : t('mailbox.empty')}
+        </li>
       ) : (
         visibleMails.map((m) => (
           <li
@@ -478,6 +514,35 @@ export function MailboxView({
           ))}
         </select>
         <FolderCombobox value={folder} onChange={setFolder} />
+
+        {/* 全文検索: 件名・差出人・本文を対象。入力はデバウンスして検索。 */}
+        <div className="relative flex items-center">
+          <Search
+            size={13}
+            className={`pointer-events-none absolute left-2 ${
+              searching ? 'animate-pulse text-sky-300' : 'text-white/40'
+            }`}
+          />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Escape' && setQuery('')}
+            placeholder={t('search.placeholder')}
+            aria-label={t('search.placeholder')}
+            className="w-44 rounded-md bg-white/10 py-1 pl-7 pr-7 text-xs outline-none placeholder:text-white/35 focus:w-56 focus:ring-1 focus:ring-sky-300/40"
+          />
+          {query && (
+            <button
+              onClick={() => setQuery('')}
+              title={t('search.clear')}
+              aria-label={t('search.clear')}
+              className="absolute right-1.5 flex h-4 w-4 items-center justify-center rounded text-white/45 hover:text-white/80"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
 
         <span className="mx-1 h-5 w-px bg-white/15" />
         {/* 新規作成（新規｜未読 のように配置） */}

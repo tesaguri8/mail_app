@@ -17,6 +17,10 @@ export const mailSend = (input: SendInput) => invoke<void>('mail_send', { input 
 export const mailList = (accountId: number, folder: string, limit: number) =>
   invoke<MailSummary[]>('mail_list', { accountId, folder, limit });
 
+// 件名・差出人・本文の全文検索（FTS5）。指定アカウント/フォルダ内を絞り込む。
+export const mailSearch = (accountId: number, folder: string, query: string, limit: number) =>
+  invoke<MailSummary[]>('mail_search', { accountId, folder, query, limit });
+
 export const mailGet = (id: number) => invoke<MailDetail>('mail_get', { id });
 
 // 1通の全文をサーバーから再取得して本文キャッシュを復元（要約保存の解除）。復元後の本文を返す。

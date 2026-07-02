@@ -200,6 +200,49 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
     Ok(touched)
 }
 
+/// ユーザー入力を FTS5 の安全なクエリ式へ変換する。
+/// 各トークンを二重引用符でくくって特殊文字（AND/OR/*/"/-/(/) 等）を無害化し、
+/// 末尾に `*` を付けて前方一致にする。空白区切りは FTS5 の暗黙 AND。
+/// 有効なトークンが無ければ None（＝検索対象なし）。
+fn build_fts_query(input: &str) -> Option<String> {
+    let expr = input
+        .split_whitespace()
+        // FTS5 の引用文字列内では " を "" にエスケープする。
+        .map(|tok| format!("\"{}\"*", tok.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if expr.is_empty() {
+        None
+    } else {
+        Some(expr)
+    }
+}
+
+/// MailSummary を組み立てる共通行マッパ（list_emails / search_emails で共有）。
+/// SELECT の列順は 0:id 1:subject 2:from_address 3:date 4:is_read 5:has_attachments
+/// 6:preview 7:is_flagged 8:is_bookmarked 9:tag_ids 10:has_real 11:to_addresses。
+fn map_mail_summary(r: &rusqlite::Row) -> rusqlite::Result<MailSummary> {
+    // group_concat はカンマ区切り文字列。空（タグ無し）は None。
+    let tag_ids = r
+        .get::<_, Option<String>>(9)?
+        .map(|s| s.split(',').filter_map(|p| p.parse::<i32>().ok()).collect())
+        .unwrap_or_default();
+    Ok(MailSummary {
+        id: r.get::<_, i64>(0)? as i32,
+        subject: r.get(1)?,
+        from_address: r.get(2)?,
+        to_addresses: r.get(11)?,
+        date: r.get(3)?,
+        is_read: r.get::<_, i64>(4)? != 0,
+        has_attachments: r.get::<_, i64>(5)? != 0,
+        preview: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
+        is_starred: r.get::<_, i64>(7)? != 0,
+        is_bookmarked: r.get::<_, i64>(8)? != 0,
+        tag_ids,
+        has_real_attachments: r.get::<_, i64>(10)? != 0,
+    })
+}
+
 impl Store {
     pub fn list_emails(
         &self,
@@ -219,27 +262,37 @@ impl Store {
              FROM emails WHERE account_id = ?1 AND COALESCE(folder, 'inbox') = ?2
              ORDER BY datetime(date) DESC, id DESC LIMIT ?3",
         )?;
-        let rows = stmt.query_map(params![account_id, folder, limit], |r| {
-            // group_concat はカンマ区切り文字列。空（タグ無し）は None。
-            let tag_ids = r
-                .get::<_, Option<String>>(9)?
-                .map(|s| s.split(',').filter_map(|p| p.parse::<i32>().ok()).collect())
-                .unwrap_or_default();
-            Ok(MailSummary {
-                id: r.get::<_, i64>(0)? as i32,
-                subject: r.get(1)?,
-                from_address: r.get(2)?,
-                to_addresses: r.get(11)?,
-                date: r.get(3)?,
-                is_read: r.get::<_, i64>(4)? != 0,
-                has_attachments: r.get::<_, i64>(5)? != 0,
-                preview: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
-                is_starred: r.get::<_, i64>(7)? != 0,
-                is_bookmarked: r.get::<_, i64>(8)? != 0,
-                tag_ids,
-                has_real_attachments: r.get::<_, i64>(10)? != 0,
-            })
-        })?;
+        let rows = stmt.query_map(params![account_id, folder, limit], map_mail_summary)?;
+        rows.collect()
+    }
+
+    /// 件名・差出人・本文（FTS5 索引）を全文検索する。
+    /// アカウント内の指定フォルダに限定し、前方一致・複数語 AND で絞り込む。
+    /// 空クエリ（有効トークン無し）は空配列を返す。
+    pub fn search_emails(
+        &self,
+        account_id: i64,
+        folder: &str,
+        query: &str,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<MailSummary>> {
+        let Some(fts) = build_fts_query(query) else {
+            return Ok(Vec::new());
+        };
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT e.id, e.subject, e.from_address, e.date, e.is_read, e.has_attachments,
+                    substr(COALESCE(e.clean_body, e.body_plain, ''), 1, 140) AS preview,
+                    e.is_flagged, e.is_bookmarked,
+                    (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = e.id) AS tag_ids,
+                    (e.has_attachments = 1
+                     OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = e.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real,
+                    e.to_addresses
+             FROM email_fts JOIN emails e ON e.id = email_fts.rowid
+             WHERE email_fts MATCH ?1 AND e.account_id = ?2 AND COALESCE(e.folder, 'inbox') = ?3
+             ORDER BY datetime(e.date) DESC, e.id DESC LIMIT ?4",
+        )?;
+        let rows = stmt.query_map(params![fts, account_id, folder, limit], map_mail_summary)?;
         rows.collect()
     }
 
@@ -489,5 +542,120 @@ impl Store {
             params![attachment_id],
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::store::migrations;
+    use rusqlite::Connection;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    fn test_store() -> Store {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        migrations::run(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1,'a@b','i','s')",
+            [],
+        )
+        .unwrap();
+        Store {
+            conn: Mutex::new(conn),
+            path: PathBuf::new(),
+        }
+    }
+
+    fn seed(store: &Store, subject: &str, from: &str, body: &str, folder: &str, key: &str) {
+        let conn = store.conn.lock().unwrap();
+        let e = NewEmail {
+            account_id: 1,
+            message_id: None,
+            canonical_key: key.to_string(),
+            subject: Some(subject.to_string()),
+            from_address: Some(from.to_string()),
+            to_addresses: None,
+            date: Some("2026-01-01 00:00:00".to_string()),
+            body_plain: Some(body.to_string()),
+            clean_body: Some(body.to_string()),
+            body_html: None,
+            auth_result: None,
+            list_id: None,
+            has_attachments: false,
+            uid: None,
+            folder: folder.to_string(),
+            attachments: vec![],
+        };
+        insert_email(&conn, &e).unwrap();
+    }
+
+    #[test]
+    fn build_fts_query_quotes_and_prefixes() {
+        assert_eq!(build_fts_query("hello"), Some("\"hello\"*".to_string()));
+        assert_eq!(
+            build_fts_query("foo bar"),
+            Some("\"foo\"* \"bar\"*".to_string())
+        );
+        assert_eq!(build_fts_query("   "), None);
+        // 引用符を含む入力もエスケープして構文エラーにしない。
+        assert_eq!(build_fts_query("a\"b"), Some("\"a\"\"b\"*".to_string()));
+    }
+
+    #[test]
+    fn search_matches_subject_body_sender_and_respects_folder() {
+        let store = test_store();
+        seed(
+            &store,
+            "Invoice March",
+            "alice@corp.com",
+            "payment details enclosed",
+            "inbox",
+            "k1",
+        );
+        seed(
+            &store,
+            "Lunch plans",
+            "bob@corp.com",
+            "let us meet on friday",
+            "inbox",
+            "k2",
+        );
+        seed(&store, "Old invoice", "alice@corp.com", "archived", "trash", "k3");
+
+        // 件名一致（inbox 内）。
+        let r = store.search_emails(1, "inbox", "invoice", 50).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].subject.as_deref(), Some("Invoice March"));
+
+        // 本文の前方一致（frid → friday）。
+        let r = store.search_emails(1, "inbox", "frid", 50).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].subject.as_deref(), Some("Lunch plans"));
+
+        // 差出人一致。
+        assert_eq!(store.search_emails(1, "inbox", "alice", 50).unwrap().len(), 1);
+
+        // フォルダ限定: trash の invoice は inbox 検索に出ない。
+        let r = store.search_emails(1, "trash", "invoice", 50).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].subject.as_deref(), Some("Old invoice"));
+
+        // 空クエリは空。
+        assert!(store.search_emails(1, "inbox", "   ", 50).unwrap().is_empty());
+
+        // 複数語は AND。
+        assert_eq!(
+            store
+                .search_emails(1, "inbox", "invoice march", 50)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(store
+            .search_emails(1, "inbox", "invoice lunch", 50)
+            .unwrap()
+            .is_empty());
     }
 }

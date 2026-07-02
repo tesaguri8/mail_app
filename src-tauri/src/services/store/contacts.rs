@@ -280,9 +280,41 @@ impl Store {
     }
 
     /// 重複候補を record linkage で束ねて返す（2 件以上のみ、確信度順）。
-    /// 検出ロジックは services::dedupe（正規化＋ブロッキング＋Union-Find）。
+    /// 検出ロジックは services::dedupe。全メール/全電話（子テーブル）を材料に渡す。
     pub fn find_duplicate_groups(&self) -> rusqlite::Result<Vec<DuplicateGroup>> {
-        Ok(crate::services::dedupe::group(&self.list_contacts(None, None)?))
+        let mut contacts = self.list_contacts(None, None)?;
+        let conn = self.conn.lock().unwrap();
+        let collect =
+            |table: &str| -> rusqlite::Result<std::collections::HashMap<i64, Vec<String>>> {
+                let mut map: std::collections::HashMap<i64, Vec<String>> =
+                    std::collections::HashMap::new();
+                let mut stmt = conn.prepare(&format!("SELECT contact_id, value FROM {table}"))?;
+                let rows =
+                    stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+                for row in rows {
+                    let (cid, v) = row?;
+                    map.entry(cid).or_default().push(v);
+                }
+                Ok(map)
+            };
+        let mut emails = collect("contact_emails")?;
+        let mut phones = collect("contact_phones")?;
+        drop(conn);
+        let mk = |value: String| ContactValue {
+            id: 0,
+            label: None,
+            value,
+            is_primary: false,
+        };
+        for c in &mut contacts {
+            if let Some(v) = emails.remove(&(c.id as i64)) {
+                c.emails = v.into_iter().map(mk).collect();
+            }
+            if let Some(v) = phones.remove(&(c.id as i64)) {
+                c.phones = v.into_iter().map(mk).collect();
+            }
+        }
+        Ok(crate::services::dedupe::group(&contacts))
     }
 
     /// 複数の連絡先を 1 件（keep_id）に統合する。メール/電話などを寄せ集め、

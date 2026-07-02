@@ -39,9 +39,11 @@ impl Store {
                     return Ok(());
                 }
                 cur = conn
-                    .query_row("SELECT parent_id FROM tags WHERE id = ?1", params![c], |r| {
-                        r.get::<_, Option<i64>>(0)
-                    })
+                    .query_row(
+                        "SELECT parent_id FROM tags WHERE id = ?1",
+                        params![c],
+                        |r| r.get::<_, Option<i64>>(0),
+                    )
                     .unwrap_or(None);
             }
         }
@@ -84,9 +86,11 @@ impl Store {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         let parent: Option<i64> = tx
-            .query_row("SELECT parent_id FROM tags WHERE id = ?1", params![id], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT parent_id FROM tags WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
             .unwrap_or(None);
         // 子タグを繰り上げ（フォルダ削除で孤立させない）。
         tx.execute(

@@ -13,15 +13,15 @@ pub fn group(contacts: &[ContactSummary]) -> Vec<DuplicateGroup> {
     let recs: Vec<Rec> = contacts.iter().map(Rec::from_contact).collect();
     let n = recs.len();
 
-    // ブロッキング: 同じキーを持つ index 同士だけを比較候補にする（総当たり回避）。
+    // ブロッキング: 同じキー（全メール・全携帯・氏名）を持つ index 同士だけを比較候補に。
     let mut by_email: HashMap<&str, Vec<usize>> = HashMap::new();
     let mut by_mobile: HashMap<&str, Vec<usize>> = HashMap::new();
     let mut by_name: HashMap<&str, Vec<usize>> = HashMap::new();
     for (i, r) in recs.iter().enumerate() {
-        if let Some(e) = &r.email {
+        for e in &r.emails {
             by_email.entry(e).or_default().push(i);
         }
-        if let Some(m) = &r.mobile {
+        for m in &r.mobiles {
             by_mobile.entry(m).or_default().push(i);
         }
         if !r.name_norm.is_empty() {
@@ -107,10 +107,12 @@ pub fn group(contacts: &[ContactSummary]) -> Vec<DuplicateGroup> {
     groups
 }
 
-/// 2 レコードの一致確信度。強い独立キーが2つ揃えば High。
+/// 2 レコードの一致確信度。全メール/全電話のどれかが一致すれば「共有」とみなす。
+/// 携帯＝強、固定電話＝弱（共有されがち）としてラベルを考慮。
 fn check(a: &Rec, b: &Rec) -> Option<Conf> {
-    let shared_mobile = opt_eq(&a.mobile, &b.mobile);
-    let shared_email = opt_eq(&a.email, &b.email);
+    let shared_mobile = intersects(&a.mobiles, &b.mobiles);
+    let shared_email = intersects(&a.emails, &b.emails);
+    let shared_landline = intersects(&a.landlines, &b.landlines);
     let name_ok = name_similar(a, b);
 
     // High は「氏名も一致」する場合に限る（家族が携帯/メールを共有する誤検出を避ける）。
@@ -121,8 +123,11 @@ fn check(a: &Rec, b: &Rec) -> Option<Conf> {
         return Some(Conf::High);
     }
     if shared_mobile && shared_email {
-        // 強キー2つ独立一致だが氏名が違う: 同一人物（別表記）か、連絡先を共有する家族か
-        // 判別できないため候補（要確認）に留める。
+        // 強キー2つ独立一致だが氏名が違う: 同一人物（別表記）か、連絡先共有の家族か不明 → 要確認。
+        return Some(Conf::Medium);
+    }
+    // 固定電話は共有されがちなので、氏名一致とセットのときだけ弱い候補に。
+    if shared_landline && name_ok {
         return Some(Conf::Medium);
     }
     if !a.name_norm.is_empty() && a.name_norm == b.name_norm {
@@ -134,6 +139,11 @@ fn check(a: &Rec, b: &Rec) -> Option<Conf> {
         return Some(Conf::Low); // 同名のみ（同姓同名の別人があり得る＝要確認）
     }
     None
+}
+
+/// 2 つの集合に共通要素があるか（空文字は無視）。
+fn intersects(a: &[String], b: &[String]) -> bool {
+    a.iter().any(|x| !x.is_empty() && b.iter().any(|y| x == y))
 }
 
 /// 氏名が十分近いか（正規化一致・トークン集合一致・かな一致・Jaro–Winkler）。
@@ -153,10 +163,6 @@ fn name_similar(a: &Rec, b: &Rec) -> bool {
         }
     }
     jaro_winkler(&a.name_norm, &b.name_norm) >= 0.92
-}
-
-fn opt_eq(a: &Option<String>, b: &Option<String>) -> bool {
-    matches!((a, b), (Some(x), Some(y)) if x == y)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -182,13 +188,14 @@ fn conf_rank(s: &str) -> u8 {
     }
 }
 
-/// 正規化済みの比較用レコード。
+/// 正規化済みの比較用レコード（メール/電話は全件）。
 struct Rec {
     name_norm: String,
     name_tokens: Vec<String>,
     kana: Option<String>,
-    email: Option<String>,
-    mobile: Option<String>,
+    emails: Vec<String>,
+    mobiles: Vec<String>,
+    landlines: Vec<String>,
     org: String,
     pref: String,
 }
@@ -202,20 +209,51 @@ impl Rec {
             .as_deref()
             .map(fold_remove_ws)
             .filter(|s| !s.is_empty());
-        let email = c
-            .email
-            .as_deref()
-            .map(|e| fold(e).trim().to_string())
-            .filter(|s| !s.is_empty());
-        let mobile = c.phone.as_deref().and_then(mobile_number);
+
+        // 全メール（無ければ flat email）を正規化・重複排除。
+        let mut emails: Vec<String> = Vec::new();
+        let email_src = if c.emails.is_empty() {
+            c.email.iter().cloned().collect::<Vec<_>>()
+        } else {
+            c.emails.iter().map(|v| v.value.clone()).collect()
+        };
+        for e in email_src {
+            let e = fold(&e).trim().to_string();
+            if !e.is_empty() && !emails.contains(&e) {
+                emails.push(e);
+            }
+        }
+
+        // 全電話（無ければ flat phone）を数字化し、携帯/固定に振り分け。
+        let mut mobiles: Vec<String> = Vec::new();
+        let mut landlines: Vec<String> = Vec::new();
+        let phone_src = if c.phones.is_empty() {
+            c.phone.iter().cloned().collect::<Vec<_>>()
+        } else {
+            c.phones.iter().map(|v| v.value.clone()).collect()
+        };
+        for p in phone_src {
+            if let Some(m) = mobile_number(&p) {
+                if !mobiles.contains(&m) {
+                    mobiles.push(m);
+                }
+            } else {
+                let d = digits(&p);
+                if !d.is_empty() && !landlines.contains(&d) {
+                    landlines.push(d);
+                }
+            }
+        }
+
         let org = normalize_org(c.organization.as_deref().unwrap_or(""));
         let pref = prefecture(c.address.as_deref().unwrap_or(""));
         Rec {
             name_norm,
             name_tokens,
             kana,
-            email,
-            mobile,
+            emails,
+            mobiles,
+            landlines,
             org,
             pref,
         }
@@ -415,6 +453,7 @@ impl UnionFind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::ContactValue;
 
     fn c(
         id: i32,
@@ -527,6 +566,49 @@ mod tests {
             c(2, "山田太郎", None, None, Some("(株)テスト")),
         ];
         let g = group(&list);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].confidence, "medium");
+    }
+
+    fn val(v: &str) -> ContactValue {
+        ContactValue {
+            id: 0,
+            label: None,
+            value: v.into(),
+            is_primary: false,
+        }
+    }
+
+    #[test]
+    fn secondary_email_matches_are_linked() {
+        // 主メールは違うが、副メールが一致し氏名も一致 → High（全メールを見る）。
+        let mut a = c(1, "末松 信吾", None, None, None);
+        a.emails = vec![val("primary@x.jp"), val("shared@y.jp")];
+        let mut b = c(2, "末松信吾", None, None, None);
+        b.emails = vec![val("other@z.jp"), val("shared@y.jp")];
+        let g = group(&[a, b]);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].confidence, "high");
+    }
+
+    #[test]
+    fn shared_landline_only_is_not_linked_without_name() {
+        // 固定電話のみ共有で氏名が違えば連結しない（共有されがちなので弱い証拠）。
+        let mut a = c(1, "田中一郎", None, None, None);
+        a.phones = vec![val("03-5287-3625")];
+        let mut b = c(2, "鈴木花子", None, None, None);
+        b.phones = vec![val("(03) 5287-3625")];
+        assert!(group(&[a, b]).is_empty());
+    }
+
+    #[test]
+    fn shared_landline_plus_name_is_medium() {
+        // 固定電話共有＋氏名一致は候補（Medium）。
+        let mut a = c(1, "田中一郎", None, None, None);
+        a.phones = vec![val("03-5287-3625")];
+        let mut b = c(2, "田中 一郎", None, None, None);
+        b.phones = vec![val("(03) 5287-3625")];
+        let g = group(&[a, b]);
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].confidence, "medium");
     }

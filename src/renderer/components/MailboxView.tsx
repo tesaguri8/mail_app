@@ -490,6 +490,35 @@ export function MailboxView({
 
   const listPane = (
     <div className="flex h-full min-h-0 flex-col">
+      {/* 絞り込みツールバー: 一覧を絞る操作はリスト直上に置く（トグル/期間/タグ） */}
+      <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-white/10 px-2 py-1">
+        {FILTERS.map(({ key, Icon }) => {
+          const on = filters.has(key);
+          return (
+            <button
+              key={key}
+              onClick={() => toggleFilter(key)}
+              title={t(`filter.${key}`)}
+              aria-label={t(`filter.${key}`)}
+              aria-pressed={on}
+              className={`flex h-8 w-8 items-center justify-center rounded-md ${
+                on
+                  ? 'bg-sky-500/30 text-sky-200 ring-1 ring-sky-300/40'
+                  : 'text-white/55 hover:text-white/80'
+              }`}
+            >
+              <span className="relative inline-flex">
+                <Icon size={15} />
+                {key === 'unread' && (
+                  <span className="absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full bg-sky-400 ring-1 ring-neutral-900/60" />
+                )}
+              </span>
+            </button>
+          );
+        })}
+        <DateFilter value={dateFilter} onChange={setDateFilter} />
+        <TagFilter tags={tags} value={tagFilter} onChange={setTagFilter} />
+      </div>
       {selecting && (
         <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2 text-xs text-white/60">
           <input
@@ -656,7 +685,7 @@ export function MailboxView({
         </div>
 
         <span className="mx-1 h-5 w-px bg-white/15" />
-        {/* 新規作成（新規｜未読 のように配置） */}
+        {/* 新規作成 */}
         <button
           className={iconBtn}
           onClick={() => setCompose({ mode: 'new' })}
@@ -665,34 +694,6 @@ export function MailboxView({
         >
           <SquarePen size={16} />
         </button>
-        <span className="mx-1 h-5 w-px bg-white/15" />
-        {/* 絞り込みトグル: 選択時のみハイライト、オフはゴースト */}
-        {FILTERS.map(({ key, Icon }) => {
-          const on = filters.has(key);
-          return (
-            <button
-              key={key}
-              onClick={() => toggleFilter(key)}
-              title={t(`filter.${key}`)}
-              aria-label={t(`filter.${key}`)}
-              aria-pressed={on}
-              className={`flex h-8 w-8 items-center justify-center rounded-md ${
-                on
-                  ? 'bg-sky-500/30 text-sky-200 ring-1 ring-sky-300/40'
-                  : 'text-white/55 hover:text-white/80'
-              }`}
-            >
-              <span className="relative inline-flex">
-                <Icon size={15} />
-                {key === 'unread' && (
-                  <span className="absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full bg-sky-400 ring-1 ring-neutral-900/60" />
-                )}
-              </span>
-            </button>
-          );
-        })}
-        <DateFilter value={dateFilter} onChange={setDateFilter} />
-        <TagFilter tags={tags} value={tagFilter} onChange={setTagFilter} />
         <span className="mx-1 h-5 w-px bg-white/15" />
 
         <button

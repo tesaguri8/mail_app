@@ -28,7 +28,7 @@ export function RecipientSuggestList({
     <ul
       id={listId}
       role="listbox"
-      className={`z-20 max-h-64 overflow-y-auto rounded-md border border-white/15 bg-neutral-900/80 py-1 shadow-xl backdrop-blur ${
+      className={`z-20 max-h-64 overflow-y-auto rounded-md border border-white/15 bg-neutral-900/65 py-1 shadow-xl backdrop-blur ${
         className ?? ''
       }`}
     >

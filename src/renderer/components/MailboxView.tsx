@@ -769,12 +769,14 @@ export function MailboxView({
 
       {layout === 'side' ? (
         <div className="grid min-h-0 flex-1 grid-cols-[340px_1fr] overflow-hidden">
-          <div className="min-h-0 overflow-hidden border-r border-white/10">{listPane}</div>
+          {/* overflow-hidden は付けない: 絞り込みのポップオーバーをコンテンツ側へ重ねて表示するため */}
+          <div className="min-h-0 border-r border-white/10">{listPane}</div>
           <div className="min-h-0 overflow-hidden">{bodyPane}</div>
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <div className="h-1/3 min-h-0 overflow-hidden border-b border-white/10">{listPane}</div>
+          {/* overflow-hidden は付けない: ポップオーバーを本文側へ重ねて表示するため */}
+          <div className="h-1/3 min-h-0 border-b border-white/10">{listPane}</div>
           <div className="min-h-0 flex-1 overflow-hidden">{bodyPane}</div>
         </div>
       )}

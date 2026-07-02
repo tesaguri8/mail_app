@@ -59,9 +59,9 @@ export function TagFilter({
         <Tag size={15} />
       </button>
 
-      {/* サイドバー内で右側に切れないよう、ボタン右端を基準に左へ展開する */}
+      {/* アイコンの左下を起点に展開（コンテンツ側への重なりは許容。親の overflow-hidden は外してある） */}
       {open && (
-        <div className="absolute right-0 top-full z-30 mt-1 max-h-72 w-52 overflow-y-auto rounded-md border border-white/15 bg-neutral-900/80 p-1 shadow-xl backdrop-blur">
+        <div className="absolute left-0 top-full z-30 mt-1 max-h-72 w-52 overflow-y-auto rounded-md border border-white/15 bg-neutral-900/65 p-1 shadow-xl backdrop-blur">
           {tags.length === 0 ? (
             <div className="px-3 py-2 text-xs text-white/40">{t('tag.none')}</div>
           ) : (

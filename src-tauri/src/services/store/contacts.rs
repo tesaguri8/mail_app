@@ -664,14 +664,26 @@ impl Store {
         query: Option<&str>,
     ) -> rusqlite::Result<Vec<OrganizationSummary>> {
         let conn = self.conn.lock().unwrap();
-        let like = query
+        // 語順に依存しない部分一致: 空白で分割した各トークンをすべて含む名前に絞る
+        // （「sng 設計」でも「設計 sng」でも当たる）。名前・よみのどちらかに含めばよい。
+        let tokens: Vec<String> = query
             .map(str::trim)
             .filter(|q| !q.is_empty())
-            .map(|q| format!("%{}%", q.replace('%', "\\%").replace('_', "\\_")));
-        let where_sql = if like.is_some() {
-            "WHERE o.name LIKE ?1 ESCAPE '\\'"
+            .map(|q| {
+                q.split_whitespace()
+                    .map(|tk| format!("%{}%", tk.replace('%', "\\%").replace('_', "\\_")))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let where_sql = if tokens.is_empty() {
+            String::new()
         } else {
-            ""
+            let conds: Vec<String> = (1..=tokens.len())
+                .map(|n| {
+                    format!("(o.name LIKE ?{n} ESCAPE '\\' OR o.name_kana LIKE ?{n} ESCAPE '\\')")
+                })
+                .collect();
+            format!("WHERE {}", conds.join(" AND "))
         };
         let sql = format!(
             "SELECT o.id, o.name, o.name_kana, o.note, \
@@ -679,7 +691,9 @@ impl Store {
              FROM organizations o {where_sql} ORDER BY o.name COLLATE NOCASE"
         );
         let mut stmt = conn.prepare(&sql)?;
-        let map = |r: &Row| {
+        let binds: Vec<&dyn rusqlite::ToSql> =
+            tokens.iter().map(|t| t as &dyn rusqlite::ToSql).collect();
+        let rows = stmt.query_map(rusqlite::params_from_iter(binds), |r: &Row| {
             Ok(OrganizationSummary {
                 id: r.get::<_, i64>(0)? as i32,
                 name: r.get(1)?,
@@ -687,11 +701,8 @@ impl Store {
                 note: r.get(3)?,
                 member_count: r.get::<_, i64>(4)? as i32,
             })
-        };
-        match &like {
-            Some(l) => stmt.query_map(params![l], map)?.collect(),
-            None => stmt.query_map([], map)?.collect(),
-        }
+        })?;
+        rows.collect()
     }
 
     /// 単一の組織を件数つきで取得。
@@ -1665,6 +1676,27 @@ mod tests {
             .unwrap();
         assert_eq!(c.org_id, Some(orgs[0].id));
         assert_eq!(c.organization.as_deref(), Some("株式会社テスト"));
+    }
+
+    #[test]
+    fn list_organizations_partial_and_order_independent() {
+        let s = store();
+        for n in ["sngDESIGN Inc.", "設計 sng 名護", "全然別の会社"] {
+            s.upsert_contact(&ContactInput {
+                display_name: format!("c-{n}"),
+                organization: Some(n.into()),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        // 部分一致（substring）。
+        assert_eq!(s.list_organizations(Some("sng")).unwrap().len(), 2);
+        // 語順非依存（2 トークンを両方含む）。
+        let r = s.list_organizations(Some("名護 sng")).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].name, "設計 sng 名護");
+        // 該当なし。
+        assert!(s.list_organizations(Some("xyz")).unwrap().is_empty());
     }
 
     #[test]

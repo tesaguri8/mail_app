@@ -116,9 +116,10 @@ export function MailboxView({
   const [searching, setSearching] = useState(false);
   const searchMode = query.trim().length > 0;
   // 検索窓の入力補助: 住所録＋履歴の候補ドロップダウン。
+  // sugActive=-1 はハイライト無し（Enter は候補を拾わず通常検索のまま）。
   const [sug, setSug] = useState<RecipientSuggestion[]>([]);
   const [sugOpen, setSugOpen] = useState(false);
-  const [sugActive, setSugActive] = useState(0);
+  const [sugActive, setSugActive] = useState(-1);
   const sugPicked = useRef(false);
   const searchListId = useId();
   const toggleFilter = (key: string) =>
@@ -194,13 +195,14 @@ export function MailboxView({
   }, [query, selected, folder]);
 
   // 検索窓の入力補助: 入力に一致する住所録＋履歴の候補を出す（選ぶとアドレスで検索）。
+  // スペースを含む入力（2語目以降）はオートコンプリート解除＝候補を出さない。
   useEffect(() => {
     const q = query.trim();
     if (sugPicked.current) {
       sugPicked.current = false;
       return;
     }
-    if (q.length < 1) {
+    if (q.length < 1 || /\s/.test(query)) {
       setSug([]);
       setSugOpen(false);
       return;
@@ -209,7 +211,7 @@ export function MailboxView({
       recipientSuggest(q, 6)
         .then((r) => {
           setSug(r);
-          setSugActive(0);
+          setSugActive(-1); // 自動ハイライトしない（Enter の誤確定を防ぐ）
           setSugOpen(r.length > 0);
         })
         .catch(() => {
@@ -226,10 +228,11 @@ export function MailboxView({
     setQuery(s.email);
     setSug([]);
     setSugOpen(false);
+    setSugActive(-1);
   };
 
-  // 検索窓のキー操作: 候補表示中は ↑↓ 移動 / Enter 確定 / Esc 閉じる、
-  // 候補が無ければ Esc で検索をクリア。
+  // 検索窓のキー操作: 候補表示中は ↑↓ でハイライト移動、Enter は「↑↓で選んだ時だけ」確定
+  // （未選択の Enter は閉じるだけ＝通常の全文検索を邪魔しない）。Esc は閉じる→クリアの順。
   const onSearchKeyDown = (e: React.KeyboardEvent) => {
     if (sugOpen && sug.length > 0) {
       if (e.key === 'ArrowDown') {
@@ -239,12 +242,12 @@ export function MailboxView({
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setSugActive((i) => (i - 1 + sug.length) % sug.length);
+        setSugActive((i) => (i < 0 ? sug.length - 1 : (i - 1 + sug.length) % sug.length));
         return;
       }
       if (e.key === 'Enter') {
-        e.preventDefault();
-        pickSuggest(sug[sugActive]);
+        if (sugActive >= 0) pickSuggest(sug[sugActive]);
+        else setSugOpen(false);
         return;
       }
       if (e.key === 'Escape') {

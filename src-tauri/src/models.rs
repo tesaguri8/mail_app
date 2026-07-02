@@ -98,8 +98,12 @@ pub struct MailSummary {
     pub id: i32,
     pub subject: Option<String>,
     pub from_address: Option<String>,
+    /// 差出人の表示名（ヘッダ From の名前部。無ければ None）。
+    pub from_name: Option<String>,
     /// 宛先（送信済・下書きフォルダで「To」を表示するのに使う）。
     pub to_addresses: Option<String>,
+    /// 宛先（先頭）の表示名（ヘッダ To の名前部。無ければ None）。
+    pub to_name: Option<String>,
     pub date: Option<String>,
     pub preview: String,
     pub is_read: bool,
@@ -339,7 +343,11 @@ pub struct MailDetail {
     pub message_id: Option<String>,
     pub subject: Option<String>,
     pub from_address: Option<String>,
+    /// 差出人の表示名（住所録から解決。無ければ None）。
+    pub from_name: Option<String>,
     pub to_addresses: Option<String>,
+    /// 宛先の表示名（住所録から解決。無ければ None）。
+    pub to_name: Option<String>,
     pub date: Option<String>,
     pub clean_body: Option<String>,
     pub body_plain: Option<String>,

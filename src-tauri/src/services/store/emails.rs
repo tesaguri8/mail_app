@@ -9,7 +9,11 @@ pub struct NewEmail {
     pub canonical_key: String,
     pub subject: Option<String>,
     pub from_address: Option<String>,
+    /// 差出人の表示名（ヘッダ From の名前部。無ければ None）。
+    pub from_name: Option<String>,
     pub to_addresses: Option<String>,
+    /// 宛先（先頭）の表示名（ヘッダ To の名前部。無ければ None）。
+    pub to_name: Option<String>,
     pub date: Option<String>,
     pub body_plain: Option<String>,
     pub clean_body: Option<String>,
@@ -113,15 +117,17 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
     let key = folder_key(&e.folder, &e.canonical_key);
     let changed = conn.execute(
         "INSERT OR IGNORE INTO emails
-           (account_id, message_id, canonical_key, subject, from_address, to_addresses, date, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+           (account_id, message_id, canonical_key, subject, from_address, from_name, to_addresses, to_name, date, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         params![
             e.account_id,
             e.message_id,
             key,
             e.subject,
             e.from_address,
+            e.from_name,
             e.to_addresses,
+            e.to_name,
             e.date,
             e.has_attachments as i64,
             e.body_plain,
@@ -184,6 +190,21 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
         )?;
         touched |= n > 0;
     }
+    // 表示名（ヘッダ From/To の名前部）を後付けする（未設定のときだけ）。
+    if e.from_name.is_some() {
+        let n = conn.execute(
+            "UPDATE emails SET from_name = ?1 WHERE id = ?2 AND from_name IS NULL",
+            params![e.from_name, id],
+        )?;
+        touched |= n > 0;
+    }
+    if e.to_name.is_some() {
+        let n = conn.execute(
+            "UPDATE emails SET to_name = ?1 WHERE id = ?2 AND to_name IS NULL",
+            params![e.to_name, id],
+        )?;
+        touched |= n > 0;
+    }
     // ヘッダ素性（§7.7）を後付けする（機能追加前に取り込んだ古いメール向け）。
     if e.auth_result.is_some() {
         let n = conn.execute(
@@ -233,7 +254,7 @@ fn build_fts_query(input: &str) -> Option<String> {
 /// MailSummary を組み立てる共通行マッパ（list_emails / search_emails で共有）。
 /// SELECT の列順は 0:id 1:subject 2:from_address 3:date 4:is_read 5:has_attachments
 /// 6:preview 7:is_flagged 8:is_bookmarked 9:tag_ids 10:has_real 11:to_addresses
-/// 12:is_known 13:is_vip。
+/// 12:is_known 13:is_vip 14:from_name 15:to_name。
 fn map_mail_summary(r: &rusqlite::Row) -> rusqlite::Result<MailSummary> {
     // group_concat はカンマ区切り文字列。空（タグ無し）は None。
     let tag_ids = r
@@ -244,7 +265,9 @@ fn map_mail_summary(r: &rusqlite::Row) -> rusqlite::Result<MailSummary> {
         id: r.get::<_, i64>(0)? as i32,
         subject: r.get(1)?,
         from_address: r.get(2)?,
+        from_name: r.get(14)?,
         to_addresses: r.get(11)?,
+        to_name: r.get(15)?,
         date: r.get(3)?,
         is_read: r.get::<_, i64>(4)? != 0,
         has_attachments: r.get::<_, i64>(5)? != 0,
@@ -256,6 +279,31 @@ fn map_mail_summary(r: &rusqlite::Row) -> rusqlite::Result<MailSummary> {
         is_known: r.get::<_, i64>(12)? != 0,
         is_vip: r.get::<_, i64>(13)? != 0,
     })
+}
+
+/// アドレス文字列（"Name <addr>" や素の addr）に一致する住所録の表示名を返す。
+/// 連絡先メール（primary の contacts.email と、複数値の contact_emails.value）を
+/// アドレス文字列が含むか（instr）で照合し、最初に見つかった表示名を採用する。
+fn contact_name_for(
+    conn: &Connection,
+    address: Option<&str>,
+) -> rusqlite::Result<Option<String>> {
+    let Some(addr) = address.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let lower = addr.to_lowercase();
+    conn.query_row(
+        "SELECT display_name FROM contacts c
+         WHERE (c.email IS NOT NULL AND c.email <> '' AND instr(?1, lower(c.email)) > 0)
+            OR EXISTS (SELECT 1 FROM contact_emails ce
+                       WHERE ce.contact_id = c.id AND ce.value <> ''
+                         AND instr(?1, lower(ce.value)) > 0)
+         ORDER BY c.is_favorite DESC LIMIT 1",
+        params![lower],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map(Option::flatten)
 }
 
 /// 差出人（from）が住所録の連絡先かを判定する SELECT 断片（is_known, is_vip）。
@@ -285,7 +333,7 @@ impl Store {
                     (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = emails.id) AS tag_ids,
                     (emails.has_attachments = 1
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = emails.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real,
-                    to_addresses, {known_vip}
+                    to_addresses, {known_vip}, from_name, to_name
              FROM emails WHERE account_id = ?1 AND COALESCE(folder, 'inbox') = ?2
              ORDER BY datetime(date) DESC, id DESC LIMIT ?3",
             known_vip = known_vip_cols("emails.from_address"),
@@ -316,7 +364,7 @@ impl Store {
                     (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = e.id) AS tag_ids,
                     (e.has_attachments = 1
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = e.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real,
-                    e.to_addresses, {known_vip}
+                    e.to_addresses, {known_vip}, e.from_name, e.to_name
              FROM email_fts JOIN emails e ON e.id = email_fts.rowid
              WHERE email_fts MATCH ?1 AND e.account_id = ?2 AND COALESCE(e.folder, 'inbox') = ?3
              ORDER BY datetime(e.date) DESC, e.id DESC LIMIT ?4",
@@ -379,36 +427,50 @@ impl Store {
         tx.commit()
     }
 
-    /// メール本文の取得（表示用）。
+    /// メール本文の取得（表示用）。差出人/宛先の表示名は住所録から解決する。
     pub fn get_email(&self, id: i64) -> rusqlite::Result<Option<MailDetail>> {
         let conn = self.conn.lock().unwrap();
-        conn.query_row(
-            "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id
-             FROM emails WHERE id = ?1",
-            params![id],
-            |r| {
-                // HTML 本文は圧縮列(body_html_z)を優先し展開。無ければ旧 TEXT 列を使う。
-                let html_z: Option<Vec<u8>> = r.get(8)?;
-                let body_html = match html_z {
-                    Some(z) => crate::services::compress::decompress_text(&z).ok(),
-                    None => r.get(7)?,
-                };
-                Ok(MailDetail {
-                    id: r.get::<_, i64>(0)? as i32,
-                    message_id: r.get(11)?,
-                    subject: r.get(1)?,
-                    from_address: r.get(2)?,
-                    to_addresses: r.get(3)?,
-                    date: r.get(4)?,
-                    clean_body: r.get(5)?,
-                    body_plain: r.get(6)?,
-                    body_html,
-                    has_attachments: r.get::<_, i64>(9)? != 0,
-                    body_compacted: r.get::<_, i64>(10)? != 0,
-                })
-            },
-        )
-        .optional()
+        let detail = conn
+            .query_row(
+                "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id, from_name, to_name
+                 FROM emails WHERE id = ?1",
+                params![id],
+                |r| {
+                    // HTML 本文は圧縮列(body_html_z)を優先し展開。無ければ旧 TEXT 列を使う。
+                    let html_z: Option<Vec<u8>> = r.get(8)?;
+                    let body_html = match html_z {
+                        Some(z) => crate::services::compress::decompress_text(&z).ok(),
+                        None => r.get(7)?,
+                    };
+                    Ok(MailDetail {
+                        id: r.get::<_, i64>(0)? as i32,
+                        message_id: r.get(11)?,
+                        subject: r.get(1)?,
+                        from_address: r.get(2)?,
+                        from_name: r.get(12)?,
+                        to_addresses: r.get(3)?,
+                        to_name: r.get(13)?,
+                        date: r.get(4)?,
+                        clean_body: r.get(5)?,
+                        body_plain: r.get(6)?,
+                        body_html,
+                        has_attachments: r.get::<_, i64>(9)? != 0,
+                        body_compacted: r.get::<_, i64>(10)? != 0,
+                    })
+                },
+            )
+            .optional()?;
+        let Some(mut d) = detail else {
+            return Ok(None);
+        };
+        // ヘッダの表示名が無ければ住所録から補完する（既存メール・表示名なしメール向け）。
+        if d.from_name.is_none() {
+            d.from_name = contact_name_for(&conn, d.from_address.as_deref())?;
+        }
+        if d.to_name.is_none() {
+            d.to_name = contact_name_for(&conn, d.to_addresses.as_deref())?;
+        }
+        Ok(Some(d))
     }
 
     /// 全文再取得に必要な情報（親メールの account_id と IMAP UID）。
@@ -607,7 +669,9 @@ mod tests {
             canonical_key: key.to_string(),
             subject: Some(subject.to_string()),
             from_address: Some(from.to_string()),
+            from_name: None,
             to_addresses: None,
+            to_name: None,
             date: Some("2026-01-01 00:00:00".to_string()),
             body_plain: Some(body.to_string()),
             clean_body: Some(body.to_string()),
@@ -635,7 +699,9 @@ mod tests {
             canonical_key: key.to_string(),
             subject: Some("s".into()),
             from_address: None,
+            from_name: None,
             to_addresses: None,
+            to_name: None,
             date: None,
             body_plain: None,
             clean_body: None,

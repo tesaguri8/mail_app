@@ -84,6 +84,10 @@ const MIGRATIONS: &[Migration] = &[
         version: 19,
         sql: include_str!("migrations/0019_contact_tags.sql"),
     },
+    Migration {
+        version: 20,
+        sql: include_str!("migrations/0020_email_names.sql"),
+    },
 ];
 
 pub fn run(conn: &Connection) -> rusqlite::Result<()> {
@@ -108,11 +112,11 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         run(&conn).unwrap();
 
-        // バージョンが最新に到達
+        // バージョンが最新に到達（MIGRATIONS 末尾の version と一致すること）
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 19);
+        assert_eq!(v, MIGRATIONS.last().unwrap().version);
 
         // emails テーブルが存在
         let n: i64 = conn

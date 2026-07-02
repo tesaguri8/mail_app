@@ -5,9 +5,17 @@
  */
 export type MailSummary = { id: number, subject: string | null, from_address: string | null, 
 /**
+ * 差出人の表示名（ヘッダ From の名前部。無ければ None）。
+ */
+from_name: string | null, 
+/**
  * 宛先（送信済・下書きフォルダで「To」を表示するのに使う）。
  */
-to_addresses: string | null, date: string | null, preview: string, is_read: boolean, 
+to_addresses: string | null, 
+/**
+ * 宛先（先頭）の表示名（ヘッダ To の名前部。無ければ None）。
+ */
+to_name: string | null, date: string | null, preview: string, is_read: boolean, 
 /**
  * 添付の有無（旧データ由来のヒント。inline を含む場合がある）。
  */

@@ -669,8 +669,10 @@ export function MailboxView({
             <div className="min-w-0 flex-1">
             {(() => {
               // 送信済/下書きは相手（To）、それ以外は差出人（From）を主に見せる。
+              // 表示名はヘッダ名（from_name/to_name）を優先し、無ければアドレスから導出。
               const addr = parseAddress(outgoing ? m.to_addresses : m.from_address);
-              const name = addr.name || addr.email || (outgoing ? '—' : '(no sender)');
+              const headerName = (outgoing ? m.to_name : m.from_name)?.trim();
+              const name = headerName || addr.name || addr.email || (outgoing ? '—' : '(no sender)');
               const showEmail = addr.email && addr.email !== name;
               return (
                 <>

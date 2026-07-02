@@ -34,7 +34,11 @@ pub struct ParsedEmail {
     pub canonical_key: String,
     pub subject: Option<String>,
     pub from_address: Option<String>,
+    /// 差出人の表示名（ヘッダ From の名前部。無ければ None）。
+    pub from_name: Option<String>,
     pub to_addresses: Option<String>,
+    /// 宛先（先頭）の表示名（ヘッダ To の名前部。無ければ None）。
+    pub to_name: Option<String>,
     pub date: Option<String>,
     pub body_plain: Option<String>,
     pub clean_body: Option<String>,
@@ -76,16 +80,23 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
     let msg = MessageParser::default().parse(raw)?;
 
     let subject = msg.subject().map(|s| s.to_string());
-    let from_address = msg
-        .from()
-        .and_then(|a| a.first())
+    let from = msg.from().and_then(|a| a.first());
+    let from_address = from
         .and_then(|addr| addr.address.as_deref())
         .map(|s| s.to_string());
-    let to_addresses = msg
-        .to()
-        .and_then(|a| a.first())
+    // ヘッダの表示名（From: "名前" <addr>）。空や引用符だけは None にする。
+    let from_name = from
+        .and_then(|addr| addr.name.as_deref())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let to = msg.to().and_then(|a| a.first());
+    let to_addresses = to
         .and_then(|addr| addr.address.as_deref())
         .map(|s| s.to_string());
+    let to_name = to
+        .and_then(|addr| addr.name.as_deref())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let message_id = msg.message_id().map(|s| s.to_string());
     let date = msg.date().map(|d| d.to_rfc3339());
     let body_plain = msg.body_text(0).map(|c| c.to_string());
@@ -136,7 +147,9 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
         canonical_key,
         subject,
         from_address,
+        from_name,
         to_addresses,
+        to_name,
         date,
         body_plain,
         clean_body,

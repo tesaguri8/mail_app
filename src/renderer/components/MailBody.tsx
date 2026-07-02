@@ -37,6 +37,14 @@ function formatDate(d: string | null): string {
   return isNaN(dt.getTime()) ? d : dt.toLocaleString();
 }
 
+/** 「表示名 <メール>」に整形。表示名が無ければアドレスのみ。 */
+function formatAddress(name: string | null, address: string | null): string {
+  const a = (address ?? '').trim();
+  const n = (name ?? '').trim();
+  if (!a) return '—';
+  return n ? `${n} <${a}>` : a;
+}
+
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -377,13 +385,13 @@ export function MailBody({
         <div className="mt-1 text-xs text-white/50">
           <div className="flex items-baseline justify-between gap-3">
             <span className="min-w-0 truncate">
-              {t('mailbox.from')}: {d.from_address ?? '—'}
+              {t('mailbox.from')}: {formatAddress(d.from_name, d.from_address)}
             </span>
             <span className="shrink-0">{formatDate(d.date)}</span>
           </div>
           {d.to_addresses && (
-            <div>
-              {t('mailbox.to')}: {d.to_addresses}
+            <div className="truncate">
+              {t('mailbox.to')}: {formatAddress(d.to_name, d.to_addresses)}
             </div>
           )}
           {/* タグ（一覧では出さず、詳細ヘッダの宛先の下にまとめて表示。× で個別に外せる） */}

@@ -7,7 +7,15 @@ export type MailDetail = { id: number,
 /**
  * 元メッセージの Message-ID（返信のスレッド化 In-Reply-To 用。無ければ None）。
  */
-message_id: string | null, subject: string | null, from_address: string | null, to_addresses: string | null, date: string | null, clean_body: string | null, body_plain: string | null, 
+message_id: string | null, subject: string | null, from_address: string | null, 
+/**
+ * 差出人の表示名（住所録から解決。無ければ None）。
+ */
+from_name: string | null, to_addresses: string | null, 
+/**
+ * 宛先の表示名（住所録から解決。無ければ None）。
+ */
+to_name: string | null, date: string | null, clean_body: string | null, body_plain: string | null, 
 /**
  * HTML 本文（あれば）。レンダラ側でテキスト＋リンクのみ安全描画する。
  */

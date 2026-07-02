@@ -85,11 +85,13 @@ function formatDate(d: string | null): string {
   return isNaN(dt.getTime()) ? d : dt.toLocaleString();
 }
 
-/** スクロール位置インジケータ用の粗い年月ラベル（例: 2026/7）。 */
-function formatMonthLabel(d: string | null): string {
+/** スクロール位置インジケータ用の日付ラベル（例: 2026/7/2）。 */
+function formatScrollDate(d: string | null): string {
   if (!d) return '';
   const dt = new Date(d);
-  return isNaN(dt.getTime()) ? '' : `${dt.getFullYear()}/${dt.getMonth() + 1}`;
+  return isNaN(dt.getTime())
+    ? ''
+    : `${dt.getFullYear()}/${dt.getMonth() + 1}/${dt.getDate()}`;
 }
 
 /**
@@ -264,19 +266,35 @@ export function MailboxView({
       });
   };
 
-  // 一覧のスクロール: 続きの自動読み込み＋位置インジケータ（先頭付近の年月）を更新。
+  // 一覧のスクロール: 続きの自動読み込み＋位置インジケータ（一番上に見えているメールの日付）。
   const onListScroll = (e: React.UIEvent<HTMLUListElement>) => {
     const el = e.currentTarget;
     if (el.scrollHeight - el.scrollTop - el.clientHeight < 400) loadMore();
-    const max = el.scrollHeight - el.clientHeight;
-    const ratio = max > 0 ? Math.min(1, Math.max(0, el.scrollTop / max)) : 0;
-    // 先頭に見えているおおよそのメールの年月（行高はほぼ一定なので比率で近似）。
-    const idx = Math.floor((el.scrollTop / Math.max(1, el.scrollHeight)) * visibleMails.length);
-    const label = formatMonthLabel(visibleMails[Math.max(0, Math.min(visibleMails.length - 1, idx))]?.date ?? null);
+    const n = visibleMails.length;
+    const rows = el.children;
+    const count = Math.min(rows.length, n);
+    if (count === 0) return;
+    // 一番上に見えているメール行を実測（getBoundingClientRect）で二分探索。行高不定でも正確。
+    const ulTop = el.getBoundingClientRect().top;
+    let lo = 0;
+    let hi = count - 1;
+    let top = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      // その行の下端がリスト上端より下 = まだ見えている → これ以降を探す。
+      if ((rows[mid] as HTMLElement).getBoundingClientRect().bottom > ulTop + 1) {
+        top = mid;
+        hi = mid - 1;
+      } else {
+        lo = mid + 1;
+      }
+    }
+    const label = formatScrollDate(visibleMails[top]?.date ?? null);
+    const ratio = n > 1 ? top / (n - 1) : 0;
     if (label) {
       setScrollHint({ ratio, label });
       if (scrollHintTimer.current) clearTimeout(scrollHintTimer.current);
-      scrollHintTimer.current = setTimeout(() => setScrollHint(null), 1000);
+      scrollHintTimer.current = setTimeout(() => setScrollHint(null), 1200);
     }
   };
   useEffect(() => {

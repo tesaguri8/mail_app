@@ -248,7 +248,7 @@ export function ContactDuplicates({
                         )}
                       </span>
                     </button>
-                    <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 pl-7 text-xs text-white/55">
+                    <div className="mt-1.5 flex min-w-0 flex-wrap gap-x-4 gap-y-1 pl-7 text-xs text-white/55">
                       <DetailChip icon={<User size={12} />} value={c.name_kana} />
                       <DetailChip icon={<Mail size={12} />} value={c.email} />
                       <DetailChip icon={<Phone size={12} />} value={c.phone} />
@@ -459,9 +459,9 @@ function FlagToggle({
 function DetailChip({ icon, value }: { icon: React.ReactNode; value: string | null }) {
   if (!value || !value.trim()) return null;
   return (
-    <span className="flex items-center gap-1">
-      <span className="shrink-0 text-white/35">{icon}</span>
-      <span className="truncate">{value.replace(/\n/g, ' ')}</span>
+    <span className="flex min-w-0 max-w-full items-start gap-1">
+      <span className="mt-0.5 shrink-0 text-white/35">{icon}</span>
+      <span className="min-w-0 break-words">{value.replace(/\n/g, ' ')}</span>
     </span>
   );
 }

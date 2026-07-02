@@ -780,8 +780,10 @@ export function MailboxView({
               onChange={() => toggleSelect(m.id)}
               onClick={(e) => e.stopPropagation()}
               aria-label={t('mailbox.selectMailCheckbox')}
+              // チェックボックスは複数選択モード中（または選択済み）のみ表示。
+              // ホバー/フォーカスでは出さない。選択は Ctrl/Shift＋クリックか右クリックから開始。
               className={`mt-1 h-3.5 w-3.5 shrink-0 accent-sky-400 ${
-                selecting || selectedIds.has(m.id) ? '' : 'opacity-0 group-hover:opacity-100'
+                selecting || selectedIds.has(m.id) ? '' : 'hidden'
               }`}
             />
             <div className="min-w-0 flex-1">

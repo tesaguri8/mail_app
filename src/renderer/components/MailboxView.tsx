@@ -676,22 +676,24 @@ export function MailboxView({
               const showEmail = addr.email && addr.email !== name;
               return (
                 <>
-                  {/* 名称＋送信日時 */}
+                  {/* 名前＜メール＞＋送信日時（1行） */}
                   <div className="flex items-baseline justify-between gap-2">
                     <span className="truncate text-sm font-medium">
                       {!m.is_read && <span className="mr-1 text-sky-300">●</span>}
                       {outgoing && <span className="text-white/40">{t('mailbox.to')}: </span>}
                       {name}
+                      {showEmail && (
+                        <span className="font-normal text-white/40">
+                          {' '}
+                          &lt;{addr.email}&gt;
+                        </span>
+                      )}
                     </span>
                     <span className="flex shrink-0 items-center gap-1 text-[10px] text-white/40">
                       {m.is_starred && <Star size={12} className="fill-amber-300 text-amber-300" />}
                       {formatDate(m.date)}
                     </span>
                   </div>
-                  {/* メールアドレス（表示名がある時のみ。無ければ上段がアドレス） */}
-                  {showEmail && (
-                    <div className="truncate text-xs text-white/40">{addr.email}</div>
-                  )}
                   {/* 件名 */}
                   <div className="truncate text-sm text-white/80">
                     {m.subject ?? '(no subject)'} {m.has_real_attachments && '📎'}

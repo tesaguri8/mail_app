@@ -216,25 +216,42 @@ export function MailboxView({
   }, []);
   const tagById = new Map(tags.map((tg) => [tg.id, tg]));
 
-  // 一覧の取得: まず最新の少数を即表示し、続きをバックグラウンドで読み込んで置き換える。
-  // 高速に切替えたときの取り違えを防ぐため、最新の呼び出しトークンの結果だけ反映する。
+  // 一覧の取得（無限スクロール）: 1 ページずつ読み込み、スクロールで続きを追加する。
+  // 切替時の取り違えを防ぐため、呼び出しトークン／ページキーで整合を取る。
+  const PAGE_SIZE = 100;
   const loadTokenRef = useRef(0);
-  const FIRST_BATCH = 40;
-  const FULL_BATCH = 200;
+  const pageKeyRef = useRef('');
+  const loadingMoreRef = useRef(false);
+  const [hasMore, setHasMore] = useState(false);
+
   const loadMails = (id: number) => {
     const token = ++loadTokenRef.current;
-    const apply = (rows: MailSummary[]) => {
-      if (loadTokenRef.current === token) setMails(rows);
-    };
-    return mailList(id, folder, FIRST_BATCH)
-      .then((first) => {
-        apply(first);
-        // 先頭バッチが埋まっていれば続きを後追い取得（同数以下ならこれで全件）。
-        if (first.length >= FIRST_BATCH) {
-          mailList(id, folder, FULL_BATCH).then(apply).catch(() => undefined);
-        }
+    pageKeyRef.current = `${id}:${folder}`;
+    loadingMoreRef.current = false;
+    return mailList(id, folder, PAGE_SIZE, 0)
+      .then((rows) => {
+        if (loadTokenRef.current !== token) return;
+        setMails(rows);
+        setHasMore(rows.length >= PAGE_SIZE);
       })
       .catch(() => undefined);
+  };
+
+  // 続きを読み込んで末尾に追加。検索モード中・読み込み中・末尾到達時は何もしない。
+  const loadMore = () => {
+    if (selected == null || searchMode || loadingMoreRef.current || !hasMore) return;
+    const key = pageKeyRef.current;
+    loadingMoreRef.current = true;
+    mailList(selected, folder, PAGE_SIZE, mails.length)
+      .then((rows) => {
+        if (pageKeyRef.current !== key) return; // 切替後の結果は破棄
+        setMails((prev) => [...prev, ...rows]);
+        setHasMore(rows.length >= PAGE_SIZE);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        loadingMoreRef.current = false;
+      });
   };
   useEffect(() => {
     setOpened(null);
@@ -665,7 +682,14 @@ export function MailboxView({
           </button>
         </div>
       )}
-      <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
+      <ul
+        className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          // 末尾付近までスクロールしたら続きを読み込む（無限スクロール）。
+          if (el.scrollHeight - el.scrollTop - el.clientHeight < 400) loadMore();
+        }}
+      >
       {visibleMails.length === 0 ? (
         <li className="px-2 py-3 text-sm text-white/50">
           {searchMode ? (searching ? t('search.searching') : t('search.noResults')) : t('mailbox.empty')}
@@ -731,6 +755,10 @@ export function MailboxView({
             </div>
           </li>
         ))
+      )}
+      {/* 続きあり: スクロールで自動読み込み（末尾のヒント） */}
+      {!searchMode && hasMore && visibleMails.length > 0 && (
+        <li className="px-2 py-3 text-center text-xs text-white/35">{t('mailbox.loadingMore')}</li>
       )}
       </ul>
     </div>

@@ -418,9 +418,10 @@ pub fn mail_list(
     account_id: i64,
     folder: String,
     limit: i64,
+    offset: i64,
 ) -> Result<Vec<MailSummary>, String> {
     store
-        .list_emails(account_id, &folder, limit)
+        .list_emails(account_id, &folder, limit, offset)
         .map_err(|e| e.to_string())
 }
 

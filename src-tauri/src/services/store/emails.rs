@@ -326,6 +326,7 @@ impl Store {
         account_id: i64,
         folder: &str,
         limit: i64,
+        offset: i64,
     ) -> rusqlite::Result<Vec<MailSummary>> {
         let conn = self.conn.lock().unwrap();
         let sql = format!(
@@ -337,11 +338,11 @@ impl Store {
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = emails.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real,
                     to_addresses, {known_vip}, from_name, to_name
              FROM emails WHERE account_id = ?1 AND folder = ?2
-             ORDER BY date_ts DESC, id DESC LIMIT ?3",
+             ORDER BY date_ts DESC, id DESC LIMIT ?3 OFFSET ?4",
             known_vip = known_vip_cols("emails.from_address"),
         );
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(params![account_id, folder, limit], map_mail_summary)?;
+        let rows = stmt.query_map(params![account_id, folder, limit, offset], map_mail_summary)?;
         rows.collect()
     }
 

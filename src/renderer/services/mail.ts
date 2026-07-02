@@ -17,9 +17,10 @@ export const mailSyncCancel = (accountId: number) =>
 // メールを送信する（SMTP）。input は差出人アカウント・宛先・件名・本文など。
 export const mailSend = (input: SendInput) => invoke<void>('mail_send', { input });
 
-// 指定フォルダ（'inbox' | 'sent' | 'drafts' | 'trash' | 'spam'）のメール一覧。
-export const mailList = (accountId: number, folder: string, limit: number) =>
-  invoke<MailSummary[]>('mail_list', { accountId, folder, limit });
+// 指定フォルダ（'inbox' | 'sent' | 'drafts' | 'trash' | 'spam'）のメール一覧（新しい順）。
+// offset でページング（無限スクロール用）。
+export const mailList = (accountId: number, folder: string, limit: number, offset = 0) =>
+  invoke<MailSummary[]>('mail_list', { accountId, folder, limit, offset });
 
 // 件名・差出人・本文の全文検索（FTS5）。指定アカウント/フォルダ内を絞り込む。
 export const mailSearch = (accountId: number, folder: string, query: string, limit: number) =>

@@ -173,7 +173,15 @@
     "data": "データ",
     "about": "このアプリ",
     "inlineImages": "本文の埋め込み画像を表示",
-    "inlineImagesHint": "メールに同梱されたインライン画像を自動取得して本文に表示します。外部（リモート）画像は引き続きブロックします。"
+    "inlineImagesHint": "メールに同梱されたインライン画像を自動取得して本文に表示します。外部（リモート）画像は引き続きブロックします。",
+    "phoneTitle": "電話番号の整形",
+    "phoneHint": "国内番号だけ入力すれば、既定の国を使って [国] + [国内番号] に整えて保存します（内部は国際標準の E.164）。",
+    "phoneRegion": "既定の国",
+    "phoneStyle": "表示スタイル",
+    "phoneStyleNational": "国内表記（例: 090-1234-5678）",
+    "phoneStyleInternational": "国際表記（例: +81 90 1234 5678）",
+    "postalAutoformat": "郵便番号を自動整形",
+    "postalAutoformatHint": "日本の郵便番号（7桁）を NNN-NNNN の形に自動で整えます。"
   },
   "dataloc": {
     "title": "データの保存先",

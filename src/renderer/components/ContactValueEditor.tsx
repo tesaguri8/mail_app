@@ -1,8 +1,12 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { GripVertical, Plus, Tag, X } from 'lucide-react';
+import type { CountryCode } from 'libphonenumber-js';
 import type { ContactValueInput } from '@bindings/ContactValueInput';
 import type { ContactAddressInput } from '@bindings/ContactAddressInput';
+import { countryOptions, parseStored, toE164 } from '../utils/phone';
+import { formatPostal } from '../utils/postal';
+import { getPhoneRegion, getPostalAutoformat } from '../config/prefs';
 
 const LABELS = ['自宅', '職場', '携帯', 'FAX', '代表'];
 
@@ -145,6 +149,97 @@ export function ValueRows({
   );
 }
 
+/** 電話番号の複数編集。[国]セレクト＋[国内番号]入力で、保存は E.164 正準形。 */
+export function PhoneRows({
+  icon,
+  label,
+  values,
+  onChange,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  values: ContactValueInput[];
+  onChange: (v: ContactValueInput[]) => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const dnd = useDnd(values, onChange);
+  const region = getPhoneRegion() as CountryCode;
+  const countries = useMemo(() => countryOptions(i18n.language), [i18n.language]);
+  const set = (i: number, patch: Partial<ContactValueInput>) =>
+    onChange(values.map((v, idx) => (idx === i ? { ...v, ...patch } : v)));
+  return (
+    <div>
+      <span className="mb-1 flex items-center gap-1.5 text-[11px] text-white/50">
+        {icon}
+        {label}
+      </span>
+      <div className="space-y-1.5">
+        {values.map((v, i) => {
+          const parsed = parseStored(v.value, region);
+          return (
+            <div
+              key={i}
+              className={`flex items-center gap-1.5 rounded ${dnd.dragging === i ? 'opacity-50' : ''}`}
+              {...dnd.rowProps(i)}
+            >
+              <DragHandle {...dnd.handleProps(i)} />
+              <input
+                className="w-16 shrink-0 rounded bg-white/10 px-2 py-1.5 text-xs outline-none focus:bg-white/15"
+                placeholder={t('contact.labelPlaceholder')}
+                list="contact-label-options"
+                value={v.label ?? ''}
+                onChange={(e) =>
+                  set(i, { label: e.target.value.trim() === '' ? null : e.target.value })
+                }
+              />
+              <select
+                className="w-20 shrink-0 rounded bg-white/10 px-1 py-1.5 text-xs outline-none focus:bg-white/15"
+                title={t('contact.country')}
+                value={parsed.region}
+                onChange={(e) =>
+                  set(i, { value: toE164(parsed.national, e.target.value as CountryCode) })
+                }
+              >
+                {countries.map((c) => (
+                  <option key={c.region} value={c.region} className="text-black">
+                    {c.region} +{c.calling}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="tel"
+                className="min-w-0 flex-1 rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
+                value={parsed.national}
+                onChange={(e) => set(i, { value: e.target.value })}
+                onBlur={() => set(i, { value: toE164(v.value, parsed.region) })}
+              />
+              <button
+                onClick={() => onChange(values.filter((_, idx) => idx !== i))}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white/40 hover:bg-white/10 hover:text-white"
+                aria-label={t('contact.removeRow')}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <button
+        onClick={() => onChange([...values, { label: null, value: '' }])}
+        className="mt-1.5 flex items-center gap-1 text-xs text-sky-300 hover:text-sky-200"
+      >
+        <Plus size={13} />
+        {t('contact.addRow')}
+      </button>
+      <datalist id="contact-label-options">
+        {LABELS.map((l) => (
+          <option key={l} value={l} />
+        ))}
+      </datalist>
+    </div>
+  );
+}
+
 /** タグ編集（チップ＋オートコンプリート）。tags は名前の配列。 */
 export function TagInput({
   tags,
@@ -227,6 +322,8 @@ export function AddressRows({
 }) {
   const { t } = useTranslation();
   const dnd = useDnd(addresses, onChange);
+  // 郵便番号の整形基準は既定の国（自動整形オフなら素通し）。
+  const postalRegion = getPostalAutoformat() ? getPhoneRegion() : '';
   const set = (i: number, patch: Partial<ContactAddressInput>) =>
     onChange(addresses.map((a, idx) => (idx === i ? { ...a, ...patch } : a)));
   const field = (i: number, key: keyof ContactAddressInput, ph: string, w = '') => (
@@ -273,7 +370,16 @@ export function AddressRows({
               </button>
             </div>
             <div className="grid grid-cols-2 gap-1.5">
-              {field(i, 'postal', t('contact.postal'))}
+              <input
+                className="rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
+                placeholder={t('contact.postal')}
+                value={a.postal ?? ''}
+                onChange={(e) => set(i, { postal: e.target.value.trim() === '' ? null : e.target.value })}
+                onBlur={(e) => {
+                  const f = formatPostal(e.target.value, postalRegion);
+                  set(i, { postal: f === '' ? null : f });
+                }}
+              />
               {field(i, 'region', t('contact.region'))}
               {field(i, 'city', t('contact.city'))}
               {field(i, 'street', t('contact.street'))}

@@ -29,7 +29,10 @@ import {
   contactUpsert,
   contactFindDuplicates,
 } from '../services/contacts';
-import { AddressRows, ValueRows, addressToFlat } from './ContactValueEditor';
+import { AddressRows, PhoneRows, ValueRows, addressToFlat } from './ContactValueEditor';
+import { displayPhone } from '../utils/phone';
+import { getPhoneRegion, getPhoneStyle } from '../config/prefs';
+import type { CountryCode } from 'libphonenumber-js';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -251,7 +254,14 @@ export function ContactDuplicates({
                     <div className="mt-1.5 flex min-w-0 flex-wrap gap-x-4 gap-y-1 pl-7 text-xs text-white/55">
                       <DetailChip icon={<User size={12} />} value={c.name_kana} />
                       <DetailChip icon={<Mail size={12} />} value={c.email} />
-                      <DetailChip icon={<Phone size={12} />} value={c.phone} />
+                      <DetailChip
+                        icon={<Phone size={12} />}
+                        value={
+                          c.phone
+                            ? displayPhone(c.phone, getPhoneStyle(), getPhoneRegion() as CountryCode)
+                            : null
+                        }
+                      />
                       <DetailChip icon={<Building2 size={12} />} value={c.organization} />
                       <DetailChip icon={<MapPin size={12} />} value={c.address} />
                       <DetailChip icon={<Cake size={12} />} value={c.birthday} />
@@ -333,7 +343,7 @@ export function ContactDuplicates({
                     values={draft.emails}
                     onChange={(emails) => patch({ emails })}
                   />
-                  <ValueRows
+                  <PhoneRows
                     icon={<Phone size={13} />}
                     label={t('contact.phone')}
                     values={draft.phones}

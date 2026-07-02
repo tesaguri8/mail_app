@@ -173,7 +173,15 @@
     "data": "Data",
     "about": "About",
     "inlineImages": "Show embedded images in body",
-    "inlineImagesHint": "Automatically fetch inline images bundled in the message and show them in the body. Remote (external) images stay blocked."
+    "inlineImagesHint": "Automatically fetch inline images bundled in the message and show them in the body. Remote (external) images stay blocked.",
+    "phoneTitle": "Phone number formatting",
+    "phoneHint": "Type just the national number and it is stored as [country] + [national number] using your default country (internally E.164).",
+    "phoneRegion": "Default country",
+    "phoneStyle": "Display style",
+    "phoneStyleNational": "National (e.g. 090-1234-5678)",
+    "phoneStyleInternational": "International (e.g. +81 90 1234 5678)",
+    "postalAutoformat": "Auto-format postal codes",
+    "postalAutoformatHint": "Automatically format Japanese postal codes (7 digits) as NNN-NNNN."
   },
   "dataloc": {
     "title": "Data location",

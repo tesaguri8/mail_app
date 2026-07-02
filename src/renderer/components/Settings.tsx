@@ -1,11 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
 import { FolderInput, HardDrive, RotateCcw } from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { DataLocation } from '@bindings/DataLocation';
 import { APP } from '../config/appIdentity';
-import { getInlineImages, setInlineImages } from '../config/prefs';
+import {
+  getInlineImages,
+  setInlineImages,
+  getPhoneRegion,
+  setPhoneRegion,
+  getPhoneStyle,
+  setPhoneStyle,
+  getPostalAutoformat,
+  setPostalAutoformat,
+} from '../config/prefs';
+import { countryOptions } from '../utils/phone';
 import { dataLocation, dataRelocate, dataResetLocation } from '../services/data';
 import { AccountSetup } from './AccountSetup';
 import { SignatureManager } from './SignatureManager';
@@ -87,42 +97,120 @@ export function Settings({
   );
 }
 
-/** 表示設定: インライン画像の自動取得など。 */
-function DisplaySettings() {
-  const { t } = useTranslation();
-  const [inline, setInline] = useState(getInlineImages());
+/** オン/オフのトグルスイッチ。 */
+function Toggle({
+  checked,
+  onChange,
+  title,
+  hint,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  title: string;
+  hint: string;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start justify-between gap-4">
+      <span>
+        <span className="block text-sm text-white/85">{title}</span>
+        <span className="mt-0.5 block text-xs text-white/45">{hint}</span>
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={onChange}
+        className={`relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors ${
+          checked ? 'bg-sky-500' : 'bg-white/20'
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+            checked ? 'translate-x-4' : 'translate-x-0.5'
+          }`}
+        />
+      </button>
+    </label>
+  );
+}
 
-  const toggleInline = () => {
-    const next = !inline;
-    setInline(next);
-    setInlineImages(next);
-  };
+/** 表示設定: インライン画像の自動取得・電話/郵便番号の整形など。 */
+function DisplaySettings() {
+  const { t, i18n } = useTranslation();
+  const [inline, setInline] = useState(getInlineImages());
+  const [region, setRegion] = useState(getPhoneRegion());
+  const [style, setStyle] = useState(getPhoneStyle());
+  const [postal, setPostal] = useState(getPostalAutoformat());
+  const countries = useMemo(() => countryOptions(i18n.language), [i18n.language]);
 
   return (
-    <div className="space-y-4">
-      <label className="flex cursor-pointer items-start justify-between gap-4">
-        <span>
-          <span className="block text-sm text-white/85">{t('settings.inlineImages')}</span>
-          <span className="mt-0.5 block text-xs text-white/45">
-            {t('settings.inlineImagesHint')}
-          </span>
-        </span>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={inline}
-          onClick={toggleInline}
-          className={`relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors ${
-            inline ? 'bg-sky-500' : 'bg-white/20'
-          }`}
-        >
-          <span
-            className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-              inline ? 'translate-x-4' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
-      </label>
+    <div className="max-w-xl space-y-5">
+      <Toggle
+        checked={inline}
+        onChange={() => {
+          const next = !inline;
+          setInline(next);
+          setInlineImages(next);
+        }}
+        title={t('settings.inlineImages')}
+        hint={t('settings.inlineImagesHint')}
+      />
+
+      <div className="border-t border-white/10 pt-4">
+        <div className="text-sm text-white/85">{t('settings.phoneTitle')}</div>
+        <p className="mt-0.5 text-xs text-white/45">{t('settings.phoneHint')}</p>
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <label className="block">
+            <span className="mb-1 block text-xs text-white/50">{t('settings.phoneRegion')}</span>
+            <select
+              value={region}
+              onChange={(e) => {
+                setRegion(e.target.value);
+                setPhoneRegion(e.target.value);
+              }}
+              className="w-full rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
+            >
+              {countries.map((c) => (
+                <option key={c.region} value={c.region} className="text-black">
+                  {c.name} (+{c.calling})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs text-white/50">{t('settings.phoneStyle')}</span>
+            <select
+              value={style}
+              onChange={(e) => {
+                const s = e.target.value as 'national' | 'international';
+                setStyle(s);
+                setPhoneStyle(s);
+              }}
+              className="w-full rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
+            >
+              <option value="national" className="text-black">
+                {t('settings.phoneStyleNational')}
+              </option>
+              <option value="international" className="text-black">
+                {t('settings.phoneStyleInternational')}
+              </option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div className="border-t border-white/10 pt-4">
+        <Toggle
+          checked={postal}
+          onChange={() => {
+            const next = !postal;
+            setPostal(next);
+            setPostalAutoformat(next);
+          }}
+          title={t('settings.postalAutoformat')}
+          hint={t('settings.postalAutoformatHint')}
+        />
+      </div>
     </div>
   );
 }

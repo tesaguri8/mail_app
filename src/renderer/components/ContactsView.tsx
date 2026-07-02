@@ -31,10 +31,14 @@ import {
   contactList,
   contactUpsert,
 } from '../services/contacts';
+import type { CountryCode } from 'libphonenumber-js';
 import { ContactDuplicates } from './ContactDuplicates';
-import { AddressRows, TagInput, ValueRows, addressToFlat } from './ContactValueEditor';
+import { AddressRows, PhoneRows, TagInput, ValueRows, addressToFlat } from './ContactValueEditor';
 import { tagList } from '../services/tags';
 import type { TagSummary } from '@bindings/TagSummary';
+import { toE164 } from '../utils/phone';
+import { formatPostal } from '../utils/postal';
+import { getPhoneRegion, getPostalAutoformat } from '../config/prefs';
 
 /** ContactSummary の複数値を入力型（配列）に変換。 */
 const toValueInputs = (vs: { label: string | null; value: string }[]): ContactValueInput[] =>
@@ -49,13 +53,26 @@ const toAddressInputs = (as: ContactAddressInput[]): ContactAddressInput[] =>
     extended: a.extended,
     country: a.country,
   }));
-/** 保存前に flat 主値（email/phone/address）を配列先頭から導出する。 */
-const withPrimaries = (d: ContactInput): ContactInput => ({
-  ...d,
-  email: d.emails[0]?.value ?? null,
-  phone: d.phones[0]?.value ?? null,
-  address: d.addresses[0] ? addressToFlat(d.addresses[0]) || null : null,
-});
+/** 保存前に電話を E.164 正準形へ、郵便番号を整形し、flat 主値を配列先頭から導出する。
+ *  （ユーザーが blur せず保存した場合の保険も兼ねる。） */
+const withPrimaries = (d: ContactInput): ContactInput => {
+  const region = getPhoneRegion() as CountryCode;
+  const autoPostal = getPostalAutoformat();
+  const phones = d.phones.map((p) =>
+    p.value.trim() ? { ...p, value: toE164(p.value, region) } : p
+  );
+  const addresses = autoPostal
+    ? d.addresses.map((a) => (a.postal ? { ...a, postal: formatPostal(a.postal, region) } : a))
+    : d.addresses;
+  return {
+    ...d,
+    phones,
+    addresses,
+    email: d.emails[0]?.value ?? null,
+    phone: phones[0]?.value ?? null,
+    address: addresses[0] ? addressToFlat(addresses[0]) || null : null,
+  };
+};
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -484,7 +501,7 @@ export function ContactsView() {
                 values={draft.emails}
                 onChange={(emails) => patch({ emails })}
               />
-              <ValueRows
+              <PhoneRows
                 icon={<Phone size={14} />}
                 label={t('contact.phone')}
                 values={draft.phones}

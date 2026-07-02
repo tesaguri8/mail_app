@@ -15,6 +15,7 @@ import {
   Star,
   Tag,
   ThumbsDown,
+  X,
 } from 'lucide-react';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { AttachmentSummary } from '@bindings/AttachmentSummary';
@@ -60,6 +61,7 @@ export function MailBody({
   starred,
   onToggleStar,
   onTag,
+  onRemoveTag,
   onReply,
   onMarkSpam,
 }: {
@@ -72,6 +74,8 @@ export function MailBody({
   onToggleStar?: () => void;
   /** タグ付与ポップオーバーを開く（ボタンの画面座標を渡す）。 */
   onTag?: (x: number, y: number) => void;
+  /** このメールからタグを外す（チップの × で呼ぶ）。 */
+  onRemoveTag?: (tagId: number) => void;
   onReply?: (mode: 'reply' | 'replyAll' | 'forward') => void;
   /** 迷惑としてマーク（学習＋隔離）。 */
   onMarkSpam?: () => void;
@@ -382,7 +386,7 @@ export function MailBody({
               {t('mailbox.to')}: {d.to_addresses}
             </div>
           )}
-          {/* タグ（一覧では出さず、詳細ヘッダの宛先の下にまとめて表示） */}
+          {/* タグ（一覧では出さず、詳細ヘッダの宛先の下にまとめて表示。× で個別に外せる） */}
           {tags && tags.length > 0 && (
             <div className="mt-1.5 flex flex-wrap gap-1">
               {tags.map((tg) => {
@@ -395,6 +399,16 @@ export function MailBody({
                   >
                     <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
                     {tg.name}
+                    {onRemoveTag && (
+                      <button
+                        onClick={() => onRemoveTag(tg.id)}
+                        title={t('ctx.removeTag')}
+                        aria-label={t('ctx.removeTag')}
+                        className="-mr-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full hover:bg-white/20"
+                      >
+                        <X size={9} />
+                      </button>
+                    )}
                   </span>
                 );
               })}

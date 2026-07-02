@@ -6,6 +6,7 @@ import {
   Building2,
   Cake,
   Check,
+  Gem,
   ImageOff,
   Mail,
   MapPin,
@@ -13,7 +14,6 @@ import {
   Phone,
   RefreshCw,
   Save,
-  Star,
   StickyNote,
   User,
   UserX,
@@ -390,7 +390,7 @@ export function ContactDuplicates({
 
                   <div className="flex flex-wrap gap-2 pt-1">
                     <FlagToggle
-                      icon={<Star size={13} />}
+                      icon={<Gem size={13} />}
                       label={t('contact.favorite')}
                       on={draft.is_favorite}
                       onClick={() => patch({ is_favorite: !draft.is_favorite })}

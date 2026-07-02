@@ -87,6 +87,7 @@
     "bookmark": "ブックマークに追加",
     "unbookmark": "ブックマークを解除",
     "tags": "タグ…",
+    "removeTag": "このタグを外す",
     "markSpam": "迷惑メールに設定",
     "delete": "削除",
     "selected": "{{count}} 件を選択中"

@@ -11,9 +11,9 @@ import {
   Phone,
   Plus,
   Download,
+  Gem,
   Layers,
   Search,
-  Star,
   StickyNote,
   Trash2,
   User,
@@ -423,7 +423,7 @@ export function ContactsView() {
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1 truncate text-sm font-medium">
                       {c.is_favorite && (
-                        <Star size={12} className="shrink-0 fill-amber-300 text-amber-300" />
+                        <Gem size={12} className="shrink-0 fill-sky-300/30 text-sky-300" />
                       )}
                       {c.display_name || t('contact.untitled')}
                     </span>
@@ -456,9 +456,9 @@ export function ContactsView() {
                 aria-label={t('contact.favorite')}
                 className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-white/10"
               >
-                <Star
+                <Gem
                   size={20}
-                  className={draft.is_favorite ? 'fill-amber-300 text-amber-300' : 'text-white/50'}
+                  className={draft.is_favorite ? 'fill-sky-300/30 text-sky-300' : 'text-white/50'}
                 />
               </button>
               <input

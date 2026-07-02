@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { Star, UserRound, Clock } from 'lucide-react';
+import { Gem, UserRound, Clock } from 'lucide-react';
 import type { RecipientSuggestion } from '@bindings/RecipientSuggestion';
 
 /**
@@ -48,7 +48,7 @@ export function RecipientSuggestList({
           }`}
         >
           {s.is_favorite ? (
-            <Star size={13} className="shrink-0 fill-amber-300 text-amber-300" />
+            <Gem size={13} className="shrink-0 fill-sky-300/30 text-sky-300" />
           ) : s.source === 'contact' ? (
             <UserRound size={13} className="shrink-0 text-white/45" />
           ) : (

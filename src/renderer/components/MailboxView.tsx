@@ -755,6 +755,7 @@ export function MailboxView({
       starred={openedStarred}
       onToggleStar={toggleStarOpened}
       onTag={openTagForOpened}
+      onRemoveTag={(tagId) => applyTagDelta([opened.id], tagId, false)}
       onReply={(mode) => setCompose({ mode, source: opened })}
       onMarkSpam={markSpamOpened}
     />

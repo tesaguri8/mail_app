@@ -87,6 +87,7 @@
     "bookmark": "Add bookmark",
     "unbookmark": "Remove bookmark",
     "tags": "Tags…",
+    "removeTag": "Remove this tag",
     "markSpam": "Mark as spam",
     "delete": "Delete",
     "selected": "{{count}} selected"

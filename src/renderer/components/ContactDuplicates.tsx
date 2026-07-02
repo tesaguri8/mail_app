@@ -21,7 +21,15 @@ import {
 import type { DuplicateGroup } from '@bindings/DuplicateGroup';
 import type { ContactSummary } from '@bindings/ContactSummary';
 import type { ContactInput } from '@bindings/ContactInput';
-import { contactMerge, contactUpsert, contactFindDuplicates } from '../services/contacts';
+import type { ContactValueInput } from '@bindings/ContactValueInput';
+import type { ContactAddressInput } from '@bindings/ContactAddressInput';
+import {
+  contactGet,
+  contactMerge,
+  contactUpsert,
+  contactFindDuplicates,
+} from '../services/contacts';
+import { AddressRows, ValueRows, addressToFlat } from './ContactValueEditor';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -74,13 +82,29 @@ export function ContactDuplicates({
   const representative = useMemo(() => pickRepresentative(includedMembers), [includedMembers]);
   const includedCount = included.size;
 
-  // 2件以上選ばれていれば統合後の正本カードを自動生成（選択が変わると作り直す）。
+  // 2件以上選ばれていれば統合後の正本カードを自動生成。各メンバーの全項目（複数値）を
+  // 取得して束ねる（一覧は軽量で複数値が空のため詳細を取り直す）。選択が変わると作り直す。
   useEffect(() => {
-    setDraft(
-      representative && includedMembers.length >= 2
-        ? buildDraft(includedMembers, representative)
-        : null,
-    );
+    if (!representative || includedMembers.length < 2) {
+      setDraft(null);
+      return;
+    }
+    let alive = true;
+    Promise.all(includedMembers.map((m) => contactGet(m.id).catch(() => null)))
+      .then((full) => {
+        if (!alive) return;
+        const members = full.filter((m): m is ContactSummary => m !== null);
+        if (members.length < 2) {
+          setDraft(buildDraft(includedMembers, representative));
+          return;
+        }
+        const rep = members.find((m) => m.id === representative.id) ?? members[0];
+        setDraft(buildDraft(members, rep));
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
   }, [includedMembers, representative]);
 
   const toggleInclude = (id: number) => {
@@ -302,20 +326,19 @@ export function ContactDuplicates({
                       />
                     </div>
                   </EditField>
-                  <EditField icon={<Mail size={14} />} label={t('contact.email')}>
-                    <input
-                      className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                      value={draft.email ?? ''}
-                      onChange={(e) => patch({ email: nullify(e.target.value) })}
-                    />
-                  </EditField>
-                  <EditField icon={<Phone size={14} />} label={t('contact.phone')}>
-                    <input
-                      className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                      value={draft.phone ?? ''}
-                      onChange={(e) => patch({ phone: nullify(e.target.value) })}
-                    />
-                  </EditField>
+                  <ValueRows
+                    icon={<Mail size={13} />}
+                    label={t('contact.email')}
+                    inputType="email"
+                    values={draft.emails}
+                    onChange={(emails) => patch({ emails })}
+                  />
+                  <ValueRows
+                    icon={<Phone size={13} />}
+                    label={t('contact.phone')}
+                    values={draft.phones}
+                    onChange={(phones) => patch({ phones })}
+                  />
                   <EditField icon={<Building2 size={14} />} label={t('contact.organization')}>
                     <input
                       className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
@@ -323,13 +346,12 @@ export function ContactDuplicates({
                       onChange={(e) => patch({ organization: nullify(e.target.value) })}
                     />
                   </EditField>
-                  <EditField icon={<MapPin size={14} />} label={t('contact.address')}>
-                    <input
-                      className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                      value={draft.address ?? ''}
-                      onChange={(e) => patch({ address: nullify(e.target.value) })}
-                    />
-                  </EditField>
+                  <AddressRows
+                    icon={<MapPin size={13} />}
+                    label={t('contact.address')}
+                    addresses={draft.addresses}
+                    onChange={(addresses) => patch({ addresses })}
+                  />
                   <EditField icon={<Cake size={14} />} label={t('contact.birthday')}>
                     <input
                       type="date"
@@ -489,6 +511,36 @@ function buildDraft(members: ContactSummary[], representative: ContactSummary): 
     }
     return null;
   };
+  // 全メンバーのメール/電話/住所を値で重複排除して統合（代表を先頭に）。
+  const emails: ContactValueInput[] = [];
+  const phones: ContactValueInput[] = [];
+  const addresses: ContactAddressInput[] = [];
+  for (const m of ordered) {
+    for (const e of m.emails) {
+      if (e.value && !emails.some((x) => x.value.toLowerCase() === e.value.toLowerCase())) {
+        emails.push({ label: e.label, value: e.value });
+      }
+    }
+    for (const p of m.phones) {
+      if (p.value && !phones.some((x) => x.value === p.value)) {
+        phones.push({ label: p.label, value: p.value });
+      }
+    }
+    for (const a of m.addresses) {
+      const key = [a.postal, a.region, a.city, a.street].join('|');
+      if (!addresses.some((x) => [x.postal, x.region, x.city, x.street].join('|') === key)) {
+        addresses.push({
+          label: a.label,
+          postal: a.postal,
+          region: a.region,
+          city: a.city,
+          street: a.street,
+          extended: a.extended,
+          country: a.country,
+        });
+      }
+    }
+  }
   return {
     id: null,
     display_name: representative.display_name,
@@ -496,17 +548,16 @@ function buildDraft(members: ContactSummary[], representative: ContactSummary): 
     given_name: pick((c) => c.given_name),
     phonetic_family: pick((c) => c.phonetic_family),
     phonetic_given: pick((c) => c.phonetic_given),
-    // 複数値は空配列（統合はバックエンドが全子値を寄せる。ここは主値のみ確定）。
-    emails: [],
-    phones: [],
-    addresses: [],
+    emails,
+    phones,
+    addresses,
     name_kana: pick((c) => c.name_kana),
-    email: pick((c) => c.email),
-    phone: pick((c) => c.phone),
+    email: emails[0]?.value ?? pick((c) => c.email),
+    phone: phones[0]?.value ?? pick((c) => c.phone),
     organization: pick((c) => c.organization),
     org_title: pick((c) => c.org_title),
     org_department: pick((c) => c.org_department),
-    address: pick((c) => c.address),
+    address: addresses[0] ? addressToFlat(addresses[0]) || null : pick((c) => c.address),
     birthday: pick((c) => c.birthday),
     note: pick((c) => c.note),
     is_favorite: members.some((m) => m.is_favorite),

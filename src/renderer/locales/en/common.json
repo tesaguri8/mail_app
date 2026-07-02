@@ -109,6 +109,7 @@
     "removeRow": "Remove",
     "moveUp": "Move up",
     "moveDown": "Move down",
+    "reorder": "Drag to reorder",
     "addAddress": "Add address",
     "postal": "Postal code",
     "region": "Region",

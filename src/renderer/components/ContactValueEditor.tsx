@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, ChevronUp, Plus, Tag, X } from 'lucide-react';
+import { GripVertical, Plus, Tag, X } from 'lucide-react';
 import type { ContactValueInput } from '@bindings/ContactValueInput';
 import type { ContactAddressInput } from '@bindings/ContactAddressInput';
 
@@ -14,43 +14,51 @@ export function addressToFlat(a: ContactAddressInput): string {
     .join(' ');
 }
 
-/** 配列 i 番目を dir(-1/+1) 方向へ入れ替えた新しい配列を返す（範囲外はそのまま）。 */
-function moved<T>(list: T[], i: number, dir: number): T[] {
-  const j = i + dir;
-  if (j < 0 || j >= list.length) return list;
+/** 配列の from を to へ移動した新しい配列を返す。 */
+function reorder<T>(list: T[], from: number, to: number): T[] {
   const next = list.slice();
-  [next[i], next[j]] = [next[j], next[i]];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
   return next;
 }
 
-/** 行の上下移動ボタン（並べ替え。先頭が主値になる）。 */
-function MoveButtons({
-  onUp,
-  onDown,
-  upDisabled,
-  downDisabled,
-}: {
-  onUp: () => void;
-  onDown: () => void;
-  upDisabled: boolean;
-  downDisabled: boolean;
-}) {
+/** ネイティブ DnD の並べ替え。ハンドルからドラッグし、行を drop 先にする。 */
+function useDnd<T>(list: T[], onChange: (l: T[]) => void) {
+  const [drag, setDrag] = useState<number | null>(null);
+  return {
+    dragging: drag,
+    /** ドラッグ開始元（ハンドル）に付与。 */
+    handleProps: (i: number) => ({
+      draggable: true,
+      onDragStart: (e: React.DragEvent) => {
+        setDrag(i);
+        e.dataTransfer.effectAllowed = 'move';
+      },
+      onDragEnd: () => setDrag(null),
+    }),
+    /** drop 先（各行）に付与。ホバー中の行位置へ即時に並べ替え。 */
+    rowProps: (i: number) => ({
+      onDragOver: (e: React.DragEvent) => {
+        e.preventDefault();
+        if (drag === null || drag === i) return;
+        onChange(reorder(list, drag, i));
+        setDrag(i);
+      },
+    }),
+  };
+}
+
+/** ドラッグハンドル。 */
+function DragHandle(props: React.HTMLAttributes<HTMLSpanElement> & { draggable?: boolean }) {
   const { t } = useTranslation();
-  const cls =
-    'flex h-5 w-5 items-center justify-center rounded text-white/40 hover:bg-white/10 hover:text-white disabled:opacity-25 disabled:hover:bg-transparent';
   return (
-    <span className="flex shrink-0 flex-col">
-      <button onClick={onUp} disabled={upDisabled} className={cls} aria-label={t('contact.moveUp')}>
-        <ChevronUp size={13} />
-      </button>
-      <button
-        onClick={onDown}
-        disabled={downDisabled}
-        className={cls}
-        aria-label={t('contact.moveDown')}
-      >
-        <ChevronDown size={13} />
-      </button>
+    <span
+      {...props}
+      title={t('contact.reorder')}
+      aria-label={t('contact.reorder')}
+      className="flex h-6 w-4 shrink-0 cursor-grab items-center justify-center text-white/30 hover:text-white/70 active:cursor-grabbing"
+    >
+      <GripVertical size={14} />
     </span>
   );
 }
@@ -81,6 +89,7 @@ export function ValueRows({
   inputType?: string;
 }) {
   const { t } = useTranslation();
+  const dnd = useDnd(values, onChange);
   const set = (i: number, patch: Partial<ContactValueInput>) =>
     onChange(values.map((v, idx) => (idx === i ? { ...v, ...patch } : v)));
   return (
@@ -91,7 +100,12 @@ export function ValueRows({
       </span>
       <div className="space-y-1.5">
         {values.map((v, i) => (
-          <div key={i} className="flex items-center gap-2">
+          <div
+            key={i}
+            className={`flex items-center gap-1.5 rounded ${dnd.dragging === i ? 'opacity-50' : ''}`}
+            {...dnd.rowProps(i)}
+          >
+            <DragHandle {...dnd.handleProps(i)} />
             <input
               className="w-16 shrink-0 rounded bg-white/10 px-2 py-1.5 text-xs outline-none focus:bg-white/15"
               placeholder={t('contact.labelPlaceholder')}
@@ -104,12 +118,6 @@ export function ValueRows({
               className="min-w-0 flex-1 rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
               value={v.value}
               onChange={(e) => set(i, { value: e.target.value })}
-            />
-            <MoveButtons
-              onUp={() => onChange(moved(values, i, -1))}
-              onDown={() => onChange(moved(values, i, 1))}
-              upDisabled={i === 0}
-              downDisabled={i === values.length - 1}
             />
             <button
               onClick={() => onChange(values.filter((_, idx) => idx !== i))}
@@ -218,6 +226,7 @@ export function AddressRows({
   onChange: (a: ContactAddressInput[]) => void;
 }) {
   const { t } = useTranslation();
+  const dnd = useDnd(addresses, onChange);
   const set = (i: number, patch: Partial<ContactAddressInput>) =>
     onChange(addresses.map((a, idx) => (idx === i ? { ...a, ...patch } : a)));
   const field = (i: number, key: keyof ContactAddressInput, ph: string, w = '') => (
@@ -236,8 +245,15 @@ export function AddressRows({
       </span>
       <div className="space-y-2">
         {addresses.map((a, i) => (
-          <div key={i} className="rounded-md border border-white/10 bg-white/5 p-2">
+          <div
+            key={i}
+            className={`rounded-md border border-white/10 bg-white/5 p-2 ${
+              dnd.dragging === i ? 'opacity-50' : ''
+            }`}
+            {...dnd.rowProps(i)}
+          >
             <div className="mb-1.5 flex items-center gap-2">
+              <DragHandle {...dnd.handleProps(i)} />
               <input
                 className="w-20 rounded bg-white/10 px-2 py-1 text-xs outline-none focus:bg-white/15"
                 placeholder={t('contact.labelPlaceholder')}
@@ -248,12 +264,6 @@ export function AddressRows({
                 }
               />
               <span className="flex-1" />
-              <MoveButtons
-                onUp={() => onChange(moved(addresses, i, -1))}
-                onDown={() => onChange(moved(addresses, i, 1))}
-                upDisabled={i === 0}
-                downDisabled={i === addresses.length - 1}
-              />
               <button
                 onClick={() => onChange(addresses.filter((_, idx) => idx !== i))}
                 className="flex h-6 w-6 items-center justify-center rounded-full text-white/40 hover:bg-white/10 hover:text-white"

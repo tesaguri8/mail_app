@@ -1,0 +1,21 @@
+# 改行コードの正規化: リポジトリ内は LF、作業ツリーは OS 設定に従う。
+# ワークツリー/環境間で LF↔CRLF だけの差分ノイズが出るのを防ぐ。
+* text=auto
+
+# バイナリ（改行変換しない）
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.icns binary
+*.heic binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.mp4 binary
+*.mov binary
+*.zip binary
+*.pdf binary

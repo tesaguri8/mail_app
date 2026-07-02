@@ -107,6 +107,8 @@
     "labelPlaceholder": "ラベル",
     "addRow": "追加",
     "removeRow": "削除",
+    "moveUp": "上へ",
+    "moveDown": "下へ",
     "addAddress": "住所を追加",
     "postal": "郵便番号",
     "region": "都道府県",

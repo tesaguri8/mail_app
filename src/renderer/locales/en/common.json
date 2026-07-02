@@ -107,6 +107,8 @@
     "labelPlaceholder": "Label",
     "addRow": "Add",
     "removeRow": "Remove",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
     "addAddress": "Add address",
     "postal": "Postal code",
     "region": "Region",

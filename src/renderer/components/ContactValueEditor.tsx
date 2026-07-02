@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, Tag, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, Plus, Tag, X } from 'lucide-react';
 import type { ContactValueInput } from '@bindings/ContactValueInput';
 import type { ContactAddressInput } from '@bindings/ContactAddressInput';
 
@@ -12,6 +12,47 @@ export function addressToFlat(a: ContactAddressInput): string {
     .map((s) => (s ?? '').trim())
     .filter(Boolean)
     .join(' ');
+}
+
+/** 配列 i 番目を dir(-1/+1) 方向へ入れ替えた新しい配列を返す（範囲外はそのまま）。 */
+function moved<T>(list: T[], i: number, dir: number): T[] {
+  const j = i + dir;
+  if (j < 0 || j >= list.length) return list;
+  const next = list.slice();
+  [next[i], next[j]] = [next[j], next[i]];
+  return next;
+}
+
+/** 行の上下移動ボタン（並べ替え。先頭が主値になる）。 */
+function MoveButtons({
+  onUp,
+  onDown,
+  upDisabled,
+  downDisabled,
+}: {
+  onUp: () => void;
+  onDown: () => void;
+  upDisabled: boolean;
+  downDisabled: boolean;
+}) {
+  const { t } = useTranslation();
+  const cls =
+    'flex h-5 w-5 items-center justify-center rounded text-white/40 hover:bg-white/10 hover:text-white disabled:opacity-25 disabled:hover:bg-transparent';
+  return (
+    <span className="flex shrink-0 flex-col">
+      <button onClick={onUp} disabled={upDisabled} className={cls} aria-label={t('contact.moveUp')}>
+        <ChevronUp size={13} />
+      </button>
+      <button
+        onClick={onDown}
+        disabled={downDisabled}
+        className={cls}
+        aria-label={t('contact.moveDown')}
+      >
+        <ChevronDown size={13} />
+      </button>
+    </span>
+  );
 }
 
 const emptyValue = (): ContactValueInput => ({ label: null, value: '' });
@@ -63,6 +104,12 @@ export function ValueRows({
               className="min-w-0 flex-1 rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
               value={v.value}
               onChange={(e) => set(i, { value: e.target.value })}
+            />
+            <MoveButtons
+              onUp={() => onChange(moved(values, i, -1))}
+              onDown={() => onChange(moved(values, i, 1))}
+              upDisabled={i === 0}
+              downDisabled={i === values.length - 1}
             />
             <button
               onClick={() => onChange(values.filter((_, idx) => idx !== i))}
@@ -201,6 +248,12 @@ export function AddressRows({
                 }
               />
               <span className="flex-1" />
+              <MoveButtons
+                onUp={() => onChange(moved(addresses, i, -1))}
+                onDown={() => onChange(moved(addresses, i, 1))}
+                upDisabled={i === 0}
+                downDisabled={i === addresses.length - 1}
+              />
               <button
                 onClick={() => onChange(addresses.filter((_, idx) => idx !== i))}
                 className="flex h-6 w-6 items-center justify-center rounded-full text-white/40 hover:bg-white/10 hover:text-white"

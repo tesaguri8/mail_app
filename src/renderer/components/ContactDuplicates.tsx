@@ -30,6 +30,7 @@ import {
   contactFindDuplicates,
 } from '../services/contacts';
 import { AddressRows, PhoneRows, ValueRows, addressToFlat } from './ContactValueEditor';
+import { DupModeToggle } from './OrgDuplicates';
 import { displayPhone } from '../utils/phone';
 import { getPhoneRegion, getPhoneStyle } from '../config/prefs';
 import type { CountryCode } from 'libphonenumber-js';
@@ -47,11 +48,16 @@ export function ContactDuplicates({
   onMerged,
   onExit,
   focusContactId,
+  mode,
+  onModeChange,
 }: {
   onMerged: () => void;
   onExit: () => void;
   /** 起動時にこの連絡先を含むグループを選択する（重複バナーからの遷移用）。 */
   focusContactId?: number | null;
+  /** 「連絡先／組織」切替の現在値と変更（組織名の統一へ切替）。 */
+  mode: 'contacts' | 'orgs';
+  onModeChange: (m: 'contacts' | 'orgs') => void;
 }) {
   const { t } = useTranslation();
   const [groups, setGroups] = useState<DuplicateGroup[]>([]);
@@ -161,34 +167,35 @@ export function ContactDuplicates({
     <div className="flex h-full min-h-0">
       {/* 左：グループ一覧 */}
       <aside className="flex w-72 shrink-0 flex-col border-r border-white/10">
-        <div className="flex items-center gap-2 p-3">
-          <button
-            onClick={onExit}
-            title={t('dupes.back')}
-            aria-label={t('dupes.back')}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white"
-          >
-            <ArrowLeft size={17} />
-          </button>
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-semibold">{t('dupes.title')}</div>
-            <div className="truncate text-xs text-white/45">
-              {loading
-                ? t('dupes.scanning')
-                : groups.length === 0
-                  ? t('dupes.none')
-                  : t('dupes.summary', { groups: groups.length, extra: totalMergeable })}
-            </div>
+        <div className="flex flex-col gap-2 p-3">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onExit}
+              title={t('dupes.back')}
+              aria-label={t('dupes.back')}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white"
+            >
+              <ArrowLeft size={17} />
+            </button>
+            <DupModeToggle mode={mode} onChange={onModeChange} />
+            <span className="flex-1" />
+            <button
+              onClick={load}
+              disabled={loading}
+              title={t('dupes.rescan')}
+              aria-label={t('dupes.rescan')}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 disabled:opacity-40"
+            >
+              <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+            </button>
           </div>
-          <button
-            onClick={load}
-            disabled={loading}
-            title={t('dupes.rescan')}
-            aria-label={t('dupes.rescan')}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 disabled:opacity-40"
-          >
-            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-          </button>
+          <div className="truncate text-xs text-white/45">
+            {loading
+              ? t('dupes.scanning')
+              : groups.length === 0
+                ? t('dupes.none')
+                : t('dupes.summary', { groups: groups.length, extra: totalMergeable })}
+          </div>
         </div>
 
         <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">

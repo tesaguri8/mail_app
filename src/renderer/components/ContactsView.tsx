@@ -39,6 +39,7 @@ import {
 } from '../services/contacts';
 import type { CountryCode } from 'libphonenumber-js';
 import { ContactDuplicates } from './ContactDuplicates';
+import { OrgDuplicates } from './OrgDuplicates';
 import { AddressRows, PhoneRows, TagInput, ValueRows, addressToFlat } from './ContactValueEditor';
 import { OrgCombobox } from './OrgCombobox';
 import { TagFilter } from './TagFilter';
@@ -166,6 +167,8 @@ export function ContactsView({
   const [report, setReport] = useState<ImportReport | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [cleanup, setCleanup] = useState(false);
+  // 重複整理のモード（連絡先の重複／組織名の統一）。
+  const [dupMode, setDupMode] = useState<'contacts' | 'orgs'>('contacts');
   // 重複整理を開くとき、最初に選択したい連絡先（重複バナーからの遷移）。
   const [cleanupFocusId, setCleanupFocusId] = useState<number | null>(null);
   const [tags, setTags] = useState<TagSummary[]>([]);
@@ -392,14 +395,24 @@ export function ContactsView({
 
   // 整理モードは専用の2ペイン画面を全幅で表示する。
   if (cleanup) {
-    return (
+    const exitCleanup = () => {
+      setCleanup(false);
+      setCleanupFocusId(null);
+    };
+    return dupMode === 'orgs' ? (
+      <OrgDuplicates
+        mode={dupMode}
+        onModeChange={setDupMode}
+        onMerged={() => load(query, tagFilter)}
+        onExit={exitCleanup}
+      />
+    ) : (
       <ContactDuplicates
         focusContactId={cleanupFocusId}
+        mode={dupMode}
+        onModeChange={setDupMode}
         onMerged={() => load(query, tagFilter)}
-        onExit={() => {
-          setCleanup(false);
-          setCleanupFocusId(null);
-        }}
+        onExit={exitCleanup}
       />
     );
   }

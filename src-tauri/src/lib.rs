@@ -77,6 +77,8 @@ pub fn run() {
             commands::contact_delete,
             commands::contact_group_list,
             commands::organization_list,
+            commands::organization_find_duplicates,
+            commands::organization_merge,
             commands::contact_import,
             commands::contact_find_duplicates,
             commands::contact_find_matches,

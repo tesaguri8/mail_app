@@ -307,7 +307,7 @@ pub(crate) fn mobile_number(raw: &str) -> Option<String> {
 }
 
 /// 組織名の正規化: fold・空白除去し、代表的な法人格表記を取り除く。
-fn normalize_org(s: &str) -> String {
+pub(crate) fn normalize_org(s: &str) -> String {
     let mut t = fold_remove_ws(s);
     for token in [
         "株式会社",

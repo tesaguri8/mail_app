@@ -2,7 +2,7 @@ use super::Store;
 use crate::models::{
     ContactAddress, ContactAddressInput, ContactGroupSummary, ContactInput, ContactMatch,
     ContactSummary, ContactValue, ContactValueInput, DuplicateGroup, ImportReport,
-    OrganizationSummary,
+    OrgDuplicateGroup, OrganizationSummary,
 };
 use crate::services::dedupe::{digits, fold, fold_remove_ws, mobile_number};
 use crate::services::vcard::{ImportedContact, ParseResult};
@@ -692,6 +692,98 @@ impl Store {
             Some(l) => stmt.query_map(params![l], map)?.collect(),
             None => stmt.query_map([], map)?.collect(),
         }
+    }
+
+    /// 単一の組織を件数つきで取得。
+    pub fn get_organization(&self, id: i64) -> rusqlite::Result<OrganizationSummary> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT o.id, o.name, o.name_kana, o.note, \
+                    (SELECT count(*) FROM contacts c WHERE c.org_id = o.id) \
+             FROM organizations o WHERE o.id = ?1",
+            params![id],
+            |r| {
+                Ok(OrganizationSummary {
+                    id: r.get::<_, i64>(0)? as i32,
+                    name: r.get(1)?,
+                    name_kana: r.get(2)?,
+                    note: r.get(3)?,
+                    member_count: r.get::<_, i64>(4)? as i32,
+                })
+            },
+        )
+    }
+
+    /// 組織名の重複候補を正規化名で束ねて返す（2 件以上、所属合計の多い順）。
+    /// 「株式会社◯◯」と「(株)◯◯」など法人格・表記ゆれを同一グループにする。
+    pub fn find_organization_duplicates(&self) -> rusqlite::Result<Vec<OrgDuplicateGroup>> {
+        use std::collections::HashMap;
+        let orgs = self.list_organizations(None)?;
+        let mut map: HashMap<String, Vec<OrganizationSummary>> = HashMap::new();
+        for o in orgs {
+            let key = crate::services::dedupe::normalize_org(&o.name);
+            if key.is_empty() {
+                continue;
+            }
+            map.entry(key).or_default().push(o);
+        }
+        let mut groups: Vec<OrgDuplicateGroup> = map
+            .into_values()
+            .filter(|v| v.len() > 1)
+            .map(|mut v| {
+                // 既定の統一名: 最多所属 → 名前が長い → 名前順。
+                v.sort_by(|a, b| {
+                    b.member_count
+                        .cmp(&a.member_count)
+                        .then_with(|| b.name.chars().count().cmp(&a.name.chars().count()))
+                        .then_with(|| a.name.cmp(&b.name))
+                });
+                OrgDuplicateGroup {
+                    canonical: v[0].name.clone(),
+                    organizations: v,
+                }
+            })
+            .collect();
+        groups.sort_by(|a, b| {
+            let sa: i32 = a.organizations.iter().map(|o| o.member_count).sum();
+            let sb: i32 = b.organizations.iter().map(|o| o.member_count).sum();
+            sb.cmp(&sa).then_with(|| a.canonical.cmp(&b.canonical))
+        });
+        Ok(groups)
+    }
+
+    /// 複数の組織を 1 件（keep_id）に統一する。統一名 `name` を keep に設定し、
+    /// drop 側に所属する連絡先を keep へ付け替え、drop 組織を削除する。
+    /// keep 所属の連絡先の organization 文字列も統一名に同期する。統一後の組織を返す。
+    pub fn merge_organizations(
+        &self,
+        keep_id: i64,
+        drop_ids: &[i64],
+        name: &str,
+    ) -> rusqlite::Result<OrganizationSummary> {
+        let name = name.trim();
+        {
+            let mut conn = self.conn.lock().unwrap();
+            let tx = conn.transaction()?;
+            tx.execute(
+                "UPDATE organizations SET name = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                params![name, keep_id],
+            )?;
+            for did in drop_ids {
+                tx.execute(
+                    "UPDATE contacts SET org_id = ?1 WHERE org_id = ?2",
+                    params![keep_id, did],
+                )?;
+                tx.execute("DELETE FROM organizations WHERE id = ?1", params![did])?;
+            }
+            // keep 所属の連絡先の organization 文字列を統一名へ同期。
+            tx.execute(
+                "UPDATE contacts SET organization = ?1 WHERE org_id = ?2",
+                params![name, keep_id],
+            )?;
+            tx.commit()?;
+        }
+        self.get_organization(keep_id)
     }
 
     /// 連絡先グループ一覧（所属件数つき、名前順）。
@@ -1450,6 +1542,46 @@ mod tests {
             .unwrap();
         assert_eq!(c.org_id, Some(orgs[0].id));
         assert_eq!(c.organization.as_deref(), Some("株式会社テスト"));
+    }
+
+    #[test]
+    fn org_duplicates_grouped_by_normalized_name_and_merge_repoints() {
+        let s = store();
+        // 法人格違いの同一組織に 2 名が別々に所属（完全一致でないので別レコード）。
+        let a = s
+            .upsert_contact(&ContactInput {
+                display_name: "田中".into(),
+                organization: Some("株式会社テスト".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let b = s
+            .upsert_contact(&ContactInput {
+                display_name: "鈴木".into(),
+                organization: Some("(株)テスト".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_ne!(a.org_id, b.org_id);
+
+        // 正規化名で 1 グループに束ねられる。
+        let groups = s.find_organization_duplicates().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].organizations.len(), 2);
+
+        // 統一名を「株式会社テスト」にして統合。
+        let keep = a.org_id.unwrap() as i64;
+        let drop = b.org_id.unwrap() as i64;
+        let merged = s
+            .merge_organizations(keep, &[drop], "株式会社テスト")
+            .unwrap();
+        assert_eq!(merged.member_count, 2); // 両名が keep 所属へ
+
+        // drop 組織は消え、連絡先は付け替え＆organization 文字列も同期。
+        assert_eq!(s.list_organizations(None).unwrap().len(), 1);
+        let bb = s.get_contact(b.id as i64).unwrap();
+        assert_eq!(bb.org_id, Some(keep as i32));
+        assert_eq!(bb.organization.as_deref(), Some("株式会社テスト"));
     }
 
     #[test]

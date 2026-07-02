@@ -1,9 +1,9 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult,
     ContactGroupSummary, ContactInput, ContactMatch, ContactSummary, DataLocation, DbInfo,
-    DuplicateGroup, ImportReport, MailDetail, MailSummary, OrganizationSummary, RecipientSuggestion,
-    RetentionReport, SendInput, ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict,
-    StorageInfo, SyncProgress, SyncResult, TagSummary,
+    DuplicateGroup, ImportReport, MailDetail, MailSummary, OrgDuplicateGroup, OrganizationSummary,
+    RecipientSuggestion, RetentionReport, SendInput, ServerAccountSummary, SignatureSummary,
+    SpamSettings, SpamVerdict, StorageInfo, SyncProgress, SyncResult, TagSummary,
 };
 use crate::services::autoconfig;
 use crate::services::datadir;
@@ -708,6 +708,32 @@ pub fn organization_list(
 ) -> Result<Vec<OrganizationSummary>, String> {
     store
         .list_organizations(query.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// 組織名の重複候補（正規化名で束ねたグループ）を返す。組織の統一 UI 用。
+#[tauri::command]
+pub fn organization_find_duplicates(
+    store: State<Store>,
+) -> Result<Vec<OrgDuplicateGroup>, String> {
+    store
+        .find_organization_duplicates()
+        .map_err(|e| e.to_string())
+}
+
+/// 複数の組織を 1 件（keep_id）に統一し、統一後の組織を返す。`name` が統一名。
+#[tauri::command]
+pub fn organization_merge(
+    store: State<Store>,
+    keep_id: i64,
+    drop_ids: Vec<i64>,
+    name: String,
+) -> Result<OrganizationSummary, String> {
+    if name.trim().is_empty() {
+        return Err("組織名を入力してください".to_string());
+    }
+    store
+        .merge_organizations(keep_id, &drop_ids, &name)
         .map_err(|e| e.to_string())
 }
 

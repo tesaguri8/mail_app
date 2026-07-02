@@ -372,6 +372,17 @@ pub struct OrganizationSummary {
     pub member_count: i32,
 }
 
+/// 組織名の重複候補グループ（「株式会社◯◯」と「(株)◯◯」など。正規化名で束ねる）。
+/// 重複整理画面で 1 つの組織に統一するのに使う。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct OrgDuplicateGroup {
+    /// 既定の統一名（最多所属→最長→名前順）。
+    pub canonical: String,
+    /// 同一とみなした組織レコード（2 件以上）。
+    pub organizations: Vec<OrganizationSummary>,
+}
+
 /// 連絡先グループ（所属件数つき。編集 UI は後続）。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

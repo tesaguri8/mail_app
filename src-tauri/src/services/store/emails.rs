@@ -281,9 +281,8 @@ fn map_mail_summary(r: &rusqlite::Row) -> rusqlite::Result<MailSummary> {
     })
 }
 
-/// アドレス文字列（"Name <addr>" や素の addr）に一致する住所録の表示名を返す。
-/// 連絡先メール（primary の contacts.email と、複数値の contact_emails.value）を
-/// アドレス文字列が含むか（instr）で照合し、最初に見つかった表示名を採用する。
+/// アドレス（素のメールアドレス）に一致する住所録の表示名を返す。
+/// contacts.email（primary）と contact_emails.value を小文字で完全一致（式インデックス）で照合。
 fn contact_name_for(
     conn: &Connection,
     address: Option<&str>,
@@ -294,10 +293,9 @@ fn contact_name_for(
     let lower = addr.to_lowercase();
     conn.query_row(
         "SELECT display_name FROM contacts c
-         WHERE (c.email IS NOT NULL AND c.email <> '' AND instr(?1, lower(c.email)) > 0)
+         WHERE lower(c.email) = ?1
             OR EXISTS (SELECT 1 FROM contact_emails ce
-                       WHERE ce.contact_id = c.id AND ce.value <> ''
-                         AND instr(?1, lower(ce.value)) > 0)
+                       WHERE ce.contact_id = c.id AND lower(ce.value) = ?1)
          ORDER BY c.is_favorite DESC LIMIT 1",
         params![lower],
         |r| r.get::<_, Option<String>>(0),
@@ -308,13 +306,14 @@ fn contact_name_for(
 
 /// 差出人（from）が住所録の連絡先かを判定する SELECT 断片（is_known, is_vip）。
 /// `from_col` は各クエリの from_address 列（list=emails.from_address / search=e.from_address）。
-/// ヘッダ "Name <addr>" 等を含むため、連絡先メールが from に含まれるか（instr）で照合する。
+/// from_address は素のメールアドレスなので、小文字化の完全一致（式インデックス）で高速に照合する。
 fn known_vip_cols(from_col: &str) -> String {
     format!(
-        "(EXISTS (SELECT 1 FROM contacts c WHERE c.email IS NOT NULL AND c.email <> '' \
-             AND instr(lower(COALESCE({from_col}, '')), lower(c.email)) > 0)) AS is_known, \
-         (EXISTS (SELECT 1 FROM contacts c WHERE c.is_favorite = 1 AND c.email IS NOT NULL AND c.email <> '' \
-             AND instr(lower(COALESCE({from_col}, '')), lower(c.email)) > 0)) AS is_vip"
+        "(EXISTS (SELECT 1 FROM contacts c WHERE lower(c.email) = lower({from_col})) \
+          OR EXISTS (SELECT 1 FROM contact_emails ce WHERE lower(ce.value) = lower({from_col}))) AS is_known, \
+         (EXISTS (SELECT 1 FROM contacts c WHERE c.is_favorite = 1 AND lower(c.email) = lower({from_col})) \
+          OR EXISTS (SELECT 1 FROM contact_emails ce JOIN contacts c2 ON c2.id = ce.contact_id \
+                     WHERE c2.is_favorite = 1 AND lower(ce.value) = lower({from_col}))) AS is_vip"
     )
 }
 

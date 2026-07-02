@@ -209,8 +209,26 @@ export function MailboxView({
   }, []);
   const tagById = new Map(tags.map((tg) => [tg.id, tg]));
 
-  const loadMails = (id: number) =>
-    mailList(id, folder, 200).then(setMails).catch(() => undefined);
+  // 一覧の取得: まず最新の少数を即表示し、続きをバックグラウンドで読み込んで置き換える。
+  // 高速に切替えたときの取り違えを防ぐため、最新の呼び出しトークンの結果だけ反映する。
+  const loadTokenRef = useRef(0);
+  const FIRST_BATCH = 40;
+  const FULL_BATCH = 200;
+  const loadMails = (id: number) => {
+    const token = ++loadTokenRef.current;
+    const apply = (rows: MailSummary[]) => {
+      if (loadTokenRef.current === token) setMails(rows);
+    };
+    return mailList(id, folder, FIRST_BATCH)
+      .then((first) => {
+        apply(first);
+        // 先頭バッチが埋まっていれば続きを後追い取得（同数以下ならこれで全件）。
+        if (first.length >= FIRST_BATCH) {
+          mailList(id, folder, FULL_BATCH).then(apply).catch(() => undefined);
+        }
+      })
+      .catch(() => undefined);
+  };
   useEffect(() => {
     setOpened(null);
     setSelectedIds(new Set());

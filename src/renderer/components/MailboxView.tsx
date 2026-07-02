@@ -490,8 +490,23 @@ export function MailboxView({
 
   const listPane = (
     <div className="flex h-full min-h-0 flex-col">
-      {/* 絞り込みツールバー: 一覧を絞る操作はリスト直上に置く（トグル/期間/タグ） */}
-      <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-white/10 px-2 py-1">
+      {/* アカウント／フォルダ選択: 一覧の対象を決める操作もサイドバーに置く */}
+      <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-2 py-1.5">
+        <select
+          className="min-w-0 flex-1 rounded-md bg-white/10 px-2 py-1 text-xs outline-none"
+          value={selected ?? ''}
+          onChange={(e) => setSelected(Number(e.target.value))}
+        >
+          {accounts.map((a) => (
+            <option key={a.id} value={a.id} className="text-black">
+              {a.email}
+            </option>
+          ))}
+        </select>
+        <FolderCombobox value={folder} onChange={setFolder} />
+      </div>
+      {/* 絞り込みツールバー: 一覧を絞る操作はリスト直上に置く（トグル/期間/タグ）。アイコンは中央寄せ */}
+      <div className="flex shrink-0 flex-wrap items-center justify-center gap-1 border-b border-white/10 px-2 py-1">
         {FILTERS.map(({ key, Icon }) => {
           const on = filters.has(key);
           return (
@@ -657,19 +672,6 @@ export function MailboxView({
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/10 px-4 py-2">
-        <select
-          className="rounded-md bg-white/10 px-2 py-1 text-xs outline-none"
-          value={selected ?? ''}
-          onChange={(e) => setSelected(Number(e.target.value))}
-        >
-          {accounts.map((a) => (
-            <option key={a.id} value={a.id} className="text-black">
-              {a.email}
-            </option>
-          ))}
-        </select>
-        <FolderCombobox value={folder} onChange={setFolder} />
-
         {/* 全文検索: 件名・差出人・本文を対象。入力はデバウンスして検索。
             入力補助として住所録＋履歴の候補を出し、選ぶとそのアドレスで検索する。 */}
         <div className="relative flex items-center">

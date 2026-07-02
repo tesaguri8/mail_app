@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { downloadDir, join } from '@tauri-apps/api/path';
 import {
+  Ban,
   BookOpen,
   ChevronDown,
   Download,
@@ -15,6 +16,8 @@ import {
 } from 'lucide-react';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { AttachmentSummary } from '@bindings/AttachmentSummary';
+import type { TagSummary } from '@bindings/TagSummary';
+import { DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import {
   attachmentExport,
   attachmentOpen,
@@ -51,10 +54,16 @@ function isImage(a: AttachmentSummary): boolean {
  */
 export function MailBody({
   detail,
+  tags,
   onReply,
+  onMarkSpam,
 }: {
   detail: MailDetail;
+  /** このメールに付いているタグ（ヘッダの宛先の下に表示）。 */
+  tags?: TagSummary[];
   onReply?: (mode: 'reply' | 'replyAll' | 'forward') => void;
+  /** 迷惑としてマーク（学習＋隔離）。 */
+  onMarkSpam?: () => void;
 }) {
   const { t } = useTranslation();
   const [showQuotes, setShowQuotes] = useState(false);
@@ -287,6 +296,17 @@ export function MailBody({
                 <Icon size={16} />
               </button>
             ))}
+            {/* 迷惑としてマーク（学習＋隔離） */}
+            {onMarkSpam && (
+              <button
+                onClick={onMarkSpam}
+                title={t('ctx.markSpam')}
+                aria-label={t('ctx.markSpam')}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-rose-300"
+              >
+                <Ban size={16} />
+              </button>
+            )}
             {/* 全文をサーバーから再取得（要約保存の解除・本文キャッシュの復元） */}
             <button
               onClick={handleRefetch}
@@ -321,6 +341,24 @@ export function MailBody({
           {d.to_addresses && (
             <div>
               {t('mailbox.to')}: {d.to_addresses}
+            </div>
+          )}
+          {/* タグ（一覧では出さず、詳細ヘッダの宛先の下にまとめて表示） */}
+          {tags && tags.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {tags.map((tg) => {
+                const color = tg.color ?? DEFAULT_TAG_COLOR;
+                return (
+                  <span
+                    key={tg.id}
+                    className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium"
+                    style={{ backgroundColor: `${color}33`, color }}
+                  >
+                    <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
+                    {tg.name}
+                  </span>
+                );
+              })}
             </div>
           )}
         </div>

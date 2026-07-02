@@ -39,7 +39,7 @@ import {
 import { recipientSuggest } from '../services/recipients';
 import { RecipientSuggestList } from './RecipientSuggestList';
 import { mailAddTag, mailRemoveTag, tagCreate, tagList } from '../services/tags';
-import { pickTagColor, DEFAULT_TAG_COLOR } from '../utils/tagColors';
+import { pickTagColor } from '../utils/tagColors';
 import { MailBody } from './MailBody';
 import { Compose, type ComposeTarget } from './Compose';
 import { FolderCombobox } from './FolderCombobox';
@@ -534,28 +534,6 @@ export function MailboxView({
               {m.subject ?? '(no subject)'} {m.has_real_attachments && '📎'}
             </div>
             <div className="line-clamp-1 text-xs text-white/40">{m.preview}</div>
-            {m.tag_ids.length > 0 && (
-              <div className="mt-1 flex flex-wrap gap-1">
-                {m.tag_ids.map((tid) => {
-                  const tg = tagById.get(tid);
-                  if (!tg) return null;
-                  const color = tg.color ?? DEFAULT_TAG_COLOR;
-                  return (
-                    <span
-                      key={tid}
-                      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium"
-                      style={{ backgroundColor: `${color}33`, color }}
-                    >
-                      <span
-                        className="h-1.5 w-1.5 rounded-full"
-                        style={{ backgroundColor: color }}
-                      />
-                      {tg.name}
-                    </span>
-                  );
-                })}
-              </div>
-            )}
             </div>
           </li>
         ))
@@ -564,10 +542,33 @@ export function MailboxView({
     </div>
     );
 
+  // 開いているメールのタグ（詳細ヘッダに表示。MailDetail はタグを持たないため一覧側から解決）。
+  const openedTags = opened
+    ? ((mails.find((m) => m.id === opened.id) ?? searchResults.find((m) => m.id === opened.id))
+        ?.tag_ids ?? [])
+        .map((tid) => tagById.get(tid))
+        .filter((tg): tg is TagSummary => tg != null)
+    : [];
+
+  // 開いているメールを迷惑としてマーク（学習＋隔離）。一覧から外して詳細を閉じる。
+  const markSpamOpened = async () => {
+    if (!opened) return;
+    const id = opened.id;
+    updateLists((prev) => prev.filter((m) => m.id !== id));
+    setOpened(null);
+    try {
+      await mailMarkSpam([id]);
+    } catch {
+      /* noop */
+    }
+  };
+
   const bodyPane = opened ? (
     <MailBody
       detail={opened}
+      tags={openedTags}
       onReply={(mode) => setCompose({ mode, source: opened })}
+      onMarkSpam={markSpamOpened}
     />
   ) : (
     <div className="flex h-full items-center justify-center text-sm text-white/40">

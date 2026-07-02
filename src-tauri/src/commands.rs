@@ -334,10 +334,16 @@ pub fn tag_update(
         .map_err(|e| e.to_string())
 }
 
-/// タグを削除（メールとの紐づけも解除）。
+/// タグを削除（メール/連絡先との紐づけも解除。子は親へ繰り上げ）。
 #[tauri::command]
 pub fn tag_delete(store: State<Store>, id: i64) -> Result<(), String> {
     store.delete_tag(id).map_err(|e| e.to_string())
+}
+
+/// タグの親を設定（フォルダ整理。parent=None でルートへ）。
+#[tauri::command]
+pub fn tag_set_parent(store: State<Store>, id: i64, parent: Option<i64>) -> Result<(), String> {
+    store.set_tag_parent(id, parent).map_err(|e| e.to_string())
 }
 
 /// 複数メールにタグを付与。

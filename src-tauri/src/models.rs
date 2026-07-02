@@ -119,6 +119,8 @@ pub struct TagSummary {
     pub name: String,
     /// 表示色（CSS カラー文字列。未設定なら None）。
     pub color: Option<String>,
+    /// 親タグ（フォルダ整理用の階層。ルートは None）。
+    pub parent_id: Option<i32>,
     /// 付与されているメール件数。
     pub count: i32,
 }

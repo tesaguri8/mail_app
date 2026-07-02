@@ -12,6 +12,10 @@ export const tagUpdate = (id: number, name: string, color: string | null) =>
 
 export const tagDelete = (id: number) => invoke<void>('tag_delete', { id });
 
+/** タグの親を設定（フォルダ整理。parent=null でトップへ）。 */
+export const tagSetParent = (id: number, parent: number | null) =>
+  invoke<void>('tag_set_parent', { id, parent });
+
 export const mailAddTag = (ids: number[], tagId: number) =>
   invoke<void>('mail_add_tag', { ids, tagId });
 

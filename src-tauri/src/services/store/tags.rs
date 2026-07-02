@@ -7,7 +7,7 @@ impl Store {
     pub fn list_tags(&self) -> rusqlite::Result<Vec<TagSummary>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT t.id, t.name, t.color,
+            "SELECT t.id, t.name, t.color, t.parent_id,
                     (SELECT count(*) FROM email_tags et WHERE et.tag_id = t.id) AS cnt
              FROM tags t
              WHERE t.kind = 'tag'
@@ -18,10 +18,38 @@ impl Store {
                 id: r.get::<_, i64>(0)? as i32,
                 name: r.get(1)?,
                 color: r.get(2)?,
-                count: r.get::<_, i64>(3)? as i32,
+                parent_id: r.get::<_, Option<i64>>(3)?.map(|v| v as i32),
+                count: r.get::<_, i64>(4)? as i32,
             })
         })?;
         rows.collect()
+    }
+
+    /// タグの親を設定（None でルートへ）。循環（自分の子孫を親にする）は拒否。
+    pub fn set_tag_parent(&self, id: i64, parent: Option<i64>) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        if let Some(p) = parent {
+            if p == id {
+                return Ok(()); // 自分自身は親にできない（無視）
+            }
+            // p から祖先をたどり id に達したら循環なので拒否。
+            let mut cur = Some(p);
+            while let Some(c) = cur {
+                if c == id {
+                    return Ok(());
+                }
+                cur = conn
+                    .query_row("SELECT parent_id FROM tags WHERE id = ?1", params![c], |r| {
+                        r.get::<_, Option<i64>>(0)
+                    })
+                    .unwrap_or(None);
+            }
+        }
+        conn.execute(
+            "UPDATE tags SET parent_id = ?1 WHERE id = ?2",
+            params![parent, id],
+        )?;
+        Ok(())
     }
 
     /// タグを新規作成し、作成した行を返す。
@@ -36,6 +64,7 @@ impl Store {
             id: id as i32,
             name: name.to_string(),
             color: color.map(str::to_string),
+            parent_id: None,
             count: 0,
         })
     }
@@ -50,11 +79,22 @@ impl Store {
         Ok(())
     }
 
-    /// タグを削除（メールとの紐づけも外す）。
+    /// タグを削除（メール/連絡先との紐づけも外す）。子タグは削除タグの親へ繰り上げる。
     pub fn delete_tag(&self, id: i64) -> rusqlite::Result<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
+        let parent: Option<i64> = tx
+            .query_row("SELECT parent_id FROM tags WHERE id = ?1", params![id], |r| {
+                r.get(0)
+            })
+            .unwrap_or(None);
+        // 子タグを繰り上げ（フォルダ削除で孤立させない）。
+        tx.execute(
+            "UPDATE tags SET parent_id = ?1 WHERE parent_id = ?2",
+            params![parent, id],
+        )?;
         tx.execute("DELETE FROM email_tags WHERE tag_id = ?1", params![id])?;
+        tx.execute("DELETE FROM contact_tags WHERE tag_id = ?1", params![id])?;
         tx.execute("DELETE FROM tags WHERE id = ?1", params![id])?;
         tx.commit()
     }

@@ -56,6 +56,7 @@ pub fn run() {
             commands::tag_create,
             commands::tag_update,
             commands::tag_delete,
+            commands::tag_set_parent,
             commands::mail_add_tag,
             commands::mail_remove_tag,
             commands::contact_list,

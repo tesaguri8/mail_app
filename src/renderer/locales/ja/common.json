@@ -79,7 +79,9 @@
     "delete": "削除",
     "color": "色を変える",
     "count": "{{count}} 件",
-    "untitled": "新しいタグ"
+    "untitled": "新しいタグ",
+    "parent": "親（フォルダ）",
+    "parentNone": "（トップ）"
   },
   "contact": {
     "search": "名前・メール・組織で検索…",

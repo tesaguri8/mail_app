@@ -79,7 +79,9 @@
     "delete": "Delete",
     "color": "Change color",
     "count": "{{count}}",
-    "untitled": "New tag"
+    "untitled": "New tag",
+    "parent": "Parent (folder)",
+    "parentNone": "(Top)"
   },
   "contact": {
     "search": "Search name, email, org…",

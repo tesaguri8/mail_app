@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, Minus, Plus } from 'lucide-react';
+import { listen } from '@tauri-apps/api/event';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { ServerAccountSummary } from '@bindings/ServerAccountSummary';
 import type { SignatureSummary } from '@bindings/SignatureSummary';
+import type { SyncProgress } from '@bindings/SyncProgress';
 import {
   accountAdd,
   accountAutoconfig,
@@ -78,6 +80,8 @@ export function AccountSetup({
   const [storageBusy, setStorageBusy] = useState(false);
   const [storageMsg, setStorageMsg] = useState('');
   const [resyncing, setResyncing] = useState(false);
+  // 点検再取り込みの進捗（フォルダ別 現在/全体）。
+  const [progress, setProgress] = useState<SyncProgress | null>(null);
 
   // form state
   const [email, setEmail] = useState('');
@@ -175,7 +179,10 @@ export function AccountSetup({
   const resync = async (id: number) => {
     setStorageBusy(true);
     setResyncing(true);
+    setProgress(null);
     setStorageMsg(t('storage.resyncing'));
+    // Rust からの "sync:progress" を購読してフォルダ別の取得状況を表示する。
+    const unlisten = await listen<SyncProgress>('sync:progress', (e) => setProgress(e.payload));
     try {
       const r = await mailResync(id);
       setStorageMsg(
@@ -186,6 +193,8 @@ export function AccountSetup({
     } catch (e) {
       setStorageMsg(String(e));
     } finally {
+      unlisten();
+      setProgress(null);
       setStorageBusy(false);
       setResyncing(false);
     }
@@ -517,8 +526,34 @@ export function AccountSetup({
                       {storageMsg && <span className="text-xs text-white/70">{storageMsg}</span>}
                     </div>
                     {resyncing && (
-                      <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-white/10">
-                        <div className="h-full w-1/3 animate-pulse rounded-full bg-sky-400" />
+                      <div className="mt-2">
+                        {progress ? (
+                          <>
+                            <div className="mb-1 flex items-center justify-between text-[11px] text-white/60">
+                              <span>{t(`mailbox.f_${progress.folder}`, progress.folder)}</span>
+                              <span className="tabular-nums">
+                                {progress.current}/{progress.total}
+                              </span>
+                            </div>
+                            <div className="h-1 w-full overflow-hidden rounded-full bg-white/10">
+                              <div
+                                className="h-full rounded-full bg-sky-400 transition-[width]"
+                                style={{
+                                  width: `${
+                                    progress.total > 0
+                                      ? Math.min(100, Math.round((progress.current / progress.total) * 100))
+                                      : 0
+                                  }%`,
+                                }}
+                              />
+                            </div>
+                          </>
+                        ) : (
+                          // 接続/準備中は不定バー。
+                          <div className="h-1 w-full overflow-hidden rounded-full bg-white/10">
+                            <div className="h-full w-1/3 animate-pulse rounded-full bg-sky-400" />
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

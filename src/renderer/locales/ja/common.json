@@ -85,6 +85,7 @@
   },
   "contact": {
     "search": "名前・メール・組織で検索…",
+    "clearSearch": "検索をクリア",
     "new": "連絡先を追加",
     "import": "vCard(.vcf)を取り込む",
     "importing": "取り込み中…",

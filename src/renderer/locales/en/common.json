@@ -85,6 +85,7 @@
   },
   "contact": {
     "search": "Search name, email, org…",
+    "clearSearch": "Clear search",
     "new": "Add contact",
     "import": "Import vCard (.vcf)",
     "importing": "Importing…",

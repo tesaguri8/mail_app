@@ -17,6 +17,7 @@ import {
   StickyNote,
   Trash2,
   User,
+  X,
 } from 'lucide-react';
 import type { ContactSummary } from '@bindings/ContactSummary';
 import type { ContactInput } from '@bindings/ContactInput';
@@ -271,6 +272,16 @@ export function ContactsView() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
+            {query && (
+              <button
+                onClick={() => setQuery('')}
+                title={t('contact.clearSearch')}
+                aria-label={t('contact.clearSearch')}
+                className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-white/40 hover:bg-white/20 hover:text-white"
+              >
+                <X size={12} />
+              </button>
+            )}
           </div>
           <button
             onClick={() => setCleanup((v) => !v)}

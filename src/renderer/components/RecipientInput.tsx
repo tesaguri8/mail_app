@@ -1,8 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { Star, UserRound, Clock } from 'lucide-react';
 import type { RecipientSuggestion } from '@bindings/RecipientSuggestion';
 import { recipientSuggest } from '../services/recipients';
+import { RecipientSuggestList } from './RecipientSuggestList';
 
 /** 入力中の最後のトークン（最後の , / 改行以降）と、それ以前（確定済み）を分ける。 */
 function splitLastToken(value: string): { prefix: string; token: string } {
@@ -33,7 +32,6 @@ export function RecipientInput({
   autoFocus?: boolean;
   className?: string;
 }) {
-  const { t } = useTranslation();
   const listId = useId();
   const [suggestions, setSuggestions] = useState<RecipientSuggestion[]>([]);
   const [open, setOpen] = useState(false);
@@ -114,49 +112,14 @@ export function RecipientInput({
         aria-autocomplete="list"
       />
       {open && suggestions.length > 0 && (
-        <ul
-          id={listId}
-          role="listbox"
-          className="absolute z-10 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-white/15 bg-neutral-800 py-1 shadow-xl"
-        >
-          {suggestions.map((s, i) => (
-            <li
-              key={`${s.source}:${s.email}`}
-              role="option"
-              aria-selected={i === active}
-              // blur より先に選択を確定させるため mousedown で拾う。
-              onMouseDown={(e) => {
-                e.preventDefault();
-                pick(s);
-              }}
-              onMouseEnter={() => setActive(i)}
-              className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm ${
-                i === active ? 'bg-white/15' : ''
-              }`}
-            >
-              {s.is_favorite ? (
-                <Star size={13} className="shrink-0 fill-amber-300 text-amber-300" />
-              ) : s.source === 'contact' ? (
-                <UserRound size={13} className="shrink-0 text-white/45" />
-              ) : (
-                <Clock size={13} className="shrink-0 text-white/35" />
-              )}
-              <span className="min-w-0 flex-1 truncate">
-                {s.name ? (
-                  <>
-                    <span className="text-white/90">{s.name}</span>{' '}
-                    <span className="text-white/45">&lt;{s.email}&gt;</span>
-                  </>
-                ) : (
-                  <span className="text-white/90">{s.email}</span>
-                )}
-              </span>
-              <span className="shrink-0 text-[10px] text-white/35">
-                {s.source === 'contact' ? t('compose.suggestContacts') : t('compose.suggestHistory')}
-              </span>
-            </li>
-          ))}
-        </ul>
+        <RecipientSuggestList
+          items={suggestions}
+          active={active}
+          onPick={pick}
+          onHover={setActive}
+          listId={listId}
+          className="absolute left-0 top-full mt-1 w-full"
+        />
       )}
     </div>
   );

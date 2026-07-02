@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Ban,
@@ -25,6 +25,7 @@ import type { MailSummary } from '@bindings/MailSummary';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { TagSummary } from '@bindings/TagSummary';
 import type { SyncProgress } from '@bindings/SyncProgress';
+import type { RecipientSuggestion } from '@bindings/RecipientSuggestion';
 import {
   mailDelete,
   mailGet,
@@ -35,6 +36,8 @@ import {
   mailSetStarred,
   mailSync,
 } from '../services/mail';
+import { recipientSuggest } from '../services/recipients';
+import { RecipientSuggestList } from './RecipientSuggestList';
 import { mailAddTag, mailRemoveTag, tagCreate, tagList } from '../services/tags';
 import { pickTagColor, DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import { MailBody } from './MailBody';
@@ -112,6 +115,12 @@ export function MailboxView({
   const [searchResults, setSearchResults] = useState<MailSummary[]>([]);
   const [searching, setSearching] = useState(false);
   const searchMode = query.trim().length > 0;
+  // 検索窓の入力補助: 住所録＋履歴の候補ドロップダウン。
+  const [sug, setSug] = useState<RecipientSuggestion[]>([]);
+  const [sugOpen, setSugOpen] = useState(false);
+  const [sugActive, setSugActive] = useState(0);
+  const sugPicked = useRef(false);
+  const searchListId = useId();
   const toggleFilter = (key: string) =>
     setFilters((prev) => {
       const next = new Set(prev);
@@ -183,6 +192,70 @@ export function MailboxView({
     }, 250);
     return () => clearTimeout(h);
   }, [query, selected, folder]);
+
+  // 検索窓の入力補助: 入力に一致する住所録＋履歴の候補を出す（選ぶとアドレスで検索）。
+  useEffect(() => {
+    const q = query.trim();
+    if (sugPicked.current) {
+      sugPicked.current = false;
+      return;
+    }
+    if (q.length < 1) {
+      setSug([]);
+      setSugOpen(false);
+      return;
+    }
+    const h = setTimeout(() => {
+      recipientSuggest(q, 6)
+        .then((r) => {
+          setSug(r);
+          setSugActive(0);
+          setSugOpen(r.length > 0);
+        })
+        .catch(() => {
+          setSug([]);
+          setSugOpen(false);
+        });
+    }, 200);
+    return () => clearTimeout(h);
+  }, [query]);
+
+  // 候補を選ぶ: そのメールアドレスで検索する（再クエリは抑止してドロップダウンを閉じる）。
+  const pickSuggest = (s: RecipientSuggestion) => {
+    sugPicked.current = true;
+    setQuery(s.email);
+    setSug([]);
+    setSugOpen(false);
+  };
+
+  // 検索窓のキー操作: 候補表示中は ↑↓ 移動 / Enter 確定 / Esc 閉じる、
+  // 候補が無ければ Esc で検索をクリア。
+  const onSearchKeyDown = (e: React.KeyboardEvent) => {
+    if (sugOpen && sug.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSugActive((i) => (i + 1) % sug.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSugActive((i) => (i - 1 + sug.length) % sug.length);
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        pickSuggest(sug[sugActive]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSugOpen(false);
+        return;
+      }
+    } else if (e.key === 'Escape') {
+      setQuery('');
+    }
+  };
 
   // 開いたメッセージをリスト内でフォーカス（スクロール）
   useEffect(() => {
@@ -515,7 +588,8 @@ export function MailboxView({
         </select>
         <FolderCombobox value={folder} onChange={setFolder} />
 
-        {/* 全文検索: 件名・差出人・本文を対象。入力はデバウンスして検索。 */}
+        {/* 全文検索: 件名・差出人・本文を対象。入力はデバウンスして検索。
+            入力補助として住所録＋履歴の候補を出し、選ぶとそのアドレスで検索する。 */}
         <div className="relative flex items-center">
           <Search
             size={13}
@@ -527,9 +601,15 @@ export function MailboxView({
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === 'Escape' && setQuery('')}
+            onKeyDown={onSearchKeyDown}
+            onFocus={() => sug.length > 0 && query.trim().length >= 1 && setSugOpen(true)}
+            onBlur={() => setTimeout(() => setSugOpen(false), 120)}
             placeholder={t('search.placeholder')}
             aria-label={t('search.placeholder')}
+            role="combobox"
+            aria-expanded={sugOpen}
+            aria-controls={searchListId}
+            aria-autocomplete="list"
             className="w-44 rounded-md bg-white/10 py-1 pl-7 pr-7 text-xs outline-none placeholder:text-white/35 focus:w-56 focus:ring-1 focus:ring-sky-300/40"
           />
           {query && (
@@ -541,6 +621,16 @@ export function MailboxView({
             >
               <X size={12} />
             </button>
+          )}
+          {sugOpen && sug.length > 0 && (
+            <RecipientSuggestList
+              items={sug}
+              active={sugActive}
+              onPick={pickSuggest}
+              onHover={setSugActive}
+              listId={searchListId}
+              className="absolute left-0 top-full mt-1 min-w-[16rem]"
+            />
           )}
         </div>
 

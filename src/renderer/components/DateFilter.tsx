@@ -103,10 +103,10 @@ export function DateFilter({
         });
 
   const applyPreset = (p: Preset) => {
+    // クリックで即適用するが、続けて微調整できるようポップオーバーは閉じない。
     setStart(p.start);
     setEnd(p.end);
     onChange({ mode, start: p.start, end: p.end });
-    setOpen(false);
   };
 
   const apply = () => {

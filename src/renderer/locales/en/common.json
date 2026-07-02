@@ -108,6 +108,7 @@
     "parent": "Parent (folder)",
     "parentNone": "(Top)",
     "removeFilter": "Remove this tag filter",
+    "clearFilter": "Clear all",
     "allSelected": "All tags selected"
   },
   "contact": {
@@ -307,6 +308,7 @@
     "title": "Inbox",
     "sync": "Sync",
     "syncing": "Syncing…",
+    "resize": "Drag to resize",
     "empty": "No mail yet. Press \"Sync\".",
     "account": "Account",
     "result": "Fetched {{fetched}} / New {{stored}}",

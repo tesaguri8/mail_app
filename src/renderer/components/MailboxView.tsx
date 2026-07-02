@@ -41,6 +41,7 @@ import { MAIL_SYNCED_EVENT } from '../hooks/useAutoSync';
 import { RecipientSuggestList } from './RecipientSuggestList';
 import { mailAddTag, mailRemoveTag, tagCreate, tagList } from '../services/tags';
 import { pickTagColor, DEFAULT_TAG_COLOR } from '../utils/tagColors';
+import { parseAddress } from '../utils/address';
 import { MailBody } from './MailBody';
 import { Compose, type ComposeTarget } from './Compose';
 import { FolderCombobox } from './FolderCombobox';
@@ -51,6 +52,11 @@ import { TagPicker } from './TagPicker';
 
 const iconBtn =
   'flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80 disabled:opacity-40';
+
+// サイドバー（メール一覧）の幅。ドラッグで可変。ここを変えれば最小幅/初期幅を一括変更できる。
+export const MIN_SIDEBAR_WIDTH = 340;
+export const MAX_SIDEBAR_WIDTH = 640;
+export const DEFAULT_SIDEBAR_WIDTH = 340;
 
 /** リスト絞り込みのトグル。known/flag はバックエンド実装まで非適用（並びのみ）。 */
 const FILTERS: { key: string; Icon: LucideIcon }[] = [
@@ -99,6 +105,34 @@ export function MailboxView({
   const [progress, setProgress] = useState<SyncProgress | null>(null);
   const [status, setStatus] = useState('');
   const [layout, setLayout] = useState<'side' | 'top'>('side');
+  // サイドバー幅（ドラッグで可変・localStorage 永続）。最小/最大は上部の定数で一括変更可。
+  const [sidebarW, setSidebarW] = useState(() => {
+    const saved = Number(localStorage.getItem('rondine.mailSidebarW'));
+    return Number.isFinite(saved) && saved >= MIN_SIDEBAR_WIDTH ? saved : DEFAULT_SIDEBAR_WIDTH;
+  });
+  const splitRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    localStorage.setItem('rondine.mailSidebarW', String(sidebarW));
+  }, [sidebarW]);
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const onMove = (ev: MouseEvent) => {
+      const rect = splitRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const w = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, ev.clientX - rect.left));
+      setSidebarW(w);
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
   // メール作成モーダル（新規／返信／転送）。null なら閉じている。
   const [compose, setCompose] = useState<ComposeTarget | null>(null);
   // 表示するフォルダ/グループ（受信箱以外は後続実装）
@@ -545,9 +579,9 @@ export function MailboxView({
         <DateFilter value={dateFilter} onChange={setDateFilter} />
         <TagFilter tags={tags} value={tagFilter} onChange={setTagFilter} />
       </div>
-      {/* 選択中のタグ: 次の行にチップで並べ、× で個別に解除できる */}
+      {/* 選択中のタグ: 次の行にチップで並べ、× で個別に解除。右端に全解除ボタン */}
       {tagFilter.size > 0 && (
-        <div className="flex shrink-0 flex-wrap gap-1 border-b border-white/10 px-2 py-1.5">
+        <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-white/10 px-2 py-1.5">
           {tags
             .filter((tg) => tagFilter.has(tg.id))
             .map((tg) => {
@@ -575,6 +609,12 @@ export function MailboxView({
                 </span>
               );
             })}
+          <button
+            onClick={() => setTagFilter(new Set())}
+            className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px] text-white/50 hover:bg-white/10 hover:text-white/80"
+          >
+            {t('tag.clearFilter')}
+          </button>
         </div>
       )}
       {selecting && (
@@ -622,22 +662,38 @@ export function MailboxView({
               }`}
             />
             <div className="min-w-0 flex-1">
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="truncate text-sm font-medium">
-                {!m.is_read && <span className="mr-1 text-sky-300">●</span>}
-                {outgoing
-                  ? `${t('mailbox.to')}: ${m.to_addresses ?? '—'}`
-                  : (m.from_address ?? '(no sender)')}
-              </span>
-              <span className="flex shrink-0 items-center gap-1 text-[10px] text-white/40">
-                {m.is_starred && <Star size={12} className="fill-amber-300 text-amber-300" />}
-                {formatDate(m.date)}
-              </span>
-            </div>
-            <div className="truncate text-sm text-white/80">
-              {m.subject ?? '(no subject)'} {m.has_real_attachments && '📎'}
-            </div>
-            <div className="line-clamp-1 text-xs text-white/40">{m.preview}</div>
+            {(() => {
+              // 送信済/下書きは相手（To）、それ以外は差出人（From）を主に見せる。
+              const addr = parseAddress(outgoing ? m.to_addresses : m.from_address);
+              const name = addr.name || addr.email || (outgoing ? '—' : '(no sender)');
+              const showEmail = addr.email && addr.email !== name;
+              return (
+                <>
+                  {/* 名称＋送信日時 */}
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="truncate text-sm font-medium">
+                      {!m.is_read && <span className="mr-1 text-sky-300">●</span>}
+                      {outgoing && <span className="text-white/40">{t('mailbox.to')}: </span>}
+                      {name}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1 text-[10px] text-white/40">
+                      {m.is_starred && <Star size={12} className="fill-amber-300 text-amber-300" />}
+                      {formatDate(m.date)}
+                    </span>
+                  </div>
+                  {/* メールアドレス（表示名がある時のみ。無ければ上段がアドレス） */}
+                  {showEmail && (
+                    <div className="truncate text-xs text-white/40">{addr.email}</div>
+                  )}
+                  {/* 件名 */}
+                  <div className="truncate text-sm text-white/80">
+                    {m.subject ?? '(no subject)'} {m.has_real_attachments && '📎'}
+                  </div>
+                  {/* 本文（詰めて2行折り返し） */}
+                  <div className="line-clamp-2 text-xs leading-snug text-white/40">{m.preview}</div>
+                </>
+              );
+            })()}
             </div>
           </li>
         ))
@@ -779,9 +835,19 @@ export function MailboxView({
       </div>
 
       {layout === 'side' ? (
-        <div className="grid min-h-0 flex-1 grid-cols-[340px_1fr] overflow-hidden">
+        <div
+          ref={splitRef}
+          className="grid min-h-0 flex-1 overflow-hidden"
+          style={{ gridTemplateColumns: `${sidebarW}px 6px 1fr` }}
+        >
           {/* overflow-hidden は付けない: 絞り込みのポップオーバーをコンテンツ側へ重ねて表示するため */}
           <div className="min-h-0 border-r border-white/10">{listPane}</div>
+          {/* ドラッグでサイドバー幅を変える（幅は上部の MIN/MAX 定数でクランプ） */}
+          <div
+            onMouseDown={startResize}
+            title={t('mailbox.resize')}
+            className="cursor-col-resize bg-transparent transition-colors hover:bg-sky-400/40"
+          />
           <div className="min-h-0 overflow-hidden">{bodyPane}</div>
         </div>
       ) : (

@@ -20,9 +20,33 @@ import {
 } from 'lucide-react';
 import type { ContactSummary } from '@bindings/ContactSummary';
 import type { ContactInput } from '@bindings/ContactInput';
+import type { ContactValueInput } from '@bindings/ContactValueInput';
+import type { ContactAddressInput } from '@bindings/ContactAddressInput';
 import type { ImportReport } from '@bindings/ImportReport';
 import { contactDelete, contactImport, contactList, contactUpsert } from '../services/contacts';
 import { ContactDuplicates } from './ContactDuplicates';
+import { AddressRows, ValueRows, addressToFlat } from './ContactValueEditor';
+
+/** ContactSummary の複数値を入力型（配列）に変換。 */
+const toValueInputs = (vs: { label: string | null; value: string }[]): ContactValueInput[] =>
+  vs.map((v) => ({ label: v.label, value: v.value }));
+const toAddressInputs = (as: ContactAddressInput[]): ContactAddressInput[] =>
+  as.map((a) => ({
+    label: a.label,
+    postal: a.postal,
+    region: a.region,
+    city: a.city,
+    street: a.street,
+    extended: a.extended,
+    country: a.country,
+  }));
+/** 保存前に flat 主値（email/phone/address）を配列先頭から導出する。 */
+const withPrimaries = (d: ContactInput): ContactInput => ({
+  ...d,
+  email: d.emails[0]?.value ?? null,
+  phone: d.phones[0]?.value ?? null,
+  address: d.addresses[0] ? addressToFlat(d.addresses[0]) || null : null,
+});
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -34,10 +58,15 @@ const emptyDraft = (): ContactInput => ({
   given_name: null,
   phonetic_family: null,
   phonetic_given: null,
+  emails: [],
+  phones: [],
+  addresses: [],
   name_kana: null,
   email: null,
   phone: null,
   organization: null,
+  org_title: null,
+  org_department: null,
   address: null,
   birthday: null,
   note: null,
@@ -53,10 +82,15 @@ const toDraft = (c: ContactSummary): ContactInput => ({
   given_name: c.given_name,
   phonetic_family: c.phonetic_family,
   phonetic_given: c.phonetic_given,
+  emails: toValueInputs(c.emails),
+  phones: toValueInputs(c.phones),
+  addresses: toAddressInputs(c.addresses),
   name_kana: c.name_kana,
   email: c.email,
   phone: c.phone,
   organization: c.organization,
+  org_title: c.org_title,
+  org_department: c.org_department,
   address: c.address,
   birthday: c.birthday,
   note: c.note,
@@ -128,7 +162,7 @@ export function ContactsView() {
   const save = async () => {
     if (!draft || draft.display_name.trim() === '') return;
     try {
-      const result = await contactUpsert(draft);
+      const result = await contactUpsert(withPrimaries(draft));
       setSaved(true);
       setSelectedId(result.id);
       setDraft(toDraft(result));
@@ -374,21 +408,19 @@ export function ContactsView() {
                   />
                 </div>
               </Field>
-              <Field icon={<Mail size={15} />} label={t('contact.email')}>
-                <input
-                  type="email"
-                  className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                  value={draft.email ?? ''}
-                  onChange={(e) => patch({ email: nullify(e.target.value) })}
-                />
-              </Field>
-              <Field icon={<Phone size={15} />} label={t('contact.phone')}>
-                <input
-                  className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                  value={draft.phone ?? ''}
-                  onChange={(e) => patch({ phone: nullify(e.target.value) })}
-                />
-              </Field>
+              <ValueRows
+                icon={<Mail size={14} />}
+                label={t('contact.email')}
+                inputType="email"
+                values={draft.emails}
+                onChange={(emails) => patch({ emails })}
+              />
+              <ValueRows
+                icon={<Phone size={14} />}
+                label={t('contact.phone')}
+                values={draft.phones}
+                onChange={(phones) => patch({ phones })}
+              />
               <Field icon={<Building2 size={15} />} label={t('contact.organization')}>
                 <input
                   className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
@@ -396,13 +428,28 @@ export function ContactsView() {
                   onChange={(e) => patch({ organization: nullify(e.target.value) })}
                 />
               </Field>
-              <Field icon={<MapPin size={15} />} label={t('contact.address')}>
-                <input
-                  className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                  value={draft.address ?? ''}
-                  onChange={(e) => patch({ address: nullify(e.target.value) })}
-                />
-              </Field>
+              <div className="flex gap-2">
+                <Field icon={<Briefcase size={15} />} label={t('contact.orgTitle')}>
+                  <input
+                    className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
+                    value={draft.org_title ?? ''}
+                    onChange={(e) => patch({ org_title: nullify(e.target.value) })}
+                  />
+                </Field>
+                <Field icon={<Building2 size={15} />} label={t('contact.orgDepartment')}>
+                  <input
+                    className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
+                    value={draft.org_department ?? ''}
+                    onChange={(e) => patch({ org_department: nullify(e.target.value) })}
+                  />
+                </Field>
+              </div>
+              <AddressRows
+                icon={<MapPin size={14} />}
+                label={t('contact.address')}
+                addresses={draft.addresses}
+                onChange={(addresses) => patch({ addresses })}
+              />
               <Field icon={<Cake size={15} />} label={t('contact.birthday')}>
                 <input
                   type="date"

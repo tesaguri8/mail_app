@@ -1,7 +1,7 @@
 use super::Store;
 use crate::models::{
-    ContactAddress, ContactGroupSummary, ContactInput, ContactSummary, ContactValue,
-    DuplicateGroup, ImportReport,
+    ContactAddress, ContactAddressInput, ContactGroupSummary, ContactInput, ContactSummary,
+    ContactValue, ContactValueInput, DuplicateGroup, ImportReport,
 };
 use crate::services::vcard::{ImportedContact, ParseResult};
 use rusqlite::{params, Connection, OptionalExtension, Row};
@@ -83,17 +83,37 @@ impl Store {
     /// 連絡先を作成または更新し、確定後の行を返す。`input.id` が None なら新規。
     pub fn upsert_contact(&self, input: &ContactInput) -> rusqlite::Result<ContactSummary> {
         let conn = self.conn.lock().unwrap();
+        // flat 主値は「配列があればその先頭、無ければ flat 入力」から導出（一覧・重複判定用）。
+        let first_value = |vs: &[ContactValueInput]| {
+            vs.iter()
+                .map(|v| v.value.trim().to_string())
+                .find(|v| !v.is_empty())
+        };
+        let email_flat = first_value(&input.emails).or_else(|| input.email.clone());
+        let phone_flat = first_value(&input.phones).or_else(|| input.phone.clone());
+        let address_flat = input
+            .addresses
+            .iter()
+            .find_map(|a| {
+                let s = address_input_string(a);
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s)
+                }
+            })
+            .or_else(|| input.address.clone());
         let id = match input.id {
             Some(id) => {
                 conn.execute(
                     "UPDATE contacts SET \
                          display_name = ?1, family_name = ?2, given_name = ?3, \
                          phonetic_family = ?4, phonetic_given = ?5, name_kana = ?6, \
-                         email = ?7, phone = ?8, organization = ?9, address = ?10, \
-                         birthday = ?11, note = ?12, \
-                         is_favorite = ?13, is_business = ?14, allow_remote_images = ?15, \
+                         email = ?7, phone = ?8, organization = ?9, org_title = ?10, \
+                         org_department = ?11, address = ?12, birthday = ?13, note = ?14, \
+                         is_favorite = ?15, is_business = ?16, allow_remote_images = ?17, \
                          updated_at = CURRENT_TIMESTAMP \
-                     WHERE id = ?16",
+                     WHERE id = ?18",
                     params![
                         input.display_name,
                         input.family_name,
@@ -101,10 +121,12 @@ impl Store {
                         input.phonetic_family,
                         input.phonetic_given,
                         input.name_kana,
-                        input.email,
-                        input.phone,
+                        email_flat,
+                        phone_flat,
                         input.organization,
-                        input.address,
+                        input.org_title,
+                        input.org_department,
+                        address_flat,
                         input.birthday,
                         input.note,
                         input.is_favorite as i64,
@@ -119,9 +141,10 @@ impl Store {
                 conn.execute(
                     "INSERT INTO contacts \
                          (display_name, family_name, given_name, phonetic_family, phonetic_given, \
-                          name_kana, email, phone, organization, address, \
-                          birthday, note, is_favorite, is_business, allow_remote_images) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                          name_kana, email, phone, organization, org_title, org_department, \
+                          address, birthday, note, is_favorite, is_business, allow_remote_images) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
+                          ?16, ?17)",
                     params![
                         input.display_name,
                         input.family_name,
@@ -129,10 +152,12 @@ impl Store {
                         input.phonetic_family,
                         input.phonetic_given,
                         input.name_kana,
-                        input.email,
-                        input.phone,
+                        email_flat,
+                        phone_flat,
                         input.organization,
-                        input.address,
+                        input.org_title,
+                        input.org_department,
+                        address_flat,
                         input.birthday,
                         input.note,
                         input.is_favorite as i64,
@@ -143,10 +168,22 @@ impl Store {
                 conn.last_insert_rowid()
             }
         };
-        // 主(primary)値を子テーブルへ反映（追加値＝非primary は温存）。
-        set_primary_value(&conn, "contact_emails", id, input.email.as_deref())?;
-        set_primary_value(&conn, "contact_phones", id, input.phone.as_deref())?;
-        set_primary_address(&conn, id, input.address.as_deref())?;
+        // 複数値が来ていれば子テーブルを作り直し、無ければ主値のみ反映（追加値は温存＝後方互換）。
+        if input.emails.is_empty() {
+            set_primary_value(&conn, "contact_emails", id, input.email.as_deref())?;
+        } else {
+            rebuild_input_values(&conn, "contact_emails", id, &input.emails)?;
+        }
+        if input.phones.is_empty() {
+            set_primary_value(&conn, "contact_phones", id, input.phone.as_deref())?;
+        } else {
+            rebuild_input_values(&conn, "contact_phones", id, &input.phones)?;
+        }
+        if input.addresses.is_empty() {
+            set_primary_address(&conn, id, input.address.as_deref())?;
+        } else {
+            rebuild_input_addresses(&conn, id, &input.addresses)?;
+        }
         drop(conn);
         self.get_contact(id)
     }
@@ -442,6 +479,98 @@ fn rebuild_pairs(
     Ok(())
 }
 
+/// 入力のラベル付き値（空値は除く）で子テーブルを作り直す（先頭を primary）。
+fn rebuild_input_values(
+    conn: &Connection,
+    table: &str,
+    cid: i64,
+    values: &[ContactValueInput],
+) -> rusqlite::Result<()> {
+    conn.execute(
+        &format!("DELETE FROM {table} WHERE contact_id = ?1"),
+        params![cid],
+    )?;
+    for (pos, v) in values
+        .iter()
+        .filter(|v| !v.value.trim().is_empty())
+        .enumerate()
+    {
+        conn.execute(
+            &format!(
+                "INSERT INTO {table} (contact_id, label, value, is_primary, position) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)"
+            ),
+            params![cid, v.label, v.value.trim(), (pos == 0) as i64, pos as i64],
+        )?;
+    }
+    Ok(())
+}
+
+/// 住所入力が全項目空か。
+fn address_input_empty(a: &ContactAddressInput) -> bool {
+    [
+        &a.postal,
+        &a.region,
+        &a.city,
+        &a.street,
+        &a.extended,
+        &a.country,
+    ]
+    .iter()
+    .all(|v| v.as_deref().map(str::trim).unwrap_or("").is_empty())
+}
+
+/// 入力の構造化住所（全項目空は除く）で contact_addresses を作り直す。
+fn rebuild_input_addresses(
+    conn: &Connection,
+    cid: i64,
+    addrs: &[ContactAddressInput],
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM contact_addresses WHERE contact_id = ?1",
+        params![cid],
+    )?;
+    for (pos, a) in addrs.iter().filter(|a| !address_input_empty(a)).enumerate() {
+        conn.execute(
+            "INSERT INTO contact_addresses \
+                 (contact_id, label, postal, region, city, street, extended, country, \
+                  is_primary, position) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                cid,
+                a.label,
+                a.postal,
+                a.region,
+                a.city,
+                a.street,
+                a.extended,
+                a.country,
+                (pos == 0) as i64,
+                pos as i64,
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+/// 入力住所を1行の文字列へ（flat 主値の導出用）。
+fn address_input_string(a: &ContactAddressInput) -> String {
+    [
+        a.postal.as_deref(),
+        a.region.as_deref(),
+        a.city.as_deref(),
+        a.street.as_deref(),
+        a.extended.as_deref(),
+        a.country.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .filter(|s| !s.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
 /// 構造化住所を1行の文字列へ（flat 保存・一覧用）。
 fn address_string(a: &ContactAddress) -> String {
     [
@@ -689,6 +818,45 @@ mod tests {
             after.emails.iter().any(|e| e.value == "b@x.jp"),
             "追加メールは残る"
         );
+    }
+
+    #[test]
+    fn upsert_with_arrays_writes_all_child_values() {
+        let s = store();
+        let input = ContactInput {
+            display_name: "配列 太郎".into(),
+            emails: vec![
+                ContactValueInput {
+                    label: Some("自宅".into()),
+                    value: "home@x.jp".into(),
+                },
+                ContactValueInput {
+                    label: Some("職場".into()),
+                    value: "work@x.jp".into(),
+                },
+            ],
+            phones: vec![ContactValueInput {
+                label: Some("携帯".into()),
+                value: "090-1".into(),
+            }],
+            addresses: vec![ContactAddressInput {
+                label: Some("自宅".into()),
+                region: Some("沖縄県".into()),
+                city: Some("那覇市".into()),
+                ..Default::default()
+            }],
+            org_title: Some("部長".into()),
+            ..Default::default()
+        };
+        let saved = s.upsert_contact(&input).unwrap();
+        let c = s.get_contact(saved.id as i64).unwrap();
+        assert_eq!(c.emails.len(), 2);
+        assert_eq!(c.emails[0].label.as_deref(), Some("自宅"));
+        assert_eq!(c.email.as_deref(), Some("home@x.jp")); // flat 主値も導出…はフロント。ここは flat 未指定
+        assert_eq!(c.phones.len(), 1);
+        assert_eq!(c.addresses.len(), 1);
+        assert_eq!(c.addresses[0].region.as_deref(), Some("沖縄県"));
+        assert_eq!(c.org_title.as_deref(), Some("部長"));
     }
 
     #[test]

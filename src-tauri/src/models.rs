@@ -194,13 +194,44 @@ pub struct ContactSummary {
     pub addresses: Vec<ContactAddress>,
 }
 
+/// ラベル付き値の入力（メール・電話）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ContactValueInput {
+    pub label: Option<String>,
+    pub value: String,
+}
+
+/// 構造化住所の入力。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ContactAddressInput {
+    pub label: Option<String>,
+    pub postal: Option<String>,
+    pub region: Option<String>,
+    pub city: Option<String>,
+    pub street: Option<String>,
+    pub extended: Option<String>,
+    pub country: Option<String>,
+}
+
 /// 連絡先の作成・更新入力（フロントから受け取る）。`id` が None なら新規作成。
-/// 姓/名・よみ姓/よみ名は任意（省略時はフロント旧実装との後方互換）。
+/// 姓/名・よみ姓/よみ名・複数値配列は任意（省略時はフロント旧実装との後方互換）。
+/// emails/phones/addresses が非空ならそれらで子テーブルを作り直し、空なら flat の主値のみ反映。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]
 pub struct ContactInput {
     pub id: Option<i32>,
     pub display_name: String,
+    /// ラベル付き複数メール（非空ならこれで確定）。
+    #[serde(default)]
+    pub emails: Vec<ContactValueInput>,
+    /// ラベル付き複数電話。
+    #[serde(default)]
+    pub phones: Vec<ContactValueInput>,
+    /// ラベル付き複数住所（構造化）。
+    #[serde(default)]
+    pub addresses: Vec<ContactAddressInput>,
     /// 姓（構造化名）。
     #[serde(default)]
     pub family_name: Option<String>,
@@ -217,6 +248,12 @@ pub struct ContactInput {
     pub email: Option<String>,
     pub phone: Option<String>,
     pub organization: Option<String>,
+    /// 役職。
+    #[serde(default)]
+    pub org_title: Option<String>,
+    /// 部署。
+    #[serde(default)]
+    pub org_department: Option<String>,
     pub address: Option<String>,
     pub birthday: Option<String>,
     pub note: Option<String>,

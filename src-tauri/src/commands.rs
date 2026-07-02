@@ -1,9 +1,9 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult,
     ContactGroupSummary, ContactInput, ContactMatch, ContactSummary, DataLocation, DbInfo,
-    DuplicateGroup, ImportReport, MailDetail, MailSummary, RecipientSuggestion, RetentionReport,
-    SendInput, ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict, StorageInfo,
-    SyncProgress, SyncResult, TagSummary,
+    DuplicateGroup, ImportReport, MailDetail, MailSummary, OrganizationSummary, RecipientSuggestion,
+    RetentionReport, SendInput, ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict,
+    StorageInfo, SyncProgress, SyncResult, TagSummary,
 };
 use crate::services::autoconfig;
 use crate::services::datadir;
@@ -698,6 +698,17 @@ pub fn contact_delete(store: State<Store>, id: i64) -> Result<(), String> {
 #[tauri::command]
 pub fn contact_group_list(store: State<Store>) -> Result<Vec<ContactGroupSummary>, String> {
     store.list_contact_groups().map_err(|e| e.to_string())
+}
+
+/// 組織一覧（所属件数つき）。`query` があれば名前で部分一致。組織コンボボックス用。
+#[tauri::command]
+pub fn organization_list(
+    store: State<Store>,
+    query: Option<String>,
+) -> Result<Vec<OrganizationSummary>, String> {
+    store
+        .list_organizations(query.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 /// 連絡先ファイルを取り込む。拡張子で判定し vCard(.vcf) と Google CSV(.csv) に対応。

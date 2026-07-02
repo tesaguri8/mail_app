@@ -41,6 +41,11 @@ phonetic_family: string | null,
  */
 phonetic_given: string | null, name_kana: string | null, email: string | null, phone: string | null, organization: string | null, 
 /**
+ * 紐づく組織 ID。指定時はその組織へ、未指定で organization 文字列があれば
+ * 同名の組織を find-or-create して紐づける（コンボボックスの「選択 or 新規登録」）。
+ */
+org_id: number | null, 
+/**
  * 役職。
  */
 org_title: string | null, 

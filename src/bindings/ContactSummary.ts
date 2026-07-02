@@ -31,7 +31,15 @@ name_kana: string | null,
 /**
  * 主メールアドレス（primary の写し）。
  */
-email: string | null, phone: string | null, organization: string | null, 
+email: string | null, phone: string | null, 
+/**
+ * 組織名（org_id があればその組織名と同期した写し。表示・検索・重複判定に使う）。
+ */
+organization: string | null, 
+/**
+ * 紐づく組織レコードの ID（照合はこの ID。無ければ未所属）。
+ */
+org_id: number | null, 
 /**
  * 役職。
  */

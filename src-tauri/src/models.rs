@@ -206,7 +206,10 @@ pub struct ContactSummary {
     /// 主メールアドレス（primary の写し）。
     pub email: Option<String>,
     pub phone: Option<String>,
+    /// 組織名（org_id があればその組織名と同期した写し。表示・検索・重複判定に使う）。
     pub organization: Option<String>,
+    /// 紐づく組織レコードの ID（照合はこの ID。無ければ未所属）。
+    pub org_id: Option<i32>,
     /// 役職。
     pub org_title: Option<String>,
     /// 部署。
@@ -292,6 +295,10 @@ pub struct ContactInput {
     pub email: Option<String>,
     pub phone: Option<String>,
     pub organization: Option<String>,
+    /// 紐づく組織 ID。指定時はその組織へ、未指定で organization 文字列があれば
+    /// 同名の組織を find-or-create して紐づける（コンボボックスの「選択 or 新規登録」）。
+    #[serde(default)]
+    pub org_id: Option<i32>,
     /// 役職。
     #[serde(default)]
     pub org_title: Option<String>,
@@ -351,6 +358,18 @@ pub struct ContactMatch {
     pub matched_phones: Vec<String>,
     /// 表示名が一致したか。
     pub matched_name: bool,
+}
+
+/// 会社・組織（所属連絡先の件数つき）。コンボボックスの候補・組織一覧に使う。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct OrganizationSummary {
+    pub id: i32,
+    pub name: String,
+    pub name_kana: Option<String>,
+    pub note: Option<String>,
+    /// この組織に所属する連絡先の件数。
+    pub member_count: i32,
 }
 
 /// 連絡先グループ（所属件数つき。編集 UI は後続）。

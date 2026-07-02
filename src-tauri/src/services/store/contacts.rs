@@ -2,6 +2,7 @@ use super::Store;
 use crate::models::{
     ContactAddress, ContactAddressInput, ContactGroupSummary, ContactInput, ContactMatch,
     ContactSummary, ContactValue, ContactValueInput, DuplicateGroup, ImportReport,
+    OrganizationSummary,
 };
 use crate::services::dedupe::{digits, fold, fold_remove_ws, mobile_number};
 use crate::services::vcard::{ImportedContact, ParseResult};
@@ -29,6 +30,7 @@ fn row_to_contact(r: &Row) -> rusqlite::Result<ContactSummary> {
         is_favorite: r.get::<_, i64>(15)? != 0,
         is_business: r.get::<_, i64>(16)? != 0,
         allow_remote_images: r.get::<_, i64>(17)? != 0,
+        org_id: r.get::<_, Option<i64>>(18)?.map(|v| v as i32),
         emails: Vec::new(),
         phones: Vec::new(),
         addresses: Vec::new(),
@@ -38,7 +40,7 @@ fn row_to_contact(r: &Row) -> rusqlite::Result<ContactSummary> {
 
 const CONTACT_COLS: &str = "id, display_name, family_name, given_name, phonetic_family, \
      phonetic_given, name_kana, email, phone, organization, org_title, org_department, \
-     address, birthday, note, is_favorite, is_business, allow_remote_images";
+     address, birthday, note, is_favorite, is_business, allow_remote_images, org_id";
 
 impl Store {
     /// 連絡先一覧。`query` があれば名前/よみ/メール/組織を部分一致で絞り込む。
@@ -131,6 +133,31 @@ impl Store {
                 }
             })
             .or_else(|| input.address.clone());
+        // 組織の紐づけ: org_id 指定があればその組織へ、無ければ organization 文字列から
+        // 同名の組織を find-or-create（コンボボックスの「選択 or 新規登録」）。
+        // organization 列は紐づく組織名に同期し、検索・重複判定の一貫性を保つ。
+        let (org_id, org_name): (Option<i64>, Option<String>) = if let Some(oid) = input.org_id {
+            let name: Option<String> = conn
+                .query_row(
+                    "SELECT name FROM organizations WHERE id = ?1",
+                    params![oid],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            match name {
+                Some(n) => (Some(oid as i64), Some(n)),
+                None => (None, None), // 参照先が消えていれば未所属に倒す
+            }
+        } else if let Some(name) = input
+            .organization
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            (Some(find_or_create_org(&conn, name)?), Some(name.to_string()))
+        } else {
+            (None, None)
+        };
         let id = match input.id {
             Some(id) => {
                 conn.execute(
@@ -140,8 +167,8 @@ impl Store {
                          email = ?7, phone = ?8, organization = ?9, org_title = ?10, \
                          org_department = ?11, address = ?12, birthday = ?13, note = ?14, \
                          is_favorite = ?15, is_business = ?16, allow_remote_images = ?17, \
-                         updated_at = CURRENT_TIMESTAMP \
-                     WHERE id = ?18",
+                         org_id = ?18, updated_at = CURRENT_TIMESTAMP \
+                     WHERE id = ?19",
                     params![
                         input.display_name,
                         input.family_name,
@@ -151,7 +178,7 @@ impl Store {
                         input.name_kana,
                         email_flat,
                         phone_flat,
-                        input.organization,
+                        org_name,
                         input.org_title,
                         input.org_department,
                         address_flat,
@@ -160,6 +187,7 @@ impl Store {
                         input.is_favorite as i64,
                         input.is_business as i64,
                         input.allow_remote_images as i64,
+                        org_id,
                         id,
                     ],
                 )?;
@@ -170,9 +198,10 @@ impl Store {
                     "INSERT INTO contacts \
                          (display_name, family_name, given_name, phonetic_family, phonetic_given, \
                           name_kana, email, phone, organization, org_title, org_department, \
-                          address, birthday, note, is_favorite, is_business, allow_remote_images) \
+                          address, birthday, note, is_favorite, is_business, allow_remote_images, \
+                          org_id) \
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
-                          ?16, ?17)",
+                          ?16, ?17, ?18)",
                     params![
                         input.display_name,
                         input.family_name,
@@ -182,7 +211,7 @@ impl Store {
                         input.name_kana,
                         email_flat,
                         phone_flat,
-                        input.organization,
+                        org_name,
                         input.org_title,
                         input.org_department,
                         address_flat,
@@ -191,6 +220,7 @@ impl Store {
                         input.is_favorite as i64,
                         input.is_business as i64,
                         input.allow_remote_images as i64,
+                        org_id,
                     ],
                 )?;
                 conn.last_insert_rowid()
@@ -627,6 +657,43 @@ impl Store {
         self.get_contact(keep_id)
     }
 
+    /// 組織一覧（所属件数つき、名前順）。`query` があれば名前で部分一致。
+    /// 組織コンボボックスの候補・組織一覧に使う。
+    pub fn list_organizations(
+        &self,
+        query: Option<&str>,
+    ) -> rusqlite::Result<Vec<OrganizationSummary>> {
+        let conn = self.conn.lock().unwrap();
+        let like = query
+            .map(str::trim)
+            .filter(|q| !q.is_empty())
+            .map(|q| format!("%{}%", q.replace('%', "\\%").replace('_', "\\_")));
+        let where_sql = if like.is_some() {
+            "WHERE o.name LIKE ?1 ESCAPE '\\'"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT o.id, o.name, o.name_kana, o.note, \
+                    (SELECT count(*) FROM contacts c WHERE c.org_id = o.id) AS cnt \
+             FROM organizations o {where_sql} ORDER BY o.name COLLATE NOCASE"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let map = |r: &Row| {
+            Ok(OrganizationSummary {
+                id: r.get::<_, i64>(0)? as i32,
+                name: r.get(1)?,
+                name_kana: r.get(2)?,
+                note: r.get(3)?,
+                member_count: r.get::<_, i64>(4)? as i32,
+            })
+        };
+        match &like {
+            Some(l) => stmt.query_map(params![l], map)?.collect(),
+            None => stmt.query_map([], map)?.collect(),
+        }
+    }
+
     /// 連絡先グループ一覧（所属件数つき、名前順）。
     pub fn list_contact_groups(&self) -> rusqlite::Result<Vec<ContactGroupSummary>> {
         let conn = self.conn.lock().unwrap();
@@ -951,6 +1018,23 @@ fn load_tags(conn: &Connection, cid: i64) -> rusqlite::Result<Vec<String>> {
     )?;
     let rows = stmt.query_map(params![cid], |r| r.get(0))?;
     rows.collect()
+}
+
+/// 組織名から id を得る（無ければ作成。名前は trim して比較・保存）。
+fn find_or_create_org(conn: &Connection, name: &str) -> rusqlite::Result<i64> {
+    let name = name.trim();
+    if let Some(id) = conn
+        .query_row(
+            "SELECT id FROM organizations WHERE name = ?1",
+            params![name],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()?
+    {
+        return Ok(id);
+    }
+    conn.execute("INSERT INTO organizations (name) VALUES (?1)", params![name])?;
+    Ok(conn.last_insert_rowid())
 }
 
 /// タグ名から id を得る（無ければ作成。メール/連絡先共通の tags）。
@@ -1324,6 +1408,48 @@ mod tests {
             .find_contact_matches(&["taro@a.jp".into()], &[], None, Some(a))
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn upsert_links_organization_and_lists_with_counts() {
+        let s = store();
+        // 組織名だけ渡すと組織レコードが作られ、連絡先が紐づく。
+        let a = s
+            .upsert_contact(&ContactInput {
+                display_name: "田中".into(),
+                organization: Some("株式会社テスト".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(a.org_id.is_some());
+        assert_eq!(a.organization.as_deref(), Some("株式会社テスト"));
+
+        // 同名組織は同じ ID（重複作成しない）。
+        let b = s
+            .upsert_contact(&ContactInput {
+                display_name: "鈴木".into(),
+                organization: Some("株式会社テスト".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(a.org_id, b.org_id);
+
+        // 一覧は件数つき。
+        let orgs = s.list_organizations(None).unwrap();
+        assert_eq!(orgs.len(), 1);
+        assert_eq!(orgs[0].name, "株式会社テスト");
+        assert_eq!(orgs[0].member_count, 2);
+
+        // org_id 指定でも紐づく（照合は ID。組織名は同期される）。
+        let c = s
+            .upsert_contact(&ContactInput {
+                display_name: "佐藤".into(),
+                org_id: Some(orgs[0].id),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(c.org_id, Some(orgs[0].id));
+        assert_eq!(c.organization.as_deref(), Some("株式会社テスト"));
     }
 
     #[test]

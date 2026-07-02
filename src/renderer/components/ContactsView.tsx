@@ -40,6 +40,7 @@ import {
 import type { CountryCode } from 'libphonenumber-js';
 import { ContactDuplicates } from './ContactDuplicates';
 import { AddressRows, PhoneRows, TagInput, ValueRows, addressToFlat } from './ContactValueEditor';
+import { OrgCombobox } from './OrgCombobox';
 import { TagFilter } from './TagFilter';
 import { tagList } from '../services/tags';
 import type { TagSummary } from '@bindings/TagSummary';
@@ -100,6 +101,7 @@ const emptyDraft = (): ContactInput => ({
   email: null,
   phone: null,
   organization: null,
+  org_id: null,
   org_title: null,
   org_department: null,
   address: null,
@@ -125,6 +127,7 @@ const toDraft = (c: ContactSummary): ContactInput => ({
   email: c.email,
   phone: c.phone,
   organization: c.organization,
+  org_id: c.org_id,
   org_title: c.org_title,
   org_department: c.org_department,
   address: c.address,
@@ -716,13 +719,11 @@ export function ContactsView({
                 shareable
                 conflicts={(v) => phoneConflicts.has(v.trim())}
               />
-              <Field icon={<Building2 size={15} />} label={t('contact.organization')}>
-                <input
-                  className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                  value={draft.organization ?? ''}
-                  onChange={(e) => patch({ organization: nullify(e.target.value) })}
-                />
-              </Field>
+              <OrgCombobox
+                orgId={draft.org_id}
+                name={draft.organization ?? ''}
+                onChange={(org_id, name) => patch({ org_id, organization: nullify(name) })}
+              />
               <div className="flex gap-2">
                 <Field icon={<Briefcase size={15} />} label={t('contact.orgTitle')}>
                   <input

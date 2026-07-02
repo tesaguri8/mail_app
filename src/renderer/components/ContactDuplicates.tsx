@@ -573,6 +573,7 @@ function buildDraft(members: ContactSummary[], representative: ContactSummary): 
     email: emails[0]?.value ?? pick((c) => c.email),
     phone: phones[0]?.value ?? pick((c) => c.phone),
     organization: pick((c) => c.organization),
+    org_id: ordered.find((m) => m.org_id != null)?.org_id ?? null,
     org_title: pick((c) => c.org_title),
     org_department: pick((c) => c.org_department),
     address: addresses[0] ? addressToFlat(addresses[0]) || null : pick((c) => c.address),

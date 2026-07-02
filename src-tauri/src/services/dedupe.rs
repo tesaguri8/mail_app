@@ -473,6 +473,7 @@ mod tests {
             email: email.map(str::to_string),
             phone: phone.map(str::to_string),
             organization: org.map(str::to_string),
+            org_id: None,
             org_title: None,
             org_department: None,
             address: None,

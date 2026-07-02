@@ -92,6 +92,10 @@ const MIGRATIONS: &[Migration] = &[
         version: 21,
         sql: include_str!("migrations/0021_contact_email_index.sql"),
     },
+    Migration {
+        version: 22,
+        sql: include_str!("migrations/0022_email_date_ts.sql"),
+    },
 ];
 
 pub fn run(conn: &Connection) -> rusqlite::Result<()> {

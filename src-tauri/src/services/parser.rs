@@ -40,6 +40,8 @@ pub struct ParsedEmail {
     /// 宛先（先頭）の表示名（ヘッダ To の名前部。無ければ None）。
     pub to_name: Option<String>,
     pub date: Option<String>,
+    /// 並び替え用の epoch 秒（date を UTC 換算）。インデックスで新しい順に引くのに使う。
+    pub date_ts: Option<i64>,
     pub body_plain: Option<String>,
     pub clean_body: Option<String>,
     pub body_html: Option<String>,
@@ -99,6 +101,8 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
         .filter(|s| !s.is_empty());
     let message_id = msg.message_id().map(|s| s.to_string());
     let date = msg.date().map(|d| d.to_rfc3339());
+    // 並び替え用の epoch 秒（UTC）。無効な日付は None。
+    let date_ts = msg.date().map(|d| d.to_timestamp());
     let body_plain = msg.body_text(0).map(|c| c.to_string());
     let body_html = msg.body_html(0).map(|c| c.to_string());
     // ヘッダ素性（§7.7）: 認証結果・メール種別。トークン化と認証バッジで共有する。
@@ -151,6 +155,7 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
         to_addresses,
         to_name,
         date,
+        date_ts,
         body_plain,
         clean_body,
         body_html,

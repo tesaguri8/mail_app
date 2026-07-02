@@ -15,6 +15,8 @@ pub struct NewEmail {
     /// 宛先（先頭）の表示名（ヘッダ To の名前部。無ければ None）。
     pub to_name: Option<String>,
     pub date: Option<String>,
+    /// 並び替え用の epoch 秒（date の UTC 換算）。インデックスで新しい順に引くのに使う。
+    pub date_ts: Option<i64>,
     pub body_plain: Option<String>,
     pub clean_body: Option<String>,
     pub body_html: Option<String>,
@@ -117,8 +119,8 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
     let key = folder_key(&e.folder, &e.canonical_key);
     let changed = conn.execute(
         "INSERT OR IGNORE INTO emails
-           (account_id, message_id, canonical_key, subject, from_address, from_name, to_addresses, to_name, date, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+           (account_id, message_id, canonical_key, subject, from_address, from_name, to_addresses, to_name, date, date_ts, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
         params![
             e.account_id,
             e.message_id,
@@ -129,6 +131,7 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
             e.to_addresses,
             e.to_name,
             e.date,
+            e.date_ts,
             e.has_attachments as i64,
             e.body_plain,
             e.clean_body,
@@ -333,8 +336,8 @@ impl Store {
                     (emails.has_attachments = 1
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = emails.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real,
                     to_addresses, {known_vip}, from_name, to_name
-             FROM emails WHERE account_id = ?1 AND COALESCE(folder, 'inbox') = ?2
-             ORDER BY datetime(date) DESC, id DESC LIMIT ?3",
+             FROM emails WHERE account_id = ?1 AND folder = ?2
+             ORDER BY date_ts DESC, id DESC LIMIT ?3",
             known_vip = known_vip_cols("emails.from_address"),
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -365,8 +368,8 @@ impl Store {
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = e.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real,
                     e.to_addresses, {known_vip}, e.from_name, e.to_name
              FROM email_fts JOIN emails e ON e.id = email_fts.rowid
-             WHERE email_fts MATCH ?1 AND e.account_id = ?2 AND COALESCE(e.folder, 'inbox') = ?3
-             ORDER BY datetime(e.date) DESC, e.id DESC LIMIT ?4",
+             WHERE email_fts MATCH ?1 AND e.account_id = ?2 AND e.folder = ?3
+             ORDER BY e.date_ts DESC, e.id DESC LIMIT ?4",
             known_vip = known_vip_cols("e.from_address"),
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -672,6 +675,7 @@ mod tests {
             to_addresses: None,
             to_name: None,
             date: Some("2026-01-01 00:00:00".to_string()),
+            date_ts: Some(1_767_225_600),
             body_plain: Some(body.to_string()),
             clean_body: Some(body.to_string()),
             body_html: None,
@@ -702,6 +706,7 @@ mod tests {
             to_addresses: None,
             to_name: None,
             date: None,
+            date_ts: None,
             body_plain: None,
             clean_body: None,
             body_html: None,

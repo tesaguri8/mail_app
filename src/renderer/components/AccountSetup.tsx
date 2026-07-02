@@ -310,7 +310,8 @@ export function AccountSetup({
 
       {!adding && accounts.length > 0 && (
         <ul className="space-y-2">
-          {accounts.map((a) => (
+          {/* 展開（編集）中は他アカウントを隠し、対象だけ表示する。 */}
+          {(editing == null ? accounts : accounts.filter((a) => a.id === editing)).map((a) => (
             <li key={a.id} className="overflow-hidden rounded-md bg-white/10 text-sm">
               <div className="flex items-center justify-between gap-2 px-3 py-2">
                 <button

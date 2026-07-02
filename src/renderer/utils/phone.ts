@@ -8,6 +8,7 @@ import {
   getCountryCallingCode,
   type CountryCode,
 } from 'libphonenumber-js';
+import { getPhoneAutoformat } from '../config/prefs';
 
 export type PhoneStyle = 'national' | 'international';
 
@@ -28,22 +29,24 @@ export function countryOptions(lang: string): { region: CountryCode; calling: st
     .sort((a, b) => a.name.localeCompare(b.name, lang));
 }
 
-/** 生入力を E.164 正準形へ。解釈できなければトリムした元文字列を返す。 */
+/** 生入力を E.164 正準形へ。解釈できなければトリムした元文字列を返す。
+ *  自動整形オフ（設定）の間は入力そのまま（トリムのみ）。 */
 export function toE164(raw: string, region: CountryCode): string {
   const s = raw.trim();
-  if (!s) return '';
+  if (!s || !getPhoneAutoformat()) return s;
   const pn = parsePhoneNumberFromString(s, region);
   return pn && pn.isValid() ? pn.number : s;
 }
 
 /** 保存値（E.164 など）を「国」と「国内番号」に分解。解釈不能なら region を既定に、
- *  national に元文字列を返す（編集中の生テキストもここを通る）。 */
+ *  national に元文字列を返す（編集中の生テキストもここを通る）。
+ *  自動整形オフの間は分解せず生テキストのまま。 */
 export function parseStored(
   stored: string,
   fallbackRegion: CountryCode
 ): { region: CountryCode; national: string } {
   const s = (stored ?? '').trim();
-  if (!s) return { region: fallbackRegion, national: '' };
+  if (!s || !getPhoneAutoformat()) return { region: fallbackRegion, national: s };
   const pn = parsePhoneNumberFromString(s, fallbackRegion);
   if (pn && pn.country) {
     return { region: pn.country, national: pn.formatNational() };
@@ -51,10 +54,10 @@ export function parseStored(
   return { region: fallbackRegion, national: s };
 }
 
-/** 表示用整形。解釈できなければ元文字列。 */
+/** 表示用整形。解釈できなければ元文字列。自動整形オフの間は保存値そのまま。 */
 export function displayPhone(stored: string, style: PhoneStyle, fallbackRegion: CountryCode): string {
   const s = (stored ?? '').trim();
-  if (!s) return '';
+  if (!s || !getPhoneAutoformat()) return s;
   const pn = parsePhoneNumberFromString(s, fallbackRegion);
   if (!pn) return s;
   return style === 'international' ? pn.formatInternational() : pn.formatNational();

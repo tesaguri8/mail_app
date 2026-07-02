@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailSummary } from '@bindings/MailSummary';
 import { mailList } from '../services/mail';
-import { getHomeCountMode, PREFS_EVENT } from '../config/prefs';
+import { getHomeCountMode, getHomeCountShow, PREFS_EVENT } from '../config/prefs';
 
 /**
  * ホーム右カラム：アカウント別の新着（未読）数を“ゴースト”表示（背景なし・文字のみ）。
@@ -19,10 +19,14 @@ export function AccountsOverview({
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState<number | null>(null);
   const [previews, setPreviews] = useState<Record<number, MailSummary[]>>({});
-  // バッジの件数表示（未読数/全数/非表示。設定で変更可）。
+  // バッジの件数表示（表示トグル＋未読数/全数。設定で変更可）。
+  const [countShow, setCountShow] = useState(getHomeCountShow());
   const [countMode, setCountMode] = useState(getHomeCountMode());
   useEffect(() => {
-    const onPrefs = () => setCountMode(getHomeCountMode());
+    const onPrefs = () => {
+      setCountShow(getHomeCountShow());
+      setCountMode(getHomeCountMode());
+    };
     window.addEventListener(PREFS_EVENT, onPrefs);
     return () => window.removeEventListener(PREFS_EVENT, onPrefs);
   }, []);
@@ -57,7 +61,7 @@ export function AccountsOverview({
             className="flex w-full shrink-0 items-baseline justify-between gap-3 text-left text-white/85 hover:text-white"
           >
             <span className="truncate">{a.email}</span>
-            {countMode !== 'hidden' && (
+            {countShow && (
               <span className="shrink-0 tabular-nums">
                 {countMode === 'total' ? a.total_count : a.unread_count}
               </span>

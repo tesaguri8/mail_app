@@ -6,8 +6,11 @@ const FLY_ANIMATION_KEY = 'rondine.flyAnimation';
 const PHONE_REGION_KEY = 'rondine.phoneRegion';
 const PHONE_STYLE_KEY = 'rondine.phoneStyle';
 const POSTAL_AUTOFORMAT_KEY = 'rondine.postalAutoformat';
+const AUTO_SYNC_ON_KEY = 'rondine.autoSyncOn';
 const AUTO_SYNC_SEC_KEY = 'rondine.autoSyncSec';
+const HOME_COUNT_SHOW_KEY = 'rondine.homeCountShow';
 const HOME_COUNT_MODE_KEY = 'rondine.homeCountMode';
+const PHONE_AUTOFORMAT_KEY = 'rondine.phoneAutoformat';
 export const PREFS_EVENT = 'rondine:prefs';
 
 /** 本文埋め込み画像（inline asset）を自動取得して表示するか。既定: オン。 */
@@ -53,34 +56,63 @@ export function setPhoneStyle(style: 'national' | 'international'): void {
   window.dispatchEvent(new Event(PREFS_EVENT));
 }
 
-/**
- * 自動同期の間隔（秒）。ホーム/メールモード滞在中にこの間隔で同期する。
- * 0 = 自動同期オフ（画面遷移時の同期は常に行う）。既定: 30 秒、下限 10 秒。
- */
-export function getAutoSyncInterval(): number {
-  const stored = localStorage.getItem(AUTO_SYNC_SEC_KEY);
-  if (stored === null) return 30; // 未設定は既定 30 秒
-  const n = Number(stored);
-  if (!Number.isFinite(n) || n <= 0) return 0; // 0 や不正値はオフ
-  return Math.max(10, Math.round(n));
+/** 自動同期（ホーム/メール滞在中の定期同期）を使うか。既定: オン。画面遷移時の同期は常に行う。 */
+export function getAutoSyncOn(): boolean {
+  return localStorage.getItem(AUTO_SYNC_ON_KEY) !== '0';
 }
 
-export function setAutoSyncInterval(sec: number): void {
-  const v = Number.isFinite(sec) && sec > 0 ? Math.max(10, Math.round(sec)) : 0;
+export function setAutoSyncOn(value: boolean): void {
+  localStorage.setItem(AUTO_SYNC_ON_KEY, value ? '1' : '0');
+  window.dispatchEvent(new Event(PREFS_EVENT));
+}
+
+/** 自動同期の間隔（秒・設定値そのもの）。既定 30 秒、下限 10 秒。 */
+export function getAutoSyncSeconds(): number {
+  const n = Number(localStorage.getItem(AUTO_SYNC_SEC_KEY));
+  if (!Number.isFinite(n) || n < 10) return 30;
+  return Math.round(n);
+}
+
+export function setAutoSyncSeconds(sec: number): void {
+  const v = Number.isFinite(sec) && sec >= 10 ? Math.round(sec) : 30;
   localStorage.setItem(AUTO_SYNC_SEC_KEY, String(v));
   window.dispatchEvent(new Event(PREFS_EVENT));
 }
 
-/** ホームのアカウント別バッジに出す件数。'unread'=未読数 / 'total'=全数 / 'hidden'=非表示。既定: unread。 */
-export type HomeCountMode = 'unread' | 'total' | 'hidden';
+/** 実効の自動同期間隔（秒）。オフなら 0（useAutoSync が参照）。 */
+export function getAutoSyncInterval(): number {
+  return getAutoSyncOn() ? getAutoSyncSeconds() : 0;
+}
+
+/** ホームのアカウント別バッジを表示するか。既定: オン。 */
+export function getHomeCountShow(): boolean {
+  return localStorage.getItem(HOME_COUNT_SHOW_KEY) !== '0';
+}
+
+export function setHomeCountShow(value: boolean): void {
+  localStorage.setItem(HOME_COUNT_SHOW_KEY, value ? '1' : '0');
+  window.dispatchEvent(new Event(PREFS_EVENT));
+}
+
+/** ホームのバッジに出す件数の種類。'unread'=未読数 / 'total'=全数。既定: unread。 */
+export type HomeCountMode = 'unread' | 'total';
 
 export function getHomeCountMode(): HomeCountMode {
-  const v = localStorage.getItem(HOME_COUNT_MODE_KEY);
-  return v === 'total' || v === 'hidden' ? v : 'unread';
+  return localStorage.getItem(HOME_COUNT_MODE_KEY) === 'total' ? 'total' : 'unread';
 }
 
 export function setHomeCountMode(mode: HomeCountMode): void {
   localStorage.setItem(HOME_COUNT_MODE_KEY, mode);
+  window.dispatchEvent(new Event(PREFS_EVENT));
+}
+
+/** 電話番号の自動整形（[国]+[国内番号] へ整えて保存・表示）を使うか。既定: オン。 */
+export function getPhoneAutoformat(): boolean {
+  return localStorage.getItem(PHONE_AUTOFORMAT_KEY) !== '0';
+}
+
+export function setPhoneAutoformat(value: boolean): void {
+  localStorage.setItem(PHONE_AUTOFORMAT_KEY, value ? '1' : '0');
   window.dispatchEvent(new Event(PREFS_EVENT));
 }
 

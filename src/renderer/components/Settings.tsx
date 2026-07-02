@@ -17,10 +17,16 @@ import {
   setPhoneStyle,
   getPostalAutoformat,
   setPostalAutoformat,
-  getAutoSyncInterval,
-  setAutoSyncInterval,
+  getAutoSyncOn,
+  setAutoSyncOn,
+  getAutoSyncSeconds,
+  setAutoSyncSeconds,
+  getHomeCountShow,
+  setHomeCountShow,
   getHomeCountMode,
   setHomeCountMode,
+  getPhoneAutoformat,
+  setPhoneAutoformat,
   type HomeCountMode,
 } from '../config/prefs';
 import { countryOptions } from '../utils/phone';
@@ -139,9 +145,10 @@ function Toggle({
           checked ? 'bg-sky-500' : 'bg-white/20'
         }`}
       >
+        {/* left-0 を明示（button は text-align:center のため、無指定だと静的位置＝中央から translate されてはみ出す） */}
         <span
-          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-            checked ? 'translate-x-4' : 'translate-x-0.5'
+          className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+            checked ? 'translate-x-4' : ''
           }`}
         />
       </button>
@@ -157,61 +164,82 @@ function DisplaySettings() {
   const [region, setRegion] = useState(getPhoneRegion());
   const [style, setStyle] = useState(getPhoneStyle());
   const [postal, setPostal] = useState(getPostalAutoformat());
-  // 自動同期の間隔（秒・0=オフ）。入力中の文字列を保持し、確定時に保存する。
-  const [syncSec, setSyncSec] = useState(String(getAutoSyncInterval()));
+  // 自動同期: オン/オフのトグル＋間隔（秒・最短10）。入力は文字列で保持し確定時に保存。
+  const [syncOn, setSyncOn] = useState(getAutoSyncOn());
+  const [syncSec, setSyncSec] = useState(String(getAutoSyncSeconds()));
+  // ホームのバッジ: 表示トグル＋種類（未読数/全数）。
+  const [countShow, setCountShow] = useState(getHomeCountShow());
   const [countMode, setCountMode] = useState<HomeCountMode>(getHomeCountMode());
+  const [phoneFmt, setPhoneFmt] = useState(getPhoneAutoformat());
   const countries = useMemo(() => countryOptions(i18n.language), [i18n.language]);
 
   const commitSyncSec = () => {
     const n = Number(syncSec);
-    setAutoSyncInterval(Number.isFinite(n) ? n : 0);
-    setSyncSec(String(getAutoSyncInterval())); // クランプ後の実値を表示に反映
+    setAutoSyncSeconds(Number.isFinite(n) ? n : 30);
+    setSyncSec(String(getAutoSyncSeconds())); // クランプ後の実値を表示に反映
   };
 
   return (
     <div className="max-w-xl space-y-5">
-      {/* 自動同期: ホーム/メールモード滞在中の同期間隔（画面遷移時は常に同期） */}
+      {/* 自動同期: ホーム/メールモード滞在中の定期同期（画面遷移時は常に同期） */}
       <div>
-        <div className="text-sm text-white/85">{t('settings.autoSync')}</div>
-        <p className="mt-0.5 text-xs text-white/45">{t('settings.autoSyncHint')}</p>
-        <label className="mt-2 flex items-center gap-2">
-          <input
-            type="number"
-            min={0}
-            step={5}
-            value={syncSec}
-            onChange={(e) => setSyncSec(e.target.value)}
-            onBlur={commitSyncSec}
-            onKeyDown={(e) => e.key === 'Enter' && commitSyncSec()}
-            className="w-24 rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
-          />
-          <span className="text-xs text-white/50">{t('settings.autoSyncUnit')}</span>
-        </label>
+        <Toggle
+          checked={syncOn}
+          onChange={() => {
+            const next = !syncOn;
+            setSyncOn(next);
+            setAutoSyncOn(next);
+          }}
+          title={t('settings.autoSync')}
+          hint={t('settings.autoSyncHint')}
+        />
+        {syncOn && (
+          <label className="mt-2 flex items-center gap-2">
+            <input
+              type="number"
+              min={10}
+              step={5}
+              value={syncSec}
+              onChange={(e) => setSyncSec(e.target.value)}
+              onBlur={commitSyncSec}
+              onKeyDown={(e) => e.key === 'Enter' && commitSyncSec()}
+              className="w-24 rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
+            />
+            <span className="text-xs text-white/50">{t('settings.autoSyncUnit')}</span>
+          </label>
+        )}
       </div>
 
-      {/* ホームのアカウント別バッジ: 未読数（既定）/ 全数 / 非表示 */}
+      {/* ホームのアカウント別バッジ: 表示トグル＋種類（未読数/全数） */}
       <div className="border-t border-white/10 pt-4">
-        <div className="text-sm text-white/85">{t('settings.homeCount')}</div>
-        <p className="mt-0.5 text-xs text-white/45">{t('settings.homeCountHint')}</p>
-        <select
-          value={countMode}
-          onChange={(e) => {
-            const m = e.target.value as HomeCountMode;
-            setCountMode(m);
-            setHomeCountMode(m);
+        <Toggle
+          checked={countShow}
+          onChange={() => {
+            const next = !countShow;
+            setCountShow(next);
+            setHomeCountShow(next);
           }}
-          className="mt-2 w-48 rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
-        >
-          <option value="unread" className="text-black">
-            {t('settings.homeCountUnread')}
-          </option>
-          <option value="total" className="text-black">
-            {t('settings.homeCountTotal')}
-          </option>
-          <option value="hidden" className="text-black">
-            {t('settings.homeCountHidden')}
-          </option>
-        </select>
+          title={t('settings.homeCount')}
+          hint={t('settings.homeCountHint')}
+        />
+        {countShow && (
+          <select
+            value={countMode}
+            onChange={(e) => {
+              const m = e.target.value as HomeCountMode;
+              setCountMode(m);
+              setHomeCountMode(m);
+            }}
+            className="mt-2 w-48 rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
+          >
+            <option value="unread" className="text-black">
+              {t('settings.homeCountUnread')}
+            </option>
+            <option value="total" className="text-black">
+              {t('settings.homeCountTotal')}
+            </option>
+          </select>
+        )}
       </div>
 
       <div className="border-t border-white/10 pt-4" />
@@ -237,8 +265,17 @@ function DisplaySettings() {
       />
 
       <div className="border-t border-white/10 pt-4">
-        <div className="text-sm text-white/85">{t('settings.phoneTitle')}</div>
-        <p className="mt-0.5 text-xs text-white/45">{t('settings.phoneHint')}</p>
+        <Toggle
+          checked={phoneFmt}
+          onChange={() => {
+            const next = !phoneFmt;
+            setPhoneFmt(next);
+            setPhoneAutoformat(next);
+          }}
+          title={t('settings.phoneTitle')}
+          hint={t('settings.phoneHint')}
+        />
+        {phoneFmt && (
         <div className="mt-3 grid grid-cols-2 gap-3">
           <label className="block">
             <span className="mb-1 block text-xs text-white/50">{t('settings.phoneRegion')}</span>
@@ -277,6 +314,7 @@ function DisplaySettings() {
             </select>
           </label>
         </div>
+        )}
       </div>
 
       <div className="border-t border-white/10 pt-4">

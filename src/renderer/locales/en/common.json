@@ -107,7 +107,8 @@
     "untitled": "New tag",
     "parent": "Parent (folder)",
     "parentNone": "(Top)",
-    "removeFilter": "Remove this tag filter"
+    "removeFilter": "Remove this tag filter",
+    "allSelected": "All tags selected"
   },
   "contact": {
     "search": "Search name, email, org…",

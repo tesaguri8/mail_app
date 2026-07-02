@@ -107,7 +107,8 @@
     "untitled": "新しいタグ",
     "parent": "親（フォルダ）",
     "parentNone": "（トップ）",
-    "removeFilter": "このタグの絞り込みを外す"
+    "removeFilter": "このタグの絞り込みを外す",
+    "allSelected": "すべてのタグを選択中"
   },
   "contact": {
     "search": "名前・メール・組織で検索…",

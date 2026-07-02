@@ -42,6 +42,8 @@ export function TagFilter({
     else next.add(id);
     onChange(next);
   };
+  // 選択済みはツールバー下のチップ行（×で解除）に出すため、リストには未選択のみ表示する。
+  const available = tags.filter((tag) => !value.has(tag.id));
 
   return (
     <div ref={ref} className="relative">
@@ -66,26 +68,23 @@ export function TagFilter({
             <div className="px-3 py-2 text-xs text-white/40">{t('tag.none')}</div>
           ) : (
             <>
-              {tags.map((tag) => {
-                const checked = value.has(tag.id);
-                return (
-                  <button
-                    key={tag.id}
-                    onClick={() => toggle(tag.id)}
-                    className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-white/10 ${
-                      checked ? 'text-white' : 'text-white/75'
-                    }`}
-                  >
-                    <span
-                      className="h-2.5 w-2.5 shrink-0 rounded-full"
-                      style={{ backgroundColor: tag.color ?? DEFAULT_TAG_COLOR }}
-                    />
-                    <span className="min-w-0 flex-1 truncate">{tag.name}</span>
-                    <span className="shrink-0 text-[10px] text-white/35">{tag.count}</span>
-                    {checked && <span className="shrink-0 text-sky-300">●</span>}
-                  </button>
-                );
-              })}
+              {available.map((tag) => (
+                <button
+                  key={tag.id}
+                  onClick={() => toggle(tag.id)}
+                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-white/75 hover:bg-white/10"
+                >
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: tag.color ?? DEFAULT_TAG_COLOR }}
+                  />
+                  <span className="min-w-0 flex-1 truncate">{tag.name}</span>
+                  <span className="shrink-0 text-[10px] text-white/35">{tag.count}</span>
+                </button>
+              ))}
+              {available.length === 0 && (
+                <div className="px-3 py-2 text-xs text-white/40">{t('tag.allSelected')}</div>
+              )}
               {on && (
                 <button
                   onClick={() => onChange(new Set())}

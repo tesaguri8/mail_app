@@ -17,10 +17,13 @@ export function TagFilter({
   tags,
   value,
   onChange,
+  variant = 'toolbar',
 }: {
   tags: TagSummary[];
   value: Set<number>;
   onChange: (v: Set<number>) => void;
+  /** ボタンの見た目。'toolbar'=メールの小アイコン / 'round'=住所録の丸ボタンに合わせる。 */
+  variant?: 'toolbar' | 'round';
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -45,6 +48,15 @@ export function TagFilter({
   // 選択済みはツールバー下のチップ行（×で解除）に出すため、リストには未選択のみ表示する。
   const available = tags.filter((tag) => !value.has(tag.id));
 
+  const btnClass =
+    variant === 'round'
+      ? `flex h-9 w-9 items-center justify-center rounded-full border border-white/20 ${
+          on ? 'bg-sky-500/30 text-sky-200 ring-1 ring-sky-300/40' : 'text-white/70 hover:bg-white/10'
+        }`
+      : `flex h-8 w-8 items-center justify-center rounded-md ${
+          on ? 'bg-sky-500/30 text-sky-200 ring-1 ring-sky-300/40' : 'text-white/55 hover:text-white/80'
+        }`;
+
   return (
     <div ref={ref} className="relative">
       <button
@@ -52,13 +64,9 @@ export function TagFilter({
         title={t('tag.filter')}
         aria-label={t('tag.filter')}
         aria-pressed={on}
-        className={`flex h-8 w-8 items-center justify-center rounded-md ${
-          on
-            ? 'bg-sky-500/30 text-sky-200 ring-1 ring-sky-300/40'
-            : 'text-white/55 hover:text-white/80'
-        }`}
+        className={btnClass}
       >
-        <Tag size={15} />
+        <Tag size={variant === 'round' ? 17 : 15} />
       </button>
 
       {/* アイコンの左下を起点に展開（コンテンツ側への重なりは許容。親の overflow-hidden は外してある） */}

@@ -41,11 +41,12 @@ const CONTACT_COLS: &str = "id, display_name, family_name, given_name, phonetic_
 
 impl Store {
     /// 連絡先一覧。`query` があれば名前/よみ/メール/組織を部分一致で絞り込む。
+    /// `groups` が非空なら、いずれかのタグを持つ連絡先に絞る（OR。メール側と同じ挙動）。
     /// お気に入りを先頭に、次いで よみ→表示名 で並べる。
     pub fn list_contacts(
         &self,
         query: Option<&str>,
-        group: Option<i64>,
+        groups: &[i64],
     ) -> rusqlite::Result<Vec<ContactSummary>> {
         let conn = self.conn.lock().unwrap();
         let order = "ORDER BY is_favorite DESC, \
@@ -67,13 +68,21 @@ impl Store {
             ));
             binds.push(l);
         }
-        if let Some(g) = &group {
-            n += 1;
+        if !groups.is_empty() {
+            // tag_id IN (?, ?, ...) を選択タグ数ぶん採番して組み立てる。
+            let placeholders = groups
+                .iter()
+                .map(|g| {
+                    n += 1;
+                    binds.push(g as &dyn rusqlite::ToSql);
+                    format!("?{n}")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
             conds.push(format!(
                 "EXISTS (SELECT 1 FROM contact_tags ct \
-                 WHERE ct.contact_id = contacts.id AND ct.tag_id = ?{n})"
+                 WHERE ct.contact_id = contacts.id AND ct.tag_id IN ({placeholders}))"
             ));
-            binds.push(g);
         }
         let where_sql = if conds.is_empty() {
             String::new()
@@ -282,7 +291,7 @@ impl Store {
     /// 重複候補を record linkage で束ねて返す（2 件以上のみ、確信度順）。
     /// 検出ロジックは services::dedupe。全メール/全電話（子テーブル）を材料に渡す。
     pub fn find_duplicate_groups(&self) -> rusqlite::Result<Vec<DuplicateGroup>> {
-        let mut contacts = self.list_contacts(None, None)?;
+        let mut contacts = self.list_contacts(None, &[])?;
         let conn = self.conn.lock().unwrap();
         let collect =
             |table: &str| -> rusqlite::Result<std::collections::HashMap<i64, Vec<String>>> {
@@ -896,7 +905,7 @@ mod tests {
             "BEGIN:VCARD\nVERSION:3.0\nFN:多重 花子\nEMAIL;type=pref:a@x.jp\nEMAIL:b@x.jp\nEMAIL:c@x.jp\nTEL:090-1\nEND:VCARD\n",
         );
         s.import_contacts(&p).unwrap();
-        let c = s.list_contacts(None, None).unwrap().remove(0);
+        let c = s.list_contacts(None, &[]).unwrap().remove(0);
         let got = s.get_contact(c.id as i64).unwrap();
         assert_eq!(got.emails.len(), 3, "追加メールも子テーブルに入る");
         assert!(got.emails[0].is_primary);
@@ -977,7 +986,7 @@ mod tests {
             "BEGIN:VCARD\nVERSION:3.0\nFN:タグ 太郎\nCATEGORIES:施主,設計事務所\nEND:VCARD\n",
         );
         s.import_contacts(&p).unwrap();
-        let id = s.list_contacts(None, None).unwrap()[0].id as i64;
+        let id = s.list_contacts(None, &[]).unwrap()[0].id as i64;
         let c = s.get_contact(id).unwrap();
         assert!(c.tags.contains(&"施主".to_string()));
         assert!(c.tags.contains(&"設計事務所".to_string()));
@@ -998,7 +1007,7 @@ mod tests {
             conn.query_row("SELECT id FROM tags WHERE name = 'VIP'", [], |r| r.get(0))
                 .unwrap()
         };
-        let filtered = s.list_contacts(None, Some(tag_id)).unwrap();
+        let filtered = s.list_contacts(None, &[tag_id]).unwrap();
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].id, c.id);
     }
@@ -1010,7 +1019,7 @@ mod tests {
             "BEGIN:VCARD\nVERSION:3.0\nFN:多値 太郎\nTEL;type=CELL:090-1111\nTEL;type=WORK:03-2222\nTEL:03-3333\nADR;type=HOME:;;番地1;那覇市;沖縄県;9000001;日本\nTITLE:部長\nORG:テスト社;営業部\nEND:VCARD\n",
         );
         s.import_contacts(&p).unwrap();
-        let id = s.list_contacts(None, None).unwrap()[0].id as i64;
+        let id = s.list_contacts(None, &[]).unwrap()[0].id as i64;
         let c = s.get_contact(id).unwrap();
         // 電話3件（1件目=CELL が主）。
         assert_eq!(c.phones.len(), 3, "全電話を保持");
@@ -1039,7 +1048,7 @@ mod tests {
         assert_eq!((r1.total, r1.imported, r1.updated), (1, 1, 0));
 
         // ユーザーがお気に入り＆取引先に設定。
-        let c = s.list_contacts(None, None).unwrap().remove(0);
+        let c = s.list_contacts(None, &[]).unwrap().remove(0);
         s.upsert_contact(&ContactInput {
             id: Some(c.id),
             display_name: c.display_name.clone(),
@@ -1065,7 +1074,7 @@ mod tests {
         assert_eq!((r2.total, r2.imported, r2.updated), (1, 0, 1));
 
         // 重複は増えず、フラグは温存、フィールドは更新されている。
-        let all = s.list_contacts(None, None).unwrap();
+        let all = s.list_contacts(None, &[]).unwrap();
         assert_eq!(all.len(), 1);
         let c = &all[0];
         assert!(c.is_favorite && c.is_business); // 温存
@@ -1083,7 +1092,7 @@ mod tests {
         );
         let r = s.import_contacts(&csv).unwrap();
         assert_eq!((r.imported, r.updated), (2, 0));
-        assert_eq!(s.list_contacts(None, None).unwrap().len(), 2);
+        assert_eq!(s.list_contacts(None, &[]).unwrap().len(), 2);
     }
 
     #[test]
@@ -1132,7 +1141,7 @@ mod tests {
         assert_eq!(groups[0].contacts.len(), 2);
 
         let merged = s.merge_contacts(id_a, &[id_b]).unwrap();
-        assert_eq!(s.list_contacts(None, None).unwrap().len(), 1);
+        assert_eq!(s.list_contacts(None, &[]).unwrap().len(), 1);
         assert!(merged.is_favorite && merged.is_business); // OR で温存
         assert_eq!(merged.name_kana.as_deref(), Some("タナカタロウ")); // 空きを補完
         assert_eq!(merged.organization.as_deref(), Some("B社"));
@@ -1198,7 +1207,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        assert_eq!(s.list_contacts(None, None).unwrap().len(), 2);
+        assert_eq!(s.list_contacts(None, &[]).unwrap().len(), 2);
 
         drop(s);
         let _ = std::fs::remove_dir_all(&root);
@@ -1252,7 +1261,7 @@ mod tests {
         );
         let r = s.import_contacts(&b).unwrap();
         assert_eq!((r.imported, r.updated), (0, 1));
-        let all = s.list_contacts(None, None).unwrap();
+        let all = s.list_contacts(None, &[]).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].email.as_deref(), Some("new@x.jp"));
     }

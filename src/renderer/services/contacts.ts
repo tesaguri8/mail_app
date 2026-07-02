@@ -6,8 +6,11 @@ import type { ImportReport } from '@bindings/ImportReport';
 import type { DuplicateGroup } from '@bindings/DuplicateGroup';
 
 // Tauri v2 は camelCase の引数キーを snake_case の Rust 引数へ自動変換する。
-export const contactList = (query?: string, group?: number | null) =>
-  invoke<ContactSummary[]>('contact_list', { query: query ?? null, group: group ?? null });
+export const contactList = (query?: string, groups?: number[]) =>
+  invoke<ContactSummary[]>('contact_list', {
+    query: query ?? null,
+    groups: groups && groups.length > 0 ? groups : null,
+  });
 
 export const contactGet = (id: number) => invoke<ContactSummary>('contact_get', { id });
 

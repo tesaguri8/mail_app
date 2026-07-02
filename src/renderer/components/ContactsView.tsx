@@ -34,11 +34,13 @@ import {
 import type { CountryCode } from 'libphonenumber-js';
 import { ContactDuplicates } from './ContactDuplicates';
 import { AddressRows, PhoneRows, TagInput, ValueRows, addressToFlat } from './ContactValueEditor';
+import { TagFilter } from './TagFilter';
 import { tagList } from '../services/tags';
 import type { TagSummary } from '@bindings/TagSummary';
 import { toE164 } from '../utils/phone';
 import { formatPostal } from '../utils/postal';
 import { getPhoneRegion, getPostalAutoformat } from '../config/prefs';
+import { DEFAULT_TAG_COLOR } from '../utils/tagColors';
 
 /** ContactSummary の複数値を入力型（配列）に変換。 */
 const toValueInputs = (vs: { label: string | null; value: string }[]): ContactValueInput[] =>
@@ -146,12 +148,12 @@ export function ContactsView() {
   const [importError, setImportError] = useState<string | null>(null);
   const [cleanup, setCleanup] = useState(false);
   const [tags, setTags] = useState<TagSummary[]>([]);
-  const [tagFilter, setTagFilter] = useState<number | null>(null);
+  const [tagFilter, setTagFilter] = useState<Set<number>>(new Set());
 
   const load = useCallback(
-    (q: string, group: number | null) => {
+    (q: string, groups: Set<number>) => {
       if (!isTauri) return;
-      contactList(q, group)
+      contactList(q, [...groups])
         .then(setItems)
         .catch(() => undefined);
     },
@@ -300,6 +302,11 @@ export function ContactsView() {
               </button>
             )}
           </div>
+          {tags.length > 0 && (
+            <div className="shrink-0">
+              <TagFilter tags={tags} value={tagFilter} onChange={setTagFilter} variant="round" />
+            </div>
+          )}
           <button
             onClick={() => setCleanup((v) => !v)}
             title={t('dupes.title')}
@@ -365,20 +372,36 @@ export function ContactsView() {
           </div>
         )}
 
-        {tags.length > 0 && (
-          <div className="px-3 pb-2">
-            <select
-              value={tagFilter ?? ''}
-              onChange={(e) => setTagFilter(e.target.value === '' ? null : Number(e.target.value))}
-              className="w-full rounded-md bg-white/10 px-2 py-1.5 text-xs text-white/80 outline-none [color-scheme:dark]"
-            >
-              <option value="">{t('contact.allTags')}</option>
-              {tags.map((tg) => (
-                <option key={tg.id} value={tg.id}>
-                  {tg.name}
-                </option>
-              ))}
-            </select>
+        {/* 選択中のタグ: チップで並べ、× で個別に解除できる（メールのサイドバーと同じ） */}
+        {tagFilter.size > 0 && (
+          <div className="flex flex-wrap gap-1 px-3 pb-2">
+            {tags
+              .filter((tg) => tagFilter.has(tg.id))
+              .map((tg) => {
+                const color = tg.color ?? DEFAULT_TAG_COLOR;
+                return (
+                  <span
+                    key={tg.id}
+                    className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium"
+                    style={{ backgroundColor: `${color}33`, color }}
+                  >
+                    <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
+                    {tg.name}
+                    <button
+                      onClick={() => {
+                        const next = new Set(tagFilter);
+                        next.delete(tg.id);
+                        setTagFilter(next);
+                      }}
+                      title={t('tag.removeFilter')}
+                      aria-label={t('tag.removeFilter')}
+                      className="-mr-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full hover:bg-white/20"
+                    >
+                      <X size={9} />
+                    </button>
+                  </span>
+                );
+              })}
           </div>
         )}
 

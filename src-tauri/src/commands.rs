@@ -600,15 +600,15 @@ pub fn spam_settings_set(store: State<Store>, settings: SpamSettings) -> Result<
         .map_err(|e| e.to_string())
 }
 
-/// 連絡先一覧（`query` で名前/よみ/メール/組織を絞り込み、`group` でタグ絞り込み）。
+/// 連絡先一覧（`query` で名前/よみ/メール/組織を絞り込み、`groups` のいずれかのタグで絞り込み）。
 #[tauri::command]
 pub fn contact_list(
     store: State<Store>,
     query: Option<String>,
-    group: Option<i64>,
+    groups: Option<Vec<i64>>,
 ) -> Result<Vec<ContactSummary>, String> {
     store
-        .list_contacts(query.as_deref(), group)
+        .list_contacts(query.as_deref(), &groups.unwrap_or_default())
         .map_err(|e| e.to_string())
 }
 

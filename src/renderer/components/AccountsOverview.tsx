@@ -49,9 +49,12 @@ export function AccountsOverview({
     return <p className="text-sm text-white/70 drop-shadow">{t('mailbox.addInSettings')}</p>;
   }
 
+  // 展開中は他アカウントを隠し、選択したアカウントだけ表示する。
+  const shown = expanded == null ? accounts : accounts.filter((a) => a.id === expanded);
+
   return (
     <div className="flex h-full min-h-0 flex-col justify-center gap-3 drop-shadow">
-      {accounts.map((a) => (
+      {shown.map((a) => (
         <div
           key={a.id}
           className={expanded === a.id ? 'flex min-h-0 flex-1 flex-col' : 'shrink-0'}
@@ -82,6 +85,10 @@ export function AccountsOverview({
                       onClick={() => onOpenMail(a.id, m.id)}
                     >
                       <div className="truncate text-sm text-white/90">
+                        {/* 未読は先頭に印を表示 */}
+                        {!m.is_read && (
+                          <span className="mr-1 align-middle text-[10px] text-sky-300">●</span>
+                        )}
                         {m.subject ?? '(no subject)'}
                       </div>
                       <div className="line-clamp-3 text-xs leading-snug text-white/50">

@@ -165,7 +165,7 @@
     "include": "Include in merge",
     "combineN": "Combine {{count}}",
     "master": "Merged master ({{count}} contacts · editable)",
-    "saveMaster": "Merge & save",
+    "saveMaster": "Merge into one",
     "saveMasterHint": "The selected contacts become one.",
     "pickAtLeast2": "Check 2 or more to see the merged master.",
     "notDup": "Not duplicates",

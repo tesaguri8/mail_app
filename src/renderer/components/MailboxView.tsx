@@ -37,6 +37,7 @@ import {
   mailSync,
 } from '../services/mail';
 import { recipientSuggest } from '../services/recipients';
+import { MAIL_SYNCED_EVENT } from '../hooks/useAutoSync';
 import { RecipientSuggestList } from './RecipientSuggestList';
 import { mailAddTag, mailRemoveTag, tagCreate, tagList } from '../services/tags';
 import { pickTagColor, DEFAULT_TAG_COLOR } from '../utils/tagColors';
@@ -192,6 +193,16 @@ export function MailboxView({
     setMails(fn);
     setSearchResults(fn);
   };
+
+  // 自動同期の完了で一覧を再読み込み（手動同期中は onSync 側が再読込するのでスキップ）。
+  useEffect(() => {
+    const onSynced = () => {
+      if (!syncing && selected != null) loadMails(selected);
+    };
+    window.addEventListener(MAIL_SYNCED_EVENT, onSynced);
+    return () => window.removeEventListener(MAIL_SYNCED_EVENT, onSynced);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncing, selected, folder]);
 
   // 全文検索: 入力を 250ms デバウンスして呼ぶ。アカウント/フォルダ切替でも再実行。
   useEffect(() => {

@@ -7,6 +7,7 @@ import { ContactsView } from './components/ContactsView';
 import { StubView } from './components/StubView';
 import { Settings } from './components/Settings';
 import { accountList } from './services/accounts';
+import { useAutoSync, MAIL_SYNCED_EVENT } from './hooks/useAutoSync';
 import type { AccountSummary } from '@bindings/AccountSummary';
 // アプリ同梱の背景画像（プレースホルダ。docs/UI_UX_DESIGN.md 背景写真システム）
 import backgroundUrl from './assets/background.jpg';
@@ -37,6 +38,15 @@ export default function App() {
     if (view !== 'mail') refreshAccounts();
   }, [view, refreshAccounts]);
 
+  // 自動同期: ホーム/メールに入った時＋滞在中は設定間隔（既定30秒）で全アカウント同期。
+  const syncNow = useAutoSync(view === 'home' || view === 'mail', accounts);
+
+  // 同期が完了したらアカウント（未読数バッジ）を更新する。
+  useEffect(() => {
+    window.addEventListener(MAIL_SYNCED_EVENT, refreshAccounts);
+    return () => window.removeEventListener(MAIL_SYNCED_EVENT, refreshAccounts);
+  }, [refreshAccounts]);
+
   const openMail = (accountId: number, mailId?: number) => {
     setMailAccountId(accountId);
     setMailOpenId(mailId ?? null);
@@ -44,8 +54,10 @@ export default function App() {
   };
 
   // タイトルバーからの遷移。メールは特定メッセージを開かずに開く。
+  // ホーム/メールは押すたびに同期（同じビューを再度押した時も含む）。
   const navigate = (v: AppView) => {
     if (v === 'mail') setMailOpenId(null);
+    if ((v === 'home' || v === 'mail') && v === view) syncNow();
     setView(v);
   };
 

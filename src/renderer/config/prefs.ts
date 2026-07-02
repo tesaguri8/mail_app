@@ -6,6 +6,8 @@ const FLY_ANIMATION_KEY = 'rondine.flyAnimation';
 const PHONE_REGION_KEY = 'rondine.phoneRegion';
 const PHONE_STYLE_KEY = 'rondine.phoneStyle';
 const POSTAL_AUTOFORMAT_KEY = 'rondine.postalAutoformat';
+const AUTO_SYNC_SEC_KEY = 'rondine.autoSyncSec';
+const HOME_COUNT_MODE_KEY = 'rondine.homeCountMode';
 export const PREFS_EVENT = 'rondine:prefs';
 
 /** 本文埋め込み画像（inline asset）を自動取得して表示するか。既定: オン。 */
@@ -48,6 +50,37 @@ export function getPhoneStyle(): 'national' | 'international' {
 
 export function setPhoneStyle(style: 'national' | 'international'): void {
   localStorage.setItem(PHONE_STYLE_KEY, style);
+  window.dispatchEvent(new Event(PREFS_EVENT));
+}
+
+/**
+ * 自動同期の間隔（秒）。ホーム/メールモード滞在中にこの間隔で同期する。
+ * 0 = 自動同期オフ（画面遷移時の同期は常に行う）。既定: 30 秒、下限 10 秒。
+ */
+export function getAutoSyncInterval(): number {
+  const stored = localStorage.getItem(AUTO_SYNC_SEC_KEY);
+  if (stored === null) return 30; // 未設定は既定 30 秒
+  const n = Number(stored);
+  if (!Number.isFinite(n) || n <= 0) return 0; // 0 や不正値はオフ
+  return Math.max(10, Math.round(n));
+}
+
+export function setAutoSyncInterval(sec: number): void {
+  const v = Number.isFinite(sec) && sec > 0 ? Math.max(10, Math.round(sec)) : 0;
+  localStorage.setItem(AUTO_SYNC_SEC_KEY, String(v));
+  window.dispatchEvent(new Event(PREFS_EVENT));
+}
+
+/** ホームのアカウント別バッジに出す件数。'unread'=未読数 / 'total'=全数 / 'hidden'=非表示。既定: unread。 */
+export type HomeCountMode = 'unread' | 'total' | 'hidden';
+
+export function getHomeCountMode(): HomeCountMode {
+  const v = localStorage.getItem(HOME_COUNT_MODE_KEY);
+  return v === 'total' || v === 'hidden' ? v : 'unread';
+}
+
+export function setHomeCountMode(mode: HomeCountMode): void {
+  localStorage.setItem(HOME_COUNT_MODE_KEY, mode);
   window.dispatchEvent(new Event(PREFS_EVENT));
 }
 

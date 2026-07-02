@@ -17,6 +17,11 @@ import {
   setPhoneStyle,
   getPostalAutoformat,
   setPostalAutoformat,
+  getAutoSyncInterval,
+  setAutoSyncInterval,
+  getHomeCountMode,
+  setHomeCountMode,
+  type HomeCountMode,
 } from '../config/prefs';
 import { countryOptions } from '../utils/phone';
 import { spamSettingsGet, spamSettingsSet } from '../services/spam';
@@ -152,10 +157,64 @@ function DisplaySettings() {
   const [region, setRegion] = useState(getPhoneRegion());
   const [style, setStyle] = useState(getPhoneStyle());
   const [postal, setPostal] = useState(getPostalAutoformat());
+  // 自動同期の間隔（秒・0=オフ）。入力中の文字列を保持し、確定時に保存する。
+  const [syncSec, setSyncSec] = useState(String(getAutoSyncInterval()));
+  const [countMode, setCountMode] = useState<HomeCountMode>(getHomeCountMode());
   const countries = useMemo(() => countryOptions(i18n.language), [i18n.language]);
+
+  const commitSyncSec = () => {
+    const n = Number(syncSec);
+    setAutoSyncInterval(Number.isFinite(n) ? n : 0);
+    setSyncSec(String(getAutoSyncInterval())); // クランプ後の実値を表示に反映
+  };
 
   return (
     <div className="max-w-xl space-y-5">
+      {/* 自動同期: ホーム/メールモード滞在中の同期間隔（画面遷移時は常に同期） */}
+      <div>
+        <div className="text-sm text-white/85">{t('settings.autoSync')}</div>
+        <p className="mt-0.5 text-xs text-white/45">{t('settings.autoSyncHint')}</p>
+        <label className="mt-2 flex items-center gap-2">
+          <input
+            type="number"
+            min={0}
+            step={5}
+            value={syncSec}
+            onChange={(e) => setSyncSec(e.target.value)}
+            onBlur={commitSyncSec}
+            onKeyDown={(e) => e.key === 'Enter' && commitSyncSec()}
+            className="w-24 rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
+          />
+          <span className="text-xs text-white/50">{t('settings.autoSyncUnit')}</span>
+        </label>
+      </div>
+
+      {/* ホームのアカウント別バッジ: 未読数（既定）/ 全数 / 非表示 */}
+      <div className="border-t border-white/10 pt-4">
+        <div className="text-sm text-white/85">{t('settings.homeCount')}</div>
+        <p className="mt-0.5 text-xs text-white/45">{t('settings.homeCountHint')}</p>
+        <select
+          value={countMode}
+          onChange={(e) => {
+            const m = e.target.value as HomeCountMode;
+            setCountMode(m);
+            setHomeCountMode(m);
+          }}
+          className="mt-2 w-48 rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
+        >
+          <option value="unread" className="text-black">
+            {t('settings.homeCountUnread')}
+          </option>
+          <option value="total" className="text-black">
+            {t('settings.homeCountTotal')}
+          </option>
+          <option value="hidden" className="text-black">
+            {t('settings.homeCountHidden')}
+          </option>
+        </select>
+      </div>
+
+      <div className="border-t border-white/10 pt-4" />
       <Toggle
         checked={inline}
         onChange={() => {

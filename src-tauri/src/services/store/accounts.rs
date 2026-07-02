@@ -107,8 +107,10 @@ impl Store {
         let mut stmt = conn.prepare(
             "SELECT id, email, display_name, imap_host, smtp_host, COALESCE(sync_window,'6m'),
                     COALESCE(full_window,'all'), COALESCE(body_window,'off'), signature_id,
-                    (SELECT COUNT(*) FROM emails e WHERE e.account_id = accounts.id AND e.is_read = 0),
-                    (SELECT COUNT(*) FROM emails e WHERE e.account_id = accounts.id)
+                    (SELECT COUNT(*) FROM emails e WHERE e.account_id = accounts.id AND e.is_read = 0
+                       AND COALESCE(e.folder,'inbox') = 'inbox'),
+                    (SELECT COUNT(*) FROM emails e WHERE e.account_id = accounts.id
+                       AND COALESCE(e.folder,'inbox') = 'inbox')
              FROM accounts ORDER BY id",
         )?;
         let rows = stmt.query_map([], |r| {

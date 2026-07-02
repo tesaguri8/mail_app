@@ -56,6 +56,8 @@ pub struct ImportedContact {
     pub all_phones: Vec<ImportedValue>,
     /// 全住所（ラベル付き・構造化）。
     pub all_addresses: Vec<ImportedAddress>,
+    /// タグ（グループ/ラベル。vCard CATEGORIES / Google Labels）。
+    pub labels: Vec<String>,
     /// 'icloud' | 'google' | 'local'（PRODID から推定）。
     pub source: String,
     /// vCard UID（あれば。後日の同期の突き合わせキー）。
@@ -216,6 +218,7 @@ struct CardAcc {
     note: Option<String>,
     uid: Option<String>,
     prodid: Option<String>,
+    labels: Vec<String>,
 }
 
 impl CardAcc {
@@ -296,6 +299,15 @@ impl CardAcc {
                 self.birthday = non_empty(d);
             }
             "NOTE" => self.note = non_empty(value),
+            "CATEGORIES" => {
+                for c in value.split(',') {
+                    if let Some(c) = non_empty(c.to_string()) {
+                        if !self.labels.contains(&c) {
+                            self.labels.push(c);
+                        }
+                    }
+                }
+            }
             "UID" => self.uid = non_empty(value),
             "PRODID" => self.prodid = non_empty(value),
             _ => {}
@@ -369,6 +381,7 @@ impl CardAcc {
             all_emails,
             all_phones,
             all_addresses,
+            labels: self.labels,
             source,
             external_id: self.uid,
         })

@@ -356,14 +356,15 @@ pub fn mail_remove_tag(store: State<Store>, ids: Vec<i64>, tag_id: i64) -> Resul
         .map_err(|e| e.to_string())
 }
 
-/// 連絡先一覧（`query` があれば名前/よみ/メール/組織で絞り込み）。
+/// 連絡先一覧（`query` で名前/よみ/メール/組織を絞り込み、`group` でタグ絞り込み）。
 #[tauri::command]
 pub fn contact_list(
     store: State<Store>,
     query: Option<String>,
+    group: Option<i64>,
 ) -> Result<Vec<ContactSummary>, String> {
     store
-        .list_contacts(query.as_deref())
+        .list_contacts(query.as_deref(), group)
         .map_err(|e| e.to_string())
 }
 

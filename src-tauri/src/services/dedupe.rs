@@ -445,6 +445,7 @@ mod tests {
             emails: Vec::new(),
             phones: Vec::new(),
             addresses: Vec::new(),
+            tags: Vec::new(),
         }
     }
 

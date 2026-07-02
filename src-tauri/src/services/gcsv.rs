@@ -186,6 +186,11 @@ fn build_contact(idx: &HashMap<String, usize>, row: &[String]) -> Option<Importe
         all_emails,
         all_phones,
         all_addresses,
+        // Labels は ` ::: ` 区切り。Google のシステムラベル（"* myContacts" 等）は除外。
+        labels: multi(get(idx, row, "Labels"))
+            .into_iter()
+            .filter(|l| !l.starts_with('*'))
+            .collect(),
         birthday: non_empty(get(idx, row, "Birthday")),
         note: non_empty(get(idx, row, "Notes")).map(|s| s.replace("\r\n", "\n")),
         source: "google".to_string(),

@@ -71,4 +71,8 @@ phones: Array<ContactValue>,
 /**
  * ラベル付き複数住所（同上）。
  */
-addresses: Array<ContactAddress>, };
+addresses: Array<ContactAddress>, 
+/**
+ * タグ（グループ/ラベル）名（同上）。
+ */
+tags: Array<string>, };

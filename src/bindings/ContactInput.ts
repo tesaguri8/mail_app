@@ -21,6 +21,10 @@ phones: Array<ContactValueInput>,
  */
 addresses: Array<ContactAddressInput>, 
 /**
+ * タグ（グループ/ラベル）名。指定時はメンバーシップをこの集合に一致させる。
+ */
+tags: Array<string>, 
+/**
  * 姓（構造化名）。
  */
 family_name: string | null, 

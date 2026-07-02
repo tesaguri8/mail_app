@@ -31,6 +31,7 @@ fn row_to_contact(r: &Row) -> rusqlite::Result<ContactSummary> {
         emails: Vec::new(),
         phones: Vec::new(),
         addresses: Vec::new(),
+        tags: Vec::new(),
     })
 }
 
@@ -41,32 +42,48 @@ const CONTACT_COLS: &str = "id, display_name, family_name, given_name, phonetic_
 impl Store {
     /// 連絡先一覧。`query` があれば名前/よみ/メール/組織を部分一致で絞り込む。
     /// お気に入りを先頭に、次いで よみ→表示名 で並べる。
-    pub fn list_contacts(&self, query: Option<&str>) -> rusqlite::Result<Vec<ContactSummary>> {
+    pub fn list_contacts(
+        &self,
+        query: Option<&str>,
+        group: Option<i64>,
+    ) -> rusqlite::Result<Vec<ContactSummary>> {
         let conn = self.conn.lock().unwrap();
         let order = "ORDER BY is_favorite DESC, \
              name_kana COLLATE NOCASE, display_name COLLATE NOCASE";
-        match query.map(str::trim).filter(|q| !q.is_empty()) {
-            Some(q) => {
-                let like = format!("%{}%", q.replace('%', "\\%").replace('_', "\\_"));
-                let sql = format!(
-                    "SELECT {CONTACT_COLS} FROM contacts \
-                     WHERE display_name LIKE ?1 ESCAPE '\\' \
-                        OR name_kana    LIKE ?1 ESCAPE '\\' \
-                        OR email        LIKE ?1 ESCAPE '\\' \
-                        OR organization LIKE ?1 ESCAPE '\\' \
-                     {order}"
-                );
-                let mut stmt = conn.prepare(&sql)?;
-                let rows = stmt.query_map(params![like], row_to_contact)?;
-                rows.collect()
-            }
-            None => {
-                let sql = format!("SELECT {CONTACT_COLS} FROM contacts {order}");
-                let mut stmt = conn.prepare(&sql)?;
-                let rows = stmt.query_map([], row_to_contact)?;
-                rows.collect()
-            }
+        let like = query
+            .map(str::trim)
+            .filter(|q| !q.is_empty())
+            .map(|q| format!("%{}%", q.replace('%', "\\%").replace('_', "\\_")));
+
+        // 条件を動的に組む（テキスト検索・タグ絞り込み）。プレースホルダは順に採番。
+        let mut conds: Vec<String> = Vec::new();
+        let mut binds: Vec<&dyn rusqlite::ToSql> = Vec::new();
+        let mut n = 0;
+        if let Some(l) = &like {
+            n += 1;
+            conds.push(format!(
+                "(display_name LIKE ?{n} ESCAPE '\\' OR name_kana LIKE ?{n} ESCAPE '\\' \
+                  OR email LIKE ?{n} ESCAPE '\\' OR organization LIKE ?{n} ESCAPE '\\')"
+            ));
+            binds.push(l);
         }
+        if let Some(g) = &group {
+            n += 1;
+            conds.push(format!(
+                "EXISTS (SELECT 1 FROM contact_tags ct \
+                 WHERE ct.contact_id = contacts.id AND ct.tag_id = ?{n})"
+            ));
+            binds.push(g);
+        }
+        let where_sql = if conds.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conds.join(" AND "))
+        };
+        let sql = format!("SELECT {CONTACT_COLS} FROM contacts {where_sql} {order}");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(binds), row_to_contact)?;
+        rows.collect()
     }
 
     /// 単一の連絡先を取得（メール/電話/住所の複数値も充填する）。
@@ -77,6 +94,7 @@ impl Store {
         c.emails = load_values(&conn, "contact_emails", id)?;
         c.phones = load_values(&conn, "contact_phones", id)?;
         c.addresses = load_addresses(&conn, id)?;
+        c.tags = load_tags(&conn, id)?;
         Ok(c)
     }
 
@@ -184,6 +202,8 @@ impl Store {
         } else {
             rebuild_input_addresses(&conn, id, &input.addresses)?;
         }
+        // タグ（グループ）メンバーシップを input.tags に一致させる（編集時のみ触る）。
+        set_contact_tags(&conn, id, &input.tags)?;
         drop(conn);
         self.get_contact(id)
     }
@@ -262,7 +282,7 @@ impl Store {
     /// 重複候補を record linkage で束ねて返す（2 件以上のみ、確信度順）。
     /// 検出ロジックは services::dedupe（正規化＋ブロッキング＋Union-Find）。
     pub fn find_duplicate_groups(&self) -> rusqlite::Result<Vec<DuplicateGroup>> {
-        Ok(crate::services::dedupe::group(&self.list_contacts(None)?))
+        Ok(crate::services::dedupe::group(&self.list_contacts(None, None)?))
     }
 
     /// 複数の連絡先を 1 件（keep_id）に統合する。メール/電話などを寄せ集め、
@@ -407,12 +427,12 @@ impl Store {
                     )?;
                 }
 
-                // drop 側のグループ所属を keep に移し、drop 行を削除（子テーブルは CASCADE）。
+                // drop 側のタグを keep に移し、drop 行を削除（子テーブルは CASCADE）。
                 for id in drop_ids {
                     tx.execute(
-                    "UPDATE OR IGNORE contact_group_members SET contact_id = ?1 WHERE contact_id = ?2",
-                    params![keep_id, id],
-                )?;
+                        "UPDATE OR IGNORE contact_tags SET contact_id = ?1 WHERE contact_id = ?2",
+                        params![keep_id, id],
+                    )?;
                     tx.execute("DELETE FROM contacts WHERE id = ?1", params![id])?;
                 }
             }
@@ -628,6 +648,10 @@ fn write_import_children(
 ) -> rusqlite::Result<()> {
     rebuild_labeled(tx, "contact_emails", id, &c.all_emails)?;
     rebuild_labeled(tx, "contact_phones", id, &c.all_phones)?;
+    // タグ（ラベル）を付与（冪等。取り込みは追加のみ）。
+    for label in &c.labels {
+        add_contact_tag(tx, id, label)?;
+    }
     tx.execute(
         "DELETE FROM contact_addresses WHERE contact_id = ?1",
         params![id],
@@ -718,6 +742,60 @@ fn load_addresses(conn: &Connection, cid: i64) -> rusqlite::Result<Vec<ContactAd
     rows.collect()
 }
 
+/// 連絡先のタグ名を読み出す（メール共通の tags を使用。名前順）。
+fn load_tags(conn: &Connection, cid: i64) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.name FROM tags t \
+         JOIN contact_tags ct ON ct.tag_id = t.id \
+         WHERE ct.contact_id = ?1 ORDER BY t.name COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map(params![cid], |r| r.get(0))?;
+    rows.collect()
+}
+
+/// タグ名から id を得る（無ければ作成。メール/連絡先共通の tags）。
+fn find_or_create_tag(conn: &Connection, name: &str) -> rusqlite::Result<i64> {
+    if let Some(id) = conn
+        .query_row("SELECT id FROM tags WHERE name = ?1", params![name], |r| {
+            r.get::<_, i64>(0)
+        })
+        .optional()?
+    {
+        return Ok(id);
+    }
+    conn.execute(
+        "INSERT INTO tags (name, kind) VALUES (?1, 'tag')",
+        params![name],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// 連絡先にタグを付与（冪等）。
+fn add_contact_tag(conn: &Connection, cid: i64, name: &str) -> rusqlite::Result<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Ok(());
+    }
+    let tid = find_or_create_tag(conn, name)?;
+    conn.execute(
+        "INSERT OR IGNORE INTO contact_tags (contact_id, tag_id) VALUES (?1, ?2)",
+        params![cid, tid],
+    )?;
+    Ok(())
+}
+
+/// 連絡先のタグ集合を names にそろえる（既存を消して張り直す）。
+fn set_contact_tags(conn: &Connection, cid: i64, names: &[String]) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM contact_tags WHERE contact_id = ?1",
+        params![cid],
+    )?;
+    for name in names {
+        add_contact_tag(conn, cid, name)?;
+    }
+    Ok(())
+}
+
 /// 主(primary)値を1件だけ張り替える（既存 primary を消して入れ直す。追加値は温存）。
 fn set_primary_value(
     conn: &Connection,
@@ -786,7 +864,7 @@ mod tests {
             "BEGIN:VCARD\nVERSION:3.0\nFN:多重 花子\nEMAIL;type=pref:a@x.jp\nEMAIL:b@x.jp\nEMAIL:c@x.jp\nTEL:090-1\nEND:VCARD\n",
         );
         s.import_contacts(&p).unwrap();
-        let c = s.list_contacts(None).unwrap().remove(0);
+        let c = s.list_contacts(None, None).unwrap().remove(0);
         let got = s.get_contact(c.id as i64).unwrap();
         assert_eq!(got.emails.len(), 3, "追加メールも子テーブルに入る");
         assert!(got.emails[0].is_primary);
@@ -860,13 +938,47 @@ mod tests {
     }
 
     #[test]
+    fn contact_tags_import_edit_and_filter() {
+        let s = store();
+        // CATEGORIES 付き vCard を取り込み → 共通 tags に入る。
+        let p = vcard::parse(
+            "BEGIN:VCARD\nVERSION:3.0\nFN:タグ 太郎\nCATEGORIES:施主,設計事務所\nEND:VCARD\n",
+        );
+        s.import_contacts(&p).unwrap();
+        let id = s.list_contacts(None, None).unwrap()[0].id as i64;
+        let c = s.get_contact(id).unwrap();
+        assert!(c.tags.contains(&"施主".to_string()));
+        assert!(c.tags.contains(&"設計事務所".to_string()));
+
+        // 編集でタグを置き換え。
+        let input = ContactInput {
+            id: Some(c.id),
+            display_name: c.display_name.clone(),
+            tags: vec!["VIP".to_string()],
+            ..Default::default()
+        };
+        s.upsert_contact(&input).unwrap();
+        assert_eq!(s.get_contact(id).unwrap().tags, vec!["VIP".to_string()]);
+
+        // タグ ID で絞り込み（メール共通の tags を参照）。
+        let tag_id: i64 = {
+            let conn = s.conn.lock().unwrap();
+            conn.query_row("SELECT id FROM tags WHERE name = 'VIP'", [], |r| r.get(0))
+                .unwrap()
+        };
+        let filtered = s.list_contacts(None, Some(tag_id)).unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, c.id);
+    }
+
+    #[test]
     fn import_keeps_all_phones_and_structured_address() {
         let s = store();
         let p = vcard::parse(
             "BEGIN:VCARD\nVERSION:3.0\nFN:多値 太郎\nTEL;type=CELL:090-1111\nTEL;type=WORK:03-2222\nTEL:03-3333\nADR;type=HOME:;;番地1;那覇市;沖縄県;9000001;日本\nTITLE:部長\nORG:テスト社;営業部\nEND:VCARD\n",
         );
         s.import_contacts(&p).unwrap();
-        let id = s.list_contacts(None).unwrap()[0].id as i64;
+        let id = s.list_contacts(None, None).unwrap()[0].id as i64;
         let c = s.get_contact(id).unwrap();
         // 電話3件（1件目=CELL が主）。
         assert_eq!(c.phones.len(), 3, "全電話を保持");
@@ -895,7 +1007,7 @@ mod tests {
         assert_eq!((r1.total, r1.imported, r1.updated), (1, 1, 0));
 
         // ユーザーがお気に入り＆取引先に設定。
-        let c = s.list_contacts(None).unwrap().remove(0);
+        let c = s.list_contacts(None, None).unwrap().remove(0);
         s.upsert_contact(&ContactInput {
             id: Some(c.id),
             display_name: c.display_name.clone(),
@@ -921,7 +1033,7 @@ mod tests {
         assert_eq!((r2.total, r2.imported, r2.updated), (1, 0, 1));
 
         // 重複は増えず、フラグは温存、フィールドは更新されている。
-        let all = s.list_contacts(None).unwrap();
+        let all = s.list_contacts(None, None).unwrap();
         assert_eq!(all.len(), 1);
         let c = &all[0];
         assert!(c.is_favorite && c.is_business); // 温存
@@ -939,7 +1051,7 @@ mod tests {
         );
         let r = s.import_contacts(&csv).unwrap();
         assert_eq!((r.imported, r.updated), (2, 0));
-        assert_eq!(s.list_contacts(None).unwrap().len(), 2);
+        assert_eq!(s.list_contacts(None, None).unwrap().len(), 2);
     }
 
     #[test]
@@ -988,7 +1100,7 @@ mod tests {
         assert_eq!(groups[0].contacts.len(), 2);
 
         let merged = s.merge_contacts(id_a, &[id_b]).unwrap();
-        assert_eq!(s.list_contacts(None).unwrap().len(), 1);
+        assert_eq!(s.list_contacts(None, None).unwrap().len(), 1);
         assert!(merged.is_favorite && merged.is_business); // OR で温存
         assert_eq!(merged.name_kana.as_deref(), Some("タナカタロウ")); // 空きを補完
         assert_eq!(merged.organization.as_deref(), Some("B社"));
@@ -1054,7 +1166,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        assert_eq!(s.list_contacts(None).unwrap().len(), 2);
+        assert_eq!(s.list_contacts(None, None).unwrap().len(), 2);
 
         drop(s);
         let _ = std::fs::remove_dir_all(&root);
@@ -1108,7 +1220,7 @@ mod tests {
         );
         let r = s.import_contacts(&b).unwrap();
         assert_eq!((r.imported, r.updated), (0, 1));
-        let all = s.list_contacts(None).unwrap();
+        let all = s.list_contacts(None, None).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].email.as_deref(), Some("new@x.jp"));
     }

@@ -192,6 +192,8 @@ pub struct ContactSummary {
     pub phones: Vec<ContactValue>,
     /// ラベル付き複数住所（同上）。
     pub addresses: Vec<ContactAddress>,
+    /// タグ（グループ/ラベル）名（同上）。
+    pub tags: Vec<String>,
 }
 
 /// ラベル付き値の入力（メール・電話）。
@@ -232,6 +234,9 @@ pub struct ContactInput {
     /// ラベル付き複数住所（構造化）。
     #[serde(default)]
     pub addresses: Vec<ContactAddressInput>,
+    /// タグ（グループ/ラベル）名。指定時はメンバーシップをこの集合に一致させる。
+    #[serde(default)]
+    pub tags: Vec<String>,
     /// 姓（構造化名）。
     #[serde(default)]
     pub family_name: Option<String>,

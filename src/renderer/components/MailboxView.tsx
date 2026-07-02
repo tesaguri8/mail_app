@@ -290,7 +290,9 @@ export function MailboxView({
       }
     }
     const label = formatScrollDate(visibleMails[top]?.date ?? null);
-    const ratio = n > 1 ? top / (n - 1) : 0;
+    // 縦位置は通常のスクロールバーのつまみと同じ（スクロール量÷スクロール可能量）。
+    const max = el.scrollHeight - el.clientHeight;
+    const ratio = max > 0 ? Math.min(1, Math.max(0, el.scrollTop / max)) : 0;
     if (label) {
       setScrollHint({ ratio, label });
       if (scrollHintTimer.current) clearTimeout(scrollHintTimer.current);

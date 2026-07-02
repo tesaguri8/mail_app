@@ -19,6 +19,8 @@ pub struct NewEmail {
     /// List-Id 生テキスト（メルマガ/ML 判定。docs/SPAM.md §7.7）。
     pub list_id: Option<String>,
     pub has_attachments: bool,
+    /// サーバー上の既読状態（IMAP \Seen フラグ）。未読数をサーバーと一致させる。
+    pub is_read: bool,
     /// メッセージの IMAP UID（添付のオンデマンド再取得用）。
     pub uid: Option<i64>,
     /// 保存先フォルダ（'inbox' | 'sent' | 'drafts' | 'trash' | 'spam'）。
@@ -111,8 +113,8 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
     let key = folder_key(&e.folder, &e.canonical_key);
     let changed = conn.execute(
         "INSERT OR IGNORE INTO emails
-           (account_id, message_id, canonical_key, subject, from_address, to_addresses, date, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+           (account_id, message_id, canonical_key, subject, from_address, to_addresses, date, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             e.account_id,
             e.message_id,
@@ -129,6 +131,7 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
             e.auth_result,
             e.list_id,
             e.folder,
+            e.is_read as i64,
         ],
     )?;
     if changed == 0 {
@@ -169,6 +172,15 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
         let n = conn.execute(
             "UPDATE emails SET uid = ?1 WHERE id = ?2 AND uid IS NULL",
             params![e.uid, id],
+        )?;
+        touched |= n > 0;
+    }
+    // サーバーで既読（\Seen）なら既読に補正する（既読→未読の巻き戻しはしない。
+    // ローカルで開いた既読はサーバーへ送っていないため、逆方向は消えてしまう）。
+    if e.is_read {
+        let n = conn.execute(
+            "UPDATE emails SET is_read = 1 WHERE id = ?1 AND is_read = 0",
+            params![id],
         )?;
         touched |= n > 0;
     }
@@ -584,11 +596,61 @@ mod tests {
             auth_result: None,
             list_id: None,
             has_attachments: false,
+            is_read: false,
             uid: None,
             folder: folder.to_string(),
             attachments: vec![],
         };
         insert_email(&conn, &e).unwrap();
+    }
+
+    /// \Seen 取り込み: 既読で挿入→既読で保存。再取り込みで未読→既読の補正はするが、
+    /// 逆（既読→未読）はしない（ローカルで開いた既読を守る）。
+    #[test]
+    fn insert_and_backfill_respect_seen_flag() {
+        let store = test_store();
+        let conn = store.conn.lock().unwrap();
+        let mk = |key: &str, read: bool| NewEmail {
+            account_id: 1,
+            message_id: None,
+            canonical_key: key.to_string(),
+            subject: Some("s".into()),
+            from_address: None,
+            to_addresses: None,
+            date: None,
+            body_plain: None,
+            clean_body: None,
+            body_html: None,
+            auth_result: None,
+            list_id: None,
+            has_attachments: false,
+            is_read: read,
+            uid: None,
+            folder: "inbox".to_string(),
+            attachments: vec![],
+        };
+        let read_of = |key: &str| -> i64 {
+            conn.query_row(
+                "SELECT is_read FROM emails WHERE canonical_key = ?1",
+                params![key],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+
+        // 既読フラグ付きで挿入 → 既読で保存される。
+        insert_email(&conn, &mk("k-seen", true)).unwrap();
+        assert_eq!(read_of("k-seen"), 1);
+
+        // 未読で挿入 → 再取り込みでサーバー既読なら既読へ補正。
+        insert_email(&conn, &mk("k-later", false)).unwrap();
+        assert_eq!(read_of("k-later"), 0);
+        insert_email(&conn, &mk("k-later", true)).unwrap();
+        assert_eq!(read_of("k-later"), 1);
+
+        // ローカルで既読のものは、サーバー未読でも未読へ巻き戻さない。
+        insert_email(&conn, &mk("k-seen", false)).unwrap();
+        assert_eq!(read_of("k-seen"), 1);
     }
 
     #[test]

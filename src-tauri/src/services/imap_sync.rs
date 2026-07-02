@@ -408,6 +408,11 @@ fn store_fetches<'a>(
             None => continue,
         };
         let uid = m.uid.map(|u| u as i64);
+        // サーバー上の既読状態（\Seen）。未読数をサーバーと一致させる。
+        let seen = m
+            .flags()
+            .iter()
+            .any(|f| matches!(f, imap::types::Flag::Seen));
         if let Some(p) = parser::parse_message(raw) {
             let attachments = p
                 .attachments
@@ -435,6 +440,7 @@ fn store_fetches<'a>(
                 auth_result: p.auth_result,
                 list_id: p.list_id,
                 has_attachments: p.has_attachments,
+                is_read: seen,
                 uid,
                 folder: folder.to_string(),
                 attachments,

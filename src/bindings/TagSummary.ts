@@ -9,6 +9,10 @@ export type TagSummary = { id: number, name: string,
  */
 color: string | null, 
 /**
+ * 親タグ（フォルダ整理用の階層。ルートは None）。
+ */
+parent_id: number | null, 
+/**
  * 付与されているメール件数。
  */
 count: number, };

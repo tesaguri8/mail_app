@@ -213,7 +213,7 @@ mod tests {
         .unwrap();
         Store {
             conn: std::sync::Mutex::new(conn),
-            path: std::path::PathBuf::from(":memory:"),
+            path: std::sync::Mutex::new(std::path::PathBuf::from(":memory:")),
         }
     }
 

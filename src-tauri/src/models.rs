@@ -121,7 +121,190 @@ pub struct TagSummary {
     pub name: String,
     /// 表示色（CSS カラー文字列。未設定なら None）。
     pub color: Option<String>,
+    /// 親タグ（フォルダ整理用の階層。ルートは None）。
+    pub parent_id: Option<i32>,
     /// 付与されているメール件数。
+    pub count: i32,
+}
+
+/// ラベル付きの値（メール・電話）。Apple/Google のラベル付き複数値に対応。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ContactValue {
+    pub id: i32,
+    /// 見出し（自宅/職場/携帯/カスタム＝会社名など）。
+    pub label: Option<String>,
+    pub value: String,
+    pub is_primary: bool,
+}
+
+/// ラベル付きの構造化住所。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ContactAddress {
+    pub id: i32,
+    pub label: Option<String>,
+    pub postal: Option<String>,
+    pub region: Option<String>,
+    pub city: Option<String>,
+    pub street: Option<String>,
+    pub extended: Option<String>,
+    pub country: Option<String>,
+    pub is_primary: bool,
+}
+
+/// 連絡先（住所録）。一覧・詳細・編集で共通に使う（連絡先はメールほど大量でないため軽量/詳細を分けない）。
+/// メール/電話/住所は子テーブル由来のラベル付き複数値（arrays）。flat な email/phone/address は
+/// 主(primary)値の写しで、一覧表示や後方互換のために保持する。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ContactSummary {
+    pub id: i32,
+    pub display_name: String,
+    /// 姓（構造化名。表示名とは別）。
+    pub family_name: Option<String>,
+    /// 名。
+    pub given_name: Option<String>,
+    /// よみ（姓）。
+    pub phonetic_family: Option<String>,
+    /// よみ（名）。
+    pub phonetic_given: Option<String>,
+    /// 読み（並び替え用。よみ姓＋よみ名の結合など）。
+    pub name_kana: Option<String>,
+    /// 主メールアドレス（primary の写し）。
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub organization: Option<String>,
+    /// 役職。
+    pub org_title: Option<String>,
+    /// 部署。
+    pub org_department: Option<String>,
+    /// 主住所の整形文字列（primary の写し。一覧用）。
+    pub address: Option<String>,
+    /// 誕生日（YYYY-MM-DD 等の文字列。ホーム/ウィジェット通知用）。
+    pub birthday: Option<String>,
+    pub note: Option<String>,
+    /// お気に入り（先頭に固定表示）。
+    pub is_favorite: bool,
+    /// 取引先の手動フラグ（docs/FILTERING.md）。
+    pub is_business: bool,
+    /// この相手からのメールで外部画像を許可（docs/MAIL_SECURITY.md）。
+    pub allow_remote_images: bool,
+    /// ラベル付き複数メール（詳細取得時のみ充填。一覧では空）。
+    pub emails: Vec<ContactValue>,
+    /// ラベル付き複数電話（同上）。
+    pub phones: Vec<ContactValue>,
+    /// ラベル付き複数住所（同上）。
+    pub addresses: Vec<ContactAddress>,
+    /// タグ（グループ/ラベル）名（同上）。
+    pub tags: Vec<String>,
+}
+
+/// ラベル付き値の入力（メール・電話）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ContactValueInput {
+    pub label: Option<String>,
+    pub value: String,
+}
+
+/// 構造化住所の入力。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ContactAddressInput {
+    pub label: Option<String>,
+    pub postal: Option<String>,
+    pub region: Option<String>,
+    pub city: Option<String>,
+    pub street: Option<String>,
+    pub extended: Option<String>,
+    pub country: Option<String>,
+}
+
+/// 連絡先の作成・更新入力（フロントから受け取る）。`id` が None なら新規作成。
+/// 姓/名・よみ姓/よみ名・複数値配列は任意（省略時はフロント旧実装との後方互換）。
+/// emails/phones/addresses が非空ならそれらで子テーブルを作り直し、空なら flat の主値のみ反映。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ContactInput {
+    pub id: Option<i32>,
+    pub display_name: String,
+    /// ラベル付き複数メール（非空ならこれで確定）。
+    #[serde(default)]
+    pub emails: Vec<ContactValueInput>,
+    /// ラベル付き複数電話。
+    #[serde(default)]
+    pub phones: Vec<ContactValueInput>,
+    /// ラベル付き複数住所（構造化）。
+    #[serde(default)]
+    pub addresses: Vec<ContactAddressInput>,
+    /// タグ（グループ/ラベル）名。指定時はメンバーシップをこの集合に一致させる。
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// 姓（構造化名）。
+    #[serde(default)]
+    pub family_name: Option<String>,
+    /// 名。
+    #[serde(default)]
+    pub given_name: Option<String>,
+    /// よみ（姓）。
+    #[serde(default)]
+    pub phonetic_family: Option<String>,
+    /// よみ（名）。
+    #[serde(default)]
+    pub phonetic_given: Option<String>,
+    pub name_kana: Option<String>,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub organization: Option<String>,
+    /// 役職。
+    #[serde(default)]
+    pub org_title: Option<String>,
+    /// 部署。
+    #[serde(default)]
+    pub org_department: Option<String>,
+    pub address: Option<String>,
+    pub birthday: Option<String>,
+    pub note: Option<String>,
+    pub is_favorite: bool,
+    pub is_business: bool,
+    pub allow_remote_images: bool,
+}
+
+/// 連絡先インポートの結果（vCard 取り込み。docs/IMPORT_EXPORT.md）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ImportReport {
+    /// ファイル内の vCard 総数。
+    pub total: i32,
+    /// 新規追加した件数。
+    pub imported: i32,
+    /// 既存（UID かメール一致）を更新した件数。
+    pub updated: i32,
+    /// 連絡先として成立せず飛ばした件数（名前・メール・電話いずれも無い等）。
+    pub skipped: i32,
+}
+
+/// 重複候補のグループ（整理 UI 用）。record linkage で束ねた連結成分。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct DuplicateGroup {
+    /// グループの見出し（代表の表示名）。
+    pub label: String,
+    /// 確信度: "high"（携帯/メール一致）| "medium"（同名＋組織/県）| "low"（同名のみ）。
+    pub confidence: String,
+    /// 重複候補の連絡先（2 件以上）。
+    pub contacts: Vec<ContactSummary>,
+}
+
+/// 連絡先グループ（所属件数つき。編集 UI は後続）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ContactGroupSummary {
+    pub id: i32,
+    pub name: String,
+    pub color: Option<String>,
+    /// 所属している連絡先の件数。
     pub count: i32,
 }
 
@@ -248,6 +431,21 @@ pub struct SyncProgress {
     pub current: i32,
     /// このフォルダで取得予定の件数（目安）。
     pub total: i32,
+}
+
+/// データ保存先（mail.db と添付キャッシュのフォルダ）と使用量。
+/// バイト数は f64（TS の number）で大きな値も安全に渡す。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct DataLocation {
+    /// 現在のデータフォルダ（絶対パス）。
+    pub dir: String,
+    /// 既定の場所を使っているか（移動していない）。
+    pub is_default: bool,
+    /// mail.db（＋WAL/SHM）の合計バイト。
+    pub db_bytes: f64,
+    /// 添付キャッシュの合計バイト。
+    pub attachments_bytes: f64,
 }
 
 /// 同期結果。

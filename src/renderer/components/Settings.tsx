@@ -1,15 +1,26 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { open } from '@tauri-apps/plugin-dialog';
+import { FolderInput, HardDrive, RotateCcw } from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { SpamSettings as SpamSettingsType } from '@bindings/SpamSettings';
+import type { DataLocation } from '@bindings/DataLocation';
 import { APP } from '../config/appIdentity';
 import {
   getFlyAnimation,
   getInlineImages,
   setFlyAnimation,
   setInlineImages,
+  getPhoneRegion,
+  setPhoneRegion,
+  getPhoneStyle,
+  setPhoneStyle,
+  getPostalAutoformat,
+  setPostalAutoformat,
 } from '../config/prefs';
+import { countryOptions } from '../utils/phone';
 import { spamSettingsGet, spamSettingsSet } from '../services/spam';
+import { dataLocation, dataRelocate, dataResetLocation } from '../services/data';
 import { AccountSetup } from './AccountSetup';
 import { SignatureManager } from './SignatureManager';
 import { TagManager } from './TagManager';
@@ -20,7 +31,20 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 // 実値はアプリ起動時に spam_settings_get で上書きする（DB が単一ソース）。
 const SPAM_DEFAULTS: SpamSettingsType = { enabled: true, threshold_low: 0.5, threshold_high: 0.9 };
 
-type Section = 'accounts' | 'signatures' | 'tags' | 'display' | 'spam' | 'about';
+type Section = 'accounts' | 'signatures' | 'tags' | 'display' | 'spam' | 'data' | 'about';
+
+/** バイト数を読みやすい単位に整形。 */
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
+}
 
 /**
  * 設定ページ: 左サイドバー（項目）＋右コンテンツの2カラム。
@@ -41,6 +65,7 @@ export function Settings({
     { key: 'tags', label: t('settings.tags') },
     { key: 'display', label: t('settings.display') },
     { key: 'spam', label: t('settings.spam') },
+    { key: 'data', label: t('settings.data') },
     { key: 'about', label: t('settings.about') },
   ];
 
@@ -67,6 +92,7 @@ export function Settings({
         {section === 'tags' && <TagManager />}
         {section === 'display' && <DisplaySettings />}
         {section === 'spam' && <SpamSettings />}
+        {section === 'data' && <DataLocationSettings />}
         {section === 'about' && (
           <div className="space-y-1 text-sm text-white/70">
             <div className="text-base font-semibold text-white">{APP.productName}</div>
@@ -81,65 +107,29 @@ export function Settings({
   );
 }
 
-/** 表示設定: インライン画像の自動取得、送信アニメーション（つばめ）など。 */
-function DisplaySettings() {
-  const { t } = useTranslation();
-  const [inline, setInline] = useState(getInlineImages());
-  const [fly, setFly] = useState(getFlyAnimation());
-
-  const toggleInline = () => {
-    const next = !inline;
-    setInline(next);
-    setInlineImages(next);
-  };
-
-  const toggleFly = () => {
-    const next = !fly;
-    setFly(next);
-    setFlyAnimation(next);
-  };
-
-  return (
-    <div className="space-y-4">
-      <ToggleRow
-        label={t('settings.inlineImages')}
-        hint={t('settings.inlineImagesHint')}
-        checked={inline}
-        onToggle={toggleInline}
-      />
-      <ToggleRow
-        label={t('settings.flyAnimation')}
-        hint={t('settings.flyAnimationHint')}
-        checked={fly}
-        onToggle={toggleFly}
-      />
-    </div>
-  );
-}
-
-/** ラベル＋説明＋スイッチの1行（設定トグルの共通形）。 */
-function ToggleRow({
-  label,
-  hint,
+/** オン/オフのトグルスイッチ。 */
+function Toggle({
   checked,
-  onToggle,
+  onChange,
+  title,
+  hint,
 }: {
-  label: string;
-  hint: string;
   checked: boolean;
-  onToggle: () => void;
+  onChange: () => void;
+  title: string;
+  hint: string;
 }) {
   return (
     <label className="flex cursor-pointer items-start justify-between gap-4">
       <span>
-        <span className="block text-sm text-white/85">{label}</span>
+        <span className="block text-sm text-white/85">{title}</span>
         <span className="mt-0.5 block text-xs text-white/45">{hint}</span>
       </span>
       <button
         type="button"
         role="switch"
         aria-checked={checked}
-        onClick={onToggle}
+        onClick={onChange}
         className={`relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors ${
           checked ? 'bg-sky-500' : 'bg-white/20'
         }`}
@@ -151,6 +141,98 @@ function ToggleRow({
         />
       </button>
     </label>
+  );
+}
+
+/** 表示設定: インライン画像の自動取得・送信アニメーション・電話/郵便番号の整形など。 */
+function DisplaySettings() {
+  const { t, i18n } = useTranslation();
+  const [inline, setInline] = useState(getInlineImages());
+  const [fly, setFly] = useState(getFlyAnimation());
+  const [region, setRegion] = useState(getPhoneRegion());
+  const [style, setStyle] = useState(getPhoneStyle());
+  const [postal, setPostal] = useState(getPostalAutoformat());
+  const countries = useMemo(() => countryOptions(i18n.language), [i18n.language]);
+
+  return (
+    <div className="max-w-xl space-y-5">
+      <Toggle
+        checked={inline}
+        onChange={() => {
+          const next = !inline;
+          setInline(next);
+          setInlineImages(next);
+        }}
+        title={t('settings.inlineImages')}
+        hint={t('settings.inlineImagesHint')}
+      />
+      <Toggle
+        checked={fly}
+        onChange={() => {
+          const next = !fly;
+          setFly(next);
+          setFlyAnimation(next);
+        }}
+        title={t('settings.flyAnimation')}
+        hint={t('settings.flyAnimationHint')}
+      />
+
+      <div className="border-t border-white/10 pt-4">
+        <div className="text-sm text-white/85">{t('settings.phoneTitle')}</div>
+        <p className="mt-0.5 text-xs text-white/45">{t('settings.phoneHint')}</p>
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <label className="block">
+            <span className="mb-1 block text-xs text-white/50">{t('settings.phoneRegion')}</span>
+            <select
+              value={region}
+              onChange={(e) => {
+                setRegion(e.target.value);
+                setPhoneRegion(e.target.value);
+              }}
+              className="w-full rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
+            >
+              {countries.map((c) => (
+                <option key={c.region} value={c.region} className="text-black">
+                  {c.name} (+{c.calling})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs text-white/50">{t('settings.phoneStyle')}</span>
+            <select
+              value={style}
+              onChange={(e) => {
+                const s = e.target.value as 'national' | 'international';
+                setStyle(s);
+                setPhoneStyle(s);
+              }}
+              className="w-full rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
+            >
+              <option value="national" className="text-black">
+                {t('settings.phoneStyleNational')}
+              </option>
+              <option value="international" className="text-black">
+                {t('settings.phoneStyleInternational')}
+              </option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div className="border-t border-white/10 pt-4">
+        <Toggle
+          checked={postal}
+          onChange={() => {
+            const next = !postal;
+            setPostal(next);
+            setPostalAutoformat(next);
+          }}
+          title={t('settings.postalAutoformat')}
+          hint={t('settings.postalAutoformatHint')}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -214,6 +296,102 @@ function SpamSettings() {
       )}
 
       {!isTauri && <p className="text-xs text-white/40">{t('settings.spamPreviewNote')}</p>}
+    </div>
+  );
+}
+
+/** データの保存先: 現在地・使用量の表示と、別フォルダへの移動／既定に戻す。 */
+function DataLocationSettings() {
+  const { t } = useTranslation();
+  const [loc, setLoc] = useState<DataLocation | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    dataLocation()
+      .then(setLoc)
+      .catch(() => undefined);
+  }, []);
+
+  const change = async () => {
+    if (busy) return;
+    const dir = await open({ directory: true, multiple: false }).catch(() => null);
+    if (typeof dir !== 'string') return;
+    setBusy(true);
+    setError(null);
+    try {
+      setLoc(await dataRelocate(dir));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reset = async () => {
+    if (busy || loc?.is_default) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setLoc(await dataResetLocation());
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const total = loc ? loc.db_bytes + loc.attachments_bytes : 0;
+
+  return (
+    <div className="max-w-xl space-y-4">
+      <div>
+        <div className="flex items-center gap-2 text-sm text-white/85">
+          <HardDrive size={16} />
+          {t('dataloc.title')}
+        </div>
+        <p className="mt-0.5 text-xs text-white/45">{t('dataloc.hint')}</p>
+      </div>
+
+      <div className="rounded-lg bg-white/5 p-3">
+        <div className="mb-1 text-xs text-white/45">
+          {t('dataloc.current')}
+          {loc?.is_default && <span className="ml-2 text-white/35">({t('dataloc.default')})</span>}
+        </div>
+        <div className="break-all font-mono text-xs text-white/80">
+          {loc ? loc.dir : '…'}
+        </div>
+        {loc && (
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-white/50">
+            <span>{t('dataloc.total', { size: formatBytes(total) })}</span>
+            <span>{t('dataloc.db', { size: formatBytes(loc.db_bytes) })}</span>
+            <span>{t('dataloc.attachments', { size: formatBytes(loc.attachments_bytes) })}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={change}
+          disabled={busy}
+          className="flex items-center gap-1.5 rounded-md bg-white/15 px-3 py-2 text-sm font-medium hover:bg-white/25 disabled:opacity-40"
+        >
+          <FolderInput size={15} />
+          {busy ? t('dataloc.moving') : t('dataloc.change')}
+        </button>
+        <button
+          onClick={reset}
+          disabled={busy || !loc || loc.is_default}
+          className="flex items-center gap-1.5 rounded-md border border-white/20 px-3 py-2 text-sm text-white/70 hover:bg-white/10 disabled:opacity-40"
+        >
+          <RotateCcw size={15} />
+          {t('dataloc.reset')}
+        </button>
+      </div>
+
+      {error && <p className="text-sm text-red-300">{error}</p>}
+      <p className="text-xs text-white/40">{t('dataloc.note')}</p>
     </div>
   );
 }

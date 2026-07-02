@@ -68,6 +68,22 @@ const MIGRATIONS: &[Migration] = &[
         version: 15,
         sql: include_str!("migrations/0015_folders.sql"),
     },
+    Migration {
+        version: 16,
+        sql: include_str!("migrations/0016_contacts.sql"),
+    },
+    Migration {
+        version: 17,
+        sql: include_str!("migrations/0017_contact_uid.sql"),
+    },
+    Migration {
+        version: 18,
+        sql: include_str!("migrations/0018_contact_model.sql"),
+    },
+    Migration {
+        version: 19,
+        sql: include_str!("migrations/0019_contact_tags.sql"),
+    },
 ];
 
 pub fn run(conn: &Connection) -> rusqlite::Result<()> {
@@ -96,7 +112,7 @@ mod tests {
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 15);
+        assert_eq!(v, 19);
 
         // emails テーブルが存在
         let n: i64 = conn
@@ -173,5 +189,49 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn contacts_tables_exist_and_cascade_membership() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        run(&conn).unwrap();
+
+        // contacts / contact_groups / contact_group_members が作成されている
+        for name in ["contacts", "contact_groups", "contact_group_members"] {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    [name],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "table {name} missing");
+        }
+
+        // 連絡先をグループに入れ、連絡先削除で所属が CASCADE で外れる
+        conn.execute(
+            "INSERT INTO contacts (id, display_name) VALUES (1, '山田太郎')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO contact_groups (id, name) VALUES (5, '取引先')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO contact_group_members (contact_id, group_id) VALUES (1, 5)",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM contacts WHERE id = 1", [])
+            .unwrap();
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM contact_group_members", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(n, 0);
     }
 }

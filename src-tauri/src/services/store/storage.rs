@@ -289,7 +289,7 @@ mod tests {
         migrations::run(&conn).unwrap();
         Store {
             conn: Mutex::new(conn),
-            path: PathBuf::new(),
+            path: Mutex::new(PathBuf::new()),
         }
     }
 

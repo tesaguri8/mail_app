@@ -91,7 +91,7 @@ export function FolderCombobox({
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-md border border-white/15 bg-neutral-900/95 shadow-xl backdrop-blur">
+        <div className="absolute left-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-md border border-white/15 bg-neutral-900/80 shadow-xl backdrop-blur">
           <input
             autoFocus
             value={query}

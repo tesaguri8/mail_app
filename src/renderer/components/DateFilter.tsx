@@ -140,8 +140,9 @@ export function DateFilter({
         <CalendarDays size={15} />
       </button>
 
+      {/* サイドバー内で右側に切れないよう、ボタン右端を基準に左へ展開する */}
       {open && (
-        <div className="absolute left-0 top-full z-30 mt-1 w-60 rounded-md border border-white/15 bg-neutral-900/95 p-3 shadow-xl backdrop-blur">
+        <div className="absolute right-0 top-full z-30 mt-1 w-60 rounded-md border border-white/15 bg-neutral-900/80 p-3 shadow-xl backdrop-blur">
           <div className="mb-2 flex gap-1">
             {MODES.map((m) => (
               <button

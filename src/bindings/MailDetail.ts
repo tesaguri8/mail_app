@@ -5,6 +5,10 @@
  */
 export type MailDetail = { id: number, 
 /**
+ * 所属アカウント ID（「全て」表示からの返信で、正しい差出人を選ぶのに使う）。
+ */
+account_id: number, 
+/**
  * 元メッセージの Message-ID（返信のスレッド化 In-Reply-To 用。無ければ None）。
  */
 message_id: string | null, subject: string | null, from_address: string | null, 

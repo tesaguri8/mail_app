@@ -106,13 +106,16 @@ export function MailboxView({
   accounts: AccountSummary[];
   initialAccountId: number | null;
   initialMailId: number | null;
-  /** 表示中アカウントの変化を親へ通知（フッターの件数表示用）。 */
-  onAccountChange?: (id: number | null) => void;
+  /** 表示中アカウントの変化を親へ通知（フッターの件数表示用）。'all'=全アカウント。 */
+  onAccountChange?: (id: number | 'all' | null) => void;
 }) {
   const { t } = useTranslation();
-  const [selected, setSelected] = useState<number | null>(
+  // 'all' = 全アカウント横断表示 / number = 特定アカウント / null = 未選択。
+  const [selected, setSelected] = useState<number | 'all' | null>(
     initialAccountId ?? accounts[0]?.id ?? null
   );
+  // クエリに渡すアカウント（number のみ。'all'/null は null=全アカウント）。
+  const queryAccount = typeof selected === 'number' ? selected : null;
   // 表示中アカウントを親へ通知（フッターのメール総数表示）。
   useEffect(() => {
     onAccountChange?.(selected);
@@ -236,11 +239,11 @@ export function MailboxView({
   const [scrollHint, setScrollHint] = useState<{ ratio: number; label: string } | null>(null);
   const scrollHintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const loadMails = (id: number) => {
+  const loadMails = () => {
     const token = ++loadTokenRef.current;
-    pageKeyRef.current = `${id}:${folder}`;
+    pageKeyRef.current = `${selected}:${folder}`;
     loadingMoreRef.current = false;
-    return mailList(id, folder, PAGE_SIZE, 0)
+    return mailList(queryAccount, folder, PAGE_SIZE, 0)
       .then((rows) => {
         if (loadTokenRef.current !== token) return;
         setMails(rows);
@@ -254,7 +257,7 @@ export function MailboxView({
     if (selected == null || searchMode || loadingMoreRef.current || !hasMore) return;
     const key = pageKeyRef.current;
     loadingMoreRef.current = true;
-    mailList(selected, folder, PAGE_SIZE, mails.length)
+    mailList(queryAccount, folder, PAGE_SIZE, mails.length)
       .then((rows) => {
         if (pageKeyRef.current !== key) return; // 切替後の結果は破棄
         setMails((prev) => [...prev, ...rows]);
@@ -304,7 +307,7 @@ export function MailboxView({
     setSelectedIds(new Set());
     anchorId.current = null;
     if (selected != null) {
-      loadMails(selected).then(() => {
+      loadMails().then(() => {
         const pid = pendingOpen.current;
         if (pid != null) {
           pendingOpen.current = null;
@@ -324,7 +327,7 @@ export function MailboxView({
   // 自動同期の完了で一覧を再読み込み（手動同期中は onSync 側が再読込するのでスキップ）。
   useEffect(() => {
     const onSynced = () => {
-      if (!syncing && selected != null) loadMails(selected);
+      if (!syncing && selected != null) loadMails();
     };
     window.addEventListener(MAIL_SYNCED_EVENT, onSynced);
     return () => window.removeEventListener(MAIL_SYNCED_EVENT, onSynced);
@@ -341,13 +344,13 @@ export function MailboxView({
     }
     setSearching(true);
     const h = setTimeout(() => {
-      mailSearch(selected, folder, q, 200)
+      mailSearch(queryAccount, folder, q, 200)
         .then(setSearchResults)
         .catch(() => setSearchResults([]))
         .finally(() => setSearching(false));
     }, 250);
     return () => clearTimeout(h);
-  }, [query, selected, folder]);
+  }, [query, selected, folder, queryAccount]);
 
   // 検索窓の入力補助: 入力に一致する住所録＋履歴の候補を出す（選ぶとアドレスで検索）。
   // スペースを含む入力（2語目以降）はオートコンプリート解除＝候補を出さない。
@@ -430,9 +433,17 @@ export function MailboxView({
     // Rust からの "sync:progress" を購読して、フォルダ別の取得状況を表示する。
     const unlisten = await listen<SyncProgress>('sync:progress', (e) => setProgress(e.payload));
     try {
-      const r = await mailSync(selected);
-      setStatus(t('mailbox.result', { fetched: r.fetched, stored: r.stored }));
-      await loadMails(selected);
+      // 「全て」表示では全アカウントを順に同期する。
+      const ids = selected === 'all' ? accounts.map((a) => a.id) : [selected];
+      let fetched = 0;
+      let stored = 0;
+      for (const id of ids) {
+        const r = await mailSync(id);
+        fetched += r.fetched;
+        stored += r.stored;
+      }
+      setStatus(t('mailbox.result', { fetched, stored }));
+      await loadMails();
     } catch (e) {
       setStatus('✕ ' + String(e));
     } finally {
@@ -633,8 +644,14 @@ export function MailboxView({
         <select
           className="min-w-0 flex-1 rounded-md bg-white/10 px-2 py-1 text-xs outline-none"
           value={selected ?? ''}
-          onChange={(e) => setSelected(Number(e.target.value))}
+          onChange={(e) => setSelected(e.target.value === 'all' ? 'all' : Number(e.target.value))}
         >
+          {/* 全アカウント横断表示。既定は特定アカウントだが、複数ある時のみ「全て」を出す。 */}
+          {accounts.length > 1 && (
+            <option value="all" className="text-black">
+              {t('mailbox.allAccounts')}
+            </option>
+          )}
           {accounts.map((a) => (
             <option key={a.id} value={a.id} className="text-black">
               {a.email}
@@ -1014,7 +1031,13 @@ export function MailboxView({
       {compose && (
         <Compose
           accounts={accounts}
-          defaultAccountId={selected}
+          // 返信/転送は元メールを受信したアカウントを既定に。新規は選択中（全ての時は先頭）。
+          defaultAccountId={
+            ('source' in compose ? compose.source.account_id : null) ??
+            queryAccount ??
+            accounts[0]?.id ??
+            null
+          }
           target={compose}
           onClose={() => setCompose(null)}
         />

@@ -316,6 +316,7 @@
     "sync": "Sync",
     "syncing": "Syncing…",
     "accountTotal": "{{total}} messages",
+    "allAccounts": "All accounts",
     "loadingMore": "Loading more…",
     "resize": "Drag to resize",
     "empty": "No mail yet. Press \"Sync\".",

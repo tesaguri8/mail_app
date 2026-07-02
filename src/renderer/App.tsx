@@ -20,6 +20,8 @@ export default function App() {
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [mailAccountId, setMailAccountId] = useState<number | null>(null);
   const [mailOpenId, setMailOpenId] = useState<number | null>(null);
+  // メール画面で現在表示中のアカウント選択（'all'=全て）。フッターの件数表示に使う。
+  const [mailSel, setMailSel] = useState<number | 'all' | null>(null);
   // 背景のかぶせ（暗さ）。写真によって文字が見づらい時に上げる。
   const [dim, setDim] = useState<number>(() => Number(localStorage.getItem('rondine.dim') ?? 0));
   useEffect(() => {
@@ -54,11 +56,13 @@ export default function App() {
     setView('mail');
   };
 
-  // フッター左に出す「表示中アカウントのメール総数」（メールモード時のみ）。
+  // フッター左に出す「表示中アカウントのメール総数」（メールモード時のみ。'all'=全合計）。
   const mailTotal =
-    view === 'mail'
-      ? (accounts.find((a) => a.id === mailAccountId)?.total_count ?? null)
-      : null;
+    view !== 'mail'
+      ? null
+      : mailSel === 'all'
+        ? accounts.reduce((s, a) => s + a.total_count, 0)
+        : (accounts.find((a) => a.id === mailSel)?.total_count ?? null);
 
   // タイトルバーからの遷移。メールは特定メッセージを開かずに開く。
   // ホーム/メールは押すたびに同期（同じビューを再度押した時も含む）。
@@ -85,7 +89,7 @@ export default function App() {
               accounts={accounts}
               initialAccountId={mailAccountId}
               initialMailId={mailOpenId}
-              onAccountChange={setMailAccountId}
+              onAccountChange={setMailSel}
             />
           )}
           {view === 'contacts' && <ContactsView />}

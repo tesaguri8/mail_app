@@ -18,13 +18,22 @@ export const mailSyncCancel = (accountId: number) =>
 export const mailSend = (input: SendInput) => invoke<void>('mail_send', { input });
 
 // 指定フォルダ（'inbox' | 'sent' | 'drafts' | 'trash' | 'spam'）のメール一覧（新しい順）。
-// offset でページング（無限スクロール用）。
-export const mailList = (accountId: number, folder: string, limit: number, offset = 0) =>
-  invoke<MailSummary[]>('mail_list', { accountId, folder, limit, offset });
+// accountId が null なら全アカウント横断（「全て」表示）。offset でページング（無限スクロール用）。
+export const mailList = (
+  accountId: number | null,
+  folder: string,
+  limit: number,
+  offset = 0,
+) => invoke<MailSummary[]>('mail_list', { accountId: accountId ?? null, folder, limit, offset });
 
 // 件名・差出人・本文の全文検索（FTS5）。指定アカウント/フォルダ内を絞り込む。
-export const mailSearch = (accountId: number, folder: string, query: string, limit: number) =>
-  invoke<MailSummary[]>('mail_search', { accountId, folder, query, limit });
+// accountId が null なら全アカウント横断で検索。
+export const mailSearch = (
+  accountId: number | null,
+  folder: string,
+  query: string,
+  limit: number,
+) => invoke<MailSummary[]>('mail_search', { accountId: accountId ?? null, folder, query, limit });
 
 export const mailGet = (id: number) => invoke<MailDetail>('mail_get', { id });
 

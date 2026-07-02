@@ -257,7 +257,7 @@ fn build_fts_query(input: &str) -> Option<String> {
 /// MailSummary を組み立てる共通行マッパ（list_emails / search_emails で共有）。
 /// SELECT の列順は 0:id 1:subject 2:from_address 3:date 4:is_read 5:has_attachments
 /// 6:preview 7:is_flagged 8:is_bookmarked 9:tag_ids 10:has_real 11:to_addresses
-/// 12:is_known 13:is_vip 14:from_name 15:to_name。
+/// 12:is_known 13:is_vip 14:from_name 15:to_name 16:account_id。
 fn map_mail_summary(r: &rusqlite::Row) -> rusqlite::Result<MailSummary> {
     // group_concat はカンマ区切り文字列。空（タグ無し）は None。
     let tag_ids = r
@@ -266,6 +266,7 @@ fn map_mail_summary(r: &rusqlite::Row) -> rusqlite::Result<MailSummary> {
         .unwrap_or_default();
     Ok(MailSummary {
         id: r.get::<_, i64>(0)? as i32,
+        account_id: r.get::<_, i64>(16)? as i32,
         subject: r.get(1)?,
         from_address: r.get(2)?,
         from_name: r.get(14)?,
@@ -321,14 +322,21 @@ fn known_vip_cols(from_col: &str) -> String {
 }
 
 impl Store {
+    /// フォルダのメール一覧。`account_id` が None なら全アカウント横断（「全て」表示）。
     pub fn list_emails(
         &self,
-        account_id: i64,
+        account_id: Option<i64>,
         folder: &str,
         limit: i64,
         offset: i64,
     ) -> rusqlite::Result<Vec<MailSummary>> {
         let conn = self.conn.lock().unwrap();
+        // アカウント指定の有無で WHERE を切替える（?4 はアカウント指定時のみ）。
+        let acct = if account_id.is_some() {
+            "account_id = ?4 AND "
+        } else {
+            ""
+        };
         let sql = format!(
             "SELECT id, subject, from_address, date, is_read, has_attachments,
                     substr(COALESCE(clean_body, body_plain, ''), 1, 140) AS preview,
@@ -336,22 +344,28 @@ impl Store {
                     (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = emails.id) AS tag_ids,
                     (emails.has_attachments = 1
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = emails.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real,
-                    to_addresses, {known_vip}, from_name, to_name
-             FROM emails WHERE account_id = ?1 AND folder = ?2
-             ORDER BY date_ts DESC, id DESC LIMIT ?3 OFFSET ?4",
+                    to_addresses, {known_vip}, from_name, to_name, account_id
+             FROM emails WHERE {acct}folder = ?1
+             ORDER BY date_ts DESC, id DESC LIMIT ?2 OFFSET ?3",
             known_vip = known_vip_cols("emails.from_address"),
         );
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(params![account_id, folder, limit, offset], map_mail_summary)?;
-        rows.collect()
+        match account_id {
+            Some(a) => stmt
+                .query_map(params![folder, limit, offset, a], map_mail_summary)?
+                .collect(),
+            None => stmt
+                .query_map(params![folder, limit, offset], map_mail_summary)?
+                .collect(),
+        }
     }
 
     /// 件名・差出人・本文（FTS5 索引）を全文検索する。
-    /// アカウント内の指定フォルダに限定し、前方一致・複数語 AND で絞り込む。
+    /// `account_id` が None なら全アカウント横断。指定フォルダに限定し、前方一致・複数語 AND。
     /// 空クエリ（有効トークン無し）は空配列を返す。
     pub fn search_emails(
         &self,
-        account_id: i64,
+        account_id: Option<i64>,
         folder: &str,
         query: &str,
         limit: i64,
@@ -360,6 +374,11 @@ impl Store {
             return Ok(Vec::new());
         };
         let conn = self.conn.lock().unwrap();
+        let acct = if account_id.is_some() {
+            "e.account_id = ?4 AND "
+        } else {
+            ""
+        };
         let sql = format!(
             "SELECT e.id, e.subject, e.from_address, e.date, e.is_read, e.has_attachments,
                     substr(COALESCE(e.clean_body, e.body_plain, ''), 1, 140) AS preview,
@@ -367,15 +386,21 @@ impl Store {
                     (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = e.id) AS tag_ids,
                     (e.has_attachments = 1
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = e.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real,
-                    e.to_addresses, {known_vip}, e.from_name, e.to_name
+                    e.to_addresses, {known_vip}, e.from_name, e.to_name, e.account_id
              FROM email_fts JOIN emails e ON e.id = email_fts.rowid
-             WHERE email_fts MATCH ?1 AND e.account_id = ?2 AND e.folder = ?3
-             ORDER BY e.date_ts DESC, e.id DESC LIMIT ?4",
+             WHERE email_fts MATCH ?1 AND {acct}e.folder = ?2
+             ORDER BY e.date_ts DESC, e.id DESC LIMIT ?3",
             known_vip = known_vip_cols("e.from_address"),
         );
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(params![fts, account_id, folder, limit], map_mail_summary)?;
-        rows.collect()
+        match account_id {
+            Some(a) => stmt
+                .query_map(params![fts, folder, limit, a], map_mail_summary)?
+                .collect(),
+            None => stmt
+                .query_map(params![fts, folder, limit], map_mail_summary)?
+                .collect(),
+        }
     }
 
     /// 指定 ID 群に対し、フラグ列（is_read / is_starred / is_bookmarked）を一括更新する。
@@ -435,7 +460,7 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let detail = conn
             .query_row(
-                "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id, from_name, to_name
+                "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id, from_name, to_name, account_id
                  FROM emails WHERE id = ?1",
                 params![id],
                 |r| {
@@ -447,6 +472,7 @@ impl Store {
                     };
                     Ok(MailDetail {
                         id: r.get::<_, i64>(0)? as i32,
+                        account_id: r.get::<_, i64>(14)? as i32,
                         message_id: r.get(11)?,
                         subject: r.get(1)?,
                         from_address: r.get(2)?,
@@ -777,36 +803,36 @@ mod tests {
         seed(&store, "Old invoice", "alice@corp.com", "archived", "trash", "k3");
 
         // 件名一致（inbox 内）。
-        let r = store.search_emails(1, "inbox", "invoice", 50).unwrap();
+        let r = store.search_emails(Some(1), "inbox", "invoice", 50).unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].subject.as_deref(), Some("Invoice March"));
 
         // 本文の前方一致（frid → friday）。
-        let r = store.search_emails(1, "inbox", "frid", 50).unwrap();
+        let r = store.search_emails(Some(1), "inbox", "frid", 50).unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].subject.as_deref(), Some("Lunch plans"));
 
         // 差出人一致。
-        assert_eq!(store.search_emails(1, "inbox", "alice", 50).unwrap().len(), 1);
+        assert_eq!(store.search_emails(Some(1), "inbox", "alice", 50).unwrap().len(), 1);
 
         // フォルダ限定: trash の invoice は inbox 検索に出ない。
-        let r = store.search_emails(1, "trash", "invoice", 50).unwrap();
+        let r = store.search_emails(Some(1), "trash", "invoice", 50).unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].subject.as_deref(), Some("Old invoice"));
 
         // 空クエリは空。
-        assert!(store.search_emails(1, "inbox", "   ", 50).unwrap().is_empty());
+        assert!(store.search_emails(Some(1), "inbox", "   ", 50).unwrap().is_empty());
 
         // 複数語は AND。
         assert_eq!(
             store
-                .search_emails(1, "inbox", "invoice march", 50)
+                .search_emails(Some(1), "inbox", "invoice march", 50)
                 .unwrap()
                 .len(),
             1
         );
         assert!(store
-            .search_emails(1, "inbox", "invoice lunch", 50)
+            .search_emails(Some(1), "inbox", "invoice lunch", 50)
             .unwrap()
             .is_empty());
     }

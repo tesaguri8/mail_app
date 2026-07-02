@@ -418,10 +418,11 @@ pub fn account_set_body_window(
 }
 
 /// 指定フォルダ（'inbox' | 'sent' | 'drafts' | 'trash' | 'spam'）のメール一覧を返す。
+/// `account_id` が None（未指定）なら全アカウント横断の「全て」表示。
 #[tauri::command]
 pub fn mail_list(
     store: State<Store>,
-    account_id: i64,
+    account_id: Option<i64>,
     folder: String,
     limit: i64,
     offset: i64,
@@ -431,11 +432,11 @@ pub fn mail_list(
         .map_err(|e| e.to_string())
 }
 
-/// 全文検索。件名・差出人・本文を対象に、指定アカウント/フォルダ内を絞り込む。
+/// 全文検索。件名・差出人・本文を対象に絞り込む。`account_id` が None なら全アカウント横断。
 #[tauri::command]
 pub fn mail_search(
     store: State<Store>,
-    account_id: i64,
+    account_id: Option<i64>,
     folder: String,
     query: String,
     limit: i64,

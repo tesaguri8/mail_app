@@ -316,6 +316,7 @@
     "sync": "同期",
     "syncing": "同期中…",
     "accountTotal": "メール {{total}} 件",
+    "allAccounts": "全て",
     "loadingMore": "さらに読み込み中…",
     "resize": "ドラッグで幅を変更",
     "empty": "メールがありません。「同期」を押してください。",

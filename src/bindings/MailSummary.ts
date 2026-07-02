@@ -3,7 +3,11 @@
 /**
  * メール一覧表示用（軽量）。
  */
-export type MailSummary = { id: number, subject: string | null, from_address: string | null, 
+export type MailSummary = { id: number, 
+/**
+ * 所属アカウント ID（「全て」表示で、どのアカウントのメールか識別する）。
+ */
+account_id: number, subject: string | null, from_address: string | null, 
 /**
  * 差出人の表示名（ヘッダ From の名前部。無ければ None）。
  */

@@ -96,6 +96,8 @@ pub struct ServerAccountSummary {
 #[ts(export, export_to = "../../src/bindings/")]
 pub struct MailSummary {
     pub id: i32,
+    /// 所属アカウント ID（「全て」表示で、どのアカウントのメールか識別する）。
+    pub account_id: i32,
     pub subject: Option<String>,
     pub from_address: Option<String>,
     /// 差出人の表示名（ヘッダ From の名前部。無ければ None）。
@@ -339,6 +341,8 @@ pub struct ContactGroupSummary {
 #[ts(export, export_to = "../../src/bindings/")]
 pub struct MailDetail {
     pub id: i32,
+    /// 所属アカウント ID（「全て」表示からの返信で、正しい差出人を選ぶのに使う）。
+    pub account_id: i32,
     /// 元メッセージの Message-ID（返信のスレッド化 In-Reply-To 用。無ければ None）。
     pub message_id: Option<String>,
     pub subject: Option<String>,

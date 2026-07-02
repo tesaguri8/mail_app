@@ -23,7 +23,13 @@ import type { ContactInput } from '@bindings/ContactInput';
 import type { ContactValueInput } from '@bindings/ContactValueInput';
 import type { ContactAddressInput } from '@bindings/ContactAddressInput';
 import type { ImportReport } from '@bindings/ImportReport';
-import { contactDelete, contactImport, contactList, contactUpsert } from '../services/contacts';
+import {
+  contactDelete,
+  contactGet,
+  contactImport,
+  contactList,
+  contactUpsert,
+} from '../services/contacts';
 import { ContactDuplicates } from './ContactDuplicates';
 import { AddressRows, ValueRows, addressToFlat } from './ContactValueEditor';
 
@@ -110,6 +116,8 @@ export function ContactsView() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   // 編集中の下書き。null＝何も開いていない。id:null＝新規。
   const [draft, setDraft] = useState<ContactInput | null>(null);
+  // 変更検知の基準（読み込み/保存直後の状態）。
+  const [baseline, setBaseline] = useState<string>('');
   const [saved, setSaved] = useState(false);
   const [importing, setImporting] = useState(false);
   const [report, setReport] = useState<ImportReport | null>(null);
@@ -134,20 +142,29 @@ export function ContactsView() {
 
   const dirty = useMemo(() => {
     if (!draft) return false;
-    const original = items.find((c) => c.id === draft.id);
-    if (!original) return true; // 新規・未保存
-    return JSON.stringify(toDraft(original)) !== JSON.stringify(draft);
-  }, [draft, items]);
+    return JSON.stringify(draft) !== baseline;
+  }, [draft, baseline]);
+
+  const openDraft = (d: ContactInput) => {
+    setDraft(d);
+    setBaseline(JSON.stringify(d));
+  };
 
   const openContact = (c: ContactSummary) => {
     setSelectedId(c.id);
-    setDraft(toDraft(c));
     setSaved(false);
+    // 一覧は軽量（複数値が空）なので、詳細はフル取得して全メール/電話/住所を表示する。
+    openDraft(toDraft(c));
+    if (isTauri) {
+      contactGet(c.id)
+        .then((full) => openDraft(toDraft(full)))
+        .catch(() => undefined);
+    }
   };
 
   const startNew = () => {
     setSelectedId(null);
-    setDraft(emptyDraft());
+    openDraft(emptyDraft());
     setSaved(false);
   };
 
@@ -165,7 +182,7 @@ export function ContactsView() {
       const result = await contactUpsert(withPrimaries(draft));
       setSaved(true);
       setSelectedId(result.id);
-      setDraft(toDraft(result));
+      openDraft(toDraft(result));
       // 一覧を取り直して並び順・件数を反映。
       contactList(query)
         .then(setItems)

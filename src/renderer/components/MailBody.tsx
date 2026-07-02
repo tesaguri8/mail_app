@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { downloadDir, join } from '@tauri-apps/api/path';
 import {
-  Ban,
   BookOpen,
   ChevronDown,
   Download,
@@ -13,6 +12,9 @@ import {
   RefreshCw,
   Reply,
   ReplyAll,
+  Star,
+  Tag,
+  ThumbsDown,
 } from 'lucide-react';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { AttachmentSummary } from '@bindings/AttachmentSummary';
@@ -55,12 +57,21 @@ function isImage(a: AttachmentSummary): boolean {
 export function MailBody({
   detail,
   tags,
+  starred,
+  onToggleStar,
+  onTag,
   onReply,
   onMarkSpam,
 }: {
   detail: MailDetail;
   /** このメールに付いているタグ（ヘッダの宛先の下に表示）。 */
   tags?: TagSummary[];
+  /** このメールにスターが付いているか。 */
+  starred?: boolean;
+  /** スターの切り替え。 */
+  onToggleStar?: () => void;
+  /** タグ付与ポップオーバーを開く（ボタンの画面座標を渡す）。 */
+  onTag?: (x: number, y: number) => void;
   onReply?: (mode: 'reply' | 'replyAll' | 'forward') => void;
   /** 迷惑としてマーク（学習＋隔離）。 */
   onMarkSpam?: () => void;
@@ -285,6 +296,20 @@ export function MailBody({
             {d.subject ?? '(no subject)'}
           </h3>
           <div className="flex shrink-0 items-center gap-1">
+            {/* スター切替 */}
+            {onToggleStar && (
+              <button
+                onClick={onToggleStar}
+                title={t(starred ? 'ctx.unstar' : 'ctx.star')}
+                aria-label={t(starred ? 'ctx.unstar' : 'ctx.star')}
+                aria-pressed={starred}
+                className={`flex h-8 w-8 items-center justify-center rounded-md ${
+                  starred ? 'text-amber-300' : 'text-white/55 hover:text-white/80'
+                }`}
+              >
+                <Star size={16} className={starred ? 'fill-amber-300' : ''} />
+              </button>
+            )}
             {COMPOSE_ACTIONS.map(({ key, Icon }) => (
               <button
                 key={key}
@@ -296,6 +321,20 @@ export function MailBody({
                 <Icon size={16} />
               </button>
             ))}
+            {/* タグ付与 */}
+            {onTag && (
+              <button
+                onClick={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  onTag(r.left, r.bottom + 4);
+                }}
+                title={t('ctx.tags')}
+                aria-label={t('ctx.tags')}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80"
+              >
+                <Tag size={16} />
+              </button>
+            )}
             {/* 迷惑としてマーク（学習＋隔離） */}
             {onMarkSpam && (
               <button
@@ -304,7 +343,7 @@ export function MailBody({
                 aria-label={t('ctx.markSpam')}
                 className="flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-rose-300"
               >
-                <Ban size={16} />
+                <ThumbsDown size={16} />
               </button>
             )}
             {/* 全文をサーバーから再取得（要約保存の解除・本文キャッシュの復元） */}

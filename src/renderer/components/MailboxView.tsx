@@ -1,7 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  Ban,
   Columns2,
   Flag,
   Mail,
@@ -14,6 +13,7 @@ import {
   Star,
   StarOff,
   Tag,
+  ThumbsDown,
   Trash2,
   UserRound,
   X,
@@ -144,7 +144,8 @@ export function MailboxView({
   // タグ（一覧データ・絞り込み条件・付与ポップオーバー位置）
   const [tags, setTags] = useState<TagSummary[]>([]);
   const [tagFilter, setTagFilter] = useState<Set<number>>(new Set());
-  const [tagPicker, setTagPicker] = useState<{ x: number; y: number } | null>(null);
+  // タグ付与ポップオーバー: 位置＋対象メールID群（選択群 or 開いている1通）。
+  const [tagPicker, setTagPicker] = useState<{ x: number; y: number; ids: number[] } | null>(null);
   // 全文検索（件名・差出人・本文）。query が空でなければ検索モード。
   const [query, setQuery] = useState('');
   const [searchResults, setSearchResults] = useState<MailSummary[]>([]);
@@ -475,12 +476,12 @@ export function MailboxView({
     }
   };
 
-  // 新規タグを作成して選択メールに付与。
-  const createAndAssign = async (name: string) => {
+  // 新規タグを作成して対象メールに付与。
+  const createAndAssign = async (name: string, ids: number[]) => {
     try {
       const created = await tagCreate(name, pickTagColor(tags.length));
       setTags((prev) => [...prev, created]);
-      await applyTagDelta(targetIds(), created.id, true);
+      await applyTagDelta(ids, created.id, true);
     } catch {
       /* noop */
     }
@@ -501,10 +502,10 @@ export function MailboxView({
         label: t('ctx.tags'),
         Icon: Tag,
         onClick: () => {
-          if (menu) setTagPicker({ x: menu.x, y: menu.y });
+          if (menu) setTagPicker({ x: menu.x, y: menu.y, ids: targetIds() });
         },
       },
-      { key: 'spam', label: t('ctx.markSpam'), Icon: Ban, onClick: actMarkSpam },
+      { key: 'spam', label: t('ctx.markSpam'), Icon: ThumbsDown, onClick: actMarkSpam },
       { key: 'delete', label: t('ctx.delete'), Icon: Trash2, danger: true, onClick: actDelete },
     ];
   };
@@ -710,6 +711,30 @@ export function MailboxView({
         .filter((tg): tg is TagSummary => tg != null)
     : [];
 
+  // 開いているメールの現在のスター状態（MailDetail は持たないため一覧から解決）。
+  const openedMail = opened
+    ? (mails.find((m) => m.id === opened.id) ?? searchResults.find((m) => m.id === opened.id))
+    : undefined;
+  const openedStarred = openedMail?.is_starred ?? false;
+
+  // 開いているメールのスターを切り替え（楽観更新 → 永続化）。
+  const toggleStarOpened = async () => {
+    if (!opened) return;
+    const id = opened.id;
+    const value = !openedStarred;
+    patchMails(new Set([id]), { is_starred: value });
+    try {
+      await mailSetStarred([id], value);
+    } catch {
+      /* noop */
+    }
+  };
+
+  // 開いているメールにタグを付与（ボタン位置にタグピッカーを開く）。
+  const openTagForOpened = (x: number, y: number) => {
+    if (opened) setTagPicker({ x, y, ids: [opened.id] });
+  };
+
   // 開いているメールを迷惑としてマーク（学習＋隔離）。一覧から外して詳細を閉じる。
   const markSpamOpened = async () => {
     if (!opened) return;
@@ -727,6 +752,9 @@ export function MailboxView({
     <MailBody
       detail={opened}
       tags={openedTags}
+      starred={openedStarred}
+      onToggleStar={toggleStarOpened}
+      onTag={openTagForOpened}
       onReply={(mode) => setCompose({ mode, source: opened })}
       onMarkSpam={markSpamOpened}
     />
@@ -882,9 +910,9 @@ export function MailboxView({
           x={tagPicker.x}
           y={tagPicker.y}
           tags={tags}
-          selectedMails={mails.filter((m) => selectedIds.has(m.id))}
-          onToggle={(tagId, add) => applyTagDelta(targetIds(), tagId, add)}
-          onCreate={createAndAssign}
+          selectedMails={mails.filter((m) => tagPicker.ids.includes(m.id))}
+          onToggle={(tagId, add) => applyTagDelta(tagPicker.ids, tagId, add)}
+          onCreate={(name) => createAndAssign(name, tagPicker.ids)}
           onClose={() => setTagPicker(null)}
         />
       )}

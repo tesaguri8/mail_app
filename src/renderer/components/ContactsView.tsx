@@ -31,7 +31,9 @@ import {
   contactUpsert,
 } from '../services/contacts';
 import { ContactDuplicates } from './ContactDuplicates';
-import { AddressRows, ValueRows, addressToFlat } from './ContactValueEditor';
+import { AddressRows, TagInput, ValueRows, addressToFlat } from './ContactValueEditor';
+import { tagList } from '../services/tags';
+import type { TagSummary } from '@bindings/TagSummary';
 
 /** ContactSummary の複数値を入力型（配列）に変換。 */
 const toValueInputs = (vs: { label: string | null; value: string }[]): ContactValueInput[] =>
@@ -67,6 +69,7 @@ const emptyDraft = (): ContactInput => ({
   emails: [],
   phones: [],
   addresses: [],
+  tags: [],
   name_kana: null,
   email: null,
   phone: null,
@@ -91,6 +94,7 @@ const toDraft = (c: ContactSummary): ContactInput => ({
   emails: toValueInputs(c.emails),
   phones: toValueInputs(c.phones),
   addresses: toAddressInputs(c.addresses),
+  tags: c.tags,
   name_kana: c.name_kana,
   email: c.email,
   phone: c.phone,
@@ -123,22 +127,32 @@ export function ContactsView() {
   const [report, setReport] = useState<ImportReport | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [cleanup, setCleanup] = useState(false);
+  const [tags, setTags] = useState<TagSummary[]>([]);
+  const [tagFilter, setTagFilter] = useState<number | null>(null);
 
   const load = useCallback(
-    (q: string) => {
+    (q: string, group: number | null) => {
       if (!isTauri) return;
-      contactList(q)
+      contactList(q, group)
         .then(setItems)
         .catch(() => undefined);
     },
     [],
   );
 
-  // 検索語の変化に追随（軽いデバウンス）。
+  const reloadTags = useCallback(() => {
+    if (!isTauri) return;
+    tagList()
+      .then(setTags)
+      .catch(() => undefined);
+  }, []);
+  useEffect(reloadTags, [reloadTags]);
+
+  // 検索語・タグ絞り込みの変化に追随（軽いデバウンス）。
   useEffect(() => {
-    const h = setTimeout(() => load(query), 150);
+    const h = setTimeout(() => load(query, tagFilter), 150);
     return () => clearTimeout(h);
-  }, [query, load]);
+  }, [query, tagFilter, load]);
 
   const dirty = useMemo(() => {
     if (!draft) return false;
@@ -183,10 +197,9 @@ export function ContactsView() {
       setSaved(true);
       setSelectedId(result.id);
       openDraft(toDraft(result));
-      // 一覧を取り直して並び順・件数を反映。
-      contactList(query)
-        .then(setItems)
-        .catch(() => undefined);
+      // 一覧・タグを取り直して並び順・件数・新規タグを反映。
+      load(query, tagFilter);
+      reloadTags();
     } catch {
       /* noop */
     }
@@ -212,7 +225,8 @@ export function ContactsView() {
     try {
       const result = await contactImport(path);
       setReport(result);
-      load(query); // 取り込み後に一覧を更新
+      load(query, tagFilter); // 取り込み後に一覧を更新
+      reloadTags(); // 取り込みで作られたタグを反映
     } catch (e) {
       setImportError(`取り込みに失敗しました: ${String(e)}`);
     } finally {
@@ -236,7 +250,12 @@ export function ContactsView() {
 
   // 整理モードは専用の2ペイン画面を全幅で表示する。
   if (cleanup) {
-    return <ContactDuplicates onMerged={() => load(query)} onExit={() => setCleanup(false)} />;
+    return (
+      <ContactDuplicates
+        onMerged={() => load(query, tagFilter)}
+        onExit={() => setCleanup(false)}
+      />
+    );
   }
 
   return (
@@ -315,6 +334,23 @@ export function ContactsView() {
                     </button>
                   </span>
                 )}
+          </div>
+        )}
+
+        {tags.length > 0 && (
+          <div className="px-3 pb-2">
+            <select
+              value={tagFilter ?? ''}
+              onChange={(e) => setTagFilter(e.target.value === '' ? null : Number(e.target.value))}
+              className="w-full rounded-md bg-white/10 px-2 py-1.5 text-xs text-white/80 outline-none [color-scheme:dark]"
+            >
+              <option value="">{t('contact.allTags')}</option>
+              {tags.map((tg) => (
+                <option key={tg.id} value={tg.id}>
+                  {tg.name}
+                </option>
+              ))}
+            </select>
           </div>
         )}
 
@@ -483,6 +519,11 @@ export function ContactsView() {
                   onChange={(e) => patch({ note: nullify(e.target.value) })}
                 />
               </Field>
+              <TagInput
+                tags={draft.tags}
+                onChange={(tags) => patch({ tags })}
+                suggestions={tags.map((tg) => tg.name)}
+              />
             </div>
 
             <div className="mt-4 space-y-2">

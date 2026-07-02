@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, X } from 'lucide-react';
+import { Plus, Tag, X } from 'lucide-react';
 import type { ContactValueInput } from '@bindings/ContactValueInput';
 import type { ContactAddressInput } from '@bindings/ContactAddressInput';
 
@@ -83,6 +84,74 @@ export function ValueRows({
       <datalist id="contact-label-options">
         {LABELS.map((l) => (
           <option key={l} value={l} />
+        ))}
+      </datalist>
+    </div>
+  );
+}
+
+/** タグ編集（チップ＋オートコンプリート）。tags は名前の配列。 */
+export function TagInput({
+  tags,
+  onChange,
+  suggestions,
+}: {
+  tags: string[];
+  onChange: (t: string[]) => void;
+  suggestions: string[];
+}) {
+  const { t } = useTranslation();
+  const [text, setText] = useState('');
+  const add = (name: string) => {
+    const n = name.trim();
+    if (n && !tags.includes(n)) onChange([...tags, n]);
+    setText('');
+  };
+  return (
+    <div>
+      <span className="mb-1 flex items-center gap-1.5 text-[11px] text-white/50">
+        <Tag size={13} />
+        {t('contact.tags')}
+      </span>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {tags.map((tag) => (
+          <span
+            key={tag}
+            className="flex items-center gap-1 rounded-full bg-sky-500/25 px-2 py-0.5 text-xs text-sky-100"
+          >
+            {tag}
+            <button
+              onClick={() => onChange(tags.filter((x) => x !== tag))}
+              className="text-sky-200/70 hover:text-white"
+              aria-label={t('contact.removeRow')}
+            >
+              <X size={11} />
+            </button>
+          </span>
+        ))}
+        <input
+          className="min-w-[8rem] flex-1 rounded bg-white/10 px-2 py-1 text-sm outline-none focus:bg-white/15"
+          placeholder={t('contact.addTag')}
+          list="contact-tag-suggestions"
+          value={text}
+          onChange={(e) => {
+            // datalist から確定選択されたら即追加。
+            const v = e.target.value;
+            if (suggestions.includes(v)) add(v);
+            else setText(v);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              add(text);
+            }
+          }}
+          onBlur={() => add(text)}
+        />
+      </div>
+      <datalist id="contact-tag-suggestions">
+        {suggestions.map((s) => (
+          <option key={s} value={s} />
         ))}
       </datalist>
     </div>

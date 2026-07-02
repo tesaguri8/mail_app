@@ -551,6 +551,7 @@ function buildDraft(members: ContactSummary[], representative: ContactSummary): 
     emails,
     phones,
     addresses,
+    tags: [...new Set(ordered.flatMap((m) => m.tags))],
     name_kana: pick((c) => c.name_kana),
     email: emails[0]?.value ?? pick((c) => c.email),
     phone: phones[0]?.value ?? pick((c) => c.phone),

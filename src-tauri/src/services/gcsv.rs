@@ -57,6 +57,18 @@ fn multi(value: &str) -> Vec<String> {
         .collect()
 }
 
+/// ` ::: ` で分解するが空要素も残す（住所の各サブ項目を位置で対応づけるため）。
+/// 全体が空なら空 Vec を返す。
+fn multi_positional(value: &str) -> Vec<String> {
+    if value.trim().is_empty() {
+        return Vec::new();
+    }
+    value
+        .split(MULTI_SEP)
+        .map(|s| s.trim().to_string())
+        .collect()
+}
+
 fn build_contact(idx: &HashMap<String, usize>, row: &[String]) -> Option<ImportedContact> {
     let first = get(idx, row, "First Name");
     let middle = get(idx, row, "Middle Name");
@@ -96,27 +108,44 @@ fn build_contact(idx: &HashMap<String, usize>, row: &[String]) -> Option<Importe
     }
     let phone = all_phones.first().map(|v| v.value.clone());
 
-    // 住所（Address 1..2、構造化）。
+    // 住所（Address 1..2）。各サブ項目が ` ::: ` で複数詰めなので位置で対応づけて分解。
     let mut all_addresses: Vec<ImportedAddress> = Vec::new();
     for n in 1..=2 {
-        let a = ImportedAddress {
-            label: non_empty(get(idx, row, &format!("Address {n} - Label"))),
-            postal: non_empty(get(idx, row, &format!("Address {n} - Postal Code"))),
-            region: non_empty(get(idx, row, &format!("Address {n} - Region"))),
-            city: non_empty(get(idx, row, &format!("Address {n} - City"))),
-            street: non_empty(get(idx, row, &format!("Address {n} - Street"))),
-            extended: non_empty(get(idx, row, &format!("Address {n} - Extended Address"))),
-            country: non_empty(get(idx, row, &format!("Address {n} - Country"))),
-            is_primary: all_addresses.is_empty(),
-        };
-        if a.postal.is_some()
-            || a.region.is_some()
-            || a.city.is_some()
-            || a.street.is_some()
-            || a.extended.is_some()
-            || a.country.is_some()
-        {
-            all_addresses.push(a);
+        let labels = multi_positional(get(idx, row, &format!("Address {n} - Label")));
+        let postals = multi_positional(get(idx, row, &format!("Address {n} - Postal Code")));
+        let regions = multi_positional(get(idx, row, &format!("Address {n} - Region")));
+        let cities = multi_positional(get(idx, row, &format!("Address {n} - City")));
+        let streets = multi_positional(get(idx, row, &format!("Address {n} - Street")));
+        let exts = multi_positional(get(idx, row, &format!("Address {n} - Extended Address")));
+        let countries = multi_positional(get(idx, row, &format!("Address {n} - Country")));
+        let count = [
+            &labels, &postals, &regions, &cities, &streets, &exts, &countries,
+        ]
+        .iter()
+        .map(|v| v.len())
+        .max()
+        .unwrap_or(0);
+        let at = |v: &[String], i: usize| v.get(i).and_then(|s| non_empty(s));
+        for i in 0..count {
+            let a = ImportedAddress {
+                label: at(&labels, i),
+                postal: at(&postals, i),
+                region: at(&regions, i),
+                city: at(&cities, i),
+                street: at(&streets, i),
+                extended: at(&exts, i),
+                country: at(&countries, i),
+                is_primary: all_addresses.is_empty(),
+            };
+            if a.postal.is_some()
+                || a.region.is_some()
+                || a.city.is_some()
+                || a.street.is_some()
+                || a.extended.is_some()
+                || a.country.is_some()
+            {
+                all_addresses.push(a);
+            }
         }
     }
     let address = all_addresses
@@ -272,6 +301,22 @@ mod tests {
         assert_eq!(c.birthday.as_deref(), Some("1987-10-06"));
         assert_eq!(c.source, "google");
         assert!(c.external_id.is_none());
+    }
+
+    #[test]
+    fn google_multi_address_split_by_triple_colon() {
+        // Google CSV は住所も1セルに ` ::: ` で複数詰める。位置対応で複数住所に分解する。
+        let header = "First Name,Last Name,Address 1 - Label,Address 1 - Postal Code,\
+            Address 1 - Region,Address 1 - City,Address 1 - Street";
+        let row = "太郎,山田,自宅 ::: 自宅,9050018 ::: 9050207,沖縄県 ::: 沖縄県,\
+            名護市 ::: 本部町,大西1-15-5 ::: 備瀬535";
+        let text = format!("{header}\n{row}\n");
+        let c = parse(&text).contacts.into_iter().next().unwrap();
+        assert_eq!(c.all_addresses.len(), 2);
+        assert_eq!(c.all_addresses[0].postal.as_deref(), Some("9050018"));
+        assert_eq!(c.all_addresses[0].city.as_deref(), Some("名護市"));
+        assert_eq!(c.all_addresses[1].postal.as_deref(), Some("9050207"));
+        assert_eq!(c.all_addresses[1].city.as_deref(), Some("本部町"));
     }
 
     #[test]

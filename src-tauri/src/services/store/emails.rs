@@ -282,7 +282,10 @@ impl Store {
 
     /// 全文再取得に必要な情報（親メールの account_id と IMAP UID）。
     /// UID が None のメールは再取得不可（要再同期）。
-    pub fn email_refetch_info(&self, email_id: i64) -> rusqlite::Result<Option<(i64, Option<i64>)>> {
+    pub fn email_refetch_info(
+        &self,
+        email_id: i64,
+    ) -> rusqlite::Result<Option<(i64, Option<i64>)>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
             "SELECT account_id, uid FROM emails WHERE id = ?1",

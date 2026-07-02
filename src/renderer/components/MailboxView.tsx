@@ -85,6 +85,13 @@ function formatDate(d: string | null): string {
   return isNaN(dt.getTime()) ? d : dt.toLocaleString();
 }
 
+/** スクロール位置インジケータ用の粗い年月ラベル（例: 2026/7）。 */
+function formatMonthLabel(d: string | null): string {
+  if (!d) return '';
+  const dt = new Date(d);
+  return isNaN(dt.getTime()) ? '' : `${dt.getFullYear()}/${dt.getMonth() + 1}`;
+}
+
 /**
  * メールモード: 全幅。リスト＋本文。レイアウトは左右/上下を切替可能。
  */
@@ -223,6 +230,9 @@ export function MailboxView({
   const pageKeyRef = useRef('');
   const loadingMoreRef = useRef(false);
   const [hasMore, setHasMore] = useState(false);
+  // スクロール位置インジケータ（右端に、先頭付近のメールの年月を表示）。
+  const [scrollHint, setScrollHint] = useState<{ ratio: number; label: string } | null>(null);
+  const scrollHintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadMails = (id: number) => {
     const token = ++loadTokenRef.current;
@@ -252,6 +262,22 @@ export function MailboxView({
       .finally(() => {
         loadingMoreRef.current = false;
       });
+  };
+
+  // 一覧のスクロール: 続きの自動読み込み＋位置インジケータ（先頭付近の年月）を更新。
+  const onListScroll = (e: React.UIEvent<HTMLUListElement>) => {
+    const el = e.currentTarget;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 400) loadMore();
+    const max = el.scrollHeight - el.clientHeight;
+    const ratio = max > 0 ? Math.min(1, Math.max(0, el.scrollTop / max)) : 0;
+    // 先頭に見えているおおよそのメールの年月（行高はほぼ一定なので比率で近似）。
+    const idx = Math.floor((el.scrollTop / Math.max(1, el.scrollHeight)) * visibleMails.length);
+    const label = formatMonthLabel(visibleMails[Math.max(0, Math.min(visibleMails.length - 1, idx))]?.date ?? null);
+    if (label) {
+      setScrollHint({ ratio, label });
+      if (scrollHintTimer.current) clearTimeout(scrollHintTimer.current);
+      scrollHintTimer.current = setTimeout(() => setScrollHint(null), 1000);
+    }
   };
   useEffect(() => {
     setOpened(null);
@@ -682,13 +708,19 @@ export function MailboxView({
           </button>
         </div>
       )}
+      <div className="relative min-h-0 flex-1">
+      {/* スクロール位置インジケータ: 右端にその辺りのメールの年月を表示 */}
+      {scrollHint && (
+        <div
+          className="pointer-events-none absolute right-1.5 z-10 -translate-y-1/2 rounded-full bg-neutral-900/80 px-2 py-0.5 text-[10px] font-medium tabular-nums text-white/85 shadow backdrop-blur"
+          style={{ top: `calc(${scrollHint.ratio} * (100% - 20px) + 10px)` }}
+        >
+          {scrollHint.label}
+        </div>
+      )}
       <ul
-        className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2"
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          // 末尾付近までスクロールしたら続きを読み込む（無限スクロール）。
-          if (el.scrollHeight - el.scrollTop - el.clientHeight < 400) loadMore();
-        }}
+        className="h-full space-y-1 overflow-y-auto p-2"
+        onScroll={onListScroll}
       >
       {visibleMails.length === 0 ? (
         <li className="px-2 py-3 text-sm text-white/50">
@@ -761,6 +793,7 @@ export function MailboxView({
         <li className="px-2 py-3 text-center text-xs text-white/35">{t('mailbox.loadingMore')}</li>
       )}
       </ul>
+      </div>
     </div>
     );
 

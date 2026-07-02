@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, Minus, Plus } from 'lucide-react';
+import { ChevronDown, GripVertical, Minus, Plus } from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { ServerAccountSummary } from '@bindings/ServerAccountSummary';
 import type { SignatureSummary } from '@bindings/SignatureSummary';
@@ -10,6 +10,7 @@ import {
   accountAutoconfig,
   accountCheck,
   accountDelete,
+  accountReorder,
   accountTestLogin,
   accountUpdate,
   serverAccountList,
@@ -79,6 +80,31 @@ export function AccountSetup({
   const [storageMsg, setStorageMsg] = useState('');
   // 同期/再取り込みはアプリ全体のバックグラウンド実行（進捗・中断・完了トースト）に委譲。
   const sync = useSync();
+
+  // ドラッグ&ドロップ並べ替え用のローカル並び（props から同期・即時反映・永続化）。
+  const [order, setOrder] = useState<AccountSummary[]>(accounts);
+  useEffect(() => setOrder(accounts), [accounts]);
+  const dragId = useRef<number | null>(null);
+  const [dragOverId, setDragOverId] = useState<number | null>(null);
+
+  // ドロップ先 toId の位置へ、ドラッグ中の fromId を移動して永続化する。
+  const reorder = (toId: number) => {
+    const fromId = dragId.current;
+    dragId.current = null;
+    setDragOverId(null);
+    if (fromId == null || fromId === toId) return;
+    const ids = order.map((a) => a.id);
+    const from = ids.indexOf(fromId);
+    const to = ids.indexOf(toId);
+    if (from < 0 || to < 0) return;
+    const next = [...order];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    setOrder(next);
+    accountReorder(next.map((a) => a.id))
+      .then(onChanged)
+      .catch(() => undefined);
+  };
 
   // form state
   const [email, setEmail] = useState('');
@@ -311,9 +337,39 @@ export function AccountSetup({
       {!adding && accounts.length > 0 && (
         <ul className="space-y-2">
           {/* 展開（編集）中は他アカウントを隠し、対象だけ表示する。 */}
-          {(editing == null ? accounts : accounts.filter((a) => a.id === editing)).map((a) => (
-            <li key={a.id} className="overflow-hidden rounded-md bg-white/10 text-sm">
+          {(editing == null ? order : order.filter((a) => a.id === editing)).map((a) => (
+            <li
+              key={a.id}
+              // 展開中は並べ替え無効（1件のみ表示のため）。
+              draggable={editing == null}
+              onDragStart={() => {
+                dragId.current = a.id;
+              }}
+              onDragOver={(e) => {
+                if (dragId.current == null) return;
+                e.preventDefault();
+                if (dragOverId !== a.id) setDragOverId(a.id);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                reorder(a.id);
+              }}
+              onDragEnd={() => {
+                dragId.current = null;
+                setDragOverId(null);
+              }}
+              className={`overflow-hidden rounded-md bg-white/10 text-sm ${
+                dragOverId === a.id ? 'ring-1 ring-sky-300/60' : ''
+              }`}
+            >
               <div className="flex items-center justify-between gap-2 px-3 py-2">
+                {editing == null && (
+                  <GripVertical
+                    size={16}
+                    className="shrink-0 cursor-grab text-white/30"
+                    aria-label={t('account.reorder')}
+                  />
+                )}
                 <button
                   onClick={() => toggleEdit(a)}
                   className="flex min-w-0 flex-1 items-center gap-2 text-left"

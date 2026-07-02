@@ -182,6 +182,12 @@ pub fn account_update(
         .map_err(|e| e.to_string())
 }
 
+/// アカウントの並び順を設定する（渡された ID 順に永続化）。
+#[tauri::command]
+pub fn account_reorder(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
+    store.reorder_accounts(&ids).map_err(|e| e.to_string())
+}
+
 /// 署名一覧。
 #[tauri::command]
 pub fn signature_list(store: State<Store>) -> Result<Vec<SignatureSummary>, String> {

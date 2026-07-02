@@ -110,7 +110,7 @@ impl Store {
                     (SELECT COUNT(*) FROM emails e WHERE e.account_id = accounts.id AND e.is_read = 0
                        AND COALESCE(e.folder,'inbox') = 'inbox'),
                     (SELECT COUNT(*) FROM emails e WHERE e.account_id = accounts.id)
-             FROM accounts ORDER BY id",
+             FROM accounts ORDER BY COALESCE(sort_order, id), id",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(AccountSummary {
@@ -128,6 +128,19 @@ impl Store {
             })
         })?;
         rows.collect()
+    }
+
+    /// アカウントの並び順を設定する（渡された ID 順に sort_order を 0,1,2... で振る）。
+    pub fn reorder_accounts(&self, ids: &[i64]) -> rusqlite::Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare("UPDATE accounts SET sort_order = ?1 WHERE id = ?2")?;
+            for (i, id) in ids.iter().enumerate() {
+                stmt.execute(params![i as i64, id])?;
+            }
+        }
+        tx.commit()
     }
 
     /// アカウントの編集（差出人名・既定署名）。

@@ -287,6 +287,7 @@
     "useExistingServer": "Use an existing server…",
     "newServer": "New server",
     "delete": "Delete",
+    "reorder": "Drag to reorder",
     "displayName": "Sender name",
     "displayNamePlaceholder": "e.g. Suematsu / SNG Design",
     "signature": "Signature",

@@ -27,6 +27,9 @@ export const accountTestLogin = (
 export const accountDelete = (accountId: number) =>
   invoke<void>('account_delete', { accountId });
 
+// アカウントの並び順を保存（渡した ID 順）。ドラッグ＆ドロップ用。
+export const accountReorder = (ids: number[]) => invoke<void>('account_reorder', { ids });
+
 export const accountCheck = (accountId: number) =>
   invoke<void>('account_check', { accountId });
 

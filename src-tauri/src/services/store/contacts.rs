@@ -2,7 +2,7 @@ use super::Store;
 use crate::models::{
     ContactAddress, ContactAddressInput, ContactGroupSummary, ContactInput, ContactMatch,
     ContactSummary, ContactValue, ContactValueInput, DuplicateGroup, ImportReport,
-    OrgDuplicateGroup, OrganizationSummary,
+    OrgDuplicateGroup, OrgSharedValue, OrganizationDetail, OrganizationSummary,
 };
 use crate::services::dedupe::{digits, fold, fold_remove_ws, mobile_number};
 use crate::services::vcard::{ImportedContact, ParseResult};
@@ -712,6 +712,113 @@ impl Store {
                 })
             },
         )
+    }
+
+    /// 組織を作成/編集する（id 指定で名前・メモを更新し、所属連絡先の organization 文字列も同期）。
+    pub fn upsert_organization(
+        &self,
+        id: Option<i64>,
+        name: &str,
+        name_kana: Option<&str>,
+        note: Option<&str>,
+    ) -> rusqlite::Result<OrganizationSummary> {
+        let name = name.trim();
+        let oid = {
+            let conn = self.conn.lock().unwrap();
+            match id {
+                Some(id) => {
+                    conn.execute(
+                        "UPDATE organizations SET name = ?1, name_kana = ?2, note = ?3, \
+                         updated_at = CURRENT_TIMESTAMP WHERE id = ?4",
+                        params![name, name_kana, note, id],
+                    )?;
+                    conn.execute(
+                        "UPDATE contacts SET organization = ?1 WHERE org_id = ?2",
+                        params![name, id],
+                    )?;
+                    id
+                }
+                None => {
+                    conn.execute(
+                        "INSERT INTO organizations (name, name_kana, note) VALUES (?1, ?2, ?3)",
+                        params![name, name_kana, note],
+                    )?;
+                    conn.last_insert_rowid()
+                }
+            }
+        };
+        self.get_organization(oid)
+    }
+
+    /// 組織の詳細（所属連絡先＋共有アドレスを件数つきで）。住所録の「組織」タブ用。
+    pub fn organization_detail(&self, id: i64) -> rusqlite::Result<OrganizationDetail> {
+        let org = self.get_organization(id)?;
+        let conn = self.conn.lock().unwrap();
+        // 所属連絡先（軽量。お気に入り→よみ→表示名）。
+        let sql = format!(
+            "SELECT {CONTACT_COLS} FROM contacts WHERE org_id = ?1 \
+             ORDER BY is_favorite DESC, name_kana COLLATE NOCASE, display_name COLLATE NOCASE"
+        );
+        let members: Vec<ContactSummary> = {
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params![id], row_to_contact)?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        // 共有アドレス（値ごとに、この組織で共有指定している連絡先の件数）。
+        let mut shared_values: Vec<OrgSharedValue> = Vec::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT ce.value, count(DISTINCT ce.contact_id), max(ce.label) \
+                 FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id \
+                 WHERE c.org_id = ?1 AND ce.is_shared = 1 \
+                 GROUP BY lower(ce.value) ORDER BY 2 DESC, ce.value",
+            )?;
+            let rows = stmt.query_map(params![id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })?;
+            for row in rows {
+                let (value, count, label) = row?;
+                shared_values.push(OrgSharedValue {
+                    kind: "email".into(),
+                    label,
+                    value,
+                    count: count as i32,
+                });
+            }
+        }
+        {
+            let mut stmt = conn.prepare(
+                "SELECT cp.value, count(DISTINCT cp.contact_id), max(cp.label) \
+                 FROM contact_phones cp JOIN contacts c ON c.id = cp.contact_id \
+                 WHERE c.org_id = ?1 AND cp.is_shared = 1 \
+                 GROUP BY cp.value ORDER BY 2 DESC, cp.value",
+            )?;
+            let rows = stmt.query_map(params![id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })?;
+            for row in rows {
+                let (value, count, label) = row?;
+                shared_values.push(OrgSharedValue {
+                    kind: "phone".into(),
+                    label,
+                    value,
+                    count: count as i32,
+                });
+            }
+        }
+        Ok(OrganizationDetail {
+            org,
+            members,
+            shared_values,
+        })
     }
 
     /// 組織名の重複候補を正規化名で束ねて返す（2 件以上、所属合計の多い順）。

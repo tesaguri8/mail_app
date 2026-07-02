@@ -175,6 +175,21 @@
     "dupCancel": "キャンセル",
     "dupSaveAnyway": "別の連絡先として登録"
   },
+  "org": {
+    "tab": "組織",
+    "tabContacts": "連絡先",
+    "search": "組織を検索…",
+    "new": "組織を追加",
+    "empty": "組織がありません。連絡先に会社名を入れると自動で作成されます。",
+    "noSelection": "組織を選択するか、追加してください。",
+    "namePlaceholder": "会社・組織名",
+    "members": "所属 {{count}} 名",
+    "membersLabel": "所属連絡先（{{count}} 名）",
+    "noMembers": "所属している連絡先はありません。",
+    "sharedValues": "共有アドレス（代表メール・代表電話など）",
+    "sharedCount": "{{count}} 名で共有",
+    "tabContactsHint": "人の住所録"
+  },
   "dupes": {
     "title": "重複の整理",
     "scanning": "重複を検出しています…",

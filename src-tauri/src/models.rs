@@ -372,6 +372,30 @@ pub struct OrganizationSummary {
     pub member_count: i32,
 }
 
+/// 組織の共有アドレス（会社の代表 info@ / 代表電話 / 代表FAX 等）。
+/// 「組織 ＋ 値 ＋ 共有件数（何名が共有指定しているか）」を組織詳細で表示する。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct OrgSharedValue {
+    /// 種別: "email" | "phone"（FAX は label で区別）。
+    pub kind: String,
+    pub label: Option<String>,
+    pub value: String,
+    /// この組織でこの値を共有指定している連絡先の件数。
+    pub count: i32,
+}
+
+/// 組織の詳細（所属連絡先・共有アドレス）。住所録の「組織」タブで表示する。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct OrganizationDetail {
+    pub org: OrganizationSummary,
+    /// 所属連絡先（軽量サマリ）。
+    pub members: Vec<ContactSummary>,
+    /// 共有アドレス（値ごとに共有件数つき）。
+    pub shared_values: Vec<OrgSharedValue>,
+}
+
 /// 組織名の重複候補グループ（「株式会社◯◯」と「(株)◯◯」など。正規化名で束ねる）。
 /// 重複整理画面で 1 つの組織に統一するのに使う。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

@@ -1,9 +1,9 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult,
     ContactGroupSummary, ContactInput, ContactMatch, ContactSummary, DataLocation, DbInfo,
-    DuplicateGroup, ImportReport, MailDetail, MailSummary, OrgDuplicateGroup, OrganizationSummary,
-    RecipientSuggestion, RetentionReport, SendInput, ServerAccountSummary, SignatureSummary,
-    SpamSettings, SpamVerdict, StorageInfo, SyncProgress, SyncResult, TagSummary,
+    DuplicateGroup, ImportReport, MailDetail, MailSummary, OrgDuplicateGroup, OrganizationDetail,
+    OrganizationSummary, RecipientSuggestion, RetentionReport, SendInput, ServerAccountSummary,
+    SignatureSummary, SpamSettings, SpamVerdict, StorageInfo, SyncProgress, SyncResult, TagSummary,
 };
 use crate::services::autoconfig;
 use crate::services::datadir;
@@ -708,6 +708,29 @@ pub fn organization_list(
 ) -> Result<Vec<OrganizationSummary>, String> {
     store
         .list_organizations(query.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// 組織の詳細（所属連絡先＋共有アドレスを件数つきで）。住所録の「組織」タブ用。
+#[tauri::command]
+pub fn organization_detail(store: State<Store>, id: i64) -> Result<OrganizationDetail, String> {
+    store.organization_detail(id).map_err(|e| e.to_string())
+}
+
+/// 組織を作成/編集する（名前・メモ）。id 指定で更新、無ければ新規。
+#[tauri::command]
+pub fn organization_upsert(
+    store: State<Store>,
+    id: Option<i64>,
+    name: String,
+    name_kana: Option<String>,
+    note: Option<String>,
+) -> Result<OrganizationSummary, String> {
+    if name.trim().is_empty() {
+        return Err("組織名を入力してください".to_string());
+    }
+    store
+        .upsert_organization(id, &name, name_kana.as_deref(), note.as_deref())
         .map_err(|e| e.to_string())
 }
 

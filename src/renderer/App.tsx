@@ -3,7 +3,8 @@ import { TitleBar, type AppView } from './components/TitleBar';
 import { BottomBar } from './components/BottomBar';
 import { Home } from './components/Home';
 import { MailboxView } from './components/MailboxView';
-import { ContactsView, type ContactPrefill } from './components/ContactsView';
+import { AddressBook } from './components/AddressBook';
+import type { ContactPrefill } from './components/ContactsView';
 import { StubView } from './components/StubView';
 import { Settings } from './components/Settings';
 import { accountList } from './services/accounts';
@@ -102,7 +103,7 @@ export default function App() {
             />
           )}
           {view === 'contacts' && (
-            <ContactsView
+            <AddressBook
               prefill={contactPrefill}
               onPrefillConsumed={() => setContactPrefill(null)}
             />

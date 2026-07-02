@@ -175,6 +175,21 @@
     "dupCancel": "Cancel",
     "dupSaveAnyway": "Add as separate contact"
   },
+  "org": {
+    "tab": "Organizations",
+    "tabContacts": "Contacts",
+    "search": "Search organizations…",
+    "new": "Add organization",
+    "empty": "No organizations yet. They are created automatically when you set a company on a contact.",
+    "noSelection": "Select an organization or add one.",
+    "namePlaceholder": "Company / organization name",
+    "members": "{{count}} members",
+    "membersLabel": "Members ({{count}})",
+    "noMembers": "No contacts belong to this organization.",
+    "sharedValues": "Shared addresses (main email, main phone, etc.)",
+    "sharedCount": "shared by {{count}}",
+    "tabContactsHint": "People"
+  },
   "dupes": {
     "title": "Clean up duplicates",
     "scanning": "Scanning for duplicates…",

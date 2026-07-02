@@ -150,9 +150,14 @@ export type ContactPrefill = { name?: string | null; email?: string | null };
 export function ContactsView({
   prefill,
   onPrefillConsumed,
+  openId,
+  onOpenIdConsumed,
 }: {
   prefill?: ContactPrefill | null;
   onPrefillConsumed?: () => void;
+  /** この ID の連絡先を開く（組織タブの所属クリックからの遷移用）。 */
+  openId?: number | null;
+  onOpenIdConsumed?: () => void;
 } = {}) {
   const { t } = useTranslation();
   const [items, setItems] = useState<ContactSummary[]>([]);
@@ -277,6 +282,14 @@ export function ContactsView({
     // prefill オブジェクトの変化だけをトリガにする。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill]);
+
+  // 組織タブの所属クリックなどから、特定の連絡先を開く。
+  useEffect(() => {
+    if (openId == null) return;
+    openContactById(openId);
+    onOpenIdConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openId]);
 
   // 編集中の氏名/メール/電話に一致する既存連絡先を軽いデバウンスで検索。
   // 共有指定した自分の値は手掛かりにしない（送らない）。

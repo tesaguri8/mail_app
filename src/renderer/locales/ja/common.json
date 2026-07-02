@@ -106,7 +106,8 @@
     "count": "{{count}} 件",
     "untitled": "新しいタグ",
     "parent": "親（フォルダ）",
-    "parentNone": "（トップ）"
+    "parentNone": "（トップ）",
+    "removeFilter": "このタグの絞り込みを外す"
   },
   "contact": {
     "search": "名前・メール・組織で検索…",

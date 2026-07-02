@@ -39,7 +39,7 @@ import {
 import { recipientSuggest } from '../services/recipients';
 import { RecipientSuggestList } from './RecipientSuggestList';
 import { mailAddTag, mailRemoveTag, tagCreate, tagList } from '../services/tags';
-import { pickTagColor } from '../utils/tagColors';
+import { pickTagColor, DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import { MailBody } from './MailBody';
 import { Compose, type ComposeTarget } from './Compose';
 import { FolderCombobox } from './FolderCombobox';
@@ -519,6 +519,38 @@ export function MailboxView({
         <DateFilter value={dateFilter} onChange={setDateFilter} />
         <TagFilter tags={tags} value={tagFilter} onChange={setTagFilter} />
       </div>
+      {/* 選択中のタグ: 次の行にチップで並べ、× で個別に解除できる */}
+      {tagFilter.size > 0 && (
+        <div className="flex shrink-0 flex-wrap gap-1 border-b border-white/10 px-2 py-1.5">
+          {tags
+            .filter((tg) => tagFilter.has(tg.id))
+            .map((tg) => {
+              const color = tg.color ?? DEFAULT_TAG_COLOR;
+              return (
+                <span
+                  key={tg.id}
+                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium"
+                  style={{ backgroundColor: `${color}33`, color }}
+                >
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
+                  {tg.name}
+                  <button
+                    onClick={() => {
+                      const next = new Set(tagFilter);
+                      next.delete(tg.id);
+                      setTagFilter(next);
+                    }}
+                    title={t('tag.removeFilter')}
+                    aria-label={t('tag.removeFilter')}
+                    className="-mr-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full hover:bg-white/20"
+                  >
+                    <X size={9} />
+                  </button>
+                </span>
+              );
+            })}
+        </div>
+      )}
       {selecting && (
         <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2 text-xs text-white/60">
           <input

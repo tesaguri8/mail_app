@@ -106,7 +106,8 @@
     "count": "{{count}}",
     "untitled": "New tag",
     "parent": "Parent (folder)",
-    "parentNone": "(Top)"
+    "parentNone": "(Top)",
+    "removeFilter": "Remove this tag filter"
   },
   "contact": {
     "search": "Search name, email, org…",

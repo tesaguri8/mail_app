@@ -272,8 +272,17 @@ export function ContactDuplicates({
               })}
             </ul>
 
-            {/* このグループを統合しない（別人）／2件未満のヒント */}
-            <div className="mt-4 flex items-center gap-3">
+            {/* 操作: 統合して保存／別人（統合しない）を正本パネルの前に 1 行で置く。
+                長い編集フォームを下までスクロールしなくても実行できるようにするため。 */}
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <button
+                onClick={saveMaster}
+                disabled={busy || !draft || draft.display_name.trim() === ''}
+                className="flex items-center gap-1.5 rounded-md bg-emerald-500/80 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Save size={15} />
+                {t('dupes.saveMaster')}
+              </button>
               <button
                 onClick={dropCurrent}
                 className="flex items-center gap-1.5 rounded-md border border-white/20 px-3 py-2 text-sm text-white/70 hover:bg-white/10"
@@ -400,18 +409,7 @@ export function ContactDuplicates({
                     />
                   </div>
                 </div>
-
-                <div className="mt-4 flex items-center gap-3">
-                  <button
-                    onClick={saveMaster}
-                    disabled={busy || draft.display_name.trim() === ''}
-                    className="flex items-center gap-1.5 rounded-md bg-emerald-500/80 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    <Save size={15} />
-                    {t('dupes.saveMaster')}
-                  </button>
-                  <span className="text-xs text-white/40">{t('dupes.saveMasterHint')}</span>
-                </div>
+                {/* 保存/統合ボタンは候補リスト直後（正本パネルの上）へ移動した。 */}
               </div>
             )}
           </div>

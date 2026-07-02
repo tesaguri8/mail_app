@@ -173,7 +173,7 @@
     "include": "統合に含める",
     "combineN": "{{count}} 件を統合する",
     "master": "統合後の正本（{{count}} 件・編集できます）",
-    "saveMaster": "正本として保存",
+    "saveMaster": "１つに統合",
     "saveMasterHint": "選んだ連絡先が 1 件にまとまります。",
     "pickAtLeast2": "2 件以上チェックすると統合後の正本が表示されます。",
     "notDup": "別人（統合しない）",

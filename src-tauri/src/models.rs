@@ -113,6 +113,24 @@ pub struct MailSummary {
     pub tag_ids: Vec<i32>,
 }
 
+/// メール作成の宛先オートコンプリート候補（docs/RECIPIENT_AUTOCOMPLETE.md）。
+/// 住所録（source="contact"）と過去のやり取り相手（source="history"）を統合し、
+/// メールアドレスで重複排除して返す。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct RecipientSuggestion {
+    /// 表示用メールアドレス。
+    pub email: String,
+    /// 表示名（連絡先名、またはヘッダ "Name <addr>" から抽出。無ければ None）。
+    pub name: Option<String>,
+    /// 候補の出所: "contact"（住所録）| "history"（送受信履歴）。
+    pub source: String,
+    /// 住所録のお気に入り（並びで優先）。履歴由来は false。
+    pub is_favorite: bool,
+    /// 住所録由来なら連絡先 ID（詳細展開用）。履歴由来は None。
+    pub contact_id: Option<i32>,
+}
+
 /// ユーザー定義タグ（プロジェクト等の任意ラベル。docs/FILTERING.md）。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

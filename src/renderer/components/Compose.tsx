@@ -5,6 +5,7 @@ import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailDetail } from '@bindings/MailDetail';
 import { mailSend } from '../services/mail';
 import { getFlyAnimation } from '../config/prefs';
+import { RecipientInput } from './RecipientInput';
 import { FlySwallow, type FlySwallowHandle } from './FlySwallow';
 import swallowUrl from '../assets/swallow.png';
 
@@ -182,10 +183,10 @@ export function Compose({
           {/* 宛先 */}
           <div className="flex items-center gap-2">
             <label className="w-12 shrink-0 text-xs text-white/45">{t('compose.to')}</label>
-            <input
+            <RecipientInput
               className={inputCls}
               value={to}
-              onChange={(e) => setTo(e.target.value)}
+              onChange={setTo}
               placeholder={t('compose.toPlaceholder')}
               autoFocus={target.mode === 'new' || target.mode === 'forward'}
             />
@@ -203,19 +204,19 @@ export function Compose({
             <>
               <div className="flex items-center gap-2">
                 <label className="w-12 shrink-0 text-xs text-white/45">{t('compose.cc')}</label>
-                <input
+                <RecipientInput
                   className={inputCls}
                   value={cc}
-                  onChange={(e) => setCc(e.target.value)}
+                  onChange={setCc}
                   placeholder={t('compose.ccPlaceholder')}
                 />
               </div>
               <div className="flex items-center gap-2">
                 <label className="w-12 shrink-0 text-xs text-white/45">{t('compose.bcc')}</label>
-                <input
+                <RecipientInput
                   className={inputCls}
                   value={bcc}
-                  onChange={(e) => setBcc(e.target.value)}
+                  onChange={setBcc}
                   placeholder={t('compose.bccPlaceholder')}
                 />
               </div>

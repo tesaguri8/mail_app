@@ -1,8 +1,9 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult,
     ContactGroupSummary, ContactInput, ContactSummary, DataLocation, DbInfo, DuplicateGroup,
-    ImportReport, MailDetail, MailSummary, RetentionReport, SendInput, ServerAccountSummary,
-    SignatureSummary, SpamSettings, SpamVerdict, StorageInfo, SyncProgress, SyncResult, TagSummary,
+    ImportReport, MailDetail, MailSummary, RecipientSuggestion, RetentionReport, SendInput,
+    ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict, StorageInfo, SyncProgress,
+    SyncResult, TagSummary,
 };
 use crate::services::autoconfig;
 use crate::services::datadir;
@@ -615,6 +616,19 @@ pub fn contact_list(
 #[tauri::command]
 pub fn contact_get(store: State<Store>, id: i64) -> Result<ContactSummary, String> {
     store.get_contact(id).map_err(|e| e.to_string())
+}
+
+/// メール作成の宛先オートコンプリート候補（住所録＋過去のやり取り相手）。
+/// docs/RECIPIENT_AUTOCOMPLETE.md
+#[tauri::command]
+pub fn recipient_suggest(
+    store: State<Store>,
+    query: String,
+    limit: i64,
+) -> Result<Vec<RecipientSuggestion>, String> {
+    store
+        .suggest_recipients(&query, limit)
+        .map_err(|e| e.to_string())
 }
 
 /// 連絡先を作成または更新（確定後の行を返す）。`input.id` が無ければ新規。

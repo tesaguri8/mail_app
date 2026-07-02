@@ -8,8 +8,10 @@ use std::path::Path;
 
 /// 初回取得の安全上限（日数/全期間でも一度に取りすぎない）。
 const SAFETY_MAX: usize = 2000;
-/// uid_fetch のチャンクサイズ。
-const CHUNK: usize = 200;
+/// uid_fetch のチャンクサイズ。進捗はチャンクごとに更新するため、小さめにして
+/// 「フリーズに見える」のを防ぐ（大きいと一括DL中に無反応になる）。往復回数と
+/// 応答性のバランスで 50 件。
+const CHUNK: usize = 50;
 
 /// 同期範囲（accounts.sync_window をパース）。
 /// "n50"=最新50件 / "3d"=3日 / "30d" / "3m" / "1y" / "all"

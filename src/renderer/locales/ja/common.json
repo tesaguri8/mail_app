@@ -25,6 +25,7 @@
   "filter": {
     "unread": "未読",
     "star": "スター",
+    "vip": "お気に入り連絡先",
     "known": "知り合い",
     "bookmark": "ブックマーク",
     "attachment": "添付あり",

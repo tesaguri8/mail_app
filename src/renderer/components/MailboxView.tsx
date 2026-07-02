@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import {
   Columns2,
   Flag,
+  Gem,
   Mail,
   MailOpen,
   Paperclip,
@@ -58,10 +59,11 @@ export const MIN_SIDEBAR_WIDTH = 340;
 export const MAX_SIDEBAR_WIDTH = 640;
 export const DEFAULT_SIDEBAR_WIDTH = 340;
 
-/** リスト絞り込みのトグル。known/flag はバックエンド実装まで非適用（並びのみ）。 */
+/** リスト絞り込みのトグル。flag（要再確認）は設定手段が入るまで非適用（並びのみ）。 */
 const FILTERS: { key: string; Icon: LucideIcon }[] = [
   { key: 'unread', Icon: Mail },
   { key: 'star', Icon: Star },
+  { key: 'vip', Icon: Gem },
   { key: 'known', Icon: UserRound },
   { key: 'attachment', Icon: Paperclip },
   { key: 'flag', Icon: Flag },
@@ -71,7 +73,9 @@ function matchesFilters(m: MailSummary, filters: Set<string>): boolean {
   if (filters.has('unread') && m.is_read) return false;
   if (filters.has('attachment') && !m.has_real_attachments) return false;
   if (filters.has('star') && !m.is_starred) return false;
-  // known/flag は対応データが入るまでフィルタしない（空表示で混乱させない）
+  if (filters.has('vip') && !m.is_vip) return false; // 差出人が住所録のお気に入り(Gem)
+  if (filters.has('known') && !m.is_known) return false; // 差出人が住所録に登録済み
+  // flag（要再確認）はマーク手段が入るまでフィルタしない（空表示で混乱させない）
   return true;
 }
 

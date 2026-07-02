@@ -19,4 +19,12 @@ has_real_attachments: boolean, is_starred: boolean, is_bookmarked: boolean,
 /**
  * 付与されているタグの ID 群（表示・絞り込み用）。
  */
-tag_ids: Array<number>, };
+tag_ids: Array<number>, 
+/**
+ * 差出人が住所録に登録済み（知り合い）か。フィルタ用。
+ */
+is_known: boolean, 
+/**
+ * 差出人が住所録のお気に入り（VIP／Gem）連絡先か。フィルタ用。
+ */
+is_vip: boolean, };

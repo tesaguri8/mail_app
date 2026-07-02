@@ -25,6 +25,7 @@
   "filter": {
     "unread": "Unread",
     "star": "Starred",
+    "vip": "Favorite contact",
     "known": "Known sender",
     "bookmark": "Bookmarked",
     "attachment": "Has attachment",

@@ -111,6 +111,10 @@ pub struct MailSummary {
     pub is_bookmarked: bool,
     /// 付与されているタグの ID 群（表示・絞り込み用）。
     pub tag_ids: Vec<i32>,
+    /// 差出人が住所録に登録済み（知り合い）か。フィルタ用。
+    pub is_known: bool,
+    /// 差出人が住所録のお気に入り（VIP／Gem）連絡先か。フィルタ用。
+    pub is_vip: bool,
 }
 
 /// メール作成の宛先オートコンプリート候補（docs/RECIPIENT_AUTOCOMPLETE.md）。

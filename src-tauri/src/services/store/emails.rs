@@ -232,7 +232,8 @@ fn build_fts_query(input: &str) -> Option<String> {
 
 /// MailSummary を組み立てる共通行マッパ（list_emails / search_emails で共有）。
 /// SELECT の列順は 0:id 1:subject 2:from_address 3:date 4:is_read 5:has_attachments
-/// 6:preview 7:is_flagged 8:is_bookmarked 9:tag_ids 10:has_real 11:to_addresses。
+/// 6:preview 7:is_flagged 8:is_bookmarked 9:tag_ids 10:has_real 11:to_addresses
+/// 12:is_known 13:is_vip。
 fn map_mail_summary(r: &rusqlite::Row) -> rusqlite::Result<MailSummary> {
     // group_concat はカンマ区切り文字列。空（タグ無し）は None。
     let tag_ids = r
@@ -252,7 +253,21 @@ fn map_mail_summary(r: &rusqlite::Row) -> rusqlite::Result<MailSummary> {
         is_bookmarked: r.get::<_, i64>(8)? != 0,
         tag_ids,
         has_real_attachments: r.get::<_, i64>(10)? != 0,
+        is_known: r.get::<_, i64>(12)? != 0,
+        is_vip: r.get::<_, i64>(13)? != 0,
     })
+}
+
+/// 差出人（from）が住所録の連絡先かを判定する SELECT 断片（is_known, is_vip）。
+/// `from_col` は各クエリの from_address 列（list=emails.from_address / search=e.from_address）。
+/// ヘッダ "Name <addr>" 等を含むため、連絡先メールが from に含まれるか（instr）で照合する。
+fn known_vip_cols(from_col: &str) -> String {
+    format!(
+        "(EXISTS (SELECT 1 FROM contacts c WHERE c.email IS NOT NULL AND c.email <> '' \
+             AND instr(lower(COALESCE({from_col}, '')), lower(c.email)) > 0)) AS is_known, \
+         (EXISTS (SELECT 1 FROM contacts c WHERE c.is_favorite = 1 AND c.email IS NOT NULL AND c.email <> '' \
+             AND instr(lower(COALESCE({from_col}, '')), lower(c.email)) > 0)) AS is_vip"
+    )
 }
 
 impl Store {
@@ -263,17 +278,19 @@ impl Store {
         limit: i64,
     ) -> rusqlite::Result<Vec<MailSummary>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        let sql = format!(
             "SELECT id, subject, from_address, date, is_read, has_attachments,
                     substr(COALESCE(clean_body, body_plain, ''), 1, 140) AS preview,
                     is_flagged, is_bookmarked,
                     (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = emails.id) AS tag_ids,
                     (emails.has_attachments = 1
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = emails.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real,
-                    to_addresses
+                    to_addresses, {known_vip}
              FROM emails WHERE account_id = ?1 AND COALESCE(folder, 'inbox') = ?2
              ORDER BY datetime(date) DESC, id DESC LIMIT ?3",
-        )?;
+            known_vip = known_vip_cols("emails.from_address"),
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params![account_id, folder, limit], map_mail_summary)?;
         rows.collect()
     }
@@ -292,18 +309,20 @@ impl Store {
             return Ok(Vec::new());
         };
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        let sql = format!(
             "SELECT e.id, e.subject, e.from_address, e.date, e.is_read, e.has_attachments,
                     substr(COALESCE(e.clean_body, e.body_plain, ''), 1, 140) AS preview,
                     e.is_flagged, e.is_bookmarked,
                     (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = e.id) AS tag_ids,
                     (e.has_attachments = 1
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = e.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real,
-                    e.to_addresses
+                    e.to_addresses, {known_vip}
              FROM email_fts JOIN emails e ON e.id = email_fts.rowid
              WHERE email_fts MATCH ?1 AND e.account_id = ?2 AND COALESCE(e.folder, 'inbox') = ?3
              ORDER BY datetime(e.date) DESC, e.id DESC LIMIT ?4",
-        )?;
+            known_vip = known_vip_cols("e.from_address"),
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params![fts, account_id, folder, limit], map_mail_summary)?;
         rows.collect()
     }

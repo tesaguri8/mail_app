@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
+  AlertTriangle,
   Briefcase,
   Building2,
   Cake,
@@ -13,6 +14,7 @@ import {
   Download,
   Gem,
   Layers,
+  Save,
   Search,
   StickyNote,
   Trash2,
@@ -21,11 +23,15 @@ import {
 } from 'lucide-react';
 import type { ContactSummary } from '@bindings/ContactSummary';
 import type { ContactInput } from '@bindings/ContactInput';
+import type { ContactValue } from '@bindings/ContactValue';
 import type { ContactValueInput } from '@bindings/ContactValueInput';
 import type { ContactAddressInput } from '@bindings/ContactAddressInput';
+import type { ContactMatch } from '@bindings/ContactMatch';
 import type { ImportReport } from '@bindings/ImportReport';
 import {
   contactDelete,
+  contactFindDuplicates,
+  contactFindMatches,
   contactGet,
   contactImport,
   contactList,
@@ -42,9 +48,9 @@ import { formatPostal } from '../utils/postal';
 import { getPhoneRegion, getPostalAutoformat } from '../config/prefs';
 import { DEFAULT_TAG_COLOR } from '../utils/tagColors';
 
-/** ContactSummary の複数値を入力型（配列）に変換。 */
-const toValueInputs = (vs: { label: string | null; value: string }[]): ContactValueInput[] =>
-  vs.map((v) => ({ label: v.label, value: v.value }));
+/** ContactSummary の複数値を入力型（配列）に変換（共有フラグも引き継ぐ）。 */
+const toValueInputs = (vs: ContactValue[]): ContactValueInput[] =>
+  vs.map((v) => ({ label: v.label, value: v.value, is_shared: v.is_shared }));
 const toAddressInputs = (as: ContactAddressInput[]): ContactAddressInput[] =>
   as.map((a) => ({
     label: a.label,
@@ -129,11 +135,21 @@ const toDraft = (c: ContactSummary): ContactInput => ({
   allow_remote_images: c.allow_remote_images,
 });
 
+/** メール等から住所録に新規追加するときの初期値（名前・メール）。 */
+export type ContactPrefill = { name?: string | null; email?: string | null };
+
 /**
  * 住所録（アドレス帳）。左に検索付き一覧、右に詳細・編集フォーム。
  * docs/FEATURE_SPEC.md §2.4。Google/iCloud 連携・グループ編集は後続。
+ * prefill: メールの＋追加などから渡す新規作成の初期値（消費後に onPrefillConsumed を呼ぶ）。
  */
-export function ContactsView() {
+export function ContactsView({
+  prefill,
+  onPrefillConsumed,
+}: {
+  prefill?: ContactPrefill | null;
+  onPrefillConsumed?: () => void;
+} = {}) {
   const { t } = useTranslation();
   const [items, setItems] = useState<ContactSummary[]>([]);
   const [query, setQuery] = useState('');
@@ -147,8 +163,14 @@ export function ContactsView() {
   const [report, setReport] = useState<ImportReport | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [cleanup, setCleanup] = useState(false);
+  // 重複整理を開くとき、最初に選択したい連絡先（重複バナーからの遷移）。
+  const [cleanupFocusId, setCleanupFocusId] = useState<number | null>(null);
   const [tags, setTags] = useState<TagSummary[]>([]);
   const [tagFilter, setTagFilter] = useState<Set<number>>(new Set());
+  // 編集中の値に一致する既存連絡先（重複警告・新規保存前チェック用）。
+  const [matches, setMatches] = useState<ContactMatch[]>([]);
+  // 新規保存前の重複確認ダイアログの表示。
+  const [confirmDup, setConfirmDup] = useState(false);
 
   const load = useCallback(
     (q: string, groups: Set<number>) => {
@@ -196,11 +218,97 @@ export function ContactsView() {
     }
   };
 
+  // id だけ分かっている連絡先（重複候補バナー等）をフル取得して開く。
+  const openContactById = (id: number) => {
+    if (!isTauri) return;
+    setConfirmDup(false);
+    contactGet(id)
+      .then((full) => {
+        setSelectedId(id);
+        setSaved(false);
+        openDraft(toDraft(full));
+      })
+      .catch(() => undefined);
+  };
+
+  // 重複バナー/ダイアログのクリック: 保存済み同士で重複グループがあれば
+  // 「重複の整理」へ遷移して統合につなげる。無ければその連絡先を開く。
+  const reviewDuplicate = async (m: ContactMatch) => {
+    setConfirmDup(false);
+    if (isTauri && draft?.id != null) {
+      try {
+        const groups = await contactFindDuplicates();
+        const hasGroup = groups.some((g) => g.contacts.some((c) => c.id === m.id));
+        if (hasGroup) {
+          setCleanupFocusId(m.id);
+          setCleanup(true);
+          return;
+        }
+      } catch {
+        /* noop: 取得失敗時は連絡先を開くだけにフォールバック */
+      }
+    }
+    openContactById(m.id);
+  };
+
   const startNew = () => {
     setSelectedId(null);
     openDraft(emptyDraft());
     setSaved(false);
   };
+
+  // メール等からの＋追加: 名前・メールを埋めた新規フォームを開く（消費したら親へ通知）。
+  useEffect(() => {
+    if (!prefill) return;
+    const d = emptyDraft();
+    d.display_name = prefill.name?.trim() || '';
+    const email = prefill.email?.trim();
+    if (email) d.emails = [{ label: null, value: email, is_shared: false }];
+    setSelectedId(null);
+    setSaved(false);
+    openDraft(d);
+    onPrefillConsumed?.();
+    // prefill オブジェクトの変化だけをトリガにする。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill]);
+
+  // 編集中の氏名/メール/電話に一致する既存連絡先を軽いデバウンスで検索。
+  // 共有指定した自分の値は手掛かりにしない（送らない）。
+  const checkEmails = draft
+    ? draft.emails.filter((e) => !e.is_shared).map((e) => e.value.trim()).filter(Boolean)
+    : [];
+  const checkPhones = draft
+    ? draft.phones.filter((p) => !p.is_shared).map((p) => p.value.trim()).filter(Boolean)
+    : [];
+  const checkName = draft?.display_name.trim() ?? '';
+  const checkKey = `${draft?.id ?? 'new'}|${checkName}|${checkEmails.join(',')}|${checkPhones.join(',')}`;
+  useEffect(() => {
+    if (!isTauri || !draft) {
+      setMatches([]);
+      return;
+    }
+    if (!checkName && checkEmails.length === 0 && checkPhones.length === 0) {
+      setMatches([]);
+      return;
+    }
+    let alive = true;
+    const h = setTimeout(() => {
+      contactFindMatches(checkEmails, checkPhones, checkName || null, draft.id ?? null)
+        .then((m) => alive && setMatches(m))
+        .catch(() => alive && setMatches([]));
+    }, 250);
+    return () => {
+      alive = false;
+      clearTimeout(h);
+    };
+    // checkKey に必要な値をまとめている。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkKey]);
+
+  // 赤字判定用の集合（バックエンドは渡した文字列をそのまま返す）。
+  const emailConflicts = useMemo(() => new Set(matches.flatMap((m) => m.matched_emails)), [matches]);
+  const phoneConflicts = useMemo(() => new Set(matches.flatMap((m) => m.matched_phones)), [matches]);
+  const nameConflict = matches.some((m) => m.matched_name);
 
   const patch = (p: Partial<ContactInput>) => {
     setDraft((d) => (d ? { ...d, ...p } : d));
@@ -210,8 +318,9 @@ export function ContactsView() {
   // 空文字は NULL に寄せてから送る（検索・並び替えの一貫性のため）。
   const nullify = (s: string) => (s.trim() === '' ? null : s);
 
-  const save = async () => {
+  const doSave = async () => {
     if (!draft || draft.display_name.trim() === '') return;
+    setConfirmDup(false);
     try {
       const result = await contactUpsert(withPrimaries(draft));
       setSaved(true);
@@ -223,6 +332,16 @@ export function ContactsView() {
     } catch {
       /* noop */
     }
+  };
+
+  // 新規（id:null）で重複候補があれば、保存前に確認ダイアログを出す。
+  const save = () => {
+    if (!draft || draft.display_name.trim() === '') return;
+    if (draft.id === null && matches.length > 0) {
+      setConfirmDup(true);
+      return;
+    }
+    void doSave();
   };
 
   const runImport = async () => {
@@ -272,8 +391,12 @@ export function ContactsView() {
   if (cleanup) {
     return (
       <ContactDuplicates
+        focusContactId={cleanupFocusId}
         onMerged={() => load(query, tagFilter)}
-        onExit={() => setCleanup(false)}
+        onExit={() => {
+          setCleanup(false);
+          setCleanupFocusId(null);
+        }}
       />
     );
   }
@@ -282,8 +405,9 @@ export function ContactsView() {
     <div className="flex h-full min-h-0">
       {/* 左：検索 + 一覧 */}
       <aside className="flex w-72 shrink-0 flex-col border-r border-white/10">
-        <div className="flex items-center gap-2 p-3">
-          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md bg-white/10 px-2.5 py-1.5">
+        {/* 1行目: 検索（全幅）。2行目: タグ絞り込み＋整理/取り込み/追加のアイコン群。 */}
+        <div className="flex flex-col gap-2 p-3">
+          <div className="flex items-center gap-2 rounded-md bg-white/10 px-2.5 py-1.5">
             <Search size={15} className="shrink-0 text-white/50" />
             <input
               className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-white/40"
@@ -302,38 +426,44 @@ export function ContactsView() {
               </button>
             )}
           </div>
-          {tags.length > 0 && (
-            <div className="shrink-0">
-              <TagFilter tags={tags} value={tagFilter} onChange={setTagFilter} variant="round" />
-            </div>
-          )}
-          <button
-            onClick={() => setCleanup((v) => !v)}
-            title={t('dupes.title')}
-            aria-label={t('dupes.title')}
-            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 hover:bg-white/10 hover:text-white ${
-              cleanup ? 'bg-white/25 text-white' : 'text-white/70'
-            }`}
-          >
-            <Layers size={17} />
-          </button>
-          <button
-            onClick={runImport}
-            disabled={importing}
-            title={t('contact.import')}
-            aria-label={t('contact.import')}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white disabled:opacity-40"
-          >
-            <Download size={17} />
-          </button>
-          <button
-            onClick={startNew}
-            title={t('contact.new')}
-            aria-label={t('contact.new')}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white"
-          >
-            <Plus size={18} />
-          </button>
+          <div className="flex items-center gap-2">
+            {tags.length > 0 && (
+              <div className="shrink-0">
+                <TagFilter tags={tags} value={tagFilter} onChange={setTagFilter} variant="round" />
+              </div>
+            )}
+            <span className="flex-1" />
+            <button
+              onClick={() => {
+                setCleanupFocusId(null);
+                setCleanup((v) => !v);
+              }}
+              title={t('dupes.title')}
+              aria-label={t('dupes.title')}
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 hover:bg-white/10 hover:text-white ${
+                cleanup ? 'bg-white/25 text-white' : 'text-white/70'
+              }`}
+            >
+              <Layers size={17} />
+            </button>
+            <button
+              onClick={runImport}
+              disabled={importing}
+              title={t('contact.import')}
+              aria-label={t('contact.import')}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white disabled:opacity-40"
+            >
+              <Download size={17} />
+            </button>
+            <button
+              onClick={startNew}
+              title={t('contact.new')}
+              aria-label={t('contact.new')}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white"
+            >
+              <Plus size={18} />
+            </button>
+          </div>
         </div>
 
         {importError && (
@@ -462,11 +592,27 @@ export function ContactsView() {
                 />
               </button>
               <input
-                className="min-w-0 flex-1 rounded bg-transparent px-1 py-1 text-xl font-semibold outline-none focus:bg-white/10"
+                className={`min-w-0 flex-1 rounded px-1 py-1 text-xl font-semibold outline-none ${
+                  nameConflict
+                    ? 'bg-red-500/10 text-red-100 ring-1 ring-red-400/60 focus:bg-red-500/15'
+                    : 'bg-transparent focus:bg-white/10'
+                }`}
                 placeholder={t('contact.namePlaceholder')}
                 value={draft.display_name}
                 onChange={(e) => patch({ display_name: e.target.value })}
+                title={nameConflict ? t('contact.dupInline') : undefined}
               />
+              {/* 上部の保存（長い編集フォームの先頭でも保存できる。下部にも同じボタンあり） */}
+              <button
+                onClick={save}
+                disabled={draft.display_name.trim() === '' || !dirty}
+                title={t('contact.save')}
+                aria-label={t('contact.save')}
+                className="flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-white/20 px-3.5 text-sm font-medium hover:bg-white/30 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Save size={16} />
+                {t('contact.save')}
+              </button>
               {draft.id !== null && (
                 <button
                   onClick={() => remove(draft.id as number)}
@@ -478,6 +624,42 @@ export function ContactsView() {
                 </button>
               )}
             </div>
+
+            {/* 重複候補（既存連絡先と一致）。クリックでその連絡先を開ける。 */}
+            {matches.length > 0 && (
+              <div className="mb-4 rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-2.5">
+                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-amber-100">
+                  <AlertTriangle size={14} />
+                  {t('contact.dupBanner', { count: matches.length })}
+                </div>
+                <ul className="space-y-1">
+                  {matches.map((m) => (
+                    <li key={m.id}>
+                      <button
+                        onClick={() => void reviewDuplicate(m)}
+                        className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-white/10"
+                      >
+                        <span className="min-w-0 flex-1 truncate">
+                          <span className="font-medium">{m.display_name}</span>
+                          {(m.organization || m.email) && (
+                            <span className="text-white/50"> · {m.organization || m.email}</span>
+                          )}
+                        </span>
+                        <span className="shrink-0 text-[10px] text-amber-200/80">
+                          {[
+                            m.matched_emails.length > 0 ? t('contact.email') : null,
+                            m.matched_phones.length > 0 ? t('contact.phone') : null,
+                            m.matched_name ? t('contact.namePlaceholder') : null,
+                          ]
+                            .filter(Boolean)
+                            .join('・')}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             <div className="space-y-3">
               <Field icon={<User size={15} />} label={t('contact.nameLabel')}>
@@ -523,12 +705,16 @@ export function ContactsView() {
                 inputType="email"
                 values={draft.emails}
                 onChange={(emails) => patch({ emails })}
+                shareable
+                conflicts={(v) => emailConflicts.has(v.trim())}
               />
               <PhoneRows
                 icon={<Phone size={14} />}
                 label={t('contact.phone')}
                 values={draft.phones}
                 onChange={(phones) => patch({ phones })}
+                shareable
+                conflicts={(v) => phoneConflicts.has(v.trim())}
               />
               <Field icon={<Building2 size={15} />} label={t('contact.organization')}>
                 <input
@@ -607,6 +793,60 @@ export function ContactsView() {
           </div>
         )}
       </section>
+
+      {/* 新規登録前の重複確認ダイアログ。 */}
+      {confirmDup && draft && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setConfirmDup(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-lg border border-white/15 bg-[#141a2e] p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-2 flex items-center gap-2 text-amber-200">
+              <AlertTriangle size={18} />
+              <h3 className="text-base font-semibold">{t('contact.dupDialogTitle')}</h3>
+            </div>
+            <p className="mb-3 text-sm text-white/60">
+              {t('contact.dupDialogBody', { count: matches.length })}
+            </p>
+            <ul className="mb-4 max-h-48 space-y-1 overflow-y-auto">
+              {matches.map((m) => (
+                <li key={m.id}>
+                  <button
+                    onClick={() => openContactById(m.id)}
+                    className="flex w-full items-center gap-2 rounded-md bg-white/5 px-3 py-2 text-left text-sm hover:bg-white/10"
+                  >
+                    <User size={14} className="shrink-0 text-white/40" />
+                    <span className="min-w-0 flex-1 truncate">
+                      <span className="font-medium">{m.display_name}</span>
+                      {(m.organization || m.email) && (
+                        <span className="text-white/50"> · {m.organization || m.email}</span>
+                      )}
+                    </span>
+                    <span className="shrink-0 text-xs text-sky-300">{t('contact.dupOpen')}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmDup(false)}
+                className="rounded-md border border-white/20 px-3 py-1.5 text-sm text-white/70 hover:bg-white/10"
+              >
+                {t('contact.dupCancel')}
+              </button>
+              <button
+                onClick={doSave}
+                className="rounded-md bg-white/20 px-3 py-1.5 text-sm font-medium hover:bg-white/30"
+              >
+                {t('contact.dupSaveAnyway')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

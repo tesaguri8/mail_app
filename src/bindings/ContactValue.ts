@@ -7,4 +7,9 @@ export type ContactValue = { id: number,
 /**
  * 見出し（自宅/職場/携帯/カスタム＝会社名など）。
  */
-label: string | null, value: string, is_primary: boolean, };
+label: string | null, value: string, is_primary: boolean, 
+/**
+ * 複数名で共有する会社の代表値（info@… / 代表電話 / 代表FAX 等）。
+ * 人単位の重複判定の手掛かりから除外する（docs/FILTERING.md 誤検知抑制）。
+ */
+is_shared: boolean, };

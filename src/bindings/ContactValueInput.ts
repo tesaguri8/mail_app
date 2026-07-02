@@ -3,4 +3,8 @@
 /**
  * ラベル付き値の入力（メール・電話）。
  */
-export type ContactValueInput = { label: string | null, value: string, };
+export type ContactValueInput = { label: string | null, value: string, 
+/**
+ * 複数名で共有する会社の代表値かどうか（重複判定から除外）。
+ */
+is_shared: boolean, };

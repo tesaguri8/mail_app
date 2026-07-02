@@ -161,7 +161,15 @@
     "save": "保存",
     "saved": "保存しました",
     "delete": "削除",
-    "deleteConfirm": "この連絡先を削除しますか？"
+    "deleteConfirm": "この連絡先を削除しますか？",
+    "sharedToggle": "共有アドレス（会社の代表など。複数名で共有し、重複判定から除外）",
+    "dupInline": "既存の連絡先と一致しています",
+    "dupBanner": "似た連絡先が {{count}} 件あります",
+    "dupDialogTitle": "重複しているかもしれません",
+    "dupDialogBody": "似た連絡先が {{count}} 件あります。このまま新しく登録しますか？",
+    "dupOpen": "開く",
+    "dupCancel": "キャンセル",
+    "dupSaveAnyway": "別の連絡先として登録"
   },
   "dupes": {
     "title": "重複の整理",
@@ -324,6 +332,7 @@
     "result": "取得 {{fetched}} 件 / 新規 {{stored}} 件",
     "from": "差出人",
     "to": "宛先",
+    "addContact": "住所録に追加",
     "showQuotes": "引用を表示",
     "hideQuotes": "引用を隠す",
     "close": "閉じる",

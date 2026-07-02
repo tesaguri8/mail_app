@@ -46,9 +46,12 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 export function ContactDuplicates({
   onMerged,
   onExit,
+  focusContactId,
 }: {
   onMerged: () => void;
   onExit: () => void;
+  /** 起動時にこの連絡先を含むグループを選択する（重複バナーからの遷移用）。 */
+  focusContactId?: number | null;
 }) {
   const { t } = useTranslation();
   const [groups, setGroups] = useState<DuplicateGroup[]>([]);
@@ -64,11 +67,17 @@ export function ContactDuplicates({
     contactFindDuplicates()
       .then((g) => {
         setGroups(g);
-        setSelected(0);
+        // 指定連絡先を含むグループがあればそれを選ぶ（無ければ先頭）。
+        const idx = focusContactId
+          ? g.findIndex((gr) => gr.contacts.some((c) => c.id === focusContactId))
+          : -1;
+        setSelected(idx >= 0 ? idx : 0);
       })
       .catch(() => undefined)
       .finally(() => setLoading(false));
   };
+  // focusContactId は起動時のみ参照（マウント時に一度ロード）。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, []);
 
   const group: DuplicateGroup | undefined = groups[selected];
@@ -526,12 +535,12 @@ function buildDraft(members: ContactSummary[], representative: ContactSummary): 
   for (const m of ordered) {
     for (const e of m.emails) {
       if (e.value && !emails.some((x) => x.value.toLowerCase() === e.value.toLowerCase())) {
-        emails.push({ label: e.label, value: e.value });
+        emails.push({ label: e.label, value: e.value, is_shared: e.is_shared });
       }
     }
     for (const p of m.phones) {
       if (p.value && !phones.some((x) => x.value === p.value)) {
-        phones.push({ label: p.label, value: p.value });
+        phones.push({ label: p.label, value: p.value, is_shared: p.is_shared });
       }
     }
     for (const a of m.addresses) {

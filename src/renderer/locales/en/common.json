@@ -161,7 +161,15 @@
     "save": "Save",
     "saved": "Saved",
     "delete": "Delete",
-    "deleteConfirm": "Delete this contact?"
+    "deleteConfirm": "Delete this contact?",
+    "sharedToggle": "Shared address (e.g. a company's main address, used by several people — excluded from duplicate checks)",
+    "dupInline": "Matches an existing contact",
+    "dupBanner": "{{count}} similar contact(s) found",
+    "dupDialogTitle": "Possible duplicate",
+    "dupDialogBody": "{{count}} similar contact(s) found. Add as a new contact anyway?",
+    "dupOpen": "Open",
+    "dupCancel": "Cancel",
+    "dupSaveAnyway": "Add as separate contact"
   },
   "dupes": {
     "title": "Clean up duplicates",
@@ -324,6 +332,7 @@
     "result": "Fetched {{fetched}} / New {{stored}}",
     "from": "From",
     "to": "To",
+    "addContact": "Add to contacts",
     "showQuotes": "Show quotes",
     "hideQuotes": "Hide quotes",
     "close": "Close",

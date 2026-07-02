@@ -1,8 +1,9 @@
 use super::Store;
 use crate::models::{
-    ContactAddress, ContactAddressInput, ContactGroupSummary, ContactInput, ContactSummary,
-    ContactValue, ContactValueInput, DuplicateGroup, ImportReport,
+    ContactAddress, ContactAddressInput, ContactGroupSummary, ContactInput, ContactMatch,
+    ContactSummary, ContactValue, ContactValueInput, DuplicateGroup, ImportReport,
 };
+use crate::services::dedupe::{digits, fold, fold_remove_ws, mobile_number};
 use crate::services::vcard::{ImportedContact, ParseResult};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
@@ -297,7 +298,9 @@ impl Store {
             |table: &str| -> rusqlite::Result<std::collections::HashMap<i64, Vec<String>>> {
                 let mut map: std::collections::HashMap<i64, Vec<String>> =
                     std::collections::HashMap::new();
-                let mut stmt = conn.prepare(&format!("SELECT contact_id, value FROM {table}"))?;
+                // 共有指定された値（会社の代表メール/電話等）は重複判定の手掛かりから除外する。
+                let mut stmt =
+                    conn.prepare(&format!("SELECT contact_id, value FROM {table} WHERE is_shared = 0"))?;
                 let rows =
                     stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
                 for row in rows {
@@ -314,6 +317,7 @@ impl Store {
             label: None,
             value,
             is_primary: false,
+            is_shared: false,
         };
         for c in &mut contacts {
             if let Some(v) = emails.remove(&(c.id as i64)) {
@@ -324,6 +328,147 @@ impl Store {
             }
         }
         Ok(crate::services::dedupe::group(&contacts))
+    }
+
+    /// 入力（メール/電話/FAX/氏名）に一致する既存連絡先を返す。新規登録前チェック・
+    /// 編集中の赤字警告・メールからの＋追加で使う。共有指定された値は手掛かりから除外する。
+    /// 住所録は大量でないため、電話/氏名はテーブル走査で正規化比較する（索引はメールのみ）。
+    pub fn find_contact_matches(
+        &self,
+        emails: &[String],
+        phones: &[String],
+        display_name: Option<&str>,
+        exclude_id: Option<i64>,
+    ) -> rusqlite::Result<Vec<ContactMatch>> {
+        use std::collections::{HashMap, HashSet};
+        let conn = self.conn.lock().unwrap();
+
+        // 入力を (元の文字列, 正規化) の対に。一致時は元の文字列をそのまま返し、
+        // フロントの赤字判定で正規化の食い違いが起きないようにする。
+        // メール＝小文字化 / 電話＝数字のみ（携帯は+81吸収）/ 氏名＝畳んで空白除去。
+        let want_emails: Vec<(String, String)> = emails
+            .iter()
+            .map(|e| (e.clone(), fold(e).trim().to_string()))
+            .filter(|(_, n)| !n.is_empty())
+            .collect();
+        let want_phones: Vec<(String, String)> = phones
+            .iter()
+            .map(|p| (p.clone(), normalize_phone_for_match(p)))
+            .filter(|(_, n)| !n.is_empty())
+            .collect();
+        let want_name = display_name.map(fold_remove_ws).filter(|s| !s.is_empty());
+
+        // 共有指定された値の集合（どの連絡先ででも共有なら手掛かりから除外）。
+        let shared_emails: HashSet<String> = {
+            let mut stmt =
+                conn.prepare("SELECT DISTINCT lower(value) FROM contact_emails WHERE is_shared = 1")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let shared_phones: HashSet<String> = {
+            let mut stmt = conn.prepare("SELECT value FROM contact_phones WHERE is_shared = 1")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            let mut set = HashSet::new();
+            for v in rows {
+                set.insert(normalize_phone_for_match(&v?));
+            }
+            set
+        };
+
+        // contact_id -> (一致メール, 一致電話, 氏名一致)
+        let mut hits: HashMap<i64, (Vec<String>, Vec<String>, bool)> = HashMap::new();
+
+        // メール一致（小文字化の式索引を利用。共有は除外。元の入力文字列を返す）。
+        for (orig, norm) in &want_emails {
+            if shared_emails.contains(norm) {
+                continue;
+            }
+            let mut stmt = conn.prepare(
+                "SELECT contact_id FROM contact_emails WHERE lower(value) = ?1 AND is_shared = 0",
+            )?;
+            let rows = stmt.query_map(params![norm], |r| r.get::<_, i64>(0))?;
+            for cid in rows {
+                hits.entry(cid?).or_default().0.push(orig.clone());
+            }
+        }
+
+        // 電話/FAX 一致（数字正規化・共有は除外。元の入力文字列を返す）。
+        if !want_phones.is_empty() {
+            let mut stmt =
+                conn.prepare("SELECT contact_id, value FROM contact_phones WHERE is_shared = 0")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+            for row in rows {
+                let (cid, val) = row?;
+                let d = normalize_phone_for_match(&val);
+                if d.is_empty() || shared_phones.contains(&d) {
+                    continue;
+                }
+                for (orig, norm) in &want_phones {
+                    if norm == &d {
+                        hits.entry(cid).or_default().1.push(orig.clone());
+                    }
+                }
+            }
+        }
+
+        // 氏名一致（畳んで空白除去した完全一致）。
+        if let Some(name) = &want_name {
+            let mut stmt = conn.prepare("SELECT id, display_name FROM contacts")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+            for row in rows {
+                let (cid, dn) = row?;
+                if &fold_remove_ws(&dn) == name {
+                    hits.entry(cid).or_default().2 = true;
+                }
+            }
+        }
+
+        if let Some(ex) = exclude_id {
+            hits.remove(&ex);
+        }
+
+        // ContactMatch へ整形（表示用フィールドを取得）。
+        let mut out: Vec<ContactMatch> = Vec::new();
+        for (cid, (mut m_emails, mut m_phones, m_name)) in hits {
+            let row = conn
+                .query_row(
+                    "SELECT display_name, organization, email, phone FROM contacts WHERE id = ?1",
+                    params![cid],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, Option<String>>(1)?,
+                            r.get::<_, Option<String>>(2)?,
+                            r.get::<_, Option<String>>(3)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            if let Some((display_name, organization, email, phone)) = row {
+                m_emails.sort();
+                m_emails.dedup();
+                m_phones.sort();
+                m_phones.dedup();
+                out.push(ContactMatch {
+                    id: cid as i32,
+                    display_name,
+                    organization,
+                    email,
+                    phone,
+                    matched_emails: m_emails,
+                    matched_phones: m_phones,
+                    matched_name: m_name,
+                });
+            }
+        }
+
+        // 強い一致（メール/電話）を先に、次いで氏名順。
+        out.sort_by(|a, b| {
+            let sa = (!a.matched_emails.is_empty() || !a.matched_phones.is_empty()) as u8;
+            let sb = (!b.matched_emails.is_empty() || !b.matched_phones.is_empty()) as u8;
+            sb.cmp(&sa).then_with(|| a.display_name.cmp(&b.display_name))
+        });
+        Ok(out)
     }
 
     /// 複数の連絡先を 1 件（keep_id）に統合する。メール/電話などを寄せ集め、
@@ -558,10 +703,17 @@ fn rebuild_input_values(
     {
         conn.execute(
             &format!(
-                "INSERT INTO {table} (contact_id, label, value, is_primary, position) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)"
+                "INSERT INTO {table} (contact_id, label, value, is_primary, position, is_shared) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
             ),
-            params![cid, v.label, v.value.trim(), (pos == 0) as i64, pos as i64],
+            params![
+                cid,
+                v.label,
+                v.value.trim(),
+                (pos == 0) as i64,
+                pos as i64,
+                v.is_shared as i64,
+            ],
         )?;
     }
     Ok(())
@@ -612,6 +764,12 @@ fn rebuild_input_addresses(
         )?;
     }
     Ok(())
+}
+
+/// 照合用に電話番号を正規化する。携帯は国番号(+81)を吸収して 0 始まり 11 桁へ、
+/// それ以外（固定電話/FAX 等）は数字のみへ。保存形式（E.164/国内表記）の差を吸収する。
+fn normalize_phone_for_match(raw: &str) -> String {
+    mobile_number(raw).unwrap_or_else(|| digits(raw))
 }
 
 /// 入力住所を1行の文字列へ（flat 主値の導出用）。
@@ -746,7 +904,7 @@ fn rebuild_labeled(
 /// ラベル付き複数値（メール/電話）を読み出す（主→position→id 順）。
 fn load_values(conn: &Connection, table: &str, cid: i64) -> rusqlite::Result<Vec<ContactValue>> {
     let sql = format!(
-        "SELECT id, label, value, is_primary FROM {table} \
+        "SELECT id, label, value, is_primary, is_shared FROM {table} \
          WHERE contact_id = ?1 ORDER BY is_primary DESC, position, id"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -756,6 +914,7 @@ fn load_values(conn: &Connection, table: &str, cid: i64) -> rusqlite::Result<Vec
             label: r.get(1)?,
             value: r.get(2)?,
             is_primary: r.get::<_, i64>(3)? != 0,
+            is_shared: r.get::<_, i64>(4)? != 0,
         })
     })?;
     rows.collect()
@@ -948,15 +1107,18 @@ mod tests {
                 ContactValueInput {
                     label: Some("自宅".into()),
                     value: "home@x.jp".into(),
+                    is_shared: false,
                 },
                 ContactValueInput {
                     label: Some("職場".into()),
                     value: "work@x.jp".into(),
+                    is_shared: false,
                 },
             ],
             phones: vec![ContactValueInput {
                 label: Some("携帯".into()),
                 value: "090-1".into(),
+                is_shared: false,
             }],
             addresses: vec![ContactAddressInput {
                 label: Some("自宅".into()),
@@ -1093,6 +1255,75 @@ mod tests {
         let r = s.import_contacts(&csv).unwrap();
         assert_eq!((r.imported, r.updated), (2, 0));
         assert_eq!(s.list_contacts(None, &[]).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn find_matches_by_email_phone_name_and_excludes_shared() {
+        let s = store();
+        // A: 通常の連絡先（メール＋携帯）。
+        let a = s
+            .upsert_contact(&ContactInput {
+                display_name: "田中一郎".into(),
+                emails: vec![ContactValueInput {
+                    label: None,
+                    value: "taro@a.jp".into(),
+                    is_shared: false,
+                }],
+                phones: vec![ContactValueInput {
+                    label: Some("携帯".into()),
+                    value: "090-1111-2222".into(),
+                    is_shared: false,
+                }],
+                ..Default::default()
+            })
+            .unwrap()
+            .id as i64;
+        // B: 会社の代表メールを共有指定で持つ別人。
+        s.upsert_contact(&ContactInput {
+            display_name: "鈴木花子".into(),
+            emails: vec![ContactValueInput {
+                label: Some("代表".into()),
+                value: "info@acme.co.jp".into(),
+                is_shared: true,
+            }],
+            ..Default::default()
+        })
+        .unwrap();
+
+        // メール一致で A を検出。
+        let m = s
+            .find_contact_matches(&["taro@a.jp".into()], &[], None, None)
+            .unwrap();
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].id as i64, a);
+        assert_eq!(m[0].matched_emails, vec!["taro@a.jp".to_string()]);
+
+        // 共有指定のメールは手掛かりにしない（誤検知を防ぐ）。
+        assert!(s
+            .find_contact_matches(&["info@acme.co.jp".into()], &[], None, None)
+            .unwrap()
+            .is_empty());
+
+        // 電話は数字正規化で一致（別表記でも当たる）。
+        let mp = s
+            .find_contact_matches(&[], &["+81 90 1111 2222".into()], None, None)
+            .unwrap();
+        assert_eq!(mp.len(), 1);
+        assert_eq!(mp[0].id as i64, a);
+        assert!(!mp[0].matched_phones.is_empty());
+
+        // 氏名は畳んで空白除去した完全一致（語間スペース差も吸収）。
+        let mn = s
+            .find_contact_matches(&[], &[], Some("田中 一郎"), None)
+            .unwrap();
+        assert_eq!(mn.len(), 1);
+        assert!(mn[0].matched_name);
+
+        // 自分自身は exclude_id で除外。
+        assert!(s
+            .find_contact_matches(&["taro@a.jp".into()], &[], None, Some(a))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

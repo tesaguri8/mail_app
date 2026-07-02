@@ -164,6 +164,10 @@ pub struct ContactValue {
     pub label: Option<String>,
     pub value: String,
     pub is_primary: bool,
+    /// 複数名で共有する会社の代表値（info@… / 代表電話 / 代表FAX 等）。
+    /// 人単位の重複判定の手掛かりから除外する（docs/FILTERING.md 誤検知抑制）。
+    #[serde(default)]
+    pub is_shared: bool,
 }
 
 /// ラベル付きの構造化住所。
@@ -234,6 +238,9 @@ pub struct ContactSummary {
 pub struct ContactValueInput {
     pub label: Option<String>,
     pub value: String,
+    /// 複数名で共有する会社の代表値かどうか（重複判定から除外）。
+    #[serde(default)]
+    pub is_shared: bool,
 }
 
 /// 構造化住所の入力。
@@ -323,6 +330,27 @@ pub struct DuplicateGroup {
     pub confidence: String,
     /// 重複候補の連絡先（2 件以上）。
     pub contacts: Vec<ContactSummary>,
+}
+
+/// 重複候補の一致（新規登録前チェック・編集中の赤字警告・メールからの＋追加で使う）。
+/// 入力（メール/電話/氏名）と一致した既存連絡先を、どの項目で一致したか付きで返す。
+/// 共有指定された値は手掛かりから除外済み。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ContactMatch {
+    pub id: i32,
+    pub display_name: String,
+    pub organization: Option<String>,
+    /// 既存連絡先の主メール（表示用）。
+    pub email: Option<String>,
+    /// 既存連絡先の主電話（表示用）。
+    pub phone: Option<String>,
+    /// 入力メールのうち一致したもの（呼び出し元が渡した値のまま）。フロントの赤字判定に使う。
+    pub matched_emails: Vec<String>,
+    /// 入力電話/FAX のうち一致したもの（呼び出し元が渡した値のまま）。
+    pub matched_phones: Vec<String>,
+    /// 表示名が一致したか。
+    pub matched_name: bool,
 }
 
 /// 連絡先グループ（所属件数つき。編集 UI は後続）。

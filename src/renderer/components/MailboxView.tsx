@@ -102,12 +102,15 @@ export function MailboxView({
   initialAccountId,
   initialMailId,
   onAccountChange,
+  onAddContact,
 }: {
   accounts: AccountSummary[];
   initialAccountId: number | null;
   initialMailId: number | null;
   /** 表示中アカウントの変化を親へ通知（フッターの件数表示用）。'all'=全アカウント。 */
   onAccountChange?: (id: number | 'all' | null) => void;
+  /** メールのアドレスから住所録へ追加（名前・メールを渡す）。 */
+  onAddContact?: (name: string | null, email: string) => void;
 }) {
   const { t } = useTranslation();
   // 'all' = 全アカウント横断表示 / number = 特定アカウント / null = 未選択。
@@ -891,6 +894,7 @@ export function MailboxView({
       onRemoveTag={(tagId) => applyTagDelta([opened.id], tagId, false)}
       onReply={(mode) => setCompose({ mode, source: opened })}
       onMarkSpam={markSpamOpened}
+      onAddContact={onAddContact}
     />
   ) : (
     <div className="flex h-full items-center justify-center text-sm text-white/40">

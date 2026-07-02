@@ -9,6 +9,7 @@ import {
   Forward,
   Image as ImageIcon,
   Paperclip,
+  Plus,
   RefreshCw,
   Reply,
   ReplyAll,
@@ -45,6 +46,77 @@ function formatAddress(name: string | null, address: string | null): string {
   return n ? `${n} <${a}>` : a;
 }
 
+/** 本文/ヘッダ中のメールアドレス検出。 */
+const EMAIL_RE = /([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/g;
+
+/** メールアドレス＋（ホバー/フォーカスで現れる）住所録追加ボタン。 */
+function EmailAdd({
+  email,
+  name,
+  onAdd,
+}: {
+  email: string;
+  name?: string | null;
+  onAdd: (name: string | null, email: string) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <span className="group/email inline-flex items-center gap-0.5 align-baseline">
+      <span>{email}</span>
+      <button
+        onClick={() => onAdd(name ?? null, email)}
+        title={t('mailbox.addContact')}
+        aria-label={t('mailbox.addContact')}
+        className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-white/10 text-white/60 opacity-0 transition-opacity hover:bg-sky-500/50 hover:text-white focus:opacity-100 focus:outline-none group-hover/email:opacity-100"
+      >
+        <Plus size={11} />
+      </button>
+    </span>
+  );
+}
+
+/** ヘッダの差出人/宛先。onAdd があればアドレスに＋を出す（無ければ従来のテキスト）。 */
+function AddressLine({
+  name,
+  address,
+  onAdd,
+}: {
+  name: string | null;
+  address: string | null;
+  onAdd?: (name: string | null, email: string) => void;
+}) {
+  const a = (address ?? '').trim();
+  const n = (name ?? '').trim();
+  if (!a) return <>—</>;
+  if (!onAdd) return <>{formatAddress(name, address)}</>;
+  return (
+    <span className="inline-flex max-w-full items-center gap-1">
+      {n && <span className="truncate">{n} &lt;</span>}
+      <EmailAdd email={a} name={n || null} onAdd={onAdd} />
+      {n && <span>&gt;</span>}
+    </span>
+  );
+}
+
+/** プレーン本文中のメールアドレスをリンク化し、それぞれに＋を出す。 */
+function LinkifyEmails({
+  text,
+  onAdd,
+}: {
+  text: string;
+  onAdd?: (name: string | null, email: string) => void;
+}) {
+  if (!onAdd) return <>{text}</>;
+  const parts = text.split(EMAIL_RE);
+  return (
+    <>
+      {parts.map((p, i) =>
+        i % 2 === 1 ? <EmailAdd key={i} email={p} onAdd={onAdd} /> : <span key={i}>{p}</span>,
+      )}
+    </>
+  );
+}
+
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -72,6 +144,7 @@ export function MailBody({
   onRemoveTag,
   onReply,
   onMarkSpam,
+  onAddContact,
 }: {
   detail: MailDetail;
   /** このメールに付いているタグ（ヘッダの宛先の下に表示）。 */
@@ -87,6 +160,8 @@ export function MailBody({
   onReply?: (mode: 'reply' | 'replyAll' | 'forward') => void;
   /** 迷惑としてマーク（学習＋隔離）。 */
   onMarkSpam?: () => void;
+  /** ヘッダ/本文のメールアドレスから住所録へ追加（名前・メールを渡す）。 */
+  onAddContact?: (name: string | null, email: string) => void;
 }) {
   const { t } = useTranslation();
   const [showQuotes, setShowQuotes] = useState(false);
@@ -385,13 +460,15 @@ export function MailBody({
         <div className="mt-1 text-xs text-white/50">
           <div className="flex items-baseline justify-between gap-3">
             <span className="min-w-0 truncate">
-              {t('mailbox.from')}: {formatAddress(d.from_name, d.from_address)}
+              {t('mailbox.from')}:{' '}
+              <AddressLine name={d.from_name} address={d.from_address} onAdd={onAddContact} />
             </span>
             <span className="shrink-0">{formatDate(d.date)}</span>
           </div>
           {d.to_addresses && (
             <div className="truncate">
-              {t('mailbox.to')}: {formatAddress(d.to_name, d.to_addresses)}
+              {t('mailbox.to')}:{' '}
+              <AddressLine name={d.to_name} address={d.to_addresses} onAdd={onAddContact} />
             </div>
           )}
           {/* タグ（一覧では出さず、詳細ヘッダの宛先の下にまとめて表示。× で個別に外せる） */}
@@ -443,7 +520,7 @@ export function MailBody({
           <HtmlText html={html} inlineImages={inlineImages} />
         ) : body.trim() ? (
           <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-white/90">
-            {body}
+            <LinkifyEmails text={body} onAdd={onAddContact} />
           </pre>
         ) : (
           <p className="text-sm text-white/40">{t('mailbox.noBody')}</p>

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { GripVertical, Plus, Tag, X } from 'lucide-react';
+import { AlertTriangle, GripVertical, Plus, Tag, Users, X } from 'lucide-react';
 import type { CountryCode } from 'libphonenumber-js';
 import type { ContactValueInput } from '@bindings/ContactValueInput';
 import type { ContactAddressInput } from '@bindings/ContactAddressInput';
@@ -67,7 +67,7 @@ function DragHandle(props: React.HTMLAttributes<HTMLSpanElement> & { draggable?:
   );
 }
 
-const emptyValue = (): ContactValueInput => ({ label: null, value: '' });
+const emptyValue = (): ContactValueInput => ({ label: null, value: '', is_shared: false });
 const emptyAddress = (): ContactAddressInput => ({
   label: null,
   postal: null,
@@ -78,19 +78,25 @@ const emptyAddress = (): ContactAddressInput => ({
   country: null,
 });
 
-/** メール/電話などラベル付き複数値の編集（＋追加・−削除・ラベル候補）。 */
+/** メール/電話などラベル付き複数値の編集（＋追加・−削除・ラベル候補）。
+ *  shareable: 各行に「共有」トグル（会社の代表アドレス等）を出す。
+ *  conflicts: その値が既存連絡先と重複しているか（true なら赤字警告）。 */
 export function ValueRows({
   icon,
   label,
   values,
   onChange,
   inputType = 'text',
+  shareable = false,
+  conflicts,
 }: {
   icon: React.ReactNode;
   label: string;
   values: ContactValueInput[];
   onChange: (v: ContactValueInput[]) => void;
   inputType?: string;
+  shareable?: boolean;
+  conflicts?: (value: string) => boolean;
 }) {
   const { t } = useTranslation();
   const dnd = useDnd(values, onChange);
@@ -103,35 +109,63 @@ export function ValueRows({
         {label}
       </span>
       <div className="space-y-1.5">
-        {values.map((v, i) => (
-          <div
-            key={i}
-            className={`flex items-center gap-1.5 rounded ${dnd.dragging === i ? 'opacity-50' : ''}`}
-            {...dnd.rowProps(i)}
-          >
-            <DragHandle {...dnd.handleProps(i)} />
-            <input
-              className="w-16 shrink-0 rounded bg-white/10 px-2 py-1.5 text-xs outline-none focus:bg-white/15"
-              placeholder={t('contact.labelPlaceholder')}
-              list="contact-label-options"
-              value={v.label ?? ''}
-              onChange={(e) => set(i, { label: e.target.value.trim() === '' ? null : e.target.value })}
-            />
-            <input
-              type={inputType}
-              className="min-w-0 flex-1 rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-              value={v.value}
-              onChange={(e) => set(i, { value: e.target.value })}
-            />
-            <button
-              onClick={() => onChange(values.filter((_, idx) => idx !== i))}
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white/40 hover:bg-white/10 hover:text-white"
-              aria-label={t('contact.removeRow')}
+        {values.map((v, i) => {
+          const conflict = !v.is_shared && (conflicts?.(v.value) ?? false);
+          return (
+            <div
+              key={i}
+              className={`flex items-center gap-1.5 rounded ${dnd.dragging === i ? 'opacity-50' : ''}`}
+              {...dnd.rowProps(i)}
             >
-              <X size={14} />
-            </button>
-          </div>
-        ))}
+              <DragHandle {...dnd.handleProps(i)} />
+              <input
+                className="w-16 shrink-0 rounded bg-white/10 px-2 py-1.5 text-xs outline-none focus:bg-white/15"
+                placeholder={t('contact.labelPlaceholder')}
+                list="contact-label-options"
+                value={v.label ?? ''}
+                onChange={(e) =>
+                  set(i, { label: e.target.value.trim() === '' ? null : e.target.value })
+                }
+              />
+              <input
+                type={inputType}
+                className={`min-w-0 flex-1 rounded px-2.5 py-1.5 text-sm outline-none ${
+                  conflict
+                    ? 'bg-red-500/15 text-red-100 ring-1 ring-red-400/70 focus:bg-red-500/20'
+                    : 'bg-white/10 focus:bg-white/15'
+                }`}
+                value={v.value}
+                onChange={(e) => set(i, { value: e.target.value })}
+                title={conflict ? t('contact.dupInline') : undefined}
+              />
+              {conflict && (
+                <AlertTriangle size={14} className="shrink-0 text-red-300" aria-label={t('contact.dupInline')} />
+              )}
+              {shareable && (
+                <button
+                  onClick={() => set(i, { is_shared: !v.is_shared })}
+                  title={t('contact.sharedToggle')}
+                  aria-label={t('contact.sharedToggle')}
+                  aria-pressed={v.is_shared}
+                  className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
+                    v.is_shared
+                      ? 'bg-amber-400/25 text-amber-200'
+                      : 'text-white/40 hover:bg-white/10 hover:text-white'
+                  }`}
+                >
+                  <Users size={14} />
+                </button>
+              )}
+              <button
+                onClick={() => onChange(values.filter((_, idx) => idx !== i))}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white/40 hover:bg-white/10 hover:text-white"
+                aria-label={t('contact.removeRow')}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          );
+        })}
       </div>
       <button
         onClick={() => onChange([...values, emptyValue()])}
@@ -155,11 +189,15 @@ export function PhoneRows({
   label,
   values,
   onChange,
+  shareable = false,
+  conflicts,
 }: {
   icon: React.ReactNode;
   label: string;
   values: ContactValueInput[];
   onChange: (v: ContactValueInput[]) => void;
+  shareable?: boolean;
+  conflicts?: (value: string) => boolean;
 }) {
   const { t, i18n } = useTranslation();
   const dnd = useDnd(values, onChange);
@@ -176,6 +214,7 @@ export function PhoneRows({
       <div className="space-y-1.5">
         {values.map((v, i) => {
           const parsed = parseStored(v.value, region);
+          const conflict = !v.is_shared && (conflicts?.(v.value) ?? false);
           return (
             <div
               key={i}
@@ -208,11 +247,34 @@ export function PhoneRows({
               </select>
               <input
                 type="tel"
-                className="min-w-0 flex-1 rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
+                className={`min-w-0 flex-1 rounded px-2.5 py-1.5 text-sm outline-none ${
+                  conflict
+                    ? 'bg-red-500/15 text-red-100 ring-1 ring-red-400/70 focus:bg-red-500/20'
+                    : 'bg-white/10 focus:bg-white/15'
+                }`}
                 value={parsed.national}
                 onChange={(e) => set(i, { value: e.target.value })}
                 onBlur={() => set(i, { value: toE164(v.value, parsed.region) })}
+                title={conflict ? t('contact.dupInline') : undefined}
               />
+              {conflict && (
+                <AlertTriangle size={14} className="shrink-0 text-red-300" aria-label={t('contact.dupInline')} />
+              )}
+              {shareable && (
+                <button
+                  onClick={() => set(i, { is_shared: !v.is_shared })}
+                  title={t('contact.sharedToggle')}
+                  aria-label={t('contact.sharedToggle')}
+                  aria-pressed={v.is_shared}
+                  className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
+                    v.is_shared
+                      ? 'bg-amber-400/25 text-amber-200'
+                      : 'text-white/40 hover:bg-white/10 hover:text-white'
+                  }`}
+                >
+                  <Users size={14} />
+                </button>
+              )}
               <button
                 onClick={() => onChange(values.filter((_, idx) => idx !== i))}
                 className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white/40 hover:bg-white/10 hover:text-white"
@@ -225,7 +287,7 @@ export function PhoneRows({
         })}
       </div>
       <button
-        onClick={() => onChange([...values, { label: null, value: '' }])}
+        onClick={() => onChange([...values, emptyValue()])}
         className="mt-1.5 flex items-center gap-1 text-xs text-sky-300 hover:text-sky-200"
       >
         <Plus size={13} />

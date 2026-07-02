@@ -1,9 +1,9 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult,
-    ContactGroupSummary, ContactInput, ContactSummary, DataLocation, DbInfo, DuplicateGroup,
-    ImportReport, MailDetail, MailSummary, RecipientSuggestion, RetentionReport, SendInput,
-    ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict, StorageInfo, SyncProgress,
-    SyncResult, TagSummary,
+    ContactGroupSummary, ContactInput, ContactMatch, ContactSummary, DataLocation, DbInfo,
+    DuplicateGroup, ImportReport, MailDetail, MailSummary, RecipientSuggestion, RetentionReport,
+    SendInput, ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict, StorageInfo,
+    SyncProgress, SyncResult, TagSummary,
 };
 use crate::services::autoconfig;
 use crate::services::datadir;
@@ -717,6 +717,21 @@ pub fn contact_import(store: State<Store>, path: String) -> Result<ImportReport,
 #[tauri::command]
 pub fn contact_find_duplicates(store: State<Store>) -> Result<Vec<DuplicateGroup>, String> {
     store.find_duplicate_groups().map_err(|e| e.to_string())
+}
+
+/// 入力（メール/電話/FAX/氏名）に一致する既存連絡先を返す。新規登録前チェック・
+/// 編集中の赤字警告・メールからの＋追加で使う。`exclude_id` は編集中の自分自身を除く。
+#[tauri::command]
+pub fn contact_find_matches(
+    store: State<Store>,
+    emails: Vec<String>,
+    phones: Vec<String>,
+    display_name: Option<String>,
+    exclude_id: Option<i64>,
+) -> Result<Vec<ContactMatch>, String> {
+    store
+        .find_contact_matches(&emails, &phones, display_name.as_deref(), exclude_id)
+        .map_err(|e| e.to_string())
 }
 
 /// 複数の連絡先を 1 件（keep_id）に統合し、統合後の連絡先を返す。

@@ -261,7 +261,7 @@ impl Rec {
 }
 
 /// 全角 ASCII/数字/空白を半角へ畳み、小文字化する。
-fn fold(s: &str) -> String {
+pub(crate) fn fold(s: &str) -> String {
     s.chars()
         .map(|c| match c {
             '\u{3000}' => ' ',                                            // 全角スペース
@@ -273,7 +273,7 @@ fn fold(s: &str) -> String {
 }
 
 /// fold して全空白を除去。
-fn fold_remove_ws(s: &str) -> String {
+pub(crate) fn fold_remove_ws(s: &str) -> String {
     fold(s).split_whitespace().collect()
 }
 
@@ -286,12 +286,12 @@ fn tokens(s: &str) -> Vec<String> {
 }
 
 /// 数字だけ抜き出す（全角数字は fold 済み前提）。
-fn digits(s: &str) -> String {
+pub(crate) fn digits(s: &str) -> String {
     fold(s).chars().filter(|c| c.is_ascii_digit()).collect()
 }
 
 /// 日本の携帯番号なら正規化して返す（070/080/090・11桁）。それ以外（固定電話等）は None。
-fn mobile_number(raw: &str) -> Option<String> {
+pub(crate) fn mobile_number(raw: &str) -> Option<String> {
     let mut d = digits(raw);
     // 国番号 +81 / 81 を 0 始まりへ。
     if let Some(rest) = d.strip_prefix("81") {
@@ -576,6 +576,7 @@ mod tests {
             label: None,
             value: v.into(),
             is_primary: false,
+            is_shared: false,
         }
     }
 

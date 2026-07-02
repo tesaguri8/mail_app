@@ -379,6 +379,20 @@ pub fn mail_list(
         .map_err(|e| e.to_string())
 }
 
+/// 全文検索。件名・差出人・本文を対象に、指定アカウント/フォルダ内を絞り込む。
+#[tauri::command]
+pub fn mail_search(
+    store: State<Store>,
+    account_id: i64,
+    folder: String,
+    query: String,
+    limit: i64,
+) -> Result<Vec<MailSummary>, String> {
+    store
+        .search_emails(account_id, &folder, &query, limit)
+        .map_err(|e| e.to_string())
+}
+
 /// 複数メールの既読/未読を一括設定。
 #[tauri::command]
 pub fn mail_set_read(store: State<Store>, ids: Vec<i64>, read: bool) -> Result<(), String> {

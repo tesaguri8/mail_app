@@ -30,6 +30,12 @@
     "attachment": "添付あり",
     "flag": "要再確認"
   },
+  "search": {
+    "placeholder": "メールを検索",
+    "clear": "検索をクリア",
+    "searching": "検索中…",
+    "noResults": "該当するメールがありません"
+  },
   "date": {
     "filter": "期間で絞り込み",
     "after": "以降",

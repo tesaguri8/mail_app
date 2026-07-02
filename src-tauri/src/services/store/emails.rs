@@ -564,7 +564,7 @@ mod tests {
         .unwrap();
         Store {
             conn: Mutex::new(conn),
-            path: PathBuf::new(),
+            path: Mutex::new(PathBuf::new()),
         }
     }
 

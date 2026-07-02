@@ -59,6 +59,8 @@
     "cc": "Cc",
     "bcc": "Bcc",
     "addCc": "Cc / Bcc",
+    "suggestContacts": "住所録",
+    "suggestHistory": "履歴",
     "subject": "件名",
     "toPlaceholder": "宛先アドレス（カンマ区切りで複数）",
     "ccPlaceholder": "Cc アドレス（カンマ区切り）",

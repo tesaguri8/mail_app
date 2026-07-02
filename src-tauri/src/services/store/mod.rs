@@ -2,6 +2,7 @@ mod accounts;
 mod contacts;
 mod emails;
 mod migrations;
+mod recipients;
 mod server_accounts;
 mod settings;
 mod signatures;

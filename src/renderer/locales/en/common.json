@@ -59,6 +59,8 @@
     "cc": "Cc",
     "bcc": "Bcc",
     "addCc": "Cc / Bcc",
+    "suggestContacts": "Contacts",
+    "suggestHistory": "History",
     "subject": "Subject",
     "toPlaceholder": "Recipient address (comma-separated)",
     "ccPlaceholder": "Cc address (comma-separated)",

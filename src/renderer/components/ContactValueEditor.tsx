@@ -373,12 +373,8 @@ export function AddressRows({
               <input
                 className="rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
                 placeholder={t('contact.postal')}
-                value={a.postal ?? ''}
+                value={formatPostal(a.postal ?? '', postalRegion)}
                 onChange={(e) => set(i, { postal: e.target.value.trim() === '' ? null : e.target.value })}
-                onBlur={(e) => {
-                  const f = formatPostal(e.target.value, postalRegion);
-                  set(i, { postal: f === '' ? null : f });
-                }}
               />
               {field(i, 'region', t('contact.region'))}
               {field(i, 'city', t('contact.city'))}

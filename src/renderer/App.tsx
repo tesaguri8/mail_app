@@ -54,6 +54,12 @@ export default function App() {
     setView('mail');
   };
 
+  // フッター左に出す「表示中アカウントのメール総数」（メールモード時のみ）。
+  const mailTotal =
+    view === 'mail'
+      ? (accounts.find((a) => a.id === mailAccountId)?.total_count ?? null)
+      : null;
+
   // タイトルバーからの遷移。メールは特定メッセージを開かずに開く。
   // ホーム/メールは押すたびに同期（同じビューを再度押した時も含む）。
   const navigate = (v: AppView) => {
@@ -79,6 +85,7 @@ export default function App() {
               accounts={accounts}
               initialAccountId={mailAccountId}
               initialMailId={mailOpenId}
+              onAccountChange={setMailAccountId}
             />
           )}
           {view === 'contacts' && <ContactsView />}
@@ -86,7 +93,7 @@ export default function App() {
           {view === 'settings' && <Settings accounts={accounts} onChanged={refreshAccounts} />}
         </main>
 
-        <BottomBar dim={dim} onDimChange={setDim} />
+        <BottomBar dim={dim} onDimChange={setDim} mailTotal={mailTotal} />
       </div>
     </SyncProvider>
   );

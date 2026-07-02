@@ -109,8 +109,7 @@ impl Store {
                     COALESCE(full_window,'all'), COALESCE(body_window,'off'), signature_id,
                     (SELECT COUNT(*) FROM emails e WHERE e.account_id = accounts.id AND e.is_read = 0
                        AND COALESCE(e.folder,'inbox') = 'inbox'),
-                    (SELECT COUNT(*) FROM emails e WHERE e.account_id = accounts.id
-                       AND COALESCE(e.folder,'inbox') = 'inbox')
+                    (SELECT COUNT(*) FROM emails e WHERE e.account_id = accounts.id)
              FROM accounts ORDER BY id",
         )?;
         let rows = stmt.query_map([], |r| {

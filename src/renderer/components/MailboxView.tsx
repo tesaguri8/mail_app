@@ -92,15 +92,22 @@ export function MailboxView({
   accounts,
   initialAccountId,
   initialMailId,
+  onAccountChange,
 }: {
   accounts: AccountSummary[];
   initialAccountId: number | null;
   initialMailId: number | null;
+  /** 表示中アカウントの変化を親へ通知（フッターの件数表示用）。 */
+  onAccountChange?: (id: number | null) => void;
 }) {
   const { t } = useTranslation();
   const [selected, setSelected] = useState<number | null>(
     initialAccountId ?? accounts[0]?.id ?? null
   );
+  // 表示中アカウントを親へ通知（フッターのメール総数表示）。
+  useEffect(() => {
+    onAccountChange?.(selected);
+  }, [selected, onAccountChange]);
   // 遷移直後に開くべきメッセージ（ホームの新着クリック）
   const pendingOpen = useRef<number | null>(initialMailId);
   const [mails, setMails] = useState<MailSummary[]>([]);

@@ -7,17 +7,26 @@ import { useTranslation } from 'react-i18next';
 export function BottomBar({
   dim,
   onDimChange,
+  mailTotal,
 }: {
   dim: number;
   onDimChange: (v: number) => void;
+  /** 表示中アカウントのメール総数（メールモード時のみ。他は null）。 */
+  mailTotal?: number | null;
 }) {
   const { t } = useTranslation();
   const MAX = 0.45;
   const pct = Math.round((dim / MAX) * 100);
   return (
     <div className="flex h-8 shrink-0 items-center gap-3 border-t border-white/10 px-4 text-xs text-white/55">
-      {/* 左: 将来のステータス領域 */}
-      <div className="flex-1" />
+      {/* 左: 表示中アカウントのメール総数（メールモード時） */}
+      <div className="flex-1">
+        {mailTotal != null && (
+          <span className="tabular-nums text-white/45">
+            {t('mailbox.accountTotal', { total: mailTotal.toLocaleString() })}
+          </span>
+        )}
+      </div>
       {/* 右: 背景の濃さ（ラベルなし。左側は進捗で塗る） */}
       <input
         type="range"

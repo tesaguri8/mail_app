@@ -314,6 +314,7 @@
     "title": "Inbox",
     "sync": "Sync",
     "syncing": "Syncing…",
+    "accountTotal": "{{total}} messages",
     "resize": "Drag to resize",
     "empty": "No mail yet. Press \"Sync\".",
     "account": "Account",

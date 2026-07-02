@@ -5,6 +5,12 @@ use chrono::{Duration, Utc};
 use mail_parser::MessageParser;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// キャンセル要求が立っているか。
+fn is_cancelled(cancel: &AtomicBool) -> bool {
+    cancel.load(Ordering::Relaxed)
+}
 
 /// 初回取得の安全上限（日数/全期間でも一度に取りすぎない）。
 const SAFETY_MAX: usize = 2000;
@@ -171,6 +177,7 @@ pub fn test_login(host: &str, port: u16, user: &str, password: &str) -> Result<(
 
 /// IMAP に接続し、受信箱＋標準フォルダ（送信済/下書き/ゴミ箱/迷惑）を同期する。
 /// 各フォルダは初回は sync_window の範囲、以降は新着 UID だけを取得して保存する。
+#[allow(clippy::too_many_arguments)]
 pub fn sync_account(
     db_path: &Path,
     account_id: i64,
@@ -179,6 +186,7 @@ pub fn sync_account(
     user: &str,
     password: &str,
     progress: &dyn Fn(&str, i32, i32),
+    cancel: &AtomicBool,
 ) -> Result<SyncResult, String> {
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
     let _ = conn.execute_batch("PRAGMA foreign_keys=ON;");
@@ -217,32 +225,40 @@ pub fn sync_account(
         &window,
         &mut result,
         progress,
+        cancel,
     )?;
 
     // その他の標準フォルダ（存在すれば best-effort。無ければスキップ）。
-    match session.list(Some(""), Some("*")) {
-        Ok(names) => {
-            let targets: Vec<(String, &'static str)> = SYNC_FOLDERS
-                .iter()
-                .filter_map(|spec| detect_mailbox(names.iter(), spec).map(|n| (n, spec.tag)))
-                .collect();
-            drop(names);
-            for (mbox, tag) in targets {
-                if let Err(e) = sync_folder(
-                    &mut session,
-                    &conn,
-                    account_id,
-                    &mbox,
-                    tag,
-                    &window,
-                    &mut result,
-                    progress,
-                ) {
-                    log::warn!("フォルダ '{mbox}' ({tag}) の同期に失敗: {e}");
+    // 中断要求があれば以降のフォルダはスキップして終了する。
+    if !is_cancelled(cancel) {
+        match session.list(Some(""), Some("*")) {
+            Ok(names) => {
+                let targets: Vec<(String, &'static str)> = SYNC_FOLDERS
+                    .iter()
+                    .filter_map(|spec| detect_mailbox(names.iter(), spec).map(|n| (n, spec.tag)))
+                    .collect();
+                drop(names);
+                for (mbox, tag) in targets {
+                    if is_cancelled(cancel) {
+                        break;
+                    }
+                    if let Err(e) = sync_folder(
+                        &mut session,
+                        &conn,
+                        account_id,
+                        &mbox,
+                        tag,
+                        &window,
+                        &mut result,
+                        progress,
+                        cancel,
+                    ) {
+                        log::warn!("フォルダ '{mbox}' ({tag}) の同期に失敗: {e}");
+                    }
                 }
             }
+            Err(e) => log::warn!("フォルダ一覧の取得に失敗（受信箱のみ同期）: {e}"),
         }
-        Err(e) => log::warn!("フォルダ一覧の取得に失敗（受信箱のみ同期）: {e}"),
     }
 
     let _ = session.logout();
@@ -261,6 +277,7 @@ fn sync_folder(
     window: &str,
     result: &mut SyncResult,
     progress: &dyn Fn(&str, i32, i32),
+    cancel: &AtomicBool,
 ) -> Result<(), String> {
     let mailbox = session.select(imap_name).map_err(|e| e.to_string())?;
     let uid_validity = mailbox.uid_validity;
@@ -298,7 +315,7 @@ fn sync_folder(
             .collect();
         uids.sort_unstable();
         uids.reverse(); // 降順（新しい UID から）
-        fetch_uids(session, conn, account_id, tag, &uids, &mut c, progress)?;
+        fetch_uids(session, conn, account_id, tag, &uids, &mut c, progress, cancel)?;
     } else {
         match parse_scope(window) {
             Scope::Count(n) if total > 0 => {
@@ -310,7 +327,9 @@ fn sync_folder(
                     .map_err(|e| e.to_string())?;
                 let planned = msgs.len() as i32;
                 progress(tag, 0, planned);
-                store_fetches(conn, account_id, tag, msgs.iter().rev(), &mut c)?;
+                if !is_cancelled(cancel) {
+                    store_fetches(conn, account_id, tag, msgs.iter().rev(), &mut c)?;
+                }
                 progress(tag, c.fetched, planned);
             }
             Scope::Count(_) => { /* 空 */ }
@@ -330,7 +349,7 @@ fn sync_folder(
                     uids = uids.split_off(uids.len() - SAFETY_MAX); // 新しい方を残す
                 }
                 uids.reverse(); // 降順（新しい UID から取得・表示）
-                fetch_uids(session, conn, account_id, tag, &uids, &mut c, progress)?;
+                fetch_uids(session, conn, account_id, tag, &uids, &mut c, progress, cancel)?;
             }
         }
     }
@@ -364,6 +383,7 @@ struct Counters {
     max_uid: u32,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fetch_uids(
     session: &mut ImapSession,
     conn: &Connection,
@@ -372,10 +392,15 @@ fn fetch_uids(
     uids: &[u32],
     c: &mut Counters,
     progress: &dyn Fn(&str, i32, i32),
+    cancel: &AtomicBool,
 ) -> Result<(), String> {
     let total = uids.len() as i32;
     progress(folder, 0, total);
     for chunk in uids.chunks(CHUNK) {
+        // 中断要求があればチャンク境界で取得を止める（取得済みは保存済み）。
+        if is_cancelled(cancel) {
+            break;
+        }
         let set = chunk
             .iter()
             .map(|u| u.to_string())

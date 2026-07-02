@@ -306,6 +306,10 @@
     "delete": "削除",
     "untitled": "（名称未設定）"
   },
+  "sync": {
+    "cancel": "中断",
+    "cancelled": "中断しました"
+  },
   "mailbox": {
     "title": "受信箱",
     "sync": "同期",

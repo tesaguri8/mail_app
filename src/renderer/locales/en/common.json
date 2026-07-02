@@ -306,6 +306,10 @@
     "delete": "Delete",
     "untitled": "(Untitled)"
   },
+  "sync": {
+    "cancel": "Cancel",
+    "cancelled": "Cancelled"
+  },
   "mailbox": {
     "title": "Inbox",
     "sync": "Sync",

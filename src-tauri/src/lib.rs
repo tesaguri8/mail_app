@@ -22,6 +22,8 @@ pub fn run() {
             log::info!("opening database at {}", db_path.display());
             let store = Store::open(&db_path).expect("failed to open database");
             app.manage(store);
+            // 同期のキャンセル状態（中断ボタン用）。
+            app.manage(commands::SyncControl::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -36,6 +38,7 @@ pub fn run() {
             commands::account_check,
             commands::account_delete,
             commands::mail_sync,
+            commands::mail_sync_cancel,
             commands::mail_send,
             commands::mail_list,
             commands::mail_search,

@@ -14,7 +14,42 @@ use crate::services::smtp;
 use crate::services::spam;
 use crate::services::store::{NewAccount, NewServerAccount, Store};
 use crate::services::vcard;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
+
+/// 実行中の同期のキャンセルフラグを account_id ごとに管理する（中断ボタン用）。
+#[derive(Default)]
+pub struct SyncControl(Mutex<HashMap<i64, Arc<AtomicBool>>>);
+
+impl SyncControl {
+    /// 同期開始時にフラグを登録して返す（既存があれば置き換え）。
+    fn begin(&self, account_id: i64) -> Arc<AtomicBool> {
+        let flag = Arc::new(AtomicBool::new(false));
+        self.0.lock().unwrap().insert(account_id, flag.clone());
+        flag
+    }
+    /// 同期終了時に取り除く。
+    fn end(&self, account_id: i64) {
+        self.0.lock().unwrap().remove(&account_id);
+    }
+    /// 中断要求を立てる（対象が動作中なら true）。
+    fn request_cancel(&self, account_id: i64) -> bool {
+        if let Some(flag) = self.0.lock().unwrap().get(&account_id) {
+            flag.store(true, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// 実行中の同期/再取り込みを中断する。中断は次のチャンク境界で反映される。
+#[tauri::command]
+pub fn mail_sync_cancel(control: State<SyncControl>, account_id: i64) -> bool {
+    control.request_cancel(account_id)
+}
 
 /// アプリ識別情報を返す（identifier はハードコードせず Tauri 設定から取得）。
 #[tauri::command]
@@ -195,6 +230,7 @@ pub fn signature_delete(store: State<Store>, id: i64) -> Result<(), String> {
 pub async fn mail_sync(
     app: AppHandle,
     store: State<'_, Store>,
+    control: State<'_, SyncControl>,
     account_id: i64,
 ) -> Result<SyncResult, String> {
     let (email, login_user, host, port) = store
@@ -207,9 +243,11 @@ pub async fn mail_sync(
         .and_then(|e| e.get_password())
         .map_err(|e| format!("資格情報を取得できません: {e}"))?;
     let db_path = store.path();
+    let cancel = control.begin(account_id);
 
     // 進捗を "sync:progress" イベントで UI に通知する（フォルダ / 取得済み / 予定）。
     let app_ev = app.clone();
+    let cancel_task = cancel.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let progress = |folder: &str, current: i32, total: i32| {
             let _ = app_ev.emit(
@@ -229,10 +267,12 @@ pub async fn mail_sync(
             &login_user,
             &password,
             &progress,
+            &cancel_task,
         )
     })
     .await
     .map_err(|e| e.to_string())?;
+    control.end(account_id);
     // 同期後に保持ポリシーを適用（古い添付の削除・本文の要約保存・容量保険）。best-effort。
     if result.is_ok() {
         let _ = store.apply_retention(account_id);
@@ -999,6 +1039,7 @@ pub fn storage_optimize(store: State<Store>, account_id: i64) -> Result<Retentio
 pub async fn mail_resync(
     app: AppHandle,
     store: State<'_, Store>,
+    control: State<'_, SyncControl>,
     account_id: i64,
 ) -> Result<SyncResult, String> {
     store
@@ -1013,9 +1054,11 @@ pub async fn mail_resync(
         .and_then(|e| e.get_password())
         .map_err(|e| format!("資格情報を取得できません: {e}"))?;
     let db_path = store.path();
+    let cancel = control.begin(account_id);
 
     let app_ev = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let cancel_task = cancel.clone();
+    let out = tauri::async_runtime::spawn_blocking(move || {
         let progress = |folder: &str, current: i32, total: i32| {
             let _ = app_ev.emit(
                 "sync:progress",
@@ -1034,10 +1077,12 @@ pub async fn mail_resync(
             &login_user,
             &password,
             &progress,
+            &cancel_task,
         )
     })
-    .await
-    .map_err(|e| e.to_string())?
+    .await;
+    control.end(account_id);
+    out.map_err(|e| e.to_string())?
 }
 
 /// ファイル名を保存に安全な形へ正規化する（パス区切り・禁止文字を除去）。

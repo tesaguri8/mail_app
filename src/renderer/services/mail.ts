@@ -10,6 +10,10 @@ import type { SendInput } from '@bindings/SendInput';
 // Tauri v2 は camelCase の引数キーを snake_case の Rust 引数へ自動変換する。
 export const mailSync = (accountId: number) => invoke<SyncResult>('mail_sync', { accountId });
 
+// 実行中の同期/再取り込みを中断する（次のチャンク境界で反映）。動作中なら true。
+export const mailSyncCancel = (accountId: number) =>
+  invoke<boolean>('mail_sync_cancel', { accountId });
+
 // メールを送信する（SMTP）。input は差出人アカウント・宛先・件名・本文など。
 export const mailSend = (input: SendInput) => invoke<void>('mail_send', { input });
 

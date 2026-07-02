@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, Minus, Plus } from 'lucide-react';
-import { listen } from '@tauri-apps/api/event';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { ServerAccountSummary } from '@bindings/ServerAccountSummary';
 import type { SignatureSummary } from '@bindings/SignatureSummary';
-import type { SyncProgress } from '@bindings/SyncProgress';
+import { useSync } from './SyncProvider';
 import {
   accountAdd,
   accountAutoconfig,
@@ -21,7 +20,6 @@ import {
   accountSetFullWindow,
   accountSetStorageLimit,
   accountStorageInfo,
-  mailResync,
   storageOptimize,
 } from '../services/mail';
 import type { StorageInfo } from '@bindings/StorageInfo';
@@ -79,9 +77,8 @@ export function AccountSetup({
   const [storage, setStorage] = useState<StorageInfo | null>(null);
   const [storageBusy, setStorageBusy] = useState(false);
   const [storageMsg, setStorageMsg] = useState('');
-  const [resyncing, setResyncing] = useState(false);
-  // 点検再取り込みの進捗（フォルダ別 現在/全体）。
-  const [progress, setProgress] = useState<SyncProgress | null>(null);
+  // 同期/再取り込みはアプリ全体のバックグラウンド実行（進捗・中断・完了トースト）に委譲。
+  const sync = useSync();
 
   // form state
   const [email, setEmail] = useState('');
@@ -176,29 +173,8 @@ export function AccountSetup({
     }
   };
 
-  const resync = async (id: number) => {
-    setStorageBusy(true);
-    setResyncing(true);
-    setProgress(null);
-    setStorageMsg(t('storage.resyncing'));
-    // Rust からの "sync:progress" を購読してフォルダ別の取得状況を表示する。
-    const unlisten = await listen<SyncProgress>('sync:progress', (e) => setProgress(e.payload));
-    try {
-      const r = await mailResync(id);
-      setStorageMsg(
-        t('storage.resynced', { fetched: r.fetched, stored: r.stored, backfilled: r.backfilled }),
-      );
-      onChanged();
-      loadStorage(id);
-    } catch (e) {
-      setStorageMsg(String(e));
-    } finally {
-      unlisten();
-      setProgress(null);
-      setStorageBusy(false);
-      setResyncing(false);
-    }
-  };
+  // 点検再取り込みをバックグラウンドで開始（進捗・中断・完了トーストは共通インジケータ）。
+  const startResync = (id: number, email: string) => sync.start(id, email, 'resync');
 
   const saveEdit = async (id: number) => {
     try {
@@ -515,47 +491,8 @@ export function AccountSetup({
                       >
                         {t('storage.optimize')}
                       </button>
-                      <button
-                        className={btnCls}
-                        disabled={storageBusy}
-                        onClick={() => resync(a.id)}
-                        title={t('storage.resyncHint')}
-                      >
-                        {t('storage.resync')}
-                      </button>
                       {storageMsg && <span className="text-xs text-white/70">{storageMsg}</span>}
                     </div>
-                    {resyncing && (
-                      <div className="mt-2">
-                        {progress ? (
-                          <>
-                            <div className="mb-1 flex items-center justify-between text-[11px] text-white/60">
-                              <span>{t(`mailbox.f_${progress.folder}`, progress.folder)}</span>
-                              <span className="tabular-nums">
-                                {progress.current}/{progress.total}
-                              </span>
-                            </div>
-                            <div className="h-1 w-full overflow-hidden rounded-full bg-white/10">
-                              <div
-                                className="h-full rounded-full bg-sky-400 transition-[width]"
-                                style={{
-                                  width: `${
-                                    progress.total > 0
-                                      ? Math.min(100, Math.round((progress.current / progress.total) * 100))
-                                      : 0
-                                  }%`,
-                                }}
-                              />
-                            </div>
-                          </>
-                        ) : (
-                          // 接続/準備中は不定バー。
-                          <div className="h-1 w-full overflow-hidden rounded-full bg-white/10">
-                            <div className="h-full w-1/3 animate-pulse rounded-full bg-sky-400" />
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </div>
 
                   <div className="flex items-center gap-3">
@@ -563,6 +500,31 @@ export function AccountSetup({
                       {t('account.save')}
                     </button>
                     {editStatus && <span className="text-xs text-white/70">{editStatus}</span>}
+                  </div>
+
+                  {/* 点検再取り込み: 保存とは別（バックグラウンド実行・進捗/中断は共通インジケータ） */}
+                  <div className="mt-1 border-t border-white/10 pt-3">
+                    {sync.active?.accountId === a.id ? (
+                      <button
+                        className={btnCls}
+                        onClick={sync.cancel}
+                        title={t('storage.resyncHint')}
+                      >
+                        {t('sync.cancel')}
+                      </button>
+                    ) : (
+                      <button
+                        className={btnCls}
+                        disabled={!!sync.active}
+                        onClick={() => startResync(a.id, a.email)}
+                        title={t('storage.resyncHint')}
+                      >
+                        {t('storage.resync')}
+                      </button>
+                    )}
+                    <span className="mt-1 block text-[11px] leading-snug text-white/40">
+                      {t('storage.resyncHint')}
+                    </span>
                   </div>
                 </div>
               )}

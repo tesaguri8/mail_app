@@ -8,6 +8,7 @@ import { StubView } from './components/StubView';
 import { Settings } from './components/Settings';
 import { accountList } from './services/accounts';
 import { useAutoSync, MAIL_SYNCED_EVENT } from './hooks/useAutoSync';
+import { SyncProvider } from './components/SyncProvider';
 import type { AccountSummary } from '@bindings/AccountSummary';
 // アプリ同梱の背景画像（プレースホルダ。docs/UI_UX_DESIGN.md 背景写真システム）
 import backgroundUrl from './assets/background.jpg';
@@ -62,29 +63,31 @@ export default function App() {
   };
 
   return (
-    <div
-      className="flex h-full flex-col overflow-hidden bg-cover bg-center text-white"
-      style={{
-        backgroundImage: `linear-gradient(160deg, rgba(15,18,35,${(0.35 + dim).toFixed(2)}) 0%, rgba(8,12,28,${(0.55 + dim).toFixed(2)}) 100%), url(${backgroundUrl})`,
-      }}
-    >
-      <TitleBar onNavigate={navigate} />
+    <SyncProvider>
+      <div
+        className="flex h-full flex-col overflow-hidden bg-cover bg-center text-white"
+        style={{
+          backgroundImage: `linear-gradient(160deg, rgba(15,18,35,${(0.35 + dim).toFixed(2)}) 0%, rgba(8,12,28,${(0.55 + dim).toFixed(2)}) 100%), url(${backgroundUrl})`,
+        }}
+      >
+        <TitleBar onNavigate={navigate} />
 
-      <main className="min-h-0 flex-1 overflow-hidden">
-        {view === 'home' && <Home accounts={accounts} onOpenMail={openMail} />}
-        {view === 'mail' && (
-          <MailboxView
-            accounts={accounts}
-            initialAccountId={mailAccountId}
-            initialMailId={mailOpenId}
-          />
-        )}
-        {view === 'contacts' && <ContactsView />}
-        {view === 'calendar' && <StubView titleKey="nav.calendar" />}
-        {view === 'settings' && <Settings accounts={accounts} onChanged={refreshAccounts} />}
-      </main>
+        <main className="min-h-0 flex-1 overflow-hidden">
+          {view === 'home' && <Home accounts={accounts} onOpenMail={openMail} />}
+          {view === 'mail' && (
+            <MailboxView
+              accounts={accounts}
+              initialAccountId={mailAccountId}
+              initialMailId={mailOpenId}
+            />
+          )}
+          {view === 'contacts' && <ContactsView />}
+          {view === 'calendar' && <StubView titleKey="nav.calendar" />}
+          {view === 'settings' && <Settings accounts={accounts} onChanged={refreshAccounts} />}
+        </main>
 
-      <BottomBar dim={dim} onDimChange={setDim} />
-    </div>
+        <BottomBar dim={dim} onDimChange={setDim} />
+      </div>
+    </SyncProvider>
   );
 }

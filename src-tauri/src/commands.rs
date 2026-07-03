@@ -25,11 +25,16 @@ use tauri::{AppHandle, Emitter, Manager, State};
 pub struct SyncControl(Mutex<HashMap<i64, Arc<AtomicBool>>>);
 
 impl SyncControl {
-    /// 同期開始時にフラグを登録して返す（既存があれば置き換え）。
-    fn begin(&self, account_id: i64) -> Arc<AtomicBool> {
+    /// 同期開始を試みる。そのアカウントが既に同期中なら None（＝二重実行を防ぐ）。
+    /// 空きがあればキャンセルフラグを登録して返す。
+    fn try_begin(&self, account_id: i64) -> Option<Arc<AtomicBool>> {
+        let mut map = self.0.lock().unwrap();
+        if map.contains_key(&account_id) {
+            return None; // 既に同期/再取り込みが進行中
+        }
         let flag = Arc::new(AtomicBool::new(false));
-        self.0.lock().unwrap().insert(account_id, flag.clone());
-        flag
+        map.insert(account_id, flag.clone());
+        Some(flag)
     }
     /// 同期終了時に取り除く。
     fn end(&self, account_id: i64) {
@@ -250,7 +255,15 @@ pub async fn mail_sync(
         .and_then(|e| e.get_password())
         .map_err(|e| format!("資格情報を取得できません: {e}"))?;
     let db_path = store.path();
-    let cancel = control.begin(account_id);
+    // このアカウントが既に同期中なら二重実行しない（自動同期と手動/再取り込みの衝突で
+    // 進捗が上下してブレるのを防ぐ）。取得 0 件のスキップ結果を返す。
+    let Some(cancel) = control.try_begin(account_id) else {
+        return Ok(SyncResult {
+            fetched: 0,
+            stored: 0,
+            backfilled: 0,
+        });
+    };
 
     // 進捗を "sync:progress" イベントで UI に通知する（フォルダ / 取得済み / 予定）。
     let app_ev = app.clone();
@@ -277,9 +290,11 @@ pub async fn mail_sync(
             &cancel_task,
         )
     })
-    .await
-    .map_err(|e| e.to_string())?;
+    .await;
+    // JoinError（タスクパニック）でも同期枠を必ず解放してから伝播する
+    // （解放漏れは以後の同期が全てスキップされる原因になるため）。
     control.end(account_id);
+    let result = result.map_err(|e| e.to_string())?;
     // 同期後に保持ポリシーを適用（古い添付の削除・本文の要約保存・容量保険）。best-effort。
     if result.is_ok() {
         let _ = store.apply_retention(account_id);
@@ -1595,9 +1610,8 @@ pub async fn mail_resync(
     control: State<'_, SyncControl>,
     account_id: i64,
 ) -> Result<SyncResult, String> {
-    store
-        .reset_sync_state(account_id)
-        .map_err(|e| e.to_string())?;
+    // 資格情報の取得（失敗しうる）は同期枠の確保より前に済ませる（確保後に失敗すると
+    // フラグが残り、以後の同期が全てスキップされてしまうため）。
     let (email, login_user, host, port) = store
         .get_account_imap(account_id)
         .map_err(|e| e.to_string())?
@@ -1606,8 +1620,17 @@ pub async fn mail_resync(
     let password = keyring::Entry::new(&service, &email)
         .and_then(|e| e.get_password())
         .map_err(|e| format!("資格情報を取得できません: {e}"))?;
+
+    // 二重実行の防止（自動同期が走っている最中の再取り込みを弾く）。
+    let Some(cancel) = control.try_begin(account_id) else {
+        return Err("同期が実行中です。完了してから再度お試しください。".to_string());
+    };
+    // これ以降のエラーは同期枠を必ず解放してから返す。
+    if let Err(e) = store.reset_sync_state(account_id) {
+        control.end(account_id);
+        return Err(e.to_string());
+    }
     let db_path = store.path();
-    let cancel = control.begin(account_id);
 
     let app_ev = app.clone();
     let cancel_task = cancel.clone();

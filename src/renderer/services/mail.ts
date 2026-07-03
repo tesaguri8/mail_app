@@ -6,6 +6,7 @@ import type { AttachmentSummary } from '@bindings/AttachmentSummary';
 import type { StorageInfo } from '@bindings/StorageInfo';
 import type { RetentionReport } from '@bindings/RetentionReport';
 import type { SendInput } from '@bindings/SendInput';
+import type { RemoteImage } from '@bindings/RemoteImage';
 
 // Tauri v2 は camelCase の引数キーを snake_case の Rust 引数へ自動変換する。
 export const mailSync = (accountId: number) => invoke<SyncResult>('mail_sync', { accountId });
@@ -105,3 +106,16 @@ export const accountSetStorageLimit = (accountId: number, bytes: number) =>
 // ストレージ最適化（保持ポリシー適用: 古い添付削除＋本文の要約保存＋容量保険）。
 export const storageOptimize = (accountId: number) =>
   invoke<RetentionReport>('storage_optimize', { accountId });
+
+// 明示許可された外部画像を取得し、サニタイズ済み data URL を返す（docs/MAIL_SECURITY.md §1）。
+// sender（差出人アドレス）が許可済みならバックエンドでディスクキャッシュする（初回だけ取得）。
+export const mailLoadRemote = (urls: string[], sender: string | null) =>
+  invoke<RemoteImage[]>('mail_load_remote', { urls, sender });
+
+// 差出人アドレスの外部画像を常に許可するか（住所録の信頼設定も反映）。
+export const senderRemoteAllowed = (address: string) =>
+  invoke<boolean>('sender_remote_allowed', { address });
+
+// 差出人アドレスの外部画像許可（常に許可/解除）を保存。
+export const senderSetRemotePolicy = (address: string, allow: boolean) =>
+  invoke<void>('sender_set_remote_policy', { address, allow });

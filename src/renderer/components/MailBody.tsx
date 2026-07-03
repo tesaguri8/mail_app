@@ -736,7 +736,7 @@ export function MailBody({
             </div>
           )}
           {d.cc_addresses && (
-            <div className="truncate">
+            <div className="break-words">
               {t('mailbox.cc')}:{' '}
               <LinkifyEmails
                 text={d.cc_addresses}

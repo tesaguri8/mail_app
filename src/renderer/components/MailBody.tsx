@@ -820,6 +820,18 @@ export function MailBody({
             inlineImages={inlineImages}
             remoteImages={remoteShown ? remoteImages : {}}
             remoteDefaultExpanded={remoteExpandDefault}
+            renderEmail={
+              onAddContact
+                ? (email) => (
+                    <EmailAdd
+                      email={email}
+                      onAdd={onAddContact}
+                      onEdit={onEditContact}
+                      onCompose={onComposeTo}
+                    />
+                  )
+                : undefined
+            }
           />
         ) : body.trim() ? (
           <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-white/90">

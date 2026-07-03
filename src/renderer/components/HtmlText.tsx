@@ -85,15 +85,32 @@ function RemoteImg({
   );
 }
 
+/** テキスト中のメールアドレスを検出するための正規表現（キャプチャ付き）。 */
+const EMAIL_RE = /([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/g;
+
+/** テキストノード内のメールアドレスを renderEmail で描画（クリックで新規作成／＋登録）。 */
+function renderTextWithEmails(
+  text: string,
+  renderEmail: (email: string) => ReactNode,
+): ReactNode {
+  const parts = text.split(EMAIL_RE);
+  return parts.map((p, i) =>
+    i % 2 === 1 ? <Fragment key={i}>{renderEmail(p)}</Fragment> : p,
+  );
+}
+
 function renderNode(
   node: Node,
   key: number,
   inlineImages: InlineImages,
   remoteImages: RemoteImages,
   remoteDefaultExpanded: boolean,
+  renderEmail?: (email: string) => ReactNode,
 ): ReactNode {
   if (node.nodeType === Node.TEXT_NODE) {
-    return node.textContent ?? '';
+    const text = node.textContent ?? '';
+    if (!renderEmail || !text) return text;
+    return renderTextWithEmails(text, renderEmail);
   }
   if (node.nodeType !== Node.ELEMENT_NODE) return null;
 
@@ -149,7 +166,7 @@ function renderNode(
 
   const children: ReactNode[] = [];
   el.childNodes.forEach((c, i) =>
-    children.push(renderNode(c, i, inlineImages, remoteImages, remoteDefaultExpanded)),
+    children.push(renderNode(c, i, inlineImages, remoteImages, remoteDefaultExpanded, renderEmail)),
   );
 
   if (tag === 'br') return <br key={key} />;
@@ -212,12 +229,15 @@ export function HtmlText({
   inlineImages = {},
   remoteImages = {},
   remoteDefaultExpanded = false,
+  renderEmail,
 }: {
   html: string;
   inlineImages?: InlineImages;
   remoteImages?: RemoteImages;
   /** リモート画像の初期サイズを完全表示にするか（既定はサムネイル。各画像はクリックで切替）。 */
   remoteDefaultExpanded?: boolean;
+  /** 本文テキスト/ mailto 中のメールアドレスの描画（クリックで新規作成・＋登録）。 */
+  renderEmail?: (email: string) => ReactNode;
 }) {
   let doc: Document;
   try {
@@ -227,7 +247,7 @@ export function HtmlText({
   }
   const nodes: ReactNode[] = [];
   doc.body.childNodes.forEach((c, i) =>
-    nodes.push(renderNode(c, i, inlineImages, remoteImages, remoteDefaultExpanded)),
+    nodes.push(renderNode(c, i, inlineImages, remoteImages, remoteDefaultExpanded, renderEmail)),
   );
   return (
     <div className="break-words text-sm leading-relaxed text-white/90 [&_a]:break-all">{nodes}</div>

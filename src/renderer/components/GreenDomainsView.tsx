@@ -31,6 +31,13 @@ export function GreenDomainsView() {
 
   const green = items.filter((e) => e.kind === 'green');
   const warning = items.filter((e) => e.kind === 'warning');
+  // 追加フィールドは検索も兼ねる: 入力に一致するドメインだけ表示（部分一致）。
+  const q = input.trim().toLowerCase();
+  const greenShown = q ? green.filter((e) => e.domain.includes(q)) : green;
+  const warningShown = q ? warning.filter((e) => e.domain.includes(q)) : warning;
+  // 入力ドメインが既にグリーンにあるか（あれば「追加」は無効化）。
+  const normalized = input.trim().toLowerCase().replace(/^.*@/, '').replace(/\/.*$/, '');
+  const alreadyGreen = green.some((e) => e.domain === normalized);
 
   // メールを貼っても OK（@ より後ろをドメインとして拾う）。
   const normalize = (s: string) => s.trim().toLowerCase().replace(/^.*@/, '').replace(/\/.*$/, '');
@@ -49,8 +56,9 @@ export function GreenDomainsView() {
   const run = (p: Promise<void>) => p.then(load).catch(() => undefined);
 
   return (
-    <section className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-2xl p-6">
+    <section className="flex h-full min-h-0 flex-col">
+      {/* 固定ヘッダ（タイトル・説明・ドメイン追加） */}
+      <div className="mx-auto w-full max-w-2xl shrink-0 px-6 pt-5">
         <div className="mb-1 flex items-center gap-2">
           <LeafyGreen size={20} className="text-emerald-400" />
           <h2 className="text-lg font-semibold">{t('green.title')}</h2>
@@ -73,26 +81,34 @@ export function GreenDomainsView() {
           />
           <button
             onClick={addManual}
-            disabled={normalize(input) === ''}
+            disabled={normalized === '' || alreadyGreen}
+            title={alreadyGreen ? t('green.alreadyGreen') : t('green.add')}
             className="flex shrink-0 items-center gap-1.5 rounded-md bg-emerald-500/80 px-3.5 py-1.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Plus size={15} />
             {t('green.add')}
           </button>
         </div>
+      </div>
 
+      {/* スクロールするリスト領域（ドメイン一覧だけスクロール） */}
+      <div className="mx-auto min-h-0 w-full max-w-2xl flex-1 overflow-y-auto px-6 pb-6">
         {/* グリーン */}
         <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-emerald-300">
           <LeafyGreen size={14} />
-          {t('green.greenSection', { count: green.length })}
+          {t('green.greenSection', { count: greenShown.length })}
         </div>
         {green.length === 0 ? (
           <p className="mb-6 rounded-md bg-white/5 px-3 py-2 text-sm text-white/40">
             {t('green.greenEmpty')}
           </p>
+        ) : greenShown.length === 0 ? (
+          <p className="mb-6 rounded-md bg-white/5 px-3 py-2 text-sm text-white/40">
+            {t('green.noMatch')}
+          </p>
         ) : (
           <ul className="mb-6 space-y-1.5">
-            {green.map((e) => (
+            {greenShown.map((e) => (
               <li
                 key={`g-${e.domain}`}
                 className="flex items-center gap-2.5 rounded-md border border-emerald-400/20 bg-emerald-400/5 px-3 py-2"
@@ -123,15 +139,15 @@ export function GreenDomainsView() {
         )}
 
         {/* 警告（除外） */}
-        {warning.length > 0 && (
+        {warningShown.length > 0 && (
           <>
             <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-amber-300">
               <AlertTriangle size={14} />
-              {t('green.warnSection', { count: warning.length })}
+              {t('green.warnSection', { count: warningShown.length })}
             </div>
             <p className="mb-2 text-[11px] text-white/40">{t('green.warnHint')}</p>
             <ul className="space-y-1.5">
-              {warning.map((e) => (
+              {warningShown.map((e) => (
                 <li
                   key={`w-${e.domain}`}
                   className="flex items-center gap-2.5 rounded-md border border-amber-300/20 bg-amber-300/5 px-3 py-2"

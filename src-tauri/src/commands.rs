@@ -1,8 +1,8 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult,
     ContactGroupSummary, ContactInput, ContactMatch, ContactSummary, DataLocation, DbInfo,
-    DraftInput, DuplicateGroup, GreenDomainEntry, ImportReport, MailDetail, MailSummary,
-    OrgDuplicateGroup,
+    DraftContent, DraftInput, DuplicateGroup, GreenDomainEntry, ImportReport, MailDetail,
+    MailSummary, OrgDuplicateGroup,
     OrganizationDetail, OrganizationSummary, RecipientSuggestion, RemoteImage, RetentionReport,
     SendInput, ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict, StorageInfo,
     SyncProgress, SyncResult, TagSummary,
@@ -647,6 +647,15 @@ pub fn mail_empty_folder(
 #[tauri::command]
 pub fn mail_save_draft(store: State<Store>, input: DraftInput) -> Result<i64, String> {
     store.save_draft(&input).map_err(|e| e.to_string())
+}
+
+/// 下書き 1 件を作成画面へ読み戻す内容（宛先・件名・本文・In-Reply-To）を取得する。
+#[tauri::command]
+pub fn mail_get_draft(store: State<Store>, id: i64) -> Result<DraftContent, String> {
+    store
+        .get_draft(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "下書きが見つかりません".to_string())
 }
 
 /// タグ一覧（使用件数つき）。

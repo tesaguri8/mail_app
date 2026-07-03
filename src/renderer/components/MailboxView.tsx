@@ -30,6 +30,7 @@ import {
   mailDelete,
   mailEmptyFolder,
   mailGet,
+  mailGetDraft,
   mailList,
   mailMarkSpam,
   mailSearch,
@@ -500,6 +501,16 @@ export function MailboxView({
     }
   };
 
+  // 下書きフォルダのクリックは、閲覧ではなく作成画面で再編集を開く。
+  const openDraft = async (id: number) => {
+    try {
+      const draft = await mailGetDraft(id);
+      setCompose({ mode: 'draft', draft });
+    } catch {
+      /* noop */
+    }
+  };
+
   // 行クリック:
   // - Shift=範囲選択 / Ctrl(Cmd)=トグル
   // - 複数選択モード（チェックボックス表示中）は、修飾キーなしのクリックでもトグル
@@ -523,7 +534,8 @@ export function MailboxView({
     // 通常クリック: 選択をクリアして開く（ハイライトは opened で行う）
     setSelectedIds(new Set());
     anchorId.current = id;
-    openMail(id);
+    if (folder === 'drafts') openDraft(id);
+    else openMail(id);
   };
 
   const onRowContextMenu = (e: React.MouseEvent, id: number) => {

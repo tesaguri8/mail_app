@@ -586,6 +586,26 @@ pub struct DraftInput {
     pub subject: String,
     /// プレーン本文（署名・引用込みの、その時点の全文）。
     pub body: String,
+    /// 返信元の Message-ID（返信の下書きのみ。新規/転送は None）。再編集・再送信の
+    /// スレッド化に使う。
+    pub in_reply_to: Option<String>,
+}
+
+/// 下書きの再編集用の内容（drafts フォルダの 1 件を作成画面へ読み戻す）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct DraftContent {
+    /// 下書きの emails.id（更新・削除のキー）。
+    pub id: i32,
+    pub account_id: i32,
+    /// 宛先（カンマ区切り文字列。作成画面の入力表記に合わせる）。
+    pub to: String,
+    pub cc: String,
+    pub subject: String,
+    /// 保存した本文（署名・引用込みの全文）。作成画面ではこれをそのまま編集する。
+    pub body: String,
+    /// 返信元の Message-ID（返信の下書きのみ。無ければ None）。
+    pub in_reply_to: Option<String>,
 }
 
 /// 同期の進捗（Tauri イベント "sync:progress" のペイロード）。

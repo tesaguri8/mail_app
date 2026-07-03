@@ -105,7 +105,8 @@
     "noSignature": "(No signature)",
     "keepDraftConfirm": "Keep this unsent message as a draft?\n\n[OK] Keep draft / [Cancel] Discard",
     "draftSaved": "Draft saved",
-    "quoteAppendNote": "The original message on the right will be quoted below your text when sent."
+    "quoteAppendNote": "The original message on the right will be quoted below your text when sent.",
+    "draft": "Edit draft"
   },
   "ctx": {
     "markRead": "Mark as read",

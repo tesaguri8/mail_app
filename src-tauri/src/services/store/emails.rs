@@ -513,8 +513,9 @@ impl Store {
         Ok(n)
     }
 
-    /// 書きかけのメールをローカルの drafts フォルダへ保存/更新する（IMAP へは上げない）。
+    /// 書きかけのメールをローカルの drafts フォルダへ保存/更新する（サーバー同期は別途）。
     /// `draft_id` があれば既存行を更新、無ければ新規作成する。保存した下書きの emails.id を返す。
+    /// 新規時は再送・サーバー同期で使う Message-ID を採番して保存する（更新時は据え置き）。
     pub fn save_draft(&self, d: &crate::models::DraftInput) -> rusqlite::Result<i64> {
         let now = chrono::Utc::now();
         let iso = now.to_rfc3339();
@@ -534,9 +535,9 @@ impl Store {
             let id = id as i64;
             conn.execute(
                 "UPDATE emails SET subject = ?1, to_addresses = ?2, cc_addresses = ?3, \
-                   body_plain = ?4, clean_body = ?4, date = ?5, date_ts = ?6 \
-                 WHERE id = ?7 AND folder = 'drafts'",
-                params![d.subject, to, cc, d.body, iso, ts, id],
+                   body_plain = ?4, clean_body = ?4, date = ?5, date_ts = ?6, in_reply_to = ?7 \
+                 WHERE id = ?8 AND folder = 'drafts'",
+                params![d.subject, to, cc, d.body, iso, ts, d.in_reply_to, id],
             )?;
             conn.execute(
                 "UPDATE email_fts SET subject = ?1, clean_body = ?2 WHERE rowid = ?3",
@@ -545,17 +546,32 @@ impl Store {
             return Ok(id);
         }
         // 新規: フォルダ接頭辞つきの一意キー（UNIQUE(account_id, canonical_key) を満たす）。
-        let key = format!(
-            "drafts:draft-{}-{}",
-            d.account_id,
-            now.timestamp_nanos_opt().unwrap_or(ts)
-        );
+        let nanos = now.timestamp_nanos_opt().unwrap_or(ts);
+        let key = format!("drafts:draft-{}-{}", d.account_id, nanos);
+        // サーバー Drafts 上で自分の下書きを一意に特定するための Message-ID を採番する。
+        let domain = from
+            .as_deref()
+            .and_then(|e| e.split('@').nth(1))
+            .unwrap_or("rondine.local");
+        let message_id = format!("<draft-{}-{}@{}>", d.account_id, nanos, domain);
         conn.execute(
             "INSERT INTO emails \
-               (account_id, canonical_key, subject, from_address, to_addresses, cc_addresses, \
-                date, date_ts, body_plain, clean_body, folder, is_read) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, 'drafts', 1)",
-            params![d.account_id as i64, key, d.subject, from, to, cc, iso, ts, d.body],
+               (account_id, canonical_key, message_id, subject, from_address, to_addresses, cc_addresses, \
+                date, date_ts, body_plain, clean_body, folder, is_read, in_reply_to) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, 'drafts', 1, ?11)",
+            params![
+                d.account_id as i64,
+                key,
+                message_id,
+                d.subject,
+                from,
+                to,
+                cc,
+                iso,
+                ts,
+                d.body,
+                d.in_reply_to
+            ],
         )?;
         let id = conn.last_insert_rowid();
         conn.execute(
@@ -563,6 +579,29 @@ impl Store {
             params![id, d.subject, from, d.body],
         )?;
         Ok(id)
+    }
+
+    /// 下書き 1 件を作成画面へ読み戻すための内容を取得する（drafts フォルダのみ）。
+    pub fn get_draft(&self, id: i64) -> rusqlite::Result<Option<crate::models::DraftContent>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, account_id, COALESCE(to_addresses, ''), COALESCE(cc_addresses, ''), \
+                    COALESCE(subject, ''), COALESCE(body_plain, ''), in_reply_to \
+             FROM emails WHERE id = ?1 AND folder = 'drafts'",
+            params![id],
+            |r| {
+                Ok(crate::models::DraftContent {
+                    id: r.get::<_, i64>(0)? as i32,
+                    account_id: r.get::<_, i64>(1)? as i32,
+                    to: r.get(2)?,
+                    cc: r.get(3)?,
+                    subject: r.get(4)?,
+                    body: r.get(5)?,
+                    in_reply_to: r.get(6)?,
+                })
+            },
+        )
+        .optional()
     }
 
     /// メール本文の取得（表示用）。差出人/宛先の表示名は住所録から解決する。

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Send, X } from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailDetail } from '@bindings/MailDetail';
+import type { DraftContent } from '@bindings/DraftContent';
 import type { SignatureSummary } from '@bindings/SignatureSummary';
 import { mailDelete, mailSaveDraft, mailSend } from '../services/mail';
 import { signatureList } from '../services/signatures';
@@ -12,10 +13,11 @@ import { RecipientInput } from './RecipientInput';
 import { FlySwallow, type FlySwallowHandle } from './FlySwallow';
 import swallowUrl from '../assets/swallow.png';
 
-/** 作成モード。返信/転送は元メール（source）を伴う。 */
+/** 作成モード。返信/転送は元メール（source）を伴う。draft は保存済み下書きの再編集。 */
 export type ComposeTarget =
   | { mode: 'new' }
-  | { mode: 'reply' | 'replyAll' | 'forward'; source: MailDetail };
+  | { mode: 'reply' | 'replyAll' | 'forward'; source: MailDetail }
+  | { mode: 'draft'; draft: DraftContent };
 
 /** "Re: " / "Fwd: " を二重に付けない。 */
 function withPrefix(subject: string | null, prefix: 'Re' | 'Fwd'): string {
@@ -71,6 +73,18 @@ export function Compose({
     if (target.mode === 'new') {
       return { to: '', cc: '', subject: '', quoted: '', inReplyTo: null as string | null };
     }
+    if (target.mode === 'draft') {
+      // 保存済み下書きの再編集。本文は保存時の全文（署名・引用込み）をそのまま編集する
+      // ので、送信時に足す引用(quoted)は無し。返信下書きは In-Reply-To を復元する。
+      const d = target.draft;
+      return {
+        to: d.to,
+        cc: d.cc,
+        subject: d.subject,
+        quoted: '',
+        inReplyTo: d.in_reply_to,
+      };
+    }
     const s = target.source;
     const body = s.body_plain ?? s.clean_body ?? '';
     const attribution = t('compose.quoteHeader', {
@@ -98,14 +112,18 @@ export function Compose({
   }, [target, t]);
 
   const [accountId, setAccountId] = useState<number | null>(
-    defaultAccountId ?? accounts[0]?.id ?? null
+    // 下書きの再編集は保存時のアカウントを使う。
+    target.mode === 'draft'
+      ? target.draft.account_id
+      : (defaultAccountId ?? accounts[0]?.id ?? null)
   );
   const [to, setTo] = useState(init.to);
   const [cc, setCc] = useState(init.cc);
   const [bcc, setBcc] = useState('');
   const [showCc, setShowCc] = useState(Boolean(init.cc));
   const [subject, setSubject] = useState(init.subject);
-  const [body, setBody] = useState('');
+  // 下書きの再編集は保存済み本文（署名・引用込み）をそのまま編集する。それ以外は空から。
+  const [body, setBody] = useState(target.mode === 'draft' ? target.draft.body : '');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
 
@@ -146,15 +164,17 @@ export function Compose({
   );
 
   // 署名が読み込めたら（およびアカウント変更時に）そのアカウントの既定署名を適用する。
+  // 下書きの再編集では本文に署名が既に含まれているので自動挿入しない（二重を防ぐ）。
   useEffect(() => {
-    if (signatures.length === 0) return;
+    if (signatures.length === 0 || target.mode === 'draft') return;
     const acc = accounts.find((a) => a.id === accountId);
     applySignature(acc?.signature_id ?? null);
-  }, [accountId, signatures, accounts, applySignature]);
+  }, [accountId, signatures, accounts, applySignature, target.mode]);
 
   // 下書きの自動保存。ユーザーが何か書き込んだら（dirty）ローカルの drafts へ保存する。
   // 署名の自動挿入や返信の引用だけでは保存しない（実際に書いたものだけ残す）。
-  const draftIdRef = useRef<number | null>(null);
+  // 再編集中はその下書きの id で上書き更新する。
+  const draftIdRef = useRef<number | null>(target.mode === 'draft' ? target.draft.id : null);
   const dirtyRef = useRef(false);
   const [dirty, setDirty] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -179,13 +199,14 @@ export function Compose({
         cc: splitAddresses(cc),
         subject,
         body: composedBody(),
+        in_reply_to: init.inReplyTo,
       });
       draftIdRef.current = id;
       setSaved(true);
     } catch {
       // 自動保存の失敗は致命的でないので黙って無視（次の入力で再試行）。
     }
-  }, [accountId, to, cc, subject, composedBody]);
+  }, [accountId, to, cc, subject, composedBody, init.inReplyTo]);
 
   // 入力のたびにデバウンス（1s）して自動保存。dirty になって初めて走る。
   useEffect(() => {

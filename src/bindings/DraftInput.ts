@@ -17,4 +17,9 @@ account_id: number, to: Array<string>, cc: Array<string>, subject: string,
 /**
  * プレーン本文（署名・引用込みの、その時点の全文）。
  */
-body: string, };
+body: string, 
+/**
+ * 返信元の Message-ID（返信の下書きのみ。新規/転送は None）。再編集・再送信の
+ * スレッド化に使う。
+ */
+in_reply_to: string | null, };

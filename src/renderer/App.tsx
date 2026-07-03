@@ -126,8 +126,9 @@ export default function App() {
         className="flex h-full flex-col overflow-hidden bg-cover bg-center text-white"
         style={
           {
-            // 背景の暗さは 0%（写真そのまま）〜85%（強く暗く）でスケールする。
-            backgroundImage: `linear-gradient(160deg, rgba(10,14,28,${(dim * 0.9).toFixed(2)}) 0%, rgba(6,9,20,${dim.toFixed(2)}) 100%), url(${backgroundUrl})`,
+            // 背景オーバーレイ: 既定でも白文字が読める最低限の暗さを土台にし、スライダー(dim)で
+            // さらに濃くする。0% でも明るい写真＋白文字が真っ白にならないようにする。
+            backgroundImage: `linear-gradient(160deg, rgba(10,14,28,${(0.35 + dim * 0.6).toFixed(2)}) 0%, rgba(6,9,20,${(0.55 + dim * 0.5).toFixed(2)}) 100%), url(${backgroundUrl})`,
             // 文字色スライダー: Tailwind の白を差し替えて UI 全体を白⇄黒でトーン反転。
             '--color-white': inkColor(ink),
           } as CSSProperties

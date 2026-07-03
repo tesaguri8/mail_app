@@ -49,7 +49,7 @@ export function GreenDomainsView() {
   const run = (p: Promise<void>) => p.then(load).catch(() => undefined);
 
   return (
-    <section className="min-h-0 flex-1 overflow-y-auto">
+    <section className="h-full overflow-y-auto">
       <div className="mx-auto max-w-2xl p-6">
         <div className="mb-1 flex items-center gap-2">
           <LeafyGreen size={20} className="text-emerald-400" />

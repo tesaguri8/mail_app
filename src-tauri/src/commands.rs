@@ -40,6 +40,10 @@ impl SyncControl {
     fn end(&self, account_id: i64) {
         self.0.lock().unwrap().remove(&account_id);
     }
+    /// そのアカウントが同期中か。
+    fn is_running(&self, account_id: i64) -> bool {
+        self.0.lock().unwrap().contains_key(&account_id)
+    }
     /// 中断要求を立てる（対象が動作中なら true）。
     fn request_cancel(&self, account_id: i64) -> bool {
         if let Some(flag) = self.0.lock().unwrap().get(&account_id) {
@@ -1621,9 +1625,22 @@ pub async fn mail_resync(
         .and_then(|e| e.get_password())
         .map_err(|e| format!("資格情報を取得できません: {e}"))?;
 
-    // 二重実行の防止（自動同期が走っている最中の再取り込みを弾く）。
+    // 明示操作（再取り込み）は自動同期より優先する。実行中（多くは画面に出ないサイレントな
+    // 自動同期）なら中断させ、枠が解放されるまで待ってから確保する。
+    if control.request_cancel(account_id) {
+        // 中断はチャンク境界で反映される。最大 ~10 秒だけ解放を待つ。
+        for _ in 0..100 {
+            if !control.is_running(account_id) {
+                break;
+            }
+            let _ = tauri::async_runtime::spawn_blocking(|| {
+                std::thread::sleep(std::time::Duration::from_millis(100))
+            })
+            .await;
+        }
+    }
     let Some(cancel) = control.try_begin(account_id) else {
-        return Err("同期が実行中です。完了してから再度お試しください。".to_string());
+        return Err("実行中の同期を中断できませんでした。少し待ってから再度お試しください。".to_string());
     };
     // これ以降のエラーは同期枠を必ず解放してから返す。
     if let Err(e) = store.reset_sync_state(account_id) {

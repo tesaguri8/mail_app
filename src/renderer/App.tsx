@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { TitleBar, type AppView } from './components/TitleBar';
 import { BottomBar } from './components/BottomBar';
 import { Home } from './components/Home';
@@ -11,10 +11,20 @@ import { accountList } from './services/accounts';
 import { useAutoSync, MAIL_SYNCED_EVENT } from './hooks/useAutoSync';
 import { SyncProvider } from './components/SyncProvider';
 import type { AccountSummary } from '@bindings/AccountSummary';
-// アプリ同梱の背景画像（プレースホルダ。docs/UI_UX_DESIGN.md 背景写真システム）
-import backgroundUrl from './assets/background.jpg';
+// 背景写真プール（同梱サンプル）。docs/UI_UX_DESIGN.md 背景写真システム
+import { BACKGROUNDS, getBackgroundIndex, setBackgroundIndex } from './config/backgrounds';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+/** 背景の濃さ・文字色スライダーの共通最大値（85%）。 */
+export const BAR_MAX = 0.85;
+
+/** 文字色（インク）の白→黒スライダー(0〜0.85)を実際の色に。0=白, 0.85=黒。
+ * これを Tailwind の --color-white に流し込み、UI 全体を白⇄黒でトーン反転させる。 */
+function inkColor(ink: number): string {
+  const l = Math.round(255 * (1 - Math.min(ink, BAR_MAX) / BAR_MAX));
+  return `rgb(${l}, ${l}, ${l})`;
+}
 
 export default function App() {
   const [view, setView] = useState<AppView>('home');
@@ -32,6 +42,27 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('rondine.dim', String(dim));
   }, [dim]);
+  // 文字色（インク）。0=白, 0.85=黒。UI 全体を白⇄黒でトーン反転させて明るい写真でも読める。
+  const [ink, setInk] = useState<number>(() => Number(localStorage.getItem('rondine.ink') ?? 0));
+  useEffect(() => {
+    localStorage.setItem('rondine.ink', String(ink));
+  }, [ink]);
+  // ボトムバーのスライダーがどちらを操作するか（背景の濃さ / 文字色）。
+  const [barMode, setBarMode] = useState<'backdrop' | 'ink'>(() =>
+    localStorage.getItem('rondine.barMode') === 'ink' ? 'ink' : 'backdrop'
+  );
+  useEffect(() => {
+    localStorage.setItem('rondine.barMode', barMode);
+  }, [barMode]);
+  // 背景写真の選択（同梱サンプルのプールから）。ボタンで次の候補へ切り替えて決める。
+  const [bgIndex, setBgIndex] = useState<number>(getBackgroundIndex);
+  const cycleBackground = () => {
+    if (BACKGROUNDS.length === 0) return;
+    const next = (bgIndex + 1) % BACKGROUNDS.length;
+    setBgIndex(next);
+    setBackgroundIndex(next);
+  };
+  const backgroundUrl = BACKGROUNDS[bgIndex] ?? BACKGROUNDS[0] ?? '';
 
   const refreshAccounts = useCallback(() => {
     if (!isTauri) return;
@@ -93,11 +124,16 @@ export default function App() {
     <SyncProvider>
       <div
         className="flex h-full flex-col overflow-hidden bg-cover bg-center text-white"
-        style={{
-          backgroundImage: `linear-gradient(160deg, rgba(15,18,35,${(0.35 + dim).toFixed(2)}) 0%, rgba(8,12,28,${(0.55 + dim).toFixed(2)}) 100%), url(${backgroundUrl})`,
-        }}
+        style={
+          {
+            // 背景の暗さは 0%（写真そのまま）〜85%（強く暗く）でスケールする。
+            backgroundImage: `linear-gradient(160deg, rgba(10,14,28,${(dim * 0.9).toFixed(2)}) 0%, rgba(6,9,20,${dim.toFixed(2)}) 100%), url(${backgroundUrl})`,
+            // 文字色スライダー: Tailwind の白を差し替えて UI 全体を白⇄黒でトーン反転。
+            '--color-white': inkColor(ink),
+          } as CSSProperties
+        }
       >
-        <TitleBar onNavigate={navigate} />
+        <TitleBar onNavigate={navigate} onCycleBackground={cycleBackground} />
 
         <main className="min-h-0 flex-1 overflow-hidden">
           {view === 'home' && <Home accounts={accounts} onOpenMail={openMail} />}
@@ -123,7 +159,15 @@ export default function App() {
           {view === 'settings' && <Settings accounts={accounts} onChanged={refreshAccounts} />}
         </main>
 
-        <BottomBar dim={dim} onDimChange={setDim} mailTotal={mailTotal} />
+        <BottomBar
+          dim={dim}
+          onDimChange={setDim}
+          ink={ink}
+          onInkChange={setInk}
+          mode={barMode}
+          onModeChange={setBarMode}
+          mailTotal={mailTotal}
+        />
       </div>
     </SyncProvider>
   );

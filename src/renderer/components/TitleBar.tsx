@@ -1,7 +1,18 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { CalendarDays, Contact, House, Mail, Minus, Pin, Settings, Square, X } from 'lucide-react';
+import {
+  CalendarDays,
+  Contact,
+  House,
+  Image,
+  Mail,
+  Minus,
+  Pin,
+  Settings,
+  Square,
+  X,
+} from 'lucide-react';
 import { APP } from '../config/appIdentity';
 
 const ICON = 15;
@@ -17,7 +28,14 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 export type AppView = 'home' | 'mail' | 'contacts' | 'calendar' | 'settings';
 
-export function TitleBar({ onNavigate }: { onNavigate: (v: AppView) => void }) {
+export function TitleBar({
+  onNavigate,
+  onCycleBackground,
+}: {
+  onNavigate: (v: AppView) => void;
+  /** 背景写真を次の候補へ切り替える（気に入るまでクリックで送る）。 */
+  onCycleBackground?: () => void;
+}) {
   const { t, i18n } = useTranslation();
   const [pinned, setPinned] = useState(false);
 
@@ -108,6 +126,13 @@ export function TitleBar({ onNavigate }: { onNavigate: (v: AppView) => void }) {
           className="flex items-center justify-center rounded p-1.5 hover:bg-white/20 focus:bg-white/20"
         >
           <Settings size={ICON} />
+        </button>
+        <button
+          onClick={() => onCycleBackground?.()}
+          title={t('titlebar.cycleBackground')}
+          className="flex items-center justify-center rounded p-1.5 hover:bg-white/20 focus:bg-white/20"
+        >
+          <Image size={ICON} />
         </button>
         <button
           onClick={() => i18n.changeLanguage(i18n.language === 'ja' ? 'en' : 'ja')}

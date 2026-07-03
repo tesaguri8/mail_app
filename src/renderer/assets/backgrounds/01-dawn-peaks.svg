@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#171334"/>
+      <stop offset="0.5" stop-color="#3f2a5c"/>
+      <stop offset="0.8" stop-color="#b0505c"/>
+      <stop offset="1" stop-color="#e79a5f"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="72%" r="36%">
+      <stop offset="0" stop-color="#ffe3ad" stop-opacity="0.95"/>
+      <stop offset="0.35" stop-color="#ffb26b" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ffb26b" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#sky)"/>
+  <circle cx="800" cy="725" r="86" fill="#ffdca3"/>
+  <rect width="1600" height="1000" fill="url(#glow)"/>
+  <path d="M0 720 L220 620 L430 690 L640 560 L860 680 L1080 600 L1320 700 L1600 620 L1600 1000 L0 1000 Z" fill="#5b3f6e" opacity="0.7"/>
+  <path d="M0 800 L260 700 L520 782 L780 675 L1040 782 L1300 700 L1600 792 L1600 1000 L0 1000 Z" fill="#3a2648" opacity="0.92"/>
+  <path d="M0 892 L300 820 L600 884 L900 800 L1200 884 L1600 832 L1600 1000 L0 1000 Z" fill="#1e1330"/>
+</svg>

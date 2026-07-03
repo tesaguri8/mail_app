@@ -5,6 +5,7 @@ import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailDetail } from '@bindings/MailDetail';
 import { mailSend } from '../services/mail';
 import { getFlyAnimation } from '../config/prefs';
+import { playFlySound } from '../utils/flySound';
 import { RecipientInput } from './RecipientInput';
 import { FlySwallow, type FlySwallowHandle } from './FlySwallow';
 import swallowUrl from '../assets/swallow.png';
@@ -128,6 +129,7 @@ export function Compose({
     });
     try {
       if (flyOn && flyRef.current && sendBtnRef.current) {
+        playFlySound(); // 仮の羽ばたき音（後日 差し替え）
         const r = sendBtnRef.current.getBoundingClientRect();
         await flyRef.current.deliver({ x: r.left + r.width / 2, y: r.top + r.height / 2 }, send);
       } else {

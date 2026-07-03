@@ -816,6 +816,13 @@ export function MailboxView({
                       )}
                     </span>
                     <span className="flex shrink-0 items-center gap-1 text-[10px] text-white/40">
+                      {m.is_vip && (
+                        <Gem
+                          size={12}
+                          className="fill-sky-300/30 text-sky-300"
+                          aria-label={t('filter.vip')}
+                        />
+                      )}
                       {m.is_green && (
                         <LeafyGreen
                           size={12}

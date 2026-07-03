@@ -31,6 +31,9 @@ pub struct OutgoingMessage {
     pub body_html: Option<String>,
     /// 返信元の Message-ID（In-Reply-To／References。スレッド用。山括弧つき/なしどちらでも可）。
     pub in_reply_to: Option<String>,
+    /// 自メッセージの Message-ID を明示指定する（山括弧なしの中身）。None なら lettre が自動採番。
+    /// 下書きをサーバー Drafts へ APPEND する際、後で同定・削除できるよう固定 ID を使う。
+    pub message_id: Option<String>,
 }
 
 /// "名前 <addr>" / "addr" のどちらでも Mailbox に解釈する。
@@ -62,6 +65,13 @@ pub fn build_message(msg: &OutgoingMessage) -> Result<Message, String> {
     };
 
     let mut builder = Message::builder().from(from).subject(msg.subject.clone());
+
+    // 自メッセージの Message-ID を固定したい場合（下書きのサーバー同期）だけ明示指定する。
+    // lettre は山括弧なしの中身を受け取り自前で <...> を付ける。
+    if let Some(mid) = msg.message_id.as_ref().filter(|s| !s.trim().is_empty()) {
+        let inner = mid.trim().trim_start_matches('<').trim_end_matches('>');
+        builder = builder.message_id(Some(inner.to_string()));
+    }
 
     for a in &msg.to {
         builder = builder.to(parse_mailbox(a)?);

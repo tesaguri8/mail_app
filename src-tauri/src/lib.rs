@@ -70,6 +70,8 @@ pub fn run() {
             commands::mail_empty_folder,
             commands::mail_save_draft,
             commands::mail_get_draft,
+            commands::mail_draft_sync_remote,
+            commands::mail_draft_discard,
             commands::tag_list,
             commands::tag_create,
             commands::tag_update,

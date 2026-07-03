@@ -5,7 +5,7 @@ import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { DraftContent } from '@bindings/DraftContent';
 import type { SignatureSummary } from '@bindings/SignatureSummary';
-import { mailDelete, mailSaveDraft, mailSend } from '../services/mail';
+import { mailDraftDiscard, mailDraftSyncRemote, mailSaveDraft, mailSend } from '../services/mail';
 import { signatureList } from '../services/signatures';
 import { getFlyAnimation } from '../config/prefs';
 import { playFlySound } from '../utils/flySound';
@@ -215,15 +215,21 @@ export function Compose({
     return () => clearTimeout(h);
   }, [dirty, saveDraft]);
 
-  // 閉じる時、書きかけがあれば「下書きに残すか」を確認する。破棄なら保存済みの下書きを消す。
+  // 閉じる時、書きかけがあれば「下書きに残すか」を確認する。
+  // 残す → 最新をローカル保存し、サーバー Drafts へも同期（背景）。
+  // 破棄 → ローカル＋サーバーの下書きを削除。
   const closeGuarded = async () => {
     if (dirty) {
       const keep = window.confirm(t('compose.keepDraftConfirm'));
       if (keep) {
         await saveDraft(); // 最新の内容で確定保存
+        if (draftIdRef.current != null) {
+          // サーバー同期は待たない（IMAP 往復で閉じるのを遅らせない）。
+          void mailDraftSyncRemote(draftIdRef.current).catch(() => undefined);
+        }
       } else if (draftIdRef.current != null) {
         try {
-          await mailDelete([draftIdRef.current]);
+          await mailDraftDiscard(draftIdRef.current); // ローカルは即時・サーバーは背景で削除
         } catch {
           // 破棄の失敗は致命的でないので無視
         }
@@ -262,10 +268,10 @@ export function Compose({
       } else {
         await send;
       }
-      // 送信できたら、残っている下書きは不要なので消す。
+      // 送信できたら、残っている下書きは不要なのでローカル＋サーバーから消す。
       if (draftIdRef.current != null) {
         try {
-          await mailDelete([draftIdRef.current]);
+          await mailDraftDiscard(draftIdRef.current);
         } catch {
           // 下書き削除の失敗は無視（送信自体は成功している）
         }

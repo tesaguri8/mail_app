@@ -355,6 +355,7 @@ pub async fn mail_send(
         body_plain: input.body,
         body_html: Some(body_html),
         in_reply_to: input.in_reply_to,
+        message_id: None, // 実送信は lettre の自動採番でよい
     };
 
     // 送信メッセージを 1 度だけ組み立て、SMTP 送信と Sent 保存で共有する。
@@ -656,6 +657,119 @@ pub fn mail_get_draft(store: State<Store>, id: i64) -> Result<DraftContent, Stri
         .get_draft(id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "下書きが見つかりません".to_string())
+}
+
+/// カンマ/改行区切りのアドレス文字列を配列へ（空要素を除去）。
+fn split_addr_list(s: &str) -> Vec<String> {
+    s.split([',', '\n'])
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty())
+        .collect()
+}
+
+/// 下書き（drafts）をサーバーの Drafts フォルダへ同期する（APPEND。既存の同 Message-ID は
+/// 削除して入れ直し、常に最新版が 1 通だけになるようにする）。作成画面を閉じて残すときに呼ぶ。
+/// サーバー設定や Drafts フォルダが無い等の失敗はエラーを返すが、呼び出し側は best-effort 扱い
+/// （ローカルの下書きは保持される）。
+#[tauri::command]
+pub async fn mail_draft_sync_remote(
+    app: AppHandle,
+    store: State<'_, Store>,
+    id: i64,
+) -> Result<(), String> {
+    let draft = store
+        .get_draft(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "下書きが見つかりません".to_string())?;
+    let (_account_id, message_id) = store
+        .draft_remote_ref(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "下書きの Message-ID がありません".to_string())?;
+    let acct = store
+        .get_account_smtp(draft.account_id as i64)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "アカウントが見つかりません".to_string())?;
+
+    let body_html = plain_to_html(&draft.body);
+    let message = smtp::OutgoingMessage {
+        from_name: acct.display_name,
+        from_email: acct.email,
+        to: split_addr_list(&draft.to),
+        cc: split_addr_list(&draft.cc),
+        bcc: vec![],
+        subject: draft.subject,
+        body_plain: draft.body,
+        body_html: Some(body_html),
+        in_reply_to: draft.in_reply_to,
+        message_id: Some(message_id.clone()),
+    };
+    let email = smtp::build_message(&message)?;
+    let raw = email.formatted();
+
+    let (imap_email, login, host, port) = store
+        .get_account_imap(draft.account_id as i64)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "アカウントが見つかりません".to_string())?;
+    let service = app.config().identifier.clone();
+    let password = keyring::Entry::new(&service, &imap_email)
+        .and_then(|e| e.get_password())
+        .map_err(|e| format!("資格情報を取得できません: {e}"))?;
+    let inner = message_id
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        imap_sync::upsert_draft(&host, port, &login, &password, &raw, &inner)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 下書きをサーバーとローカルの両方から削除する（破棄・送信後の後片付け）。
+/// ローカルは即削除して返し、サーバーのコピー削除はバックグラウンドで行う（best-effort。
+/// サーバー設定が無い/失敗しても UI は待たせない）。
+#[tauri::command]
+pub async fn mail_draft_discard(
+    app: AppHandle,
+    store: State<'_, Store>,
+    id: i64,
+) -> Result<(), String> {
+    // サーバー削除に要る情報は、ローカル削除で消える前に読み出しておく。
+    let remote = store
+        .draft_remote_ref(id)
+        .ok()
+        .flatten()
+        .and_then(|(account_id, mid)| {
+            store
+                .get_account_imap(account_id)
+                .ok()
+                .flatten()
+                .map(|(imap_email, login, host, port)| (imap_email, login, host, port, mid))
+        });
+    // ローカルは即削除（UI 反映を待たせない）。
+    store.delete_emails(&[id]).map_err(|e| e.to_string())?;
+    // サーバーのコピー削除はバックグラウンドで（best-effort）。
+    if let Some((imap_email, login, host, port, mid)) = remote {
+        let service = app.config().identifier.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Ok(password) =
+                keyring::Entry::new(&service, &imap_email).and_then(|e| e.get_password())
+            {
+                let inner = mid
+                    .trim()
+                    .trim_start_matches('<')
+                    .trim_end_matches('>')
+                    .to_string();
+                let _ = tauri::async_runtime::spawn_blocking(move || {
+                    imap_sync::delete_draft_remote(&host, port, &login, &password, &inner)
+                })
+                .await;
+            }
+        });
+    }
+    Ok(())
 }
 
 /// タグ一覧（使用件数つき）。

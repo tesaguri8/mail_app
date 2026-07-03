@@ -581,6 +581,20 @@ impl Store {
         Ok(id)
     }
 
+    /// 下書きのサーバー同期に使う参照情報（account_id, Message-ID）を取得する。
+    /// Message-ID 未設定（古い下書き等）なら None を返す。
+    pub fn draft_remote_ref(&self, id: i64) -> rusqlite::Result<Option<(i64, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let row: Option<(i64, Option<String>)> = conn
+            .query_row(
+                "SELECT account_id, message_id FROM emails WHERE id = ?1 AND folder = 'drafts'",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        Ok(row.and_then(|(a, m)| m.map(|mid| (a, mid))))
+    }
+
     /// 下書き 1 件を作成画面へ読み戻すための内容を取得する（drafts フォルダのみ）。
     pub fn get_draft(&self, id: i64) -> rusqlite::Result<Option<crate::models::DraftContent>> {
         let conn = self.conn.lock().unwrap();

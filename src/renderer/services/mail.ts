@@ -27,6 +27,12 @@ export const mailSaveDraft = (input: DraftInput) => invoke<number>('mail_save_dr
 // 下書き 1 件を作成画面へ読み戻す内容（宛先・件名・本文・In-Reply-To）を取得する。
 export const mailGetDraft = (id: number) => invoke<DraftContent>('mail_get_draft', { id });
 
+// 下書きをサーバーの Drafts フォルダへ同期（APPEND、既存の同一下書きは入れ替え）。best-effort。
+export const mailDraftSyncRemote = (id: number) => invoke<void>('mail_draft_sync_remote', { id });
+
+// 下書きをローカル＋サーバーから削除（破棄・送信後）。ローカルは即時、サーバーは背景で。
+export const mailDraftDiscard = (id: number) => invoke<void>('mail_draft_discard', { id });
+
 // 指定フォルダ（'inbox' | 'sent' | 'drafts' | 'trash' | 'spam'）のメール一覧（新しい順）。
 // accountId が null なら全アカウント横断（「全て」表示）。offset でページング（無限スクロール用）。
 export const mailList = (

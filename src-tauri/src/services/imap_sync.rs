@@ -525,6 +525,102 @@ pub fn append_to_sent(
     })
 }
 
+/// サーバーの Drafts フォルダを探して名前を返す（\Drafts→よくある名前 の順）。
+fn find_drafts_mailbox<T: std::io::Read + std::io::Write>(
+    session: &mut imap::Session<T>,
+) -> Result<String, String> {
+    let names = session
+        .list(Some(""), Some("*"))
+        .map_err(|e| e.to_string())?;
+    let spec = SYNC_FOLDERS
+        .iter()
+        .find(|s| s.tag == "drafts")
+        .expect("drafts spec");
+    detect_mailbox(names.iter(), spec)
+        .ok_or_else(|| "Drafts（下書き）フォルダが見つかりませんでした".to_string())
+}
+
+/// Drafts フォルダ内から、指定 Message-ID（山括弧なしの中身）の下書きを削除する。
+/// 見つからなければ何もしない。フォルダは選択済みで呼ぶ。
+fn expunge_draft_by_message_id<T: std::io::Read + std::io::Write>(
+    session: &mut imap::Session<T>,
+    message_id_inner: &str,
+) -> Result<(), String> {
+    // HEADER 検索は部分一致なので、山括弧なしの中身で自分の下書きだけを引ける。
+    let uids = session
+        .uid_search(format!("HEADER \"Message-ID\" \"{message_id_inner}\""))
+        .map_err(|e| e.to_string())?;
+    if uids.is_empty() {
+        return Ok(());
+    }
+    let set = uids
+        .iter()
+        .map(|u| u.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    session
+        .uid_store(&set, "+FLAGS (\\Deleted)")
+        .map_err(|e| e.to_string())?;
+    // UIDPLUS が無いサーバーもあるので、uid_expunge がダメなら通常 expunge にフォールバック。
+    let _ = session
+        .uid_expunge(&set)
+        .map(|_| ())
+        .or_else(|_| session.expunge().map(|_| ()));
+    Ok(())
+}
+
+/// 下書きをサーバーの Drafts フォルダへ APPEND する（既存の同 Message-ID は削除して入れ直す）。
+/// これで「サーバー上に常に最新版が 1 通だけ」を保つ。best-effort。
+pub fn upsert_draft(
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    raw: &[u8],
+    message_id_inner: &str,
+) -> Result<(), String> {
+    use imap::types::Flag;
+    let tls = native_tls::TlsConnector::builder()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let client = imap::connect((host, port), host, &tls).map_err(|e| e.to_string())?;
+    let mut session = client
+        .login(user, password)
+        .map_err(|(e, _)| e.to_string())?;
+
+    let drafts = find_drafts_mailbox(&mut session)?;
+    // 旧版を消してから新版を APPEND（IMAP は上書き不可のため）。
+    session.select(&drafts).map_err(|e| e.to_string())?;
+    let _ = expunge_draft_by_message_id(&mut session, message_id_inner);
+    let result = session
+        .append_with_flags(&drafts, raw, &[Flag::Draft, Flag::Seen])
+        .map_err(|e| e.to_string());
+    let _ = session.logout();
+    result.map(|_| log::info!("下書きを Drafts フォルダ '{drafts}' に同期しました"))
+}
+
+/// サーバーの Drafts フォルダから、指定 Message-ID の下書きを削除する（送信済み/破棄時）。best-effort。
+pub fn delete_draft_remote(
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    message_id_inner: &str,
+) -> Result<(), String> {
+    let tls = native_tls::TlsConnector::builder()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let client = imap::connect((host, port), host, &tls).map_err(|e| e.to_string())?;
+    let mut session = client
+        .login(user, password)
+        .map_err(|(e, _)| e.to_string())?;
+    let drafts = find_drafts_mailbox(&mut session)?;
+    session.select(&drafts).map_err(|e| e.to_string())?;
+    let r = expunge_draft_by_message_id(&mut session, message_id_inner);
+    let _ = session.logout();
+    r
+}
+
 /// 取得した添付の本体（バイト列・ファイル名・MIME型）。
 pub struct FetchedAttachment {
     pub bytes: Vec<u8>,

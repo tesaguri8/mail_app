@@ -2,6 +2,10 @@
 # ワークツリー/環境間で LF↔CRLF だけの差分ノイズが出るのを防ぐ。
 * text=auto
 
+# 生成物（ts-rs バインディング）は改行 LF 固定。gen:bindings が LF で書き出すため、
+# 作業ツリーを CRLF にしないことで「改行だけの差分（見かけ上の M）」を消す。
+src/bindings/** text eol=lf
+
 # バイナリ（改行変換しない）
 *.png binary
 *.jpg binary

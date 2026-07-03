@@ -36,11 +36,19 @@ export function RecipientInput({
   const [suggestions, setSuggestions] = useState<RecipientSuggestion[]>([]);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   // 直前に確定挿入したことを示すフラグ（挿入直後の再クエリを抑止）。
   const justPicked = useRef(false);
 
   const { prefix, token } = splitLastToken(value);
+
+  // 宛先が増えても全員見えるよう、内容に合わせて高さを自動調整（折り返し表示）。
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [value]);
 
   // 入力（最後のトークン）を 250ms デバウンスして候補取得。
   useEffect(() => {
@@ -80,27 +88,38 @@ export function RecipientInput({
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (!open || suggestions.length === 0) return;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setActive((i) => (i + 1) % suggestions.length);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setActive((i) => (i - 1 + suggestions.length) % suggestions.length);
-    } else if (e.key === 'Enter' || e.key === 'Tab') {
-      e.preventDefault();
-      pick(suggestions[active]);
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      setOpen(false);
+    if (open && suggestions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActive((i) => (i + 1) % suggestions.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActive((i) => (i - 1 + suggestions.length) % suggestions.length);
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        pick(suggestions[active]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setOpen(false);
+        return;
+      }
     }
+    // 候補が出ていない時の Enter は改行を入れない（宛先欄はユーザー入力での多行化を避ける）。
+    if (e.key === 'Enter') e.preventDefault();
   };
 
   return (
     <div className="relative flex-1">
-      <input
+      <textarea
         ref={inputRef}
-        className={className}
+        className={`${className ?? ''} block resize-none overflow-hidden`}
+        rows={1}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}

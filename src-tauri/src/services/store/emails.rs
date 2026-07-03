@@ -522,6 +522,7 @@ impl Store {
         let ts = now.timestamp();
         let to = d.to.join(", ");
         let cc = d.cc.join(", ");
+        let bcc = d.bcc.join(", ");
         let conn = self.conn.lock().unwrap();
         // 差出人アドレス（一覧・検索の見出し用）はアカウントから引く。
         let from: Option<String> = conn
@@ -535,9 +536,10 @@ impl Store {
             let id = id as i64;
             conn.execute(
                 "UPDATE emails SET subject = ?1, to_addresses = ?2, cc_addresses = ?3, \
-                   body_plain = ?4, clean_body = ?4, date = ?5, date_ts = ?6, in_reply_to = ?7 \
-                 WHERE id = ?8 AND folder = 'drafts'",
-                params![d.subject, to, cc, d.body, iso, ts, d.in_reply_to, id],
+                   bcc_addresses = ?4, body_plain = ?5, clean_body = ?5, date = ?6, date_ts = ?7, \
+                   in_reply_to = ?8 \
+                 WHERE id = ?9 AND folder = 'drafts'",
+                params![d.subject, to, cc, bcc, d.body, iso, ts, d.in_reply_to, id],
             )?;
             conn.execute(
                 "UPDATE email_fts SET subject = ?1, clean_body = ?2 WHERE rowid = ?3",
@@ -557,8 +559,8 @@ impl Store {
         conn.execute(
             "INSERT INTO emails \
                (account_id, canonical_key, message_id, subject, from_address, to_addresses, cc_addresses, \
-                date, date_ts, body_plain, clean_body, folder, is_read, in_reply_to) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, 'drafts', 1, ?11)",
+                bcc_addresses, date, date_ts, body_plain, clean_body, folder, is_read, in_reply_to) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, 'drafts', 1, ?12)",
             params![
                 d.account_id as i64,
                 key,
@@ -567,6 +569,7 @@ impl Store {
                 from,
                 to,
                 cc,
+                bcc,
                 iso,
                 ts,
                 d.body,
@@ -600,7 +603,8 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
             "SELECT id, account_id, COALESCE(to_addresses, ''), COALESCE(cc_addresses, ''), \
-                    COALESCE(subject, ''), COALESCE(body_plain, ''), in_reply_to \
+                    COALESCE(bcc_addresses, ''), COALESCE(subject, ''), COALESCE(body_plain, ''), \
+                    in_reply_to \
              FROM emails WHERE id = ?1 AND folder = 'drafts'",
             params![id],
             |r| {
@@ -609,9 +613,10 @@ impl Store {
                     account_id: r.get::<_, i64>(1)? as i32,
                     to: r.get(2)?,
                     cc: r.get(3)?,
-                    subject: r.get(4)?,
-                    body: r.get(5)?,
-                    in_reply_to: r.get(6)?,
+                    bcc: r.get(4)?,
+                    subject: r.get(5)?,
+                    body: r.get(6)?,
+                    in_reply_to: r.get(7)?,
                 })
             },
         )

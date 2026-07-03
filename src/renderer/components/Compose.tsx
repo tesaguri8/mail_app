@@ -71,15 +71,16 @@ export function Compose({
   // 組み立てる。引用は編集欄には入れず、送信/下書き保存の直前に本文へ連結する（書く欄を広く保つ）。
   const init = useMemo(() => {
     if (target.mode === 'new') {
-      return { to: '', cc: '', subject: '', quoted: '', inReplyTo: null as string | null };
+      return { to: '', cc: '', bcc: '', subject: '', quoted: '', inReplyTo: null as string | null };
     }
     if (target.mode === 'draft') {
       // 保存済み下書きの再編集。本文は保存時の全文（署名・引用込み）をそのまま編集する
-      // ので、送信時に足す引用(quoted)は無し。返信下書きは In-Reply-To を復元する。
+      // ので、送信時に足す引用(quoted)は無し。返信下書きは In-Reply-To を、手入力 Bcc も復元する。
       const d = target.draft;
       return {
         to: d.to,
         cc: d.cc,
+        bcc: d.bcc,
         subject: d.subject,
         quoted: '',
         inReplyTo: d.in_reply_to,
@@ -98,13 +99,21 @@ export function Compose({
         `${t('mailbox.to')}: ${s.to_addresses ?? ''}\n` +
         `${t('compose.subject')}: ${s.subject ?? ''}\n\n` +
         body;
-      return { to: '', cc: '', subject: withPrefix(s.subject, 'Fwd'), quoted: fwd, inReplyTo: null };
+      return {
+        to: '',
+        cc: '',
+        bcc: '',
+        subject: withPrefix(s.subject, 'Fwd'),
+        quoted: fwd,
+        inReplyTo: null,
+      };
     }
     // reply / replyAll
     const cc = target.mode === 'replyAll' ? (s.to_addresses ?? '') : '';
     return {
       to: s.from_address ?? '',
       cc,
+      bcc: '',
       subject: withPrefix(s.subject, 'Re'),
       quoted: `\n\n${attribution}\n${quote(body)}`,
       inReplyTo: s.message_id,
@@ -119,8 +128,8 @@ export function Compose({
   );
   const [to, setTo] = useState(init.to);
   const [cc, setCc] = useState(init.cc);
-  const [bcc, setBcc] = useState('');
-  const [showCc, setShowCc] = useState(Boolean(init.cc));
+  const [bcc, setBcc] = useState(init.bcc);
+  const [showCc, setShowCc] = useState(Boolean(init.cc || init.bcc));
   const [subject, setSubject] = useState(init.subject);
   // 下書きの再編集は保存済み本文（署名・引用込み）をそのまま編集する。それ以外は空から。
   const [body, setBody] = useState(target.mode === 'draft' ? target.draft.body : '');
@@ -197,6 +206,7 @@ export function Compose({
         account_id: accountId,
         to: splitAddresses(to),
         cc: splitAddresses(cc),
+        bcc: splitAddresses(bcc),
         subject,
         body: composedBody(),
         in_reply_to: init.inReplyTo,
@@ -206,7 +216,7 @@ export function Compose({
     } catch {
       // 自動保存の失敗は致命的でないので黙って無視（次の入力で再試行）。
     }
-  }, [accountId, to, cc, subject, composedBody, init.inReplyTo]);
+  }, [accountId, to, cc, bcc, subject, composedBody, init.inReplyTo]);
 
   // 入力のたびにデバウンス（1s）して自動保存。dirty になって初めて走る。
   useEffect(() => {

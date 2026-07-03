@@ -11,7 +11,11 @@ id: number, account_id: number,
 /**
  * 宛先（カンマ区切り文字列。作成画面の入力表記に合わせる）。
  */
-to: string, cc: string, subject: string, 
+to: string, cc: string, 
+/**
+ * 手入力した Bcc（カンマ区切り文字列。無ければ空）。
+ */
+bcc: string, subject: string, 
 /**
  * 保存した本文（署名・引用込みの全文）。作成画面ではこれをそのまま編集する。
  */

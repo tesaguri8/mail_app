@@ -696,7 +696,7 @@ pub async fn mail_draft_sync_remote(
         from_email: acct.email,
         to: split_addr_list(&draft.to),
         cc: split_addr_list(&draft.cc),
-        bcc: vec![],
+        bcc: split_addr_list(&draft.bcc),
         subject: draft.subject,
         body_plain: draft.body,
         body_html: Some(body_html),

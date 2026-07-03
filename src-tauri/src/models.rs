@@ -583,6 +583,8 @@ pub struct DraftInput {
     pub account_id: i32,
     pub to: Vec<String>,
     pub cc: Vec<String>,
+    /// ユーザーが手入力した Bcc（自動設定はしない）。再編集で復元し、送信時は宛先に使う。
+    pub bcc: Vec<String>,
     pub subject: String,
     /// プレーン本文（署名・引用込みの、その時点の全文）。
     pub body: String,
@@ -601,6 +603,8 @@ pub struct DraftContent {
     /// 宛先（カンマ区切り文字列。作成画面の入力表記に合わせる）。
     pub to: String,
     pub cc: String,
+    /// 手入力した Bcc（カンマ区切り文字列。無ければ空）。
+    pub bcc: String,
     pub subject: String,
     /// 保存した本文（署名・引用込みの全文）。作成画面ではこれをそのまま編集する。
     pub body: String,

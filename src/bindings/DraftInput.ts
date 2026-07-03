@@ -13,7 +13,11 @@ draft_id: number | null,
 /**
  * 差出人アカウント（accounts.id）。
  */
-account_id: number, to: Array<string>, cc: Array<string>, subject: string, 
+account_id: number, to: Array<string>, cc: Array<string>, 
+/**
+ * ユーザーが手入力した Bcc（自動設定はしない）。再編集で復元し、送信時は宛先に使う。
+ */
+bcc: Array<string>, subject: string, 
 /**
  * プレーン本文（署名・引用込みの、その時点の全文）。
  */

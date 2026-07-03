@@ -1,6 +1,6 @@
 use crate::models::SyncResult;
 use crate::services::parser;
-use crate::services::store::{insert_email, InsertOutcome, NewAttachment, NewEmail};
+use crate::services::store::{insert_email, InsertOutcome, NewAttachment, NewEmail, NewQuote};
 use chrono::{Duration, Utc};
 use mail_parser::MessageParser;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -315,7 +315,9 @@ fn sync_folder(
             .collect();
         uids.sort_unstable();
         uids.reverse(); // 降順（新しい UID から）
-        fetch_uids(session, conn, account_id, tag, &uids, &mut c, progress, cancel)?;
+        fetch_uids(
+            session, conn, account_id, tag, &uids, &mut c, progress, cancel,
+        )?;
     } else {
         match parse_scope(window) {
             Scope::Count(n) if total > 0 => {
@@ -349,7 +351,9 @@ fn sync_folder(
                     uids = uids.split_off(uids.len() - SAFETY_MAX); // 新しい方を残す
                 }
                 uids.reverse(); // 降順（新しい UID から取得・表示）
-                fetch_uids(session, conn, account_id, tag, &uids, &mut c, progress, cancel)?;
+                fetch_uids(
+                    session, conn, account_id, tag, &uids, &mut c, progress, cancel,
+                )?;
             }
         }
     }
@@ -453,6 +457,16 @@ fn store_fetches<'a>(
                     content_id: a.content_id,
                 })
                 .collect();
+            let quotes = p
+                .quotes
+                .into_iter()
+                .map(|q| NewQuote {
+                    order: q.order,
+                    quoted_from: q.quoted_from,
+                    quoted_at: q.quoted_at,
+                    fingerprint: q.fingerprint,
+                })
+                .collect();
             let ne = NewEmail {
                 account_id,
                 message_id: p.message_id,
@@ -470,6 +484,11 @@ fn store_fetches<'a>(
                 body_html: p.body_html,
                 auth_result: p.auth_result,
                 list_id: p.list_id,
+                in_reply_to: p.in_reply_to,
+                references_ids: p.references_ids,
+                thread_index: p.thread_index,
+                raw_headers: p.raw_headers,
+                quotes,
                 has_attachments: p.has_attachments,
                 is_read: seen,
                 uid,

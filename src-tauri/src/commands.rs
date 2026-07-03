@@ -2,10 +2,9 @@ use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult,
     ContactGroupSummary, ContactInput, ContactMatch, ContactSummary, DataLocation, DbInfo,
     DraftContent, DraftInput, DuplicateGroup, GreenDomainEntry, ImportReport, MailDetail,
-    MailSummary, OrgDuplicateGroup,
-    OrganizationDetail, OrganizationSummary, RecipientSuggestion, RemoteImage, RetentionReport,
-    SendInput, ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict, StorageInfo,
-    SyncProgress, SyncResult, TagSummary,
+    MailSummary, OrgDuplicateGroup, OrganizationDetail, OrganizationSummary, RecipientSuggestion,
+    RemoteImage, RetentionReport, SendInput, ServerAccountSummary, SignatureSummary, SpamSettings,
+    SpamVerdict, StorageInfo, SyncProgress, SyncResult, TagSummary, ThreadView,
 };
 use crate::services::autoconfig;
 use crate::services::datadir;
@@ -338,6 +337,13 @@ pub async fn mail_send(
         .map_err(|e| format!("資格情報を取得できません: {e}"))?;
 
     let body_html = plain_to_html(&input.body);
+    // References チェーン: フロント指定が無ければ、返信元（in_reply_to）から親の祖先連鎖を組む。
+    let references = match input.references.filter(|s| !s.trim().is_empty()) {
+        Some(r) => Some(r),
+        None => store
+            .references_chain_for(input.in_reply_to.as_deref())
+            .map_err(|e| e.to_string())?,
+    };
     let config = smtp::SmtpConfig {
         host: acct.smtp_host,
         port: acct.smtp_port,
@@ -355,6 +361,7 @@ pub async fn mail_send(
         body_plain: input.body,
         body_html: Some(body_html),
         in_reply_to: input.in_reply_to,
+        references,
         message_id: None, // 実送信は lettre の自動採番でよい
     };
 
@@ -691,6 +698,9 @@ pub async fn mail_draft_sync_remote(
         .ok_or_else(|| "アカウントが見つかりません".to_string())?;
 
     let body_html = plain_to_html(&draft.body);
+    let references = store
+        .references_chain_for(draft.in_reply_to.as_deref())
+        .map_err(|e| e.to_string())?;
     let message = smtp::OutgoingMessage {
         from_name: acct.display_name,
         from_email: acct.email,
@@ -701,6 +711,7 @@ pub async fn mail_draft_sync_remote(
         body_plain: draft.body,
         body_html: Some(body_html),
         in_reply_to: draft.in_reply_to,
+        references,
         message_id: Some(message_id.clone()),
     };
     let email = smtp::build_message(&message)?;
@@ -1063,7 +1074,9 @@ pub fn trash_retention_get(store: State<Store>) -> Result<i64, String> {
 /// ゴミ箱の保持日数を保存。
 #[tauri::command]
 pub fn trash_retention_set(store: State<Store>, days: i64) -> Result<(), String> {
-    store.set_trash_retention_days(days).map_err(|e| e.to_string())
+    store
+        .set_trash_retention_days(days)
+        .map_err(|e| e.to_string())
 }
 
 /// 保持期間を過ぎたゴミ箱を今すぐ完全削除する（設定変更後などに呼べる）。
@@ -1092,9 +1105,7 @@ pub fn organization_upsert(
 
 /// 組織名の重複候補（正規化名で束ねたグループ）を返す。組織の統一 UI 用。
 #[tauri::command]
-pub fn organization_find_duplicates(
-    store: State<Store>,
-) -> Result<Vec<OrgDuplicateGroup>, String> {
+pub fn organization_find_duplicates(store: State<Store>) -> Result<Vec<OrgDuplicateGroup>, String> {
     store
         .find_organization_duplicates()
         .map_err(|e| e.to_string())
@@ -1250,6 +1261,67 @@ pub fn mail_get(store: State<Store>, id: i64) -> Result<MailDetail, String> {
         .ok_or_else(|| "メールが見つかりません".to_string())?;
     let _ = store.mark_read(id);
     Ok(detail)
+}
+
+/// 指定メールが属する論理スレッドの会話（時系列）を取得する（docs/THREADING.md §5）。
+/// 未割当の旧データはここで遅延割当する。
+#[tauri::command]
+pub fn thread_view(store: State<Store>, email_id: i64) -> Result<ThreadView, String> {
+    store
+        .thread_view(email_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "スレッドが見つかりません".to_string())
+}
+
+/// 論理スレッドにアプリ独自タイトルを付ける（再件名）。title=null で既定へ戻す。
+#[tauri::command]
+pub fn thread_rename(
+    store: State<Store>,
+    thread_id: i64,
+    title: Option<String>,
+) -> Result<(), String> {
+    store
+        .thread_rename(thread_id, title.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// メールを別スレッドへ切り出す（手動分割）。mode: "this"（この 1 通）| "below"（このメール以降）。
+/// 新スレッド id を返す。
+#[tauri::command]
+pub fn thread_split(store: State<Store>, email_id: i64, mode: String) -> Result<i64, String> {
+    store
+        .thread_split(email_id, &mode)
+        .map_err(|e| e.to_string())
+}
+
+/// 2 つの論理スレッドを結合する（source を target へ）。
+#[tauri::command]
+pub fn thread_merge(
+    store: State<Store>,
+    source_thread: i64,
+    target_thread: i64,
+) -> Result<(), String> {
+    store
+        .thread_merge(source_thread, target_thread)
+        .map_err(|e| e.to_string())
+}
+
+/// メール 1 通を指定スレッドへ付け替える（手動）。
+#[tauri::command]
+pub fn message_reassign(
+    store: State<Store>,
+    email_id: i64,
+    target_thread: i64,
+) -> Result<(), String> {
+    store
+        .message_reassign(email_id, target_thread)
+        .map_err(|e| e.to_string())
+}
+
+/// アカウントの auto スレッド割当を作り直す（manual は保持）。
+#[tauri::command]
+pub fn thread_rebuild(store: State<Store>, account_id: i64) -> Result<(), String> {
+    store.rebuild_threads(account_id).map_err(|e| e.to_string())
 }
 
 /// 1通の全文をサーバーから再取得して本文キャッシュを復元する（要約保存の解除）。

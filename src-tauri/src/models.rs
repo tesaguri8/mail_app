@@ -481,6 +481,66 @@ pub struct MailDetail {
     pub is_vip: bool,
 }
 
+/// 論理スレッド（アプリが再構築する会話単位。ヘッダスレッドとは独立）。docs/THREADING.md。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ThreadSummary {
+    pub id: i32,
+    /// ユーザーが付け直したタイトル（再件名）。未設定なら None。
+    pub title: Option<String>,
+    /// 元件名から導いた既定タイトル（最初のメールの件名）。
+    pub auto_title: Option<String>,
+    /// このスレッドのメール件数。
+    pub message_count: i32,
+    /// 未読件数。
+    pub unread_count: i32,
+    /// 参加者（差出人アドレスを結合した表示用文字列）。
+    pub participants: Option<String>,
+    /// ユーザーがタイトルを付け直したか。
+    pub is_user_renamed: bool,
+}
+
+/// 会話ビュー 1 通ぶんのメッセージ（バブル表示用。docs/THREADING.md §5）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ThreadMessage {
+    pub id: i32,
+    pub account_id: i32,
+    /// 返信スレッド化用の Message-ID（無ければ None）。
+    pub message_id: Option<String>,
+    pub from_address: Option<String>,
+    /// 差出人の表示名（ヘッダ or 住所録から解決。無ければ None）。
+    pub from_name: Option<String>,
+    pub to_addresses: Option<String>,
+    pub subject: Option<String>,
+    pub date: Option<String>,
+    /// "out"（自分が送った＝右寄せ）| "in"（相手＝左寄せ）。
+    pub direction: String,
+    /// 引用・署名を除いた新規本文。
+    pub clean_body: Option<String>,
+    /// 引用込みの全文（「引用を表示」で使う）。
+    pub body_plain: Option<String>,
+    /// HTML 本文（あれば。展開時に安全描画）。
+    pub body_html: Option<String>,
+    pub has_attachments: bool,
+    /// 引用が畳まれている（clean より全文が長い）＝「引用を表示」を出すか。
+    pub has_quotes: bool,
+    pub is_read: bool,
+    /// 保存フォルダ（'inbox' | 'sent' | ...）。
+    pub folder: Option<String>,
+    /// スレッド割当が手動か（'auto' | 'manual'）。
+    pub thread_assignment: String,
+}
+
+/// 会話ビュー（スレッド情報＋時系列のメッセージ）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ThreadView {
+    pub thread: ThreadSummary,
+    /// 時系列（古い順）のメッセージ。
+    pub messages: Vec<ThreadMessage>,
+}
+
 /// 添付ファイル（一覧/ダウンロード状態）。
 /// `is_downloaded` が false のときは本体未取得（メタのみ）。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -571,6 +631,11 @@ pub struct SendInput {
     pub body: String,
     /// 返信元の Message-ID（スレッド化用。新規なら None）。
     pub in_reply_to: Option<String>,
+    /// References チェーン（祖先 Message-ID を空白区切り・古い順。相手メーラーで正しく
+    /// スレッド表示させるため。返信時は「元メールの References ＋ 元メールの Message-ID」。
+    /// docs/THREADING.md）。
+    #[serde(default)]
+    pub references: Option<String>,
 }
 
 /// 下書きの自動保存の入力（フロントから受け取る。docs/COMPOSE.md）。

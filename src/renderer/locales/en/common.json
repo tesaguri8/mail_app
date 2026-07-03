@@ -486,6 +486,19 @@
     "cc": "Cc",
     "composeTo": "New message to {{email}}"
   },
+  "thread": {
+    "you": "You",
+    "untitled": "(untitled thread)",
+    "messages": "{{count}} messages",
+    "rename": "Rename thread",
+    "renameSave": "Save",
+    "loading": "Loading conversation…",
+    "showFull": "Show full message",
+    "collapse": "Collapse",
+    "actions": "Actions",
+    "splitBelow": "Split this and later into a new thread",
+    "splitThis": "Split only this message into a new thread"
+  },
   "bottombar": {
     "backdrop": "Background dim",
     "textColor": "Text color (white→black)"

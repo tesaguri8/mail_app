@@ -29,8 +29,11 @@ pub struct OutgoingMessage {
     pub body_plain: String,
     /// HTML 本文（あれば multipart/alternative で同梱）。
     pub body_html: Option<String>,
-    /// 返信元の Message-ID（In-Reply-To／References。スレッド用。山括弧つき/なしどちらでも可）。
+    /// 返信元の Message-ID（In-Reply-To。直近の親。山括弧つき/なしどちらでも可）。
     pub in_reply_to: Option<String>,
+    /// References チェーン（祖先 Message-ID を空白区切り・古い順。相手メーラーで正しくスレッド
+    /// 表示させるため。docs/THREADING.md）。None のときは in_reply_to 単体で代用する。
+    pub references: Option<String>,
     /// 自メッセージの Message-ID を明示指定する（山括弧なしの中身）。None なら lettre が自動採番。
     /// 下書きをサーバー Drafts へ APPEND する際、後で同定・削除できるよう固定 ID を使う。
     pub message_id: Option<String>,
@@ -83,10 +86,27 @@ pub fn build_message(msg: &OutgoingMessage) -> Result<Message, String> {
         builder = builder.bcc(parse_mailbox(a)?);
     }
 
-    // 返信のスレッド化: In-Reply-To と References に元メッセージの Message-ID を入れる。
+    // 返信のスレッド化:
+    // - In-Reply-To は直近の親 1 件。
+    // - References は祖先チェーン全部（古い順）。相手メーラーで正しく連なる。
+    //   references が無ければ in_reply_to 単体で代用する（従来動作）。
     if let Some(id) = msg.in_reply_to.as_ref().filter(|s| !s.trim().is_empty()) {
-        let wrapped = angle_wrap(id);
-        builder = builder.in_reply_to(wrapped.clone()).references(wrapped);
+        builder = builder.in_reply_to(angle_wrap(id));
+    }
+    let refs_src = msg
+        .references
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .or(msg.in_reply_to.as_ref().filter(|s| !s.trim().is_empty()));
+    if let Some(refs) = refs_src {
+        let chain = refs
+            .split_whitespace()
+            .map(angle_wrap)
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !chain.is_empty() {
+            builder = builder.references(chain);
+        }
     }
 
     // 本文: HTML があれば plain + HTML の multipart/alternative、無ければ plain のみ。

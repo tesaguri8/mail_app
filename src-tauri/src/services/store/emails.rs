@@ -26,6 +26,16 @@ pub struct NewEmail {
     pub auth_result: Option<String>,
     /// List-Id 生テキスト（メルマガ/ML 判定。docs/SPAM.md §7.7）。
     pub list_id: Option<String>,
+    /// In-Reply-To（返信元 Message-ID。山括弧なし）。docs/THREADING.md §2。
+    pub in_reply_to: Option<String>,
+    /// References（祖先 Message-ID の連鎖。空白区切り・山括弧なし・古い順）。
+    pub references_ids: Option<String>,
+    /// Thread-Index（Outlook/Exchange の会話ツリー）。
+    pub thread_index: Option<String>,
+    /// ヘッダ部の生テキスト（解析やり直し用）。
+    pub raw_headers: Option<String>,
+    /// 引用ブロック（属性行から from+時刻、本文から fingerprint）。message_quotes へ保存。
+    pub quotes: Vec<NewQuote>,
     pub has_attachments: bool,
     /// サーバー上の既読状態（IMAP \Seen フラグ）。未読数をサーバーと一致させる。
     pub is_read: bool,
@@ -46,6 +56,14 @@ fn folder_key(folder: &str, canonical_key: &str) -> String {
     } else {
         format!("{folder}:{canonical_key}")
     }
+}
+
+/// 引用ブロック挿入用（内部）。message_quotes に対応。docs/THREADING.md §7。
+pub struct NewQuote {
+    pub order: i64,
+    pub quoted_from: Option<String>,
+    pub quoted_at: Option<String>,
+    pub fingerprint: String,
 }
 
 /// 添付メタ挿入用（内部）。
@@ -119,10 +137,16 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
         .map(crate::services::compress::compress_text);
     // フォルダごとに別レコードにするため canonical_key はフォルダ接頭辞付きで保存する。
     let key = folder_key(&e.folder, &e.canonical_key);
+    // 新規本文の fingerprint（引用照合・重複ヒントの手掛かり）。
+    let body_fingerprint = e
+        .clean_body
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .map(crate::services::quotes::fingerprint);
     let changed = conn.execute(
         "INSERT OR IGNORE INTO emails
-           (account_id, message_id, canonical_key, subject, from_address, from_name, to_addresses, to_name, cc_addresses, date, date_ts, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+           (account_id, message_id, canonical_key, subject, from_address, from_name, to_addresses, to_name, cc_addresses, date, date_ts, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read, in_reply_to, references_ids, thread_index, raw_headers, body_fingerprint)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
         params![
             e.account_id,
             e.message_id,
@@ -144,10 +168,15 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
             e.list_id,
             e.folder,
             e.is_read as i64,
+            e.in_reply_to,
+            e.references_ids,
+            e.thread_index,
+            e.raw_headers,
+            body_fingerprint,
         ],
     )?;
     if changed == 0 {
-        // 既存メール: uid / 添付メタを埋め戻す（再同期での後付け）。
+        // 既存メール: uid / 添付メタ / スレッド用ヘッダを埋め戻す（再同期での後付け）。
         let did = backfill_existing(conn, e)?;
         return Ok(if did {
             InsertOutcome::Backfilled
@@ -162,7 +191,33 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
         params![id, e.subject, e.from_address, e.clean_body],
     )?;
     insert_attachments(conn, id, &e.attachments)?;
+    insert_quotes(conn, id, &e.quotes)?;
+    // 論理スレッドへ割り当てる（docs/THREADING.md §2〜§4）。失敗しても取り込み自体は続行する。
+    if let Err(err) = super::threads::assign_thread(conn, id) {
+        log::warn!("スレッド割当に失敗（email_id={id}）: {err}");
+    }
     Ok(InsertOutcome::Inserted(id))
+}
+
+/// 引用ブロック（message_quotes）を一括挿入する。
+fn insert_quotes(conn: &Connection, email_id: i64, quotes: &[NewQuote]) -> rusqlite::Result<()> {
+    if quotes.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = conn.prepare(
+        "INSERT INTO message_quotes (email_id, block_order, quoted_from, quoted_at, fingerprint)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?;
+    for q in quotes {
+        stmt.execute(params![
+            email_id,
+            q.order,
+            q.quoted_from,
+            q.quoted_at,
+            q.fingerprint
+        ])?;
+    }
+    Ok(())
 }
 
 /// 既存メールに uid と添付メタを埋め戻す（再同期で古いメールを後付け対応）。
@@ -233,6 +288,39 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
             params![e.list_id, id],
         )?;
         touched |= n > 0;
+    }
+    // スレッド用ヘッダ（この機能の追加前に取り込んだ古いメール向け。点検再取り込みで後付け）。
+    let mut header_backfilled = false;
+    for (col, val) in [
+        ("in_reply_to", &e.in_reply_to),
+        ("references_ids", &e.references_ids),
+        ("thread_index", &e.thread_index),
+        ("raw_headers", &e.raw_headers),
+    ] {
+        if val.is_some() {
+            let sql = format!("UPDATE emails SET {col} = ?1 WHERE id = ?2 AND {col} IS NULL");
+            let n = conn.execute(&sql, params![val, id])?;
+            if n > 0 {
+                header_backfilled = true;
+                touched = true;
+            }
+        }
+    }
+    // 引用ブロックが未保存なら入れて、スレッドを割り当て直す（束ねの精度が上がる）。
+    let has_quotes: i64 = conn.query_row(
+        "SELECT count(*) FROM message_quotes WHERE email_id = ?1",
+        params![id],
+        |r| r.get(0),
+    )?;
+    if has_quotes == 0 && !e.quotes.is_empty() {
+        insert_quotes(conn, id, &e.quotes)?;
+        touched = true;
+    }
+    // ヘッダを後付けできたなら、auto 割当のスレッドを引き直す（manual は assign 側で保持）。
+    if header_backfilled {
+        if let Err(err) = super::threads::assign_thread(conn, id) {
+            log::warn!("スレッド再割当に失敗（email_id={id}）: {err}");
+        }
     }
     // 添付行が無ければ挿入する（重複防止）。
     let existing: i64 = conn.query_row(
@@ -318,10 +406,7 @@ fn fill_is_green(conn: &Connection, rows: &mut [MailSummary]) -> rusqlite::Resul
 
 /// アドレス（素のメールアドレス）に一致する住所録の表示名を返す。
 /// contacts.email（primary）と contact_emails.value を小文字で完全一致（式インデックス）で照合。
-fn contact_name_for(
-    conn: &Connection,
-    address: Option<&str>,
-) -> rusqlite::Result<Option<String>> {
+fn contact_name_for(conn: &Connection, address: Option<&str>) -> rusqlite::Result<Option<String>> {
     let Some(addr) = address.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(None);
     };
@@ -494,11 +579,7 @@ impl Store {
 
     /// 指定フォルダを空にする（全メールを完全削除）。`account_id` が None なら全アカウント。
     /// 削除件数を返す。ゴミ箱/迷惑メールの「空にする」で使う。
-    pub fn empty_folder(
-        &self,
-        account_id: Option<i64>,
-        folder: &str,
-    ) -> rusqlite::Result<i32> {
+    pub fn empty_folder(&self, account_id: Option<i64>, folder: &str) -> rusqlite::Result<i32> {
         let ids: Vec<i64> = {
             let conn = self.conn.lock().unwrap();
             match account_id {
@@ -676,7 +757,8 @@ impl Store {
         };
         // グリーン判定（本人 or 認定ドメイン）と VIP（お気に入り連絡先）判定。
         let green_set = super::greendomain::green_domain_set(&conn)?;
-        d.is_green = super::greendomain::address_is_green(&conn, &green_set, d.from_address.as_deref())?;
+        d.is_green =
+            super::greendomain::address_is_green(&conn, &green_set, d.from_address.as_deref())?;
         if let Some(from) = d.from_address.as_deref() {
             d.is_vip = super::greendomain::address_is_vip(&conn, from)?;
         }
@@ -730,6 +812,43 @@ impl Store {
             params![clean_body, id],
         )?;
         Ok(())
+    }
+
+    /// 返信送信時の References チェーン（祖先 Message-ID を空白区切り・古い順）を作る。
+    /// = 親メールの References ＋ 親メールの Message-ID。親が手元に無ければ親 ID 単体。
+    /// `in_reply_to`（返信元 Message-ID・山括弧なし）が None なら None（新規メール）。
+    pub fn references_chain_for(
+        &self,
+        in_reply_to: Option<&str>,
+    ) -> rusqlite::Result<Option<String>> {
+        let Some(parent_mid) = in_reply_to.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Ok(None);
+        };
+        let conn = self.conn.lock().unwrap();
+        let row: Option<(Option<String>, Option<String>)> = conn
+            .query_row(
+                "SELECT references_ids, message_id FROM emails WHERE message_id = ?1
+                 ORDER BY id LIMIT 1",
+                params![parent_mid],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let chain = match row {
+            Some((refs, mid)) => {
+                let mut ids: Vec<String> = refs
+                    .as_deref()
+                    .map(|s| s.split_whitespace().map(str::to_string).collect())
+                    .unwrap_or_default();
+                let parent = mid.as_deref().unwrap_or(parent_mid);
+                if !ids.iter().any(|x| x == parent) {
+                    ids.push(parent.to_string());
+                }
+                ids.join(" ")
+            }
+            // 親が手元に無い（別経路で開始したスレッド等）: 少なくとも親 ID を参照する。
+            None => parent_mid.to_string(),
+        };
+        Ok(Some(chain))
     }
 
     /// 既読にする。
@@ -897,6 +1016,11 @@ mod tests {
             body_html: None,
             auth_result: None,
             list_id: None,
+            in_reply_to: None,
+            references_ids: None,
+            thread_index: None,
+            raw_headers: None,
+            quotes: vec![],
             has_attachments: false,
             is_read: false,
             uid: None,
@@ -929,6 +1053,11 @@ mod tests {
             body_html: None,
             auth_result: None,
             list_id: None,
+            in_reply_to: None,
+            references_ids: None,
+            thread_index: None,
+            raw_headers: None,
+            quotes: vec![],
             has_attachments: false,
             is_read: read,
             uid: None,
@@ -990,10 +1119,19 @@ mod tests {
             "inbox",
             "k2",
         );
-        seed(&store, "Old invoice", "alice@corp.com", "archived", "trash", "k3");
+        seed(
+            &store,
+            "Old invoice",
+            "alice@corp.com",
+            "archived",
+            "trash",
+            "k3",
+        );
 
         // 件名一致（inbox 内）。
-        let r = store.search_emails(Some(1), "inbox", "invoice", 50).unwrap();
+        let r = store
+            .search_emails(Some(1), "inbox", "invoice", 50)
+            .unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].subject.as_deref(), Some("Invoice March"));
 
@@ -1003,15 +1141,26 @@ mod tests {
         assert_eq!(r[0].subject.as_deref(), Some("Lunch plans"));
 
         // 差出人一致。
-        assert_eq!(store.search_emails(Some(1), "inbox", "alice", 50).unwrap().len(), 1);
+        assert_eq!(
+            store
+                .search_emails(Some(1), "inbox", "alice", 50)
+                .unwrap()
+                .len(),
+            1
+        );
 
         // フォルダ限定: trash の invoice は inbox 検索に出ない。
-        let r = store.search_emails(Some(1), "trash", "invoice", 50).unwrap();
+        let r = store
+            .search_emails(Some(1), "trash", "invoice", 50)
+            .unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].subject.as_deref(), Some("Old invoice"));
 
         // 空クエリは空。
-        assert!(store.search_emails(Some(1), "inbox", "   ", 50).unwrap().is_empty());
+        assert!(store
+            .search_emails(Some(1), "inbox", "   ", 50)
+            .unwrap()
+            .is_empty());
 
         // 複数語は AND。
         assert_eq!(

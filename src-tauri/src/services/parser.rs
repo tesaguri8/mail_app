@@ -51,9 +51,55 @@ pub struct ParsedEmail {
     pub auth_result: Option<String>,
     /// List-Id の生テキスト（メルマガ/ML 判定。docs/SPAM.md §7.7）。
     pub list_id: Option<String>,
+    /// In-Reply-To（返信元 Message-ID。山括弧なし。スレッド束ね。docs/THREADING.md §2）。
+    pub in_reply_to: Option<String>,
+    /// References（祖先 Message-ID の連鎖。空白区切り・山括弧なし・古い順）。
+    pub references_ids: Option<String>,
+    /// Thread-Index（Outlook/Exchange の会話ツリー。References 欠落時の補完）。
+    pub thread_index: Option<String>,
+    /// ヘッダ部の生テキスト（後からの解析やり直し・素性抽出用）。
+    pub raw_headers: Option<String>,
     pub has_attachments: bool,
     pub attachments: Vec<ParsedAttachment>,
+    /// 引用ブロック（属性行から from+時刻、本文から fingerprint）。docs/THREADING.md §7。
+    pub quotes: Vec<crate::services::quotes::QuoteBlock>,
     pub preview: String,
+}
+
+/// Message-ID 系ヘッダの生値から、山括弧内の ID 群（無ければ空白区切りトークン）を取り出す。
+fn extract_ids(raw: Option<String>) -> Vec<String> {
+    let Some(s) = raw else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    let mut rest = s.as_str();
+    while let Some(a) = rest.find('<') {
+        if let Some(rel) = rest[a + 1..].find('>') {
+            let id = rest[a + 1..a + 1 + rel].trim();
+            if !id.is_empty() {
+                ids.push(id.to_string());
+            }
+            rest = &rest[a + 1 + rel + 1..];
+        } else {
+            break;
+        }
+    }
+    if ids.is_empty() {
+        for tok in s.split_whitespace() {
+            let t = tok.trim_matches(|c| c == '<' || c == '>').trim();
+            if !t.is_empty() {
+                ids.push(t.to_string());
+            }
+        }
+    }
+    ids
+}
+
+/// 生メッセージのヘッダ部（最初の空行まで）を取り出す。
+fn header_block(raw: &[u8]) -> Option<String> {
+    let s = String::from_utf8_lossy(raw);
+    let idx = s.find("\r\n\r\n").or_else(|| s.find("\n\n"))?;
+    Some(s[..idx].to_string())
 }
 
 /// アドレスヘッダ（To/Cc）を "名前 <addr>, ..." の表示用文字列へ整形する（無ければ None）。
@@ -62,7 +108,11 @@ fn format_address_list(addr: Option<&mail_parser::Address>) -> Option<String> {
     let parts: Vec<String> = addr?
         .iter()
         .filter_map(|x| {
-            let email = x.address.as_deref().map(str::trim).filter(|s| !s.is_empty())?;
+            let email = x
+                .address
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())?;
             let name = x.name.as_deref().map(str::trim).filter(|s| !s.is_empty());
             Some(match name {
                 Some(n) => format!("{n} <{email}>"),
@@ -133,6 +183,18 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
     // ヘッダ素性（§7.7）: 認証結果・メール種別。トークン化と認証バッジで共有する。
     let auth_result = header_text(&msg, "Authentication-Results");
     let list_id = header_text(&msg, "List-Id");
+    // スレッド束ね用ヘッダ（docs/THREADING.md §2）。ID は山括弧を外して保存する。
+    let in_reply_to = extract_ids(header_text(&msg, "In-Reply-To"))
+        .into_iter()
+        .next();
+    let references_vec = extract_ids(header_text(&msg, "References"));
+    let references_ids = if references_vec.is_empty() {
+        None
+    } else {
+        Some(references_vec.join(" "))
+    };
+    let thread_index = header_text(&msg, "Thread-Index");
+    let raw_headers = header_block(raw);
     let attachments: Vec<ParsedAttachment> = msg
         .attachments()
         .enumerate()
@@ -152,7 +214,12 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
     // 本文埋め込み画像（inline）だけの HTML メールでは立てない。
     let has_attachments = attachments.iter().any(|a| a.kind == "attachment");
 
-    let clean_body = body_plain.as_deref().map(strip_quotes);
+    // 引用/署名を分離して新規本文（clean_body）と引用ブロックを得る（docs/THREADING.md §7）。
+    let split = body_plain
+        .as_deref()
+        .map(crate::services::quotes::split_reply);
+    let clean_body = split.as_ref().map(|s| s.clean.clone());
+    let quotes = split.map(|s| s.quotes).unwrap_or_default();
     let preview: String = clean_body
         .as_deref()
         .or(body_plain.as_deref())
@@ -187,20 +254,15 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
         body_html,
         auth_result,
         list_id,
+        in_reply_to,
+        references_ids,
+        thread_index,
+        raw_headers,
         has_attachments,
         attachments,
+        quotes,
         preview,
     })
-}
-
-/// 素朴な引用除去（行頭 `>` を落とすだけ。本格版は docs/THREADING.md で実装）。
-fn strip_quotes(s: &str) -> String {
-    s.lines()
-        .filter(|l| !l.trim_start().starts_with('>'))
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_string()
 }
 
 #[cfg(test)]

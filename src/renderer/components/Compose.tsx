@@ -312,6 +312,8 @@ export function Compose({
       subject,
       body: composedBody(),
       in_reply_to: init.inReplyTo,
+      // References チェーンは Rust 側で in_reply_to から祖先を辿って積む（docs/THREADING.md）。
+      references: null,
     });
     try {
       if (flyOn && flyRef.current && sendBtnRef.current) {
@@ -345,158 +347,154 @@ export function Compose({
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
-          <h2 className="text-sm font-semibold">{t(`compose.${target.mode}`)}</h2>
-          <button
-            onClick={closeGuarded}
-            disabled={sending}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-white/55 hover:text-white/85 disabled:opacity-40"
-            aria-label={t('account.cancel')}
+        <h2 className="text-sm font-semibold">{t(`compose.${target.mode}`)}</h2>
+        <button
+          onClick={closeGuarded}
+          disabled={sending}
+          className="flex h-7 w-7 items-center justify-center rounded-md text-white/55 hover:text-white/85 disabled:opacity-40"
+          aria-label={t('account.cancel')}
+        >
+          <X size={16} />
+        </button>
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-4">
+        {/* 差出人アカウント */}
+        <div className="flex items-center gap-2">
+          <label className="w-12 shrink-0 text-xs text-white/45">{t('compose.from')}</label>
+          <select
+            className="flex-1 rounded-md bg-white/10 px-2 py-1.5 text-sm outline-none"
+            value={accountId ?? ''}
+            onChange={(e) => setAccountId(Number(e.target.value))}
           >
-            <X size={16} />
-          </button>
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id} className="text-black">
+                {a.display_name ? `${a.display_name} <${a.email}>` : a.email}
+              </option>
+            ))}
+          </select>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-4">
-          {/* 差出人アカウント */}
-          <div className="flex items-center gap-2">
-            <label className="w-12 shrink-0 text-xs text-white/45">{t('compose.from')}</label>
-            <select
-              className="flex-1 rounded-md bg-white/10 px-2 py-1.5 text-sm outline-none"
-              value={accountId ?? ''}
-              onChange={(e) => setAccountId(Number(e.target.value))}
+        {/* 宛先 */}
+        <div className="flex items-center gap-2">
+          <label className="w-12 shrink-0 text-xs text-white/45">{t('compose.to')}</label>
+          <RecipientInput
+            className={inputCls}
+            value={to}
+            onChange={(v) => {
+              setTo(v);
+              markDirty();
+            }}
+            placeholder={t('compose.toPlaceholder')}
+            autoFocus={target.mode === 'new' || target.mode === 'forward'}
+          />
+          {!showCc && (
+            <button
+              onClick={() => setShowCc(true)}
+              className="shrink-0 text-xs text-sky-300 hover:underline"
             >
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id} className="text-black">
-                  {a.display_name ? `${a.display_name} <${a.email}>` : a.email}
+              {t('compose.addCc')}
+            </button>
+          )}
+        </div>
+
+        {showCc && (
+          <>
+            <div className="flex items-center gap-2">
+              <label className="w-12 shrink-0 text-xs text-white/45">{t('compose.cc')}</label>
+              <RecipientInput
+                className={inputCls}
+                value={cc}
+                onChange={(v) => {
+                  setCc(v);
+                  markDirty();
+                }}
+                placeholder={t('compose.ccPlaceholder')}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="w-12 shrink-0 text-xs text-white/45">{t('compose.bcc')}</label>
+              <RecipientInput
+                className={inputCls}
+                value={bcc}
+                onChange={(v) => {
+                  setBcc(v);
+                  markDirty();
+                }}
+                placeholder={t('compose.bccPlaceholder')}
+              />
+            </div>
+          </>
+        )}
+
+        {/* 件名 */}
+        <div className="flex items-center gap-2">
+          <label className="w-12 shrink-0 text-xs text-white/45">{t('compose.subject')}</label>
+          <input
+            className={inputCls}
+            value={subject}
+            onChange={(e) => {
+              setSubject(e.target.value);
+              markDirty();
+            }}
+            placeholder={t('compose.subjectPlaceholder')}
+          />
+        </div>
+
+        {/* 署名の選択（切り替え）。署名が 1 つも無いときは行ごと隠す。 */}
+        {signatures.length > 0 && (
+          <div className="flex items-center gap-2">
+            <label className="w-12 shrink-0 text-xs text-white/45">{t('compose.signature')}</label>
+            <select
+              className="rounded-md bg-white/10 px-2 py-1.5 text-sm outline-none"
+              value={sigId ?? ''}
+              onChange={(e) => applySignature(e.target.value ? Number(e.target.value) : null)}
+            >
+              <option value="" className="text-black">
+                {t('compose.noSignature')}
+              </option>
+              {signatures.map((s) => (
+                <option key={s.id} value={s.id} className="text-black">
+                  {s.name}
                 </option>
               ))}
             </select>
           </div>
+        )}
 
-          {/* 宛先 */}
-          <div className="flex items-center gap-2">
-            <label className="w-12 shrink-0 text-xs text-white/45">{t('compose.to')}</label>
-            <RecipientInput
-              className={inputCls}
-              value={to}
-              onChange={(v) => {
-                setTo(v);
-                markDirty();
-              }}
-              placeholder={t('compose.toPlaceholder')}
-              autoFocus={target.mode === 'new' || target.mode === 'forward'}
-            />
-            {!showCc && (
-              <button
-                onClick={() => setShowCc(true)}
-                className="shrink-0 text-xs text-sky-300 hover:underline"
-              >
-                {t('compose.addCc')}
-              </button>
-            )}
-          </div>
+        {/* 本文（引用は編集欄に入れず、送信時に付ける）。ペインの残り高さいっぱいに広げる。 */}
+        <textarea
+          className="min-h-[10rem] w-full flex-1 resize-none rounded-md bg-white/10 px-3 py-2 text-sm leading-relaxed outline-none placeholder:text-white/30 focus:bg-white/15"
+          value={body}
+          onChange={(e) => {
+            setBody(e.target.value);
+            markDirty();
+          }}
+          placeholder={t('compose.bodyPlaceholder')}
+        />
+        {quotedRef.current && (
+          <p className="shrink-0 text-[11px] text-white/35">{t('compose.quoteAppendNote')}</p>
+        )}
+      </div>
 
-          {showCc && (
-            <>
-              <div className="flex items-center gap-2">
-                <label className="w-12 shrink-0 text-xs text-white/45">{t('compose.cc')}</label>
-                <RecipientInput
-                  className={inputCls}
-                  value={cc}
-                  onChange={(v) => {
-                    setCc(v);
-                    markDirty();
-                  }}
-                  placeholder={t('compose.ccPlaceholder')}
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <label className="w-12 shrink-0 text-xs text-white/45">{t('compose.bcc')}</label>
-                <RecipientInput
-                  className={inputCls}
-                  value={bcc}
-                  onChange={(v) => {
-                    setBcc(v);
-                    markDirty();
-                  }}
-                  placeholder={t('compose.bccPlaceholder')}
-                />
-              </div>
-            </>
-          )}
-
-          {/* 件名 */}
-          <div className="flex items-center gap-2">
-            <label className="w-12 shrink-0 text-xs text-white/45">{t('compose.subject')}</label>
-            <input
-              className={inputCls}
-              value={subject}
-              onChange={(e) => {
-                setSubject(e.target.value);
-                markDirty();
-              }}
-              placeholder={t('compose.subjectPlaceholder')}
-            />
-          </div>
-
-          {/* 署名の選択（切り替え）。署名が 1 つも無いときは行ごと隠す。 */}
-          {signatures.length > 0 && (
-            <div className="flex items-center gap-2">
-              <label className="w-12 shrink-0 text-xs text-white/45">
-                {t('compose.signature')}
-              </label>
-              <select
-                className="rounded-md bg-white/10 px-2 py-1.5 text-sm outline-none"
-                value={sigId ?? ''}
-                onChange={(e) => applySignature(e.target.value ? Number(e.target.value) : null)}
-              >
-                <option value="" className="text-black">
-                  {t('compose.noSignature')}
-                </option>
-                {signatures.map((s) => (
-                  <option key={s.id} value={s.id} className="text-black">
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {/* 本文（引用は編集欄に入れず、送信時に付ける）。ペインの残り高さいっぱいに広げる。 */}
-          <textarea
-            className="min-h-[10rem] w-full flex-1 resize-none rounded-md bg-white/10 px-3 py-2 text-sm leading-relaxed outline-none placeholder:text-white/30 focus:bg-white/15"
-            value={body}
-            onChange={(e) => {
-              setBody(e.target.value);
-              markDirty();
-            }}
-            placeholder={t('compose.bodyPlaceholder')}
-          />
-          {quotedRef.current && (
-            <p className="shrink-0 text-[11px] text-white/35">{t('compose.quoteAppendNote')}</p>
-          )}
-        </div>
-
-        <div className="flex items-center gap-3 border-t border-white/10 px-4 py-2.5">
-          <button
-            ref={sendBtnRef}
-            onClick={onSend}
-            disabled={!canSend}
-            className="flex items-center gap-1.5 rounded-md bg-sky-500/90 px-4 py-1.5 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-40"
-          >
-            {flyOn ? (
-              <img src={swallowUrl} alt="" className="h-4 w-auto" />
-            ) : (
-              <Send size={14} />
-            )}
-            {sending ? t('compose.sending') : flyOn ? t('compose.fly') : t('compose.send')}
-          </button>
-          {error ? (
-            <span className="flex-1 truncate text-xs text-rose-300">{error}</span>
-          ) : (
-            saved && <span className="flex-1 truncate text-xs text-white/40">{t('compose.draftSaved')}</span>
-          )}
-        </div>
+      <div className="flex items-center gap-3 border-t border-white/10 px-4 py-2.5">
+        <button
+          ref={sendBtnRef}
+          onClick={onSend}
+          disabled={!canSend}
+          className="flex items-center gap-1.5 rounded-md bg-sky-500/90 px-4 py-1.5 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-40"
+        >
+          {flyOn ? <img src={swallowUrl} alt="" className="h-4 w-auto" /> : <Send size={14} />}
+          {sending ? t('compose.sending') : flyOn ? t('compose.fly') : t('compose.send')}
+        </button>
+        {error ? (
+          <span className="flex-1 truncate text-xs text-rose-300">{error}</span>
+        ) : (
+          saved && (
+            <span className="flex-1 truncate text-xs text-white/40">{t('compose.draftSaved')}</span>
+          )
+        )}
+      </div>
 
       {flyOn && <FlySwallow ref={flyRef} />}
     </div>

@@ -486,6 +486,19 @@
     "cc": "Cc",
     "composeTo": "{{email}} へ新規メール"
   },
+  "thread": {
+    "you": "自分",
+    "untitled": "（無題のスレッド）",
+    "messages": "{{count}} 通",
+    "rename": "スレッド名を変更（再件名）",
+    "renameSave": "保存",
+    "loading": "会話を読み込み中…",
+    "showFull": "全文を開く",
+    "collapse": "とじる",
+    "actions": "操作",
+    "splitBelow": "このメール以降を別スレッドに分ける",
+    "splitThis": "このメールだけ別スレッドに分ける"
+  },
   "bottombar": {
     "backdrop": "背景の濃さ",
     "textColor": "文字色（白→黒）"

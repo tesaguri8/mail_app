@@ -10,9 +10,12 @@ mod signatures;
 mod spam;
 mod storage;
 mod tags;
+mod threads;
 
 pub use accounts::{NewAccount, SmtpAccount};
-pub use emails::{insert_email, AttachmentFetchInfo, InsertOutcome, NewAttachment, NewEmail};
+pub use emails::{
+    insert_email, AttachmentFetchInfo, InsertOutcome, NewAttachment, NewEmail, NewQuote,
+};
 pub use server_accounts::NewServerAccount;
 pub use spam::SpamFeatures;
 

@@ -16,4 +16,10 @@ body: string,
 /**
  * 返信元の Message-ID（スレッド化用。新規なら None）。
  */
-in_reply_to: string | null, };
+in_reply_to: string | null, 
+/**
+ * References チェーン（祖先 Message-ID を空白区切り・古い順。相手メーラーで正しく
+ * スレッド表示させるため。返信時は「元メールの References ＋ 元メールの Message-ID」。
+ * docs/THREADING.md）。
+ */
+references: string | null, };

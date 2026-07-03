@@ -45,6 +45,7 @@ import { mailAddTag, mailRemoveTag, tagCreate, tagList } from '../services/tags'
 import { pickTagColor, DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import { parseAddress } from '../utils/address';
 import { MailBody } from './MailBody';
+import { Conversation, type ConversationHandlers } from './Conversation';
 import { Compose, type ComposeTarget } from './Compose';
 import { FolderIcons } from './FolderIcons';
 import { MAIL_FILTERS, matchesFilters } from './mailFilters';
@@ -71,9 +72,7 @@ function formatDate(d: string | null): string {
 function formatScrollDate(d: string | null): string {
   if (!d) return '';
   const dt = new Date(d);
-  return isNaN(dt.getTime())
-    ? ''
-    : `${dt.getFullYear()}/${dt.getMonth() + 1}/${dt.getDate()}`;
+  return isNaN(dt.getTime()) ? '' : `${dt.getFullYear()}/${dt.getMonth() + 1}/${dt.getDate()}`;
 }
 
 /**
@@ -260,7 +259,10 @@ export function MailboxView({
   }, [accounts, selected]);
 
   // タグ一覧（チップ表示・絞り込み・付与候補の元データ）
-  const reloadTags = () => tagList().then(setTags).catch(() => undefined);
+  const reloadTags = () =>
+    tagList()
+      .then(setTags)
+      .catch(() => undefined);
   useEffect(() => {
     reloadTags();
   }, []);
@@ -710,11 +712,7 @@ export function MailboxView({
   };
 
   const listPane = (
-    <div
-      className={`flex h-full min-h-0 flex-col ${
-        folder === 'spam' ? 'bg-amber-600/15' : ''
-      }`}
-    >
+    <div className={`flex h-full min-h-0 flex-col ${folder === 'spam' ? 'bg-amber-600/15' : ''}`}>
       {/* アカウント選択＋フォルダ選択（アイコンボタン）を同じ行に置く */}
       <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-2 py-1.5">
         <select
@@ -835,170 +833,167 @@ export function MailboxView({
         </div>
       )}
       <div className="relative min-h-0 flex-1">
-      {/* スクロール位置インジケータ: 右端にその辺りのメールの年月を表示 */}
-      {scrollHint && (
-        <div
-          className="pointer-events-none absolute right-1.5 z-10 -translate-y-1/2 rounded-full bg-neutral-900/80 px-2 py-0.5 text-[10px] font-medium tabular-nums text-white/85 shadow backdrop-blur"
-          style={{ top: `calc(${scrollHint.ratio} * (100% - 20px) + 10px)` }}
-        >
-          {scrollHint.label}
-        </div>
-      )}
-      <ul
-        className="h-full space-y-1 overflow-y-auto p-2"
-        onScroll={onListScroll}
-      >
-      {visibleMails.length === 0 ? (
-        <li className="px-2 py-3 text-sm text-white/50">
-          {searchMode ? (searching ? t('search.searching') : t('search.noResults')) : t('mailbox.empty')}
-        </li>
-      ) : (
-        visibleMails.map((m) => (
-          <li
-            key={m.id}
-            id={`mail-li-${m.id}`}
-            onClick={(e) => onRowClick(e, m.id)}
-            onContextMenu={(e) => onRowContextMenu(e, m.id)}
-            className={`group flex cursor-pointer select-none gap-2 rounded-md px-3 py-2 hover:bg-white/10 ${
-              selectedIds.has(m.id) ? 'bg-white/15' : ''
-            } ${opened?.id === m.id ? 'ring-1 ring-sky-300/40' : ''}`}
+        {/* スクロール位置インジケータ: 右端にその辺りのメールの年月を表示 */}
+        {scrollHint && (
+          <div
+            className="pointer-events-none absolute right-1.5 z-10 -translate-y-1/2 rounded-full bg-neutral-900/80 px-2 py-0.5 text-[10px] font-medium tabular-nums text-white/85 shadow backdrop-blur"
+            style={{ top: `calc(${scrollHint.ratio} * (100% - 20px) + 10px)` }}
           >
-            <input
-              type="checkbox"
-              checked={selectedIds.has(m.id)}
-              onChange={() => toggleSelect(m.id)}
-              onClick={(e) => e.stopPropagation()}
-              aria-label={t('mailbox.selectMailCheckbox')}
-              // チェックボックスは複数選択モード中（または選択済み）のみ表示。
-              // ホバー/フォーカスでは出さない。選択は Ctrl/Shift＋クリックか右クリックから開始。
-              className={`mt-1 h-3.5 w-3.5 shrink-0 accent-sky-400 ${
-                selecting || selectedIds.has(m.id) ? '' : 'hidden'
-              }`}
-            />
-            <div className="min-w-0 flex-1">
-            {(() => {
-              // 送信済/下書きは相手（To）、それ以外は差出人（From）を主に見せる。
-              // 表示名はヘッダ名（from_name/to_name）を優先し、無ければアドレスから導出。
-              const addr = parseAddress(outgoing ? m.to_addresses : m.from_address);
-              const headerName = (outgoing ? m.to_name : m.from_name)?.trim();
-              const name = headerName || addr.name || addr.email || (outgoing ? '—' : '(no sender)');
-              const showEmail = addr.email && addr.email !== name;
-              return (
-                <>
-                  {/* 名前＜メール＞＋送信日時（1行） */}
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span className="truncate text-sm font-medium">
-                      {!m.is_read && <span className="mr-1 text-sky-300">●</span>}
-                      {outgoing && <span className="text-white/40">{t('mailbox.to')}: </span>}
-                      {name}
-                      {showEmail && (
-                        <span className="font-normal text-white/40">
-                          {' '}
-                          &lt;{addr.email}&gt;
-                        </span>
-                      )}
-                    </span>
-                    <span className="flex shrink-0 items-center gap-1 text-[10px] text-white/40">
-                      {m.is_vip && (
-                        <Gem
-                          size={12}
-                          className="fill-sky-300/30 text-sky-300"
-                          aria-label={t('filter.vip')}
-                        />
-                      )}
-                      {m.is_green && (
-                        <LeafyGreen
-                          size={12}
-                          className="text-emerald-400"
-                          aria-label={t('green.badge')}
-                        />
-                      )}
-                      {m.is_starred && <Star size={12} className="fill-amber-300 text-amber-300" />}
-                      {formatDate(m.date)}
-                    </span>
-                  </div>
-                  {/* 件名 */}
-                  <div className="truncate text-sm text-white/80">
-                    {m.subject ?? '(no subject)'} {m.has_real_attachments && '📎'}
-                  </div>
-                  {/* 本文（詰めて2行折り返し） */}
-                  <div className="line-clamp-2 text-xs leading-snug text-white/40">{m.preview}</div>
-                </>
-              );
-            })()}
-            </div>
-          </li>
-        ))
-      )}
-      {/* 続きあり: スクロールで自動読み込み（末尾のヒント） */}
-      {!searchMode && hasMore && visibleMails.length > 0 && (
-        <li className="px-2 py-3 text-center text-xs text-white/35">{t('mailbox.loadingMore')}</li>
-      )}
-      </ul>
+            {scrollHint.label}
+          </div>
+        )}
+        <ul className="h-full space-y-1 overflow-y-auto p-2" onScroll={onListScroll}>
+          {visibleMails.length === 0 ? (
+            <li className="px-2 py-3 text-sm text-white/50">
+              {searchMode
+                ? searching
+                  ? t('search.searching')
+                  : t('search.noResults')
+                : t('mailbox.empty')}
+            </li>
+          ) : (
+            visibleMails.map((m) => (
+              <li
+                key={m.id}
+                id={`mail-li-${m.id}`}
+                onClick={(e) => onRowClick(e, m.id)}
+                onContextMenu={(e) => onRowContextMenu(e, m.id)}
+                className={`group flex cursor-pointer select-none gap-2 rounded-md px-3 py-2 hover:bg-white/10 ${
+                  selectedIds.has(m.id) ? 'bg-white/15' : ''
+                } ${opened?.id === m.id ? 'ring-1 ring-sky-300/40' : ''}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(m.id)}
+                  onChange={() => toggleSelect(m.id)}
+                  onClick={(e) => e.stopPropagation()}
+                  aria-label={t('mailbox.selectMailCheckbox')}
+                  // チェックボックスは複数選択モード中（または選択済み）のみ表示。
+                  // ホバー/フォーカスでは出さない。選択は Ctrl/Shift＋クリックか右クリックから開始。
+                  className={`mt-1 h-3.5 w-3.5 shrink-0 accent-sky-400 ${
+                    selecting || selectedIds.has(m.id) ? '' : 'hidden'
+                  }`}
+                />
+                <div className="min-w-0 flex-1">
+                  {(() => {
+                    // 送信済/下書きは相手（To）、それ以外は差出人（From）を主に見せる。
+                    // 表示名はヘッダ名（from_name/to_name）を優先し、無ければアドレスから導出。
+                    const addr = parseAddress(outgoing ? m.to_addresses : m.from_address);
+                    const headerName = (outgoing ? m.to_name : m.from_name)?.trim();
+                    const name =
+                      headerName || addr.name || addr.email || (outgoing ? '—' : '(no sender)');
+                    const showEmail = addr.email && addr.email !== name;
+                    return (
+                      <>
+                        {/* 名前＜メール＞＋送信日時（1行） */}
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span className="truncate text-sm font-medium">
+                            {!m.is_read && <span className="mr-1 text-sky-300">●</span>}
+                            {outgoing && <span className="text-white/40">{t('mailbox.to')}: </span>}
+                            {name}
+                            {showEmail && (
+                              <span className="font-normal text-white/40">
+                                {' '}
+                                &lt;{addr.email}&gt;
+                              </span>
+                            )}
+                          </span>
+                          <span className="flex shrink-0 items-center gap-1 text-[10px] text-white/40">
+                            {m.is_vip && (
+                              <Gem
+                                size={12}
+                                className="fill-sky-300/30 text-sky-300"
+                                aria-label={t('filter.vip')}
+                              />
+                            )}
+                            {m.is_green && (
+                              <LeafyGreen
+                                size={12}
+                                className="text-emerald-400"
+                                aria-label={t('green.badge')}
+                              />
+                            )}
+                            {m.is_starred && (
+                              <Star size={12} className="fill-amber-300 text-amber-300" />
+                            )}
+                            {formatDate(m.date)}
+                          </span>
+                        </div>
+                        {/* 件名 */}
+                        <div className="truncate text-sm text-white/80">
+                          {m.subject ?? '(no subject)'} {m.has_real_attachments && '📎'}
+                        </div>
+                        {/* 本文（詰めて2行折り返し） */}
+                        <div className="line-clamp-2 text-xs leading-snug text-white/40">
+                          {m.preview}
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              </li>
+            ))
+          )}
+          {/* 続きあり: スクロールで自動読み込み（末尾のヒント） */}
+          {!searchMode && hasMore && visibleMails.length > 0 && (
+            <li className="px-2 py-3 text-center text-xs text-white/35">
+              {t('mailbox.loadingMore')}
+            </li>
+          )}
+        </ul>
       </div>
     </div>
-    );
+  );
 
-  // 開いているメールのタグ（詳細ヘッダに表示。MailDetail はタグを持たないため一覧側から解決）。
-  const openedTags = opened
-    ? ((mails.find((m) => m.id === opened.id) ?? searchResults.find((m) => m.id === opened.id))
-        ?.tag_ids ?? [])
+  // 一覧（通常＋検索結果）から 1 通を引く。会話ビューの各メッセージのタグ/スター解決に使う。
+  const findMail = (id: number) =>
+    mails.find((m) => m.id === id) ?? searchResults.find((m) => m.id === id);
+
+  // 会話ビュー（Conversation）へ渡す、メール 1 通単位の操作・状態。
+  const conversationHandlers: ConversationHandlers = {
+    tagsFor: (id) =>
+      (findMail(id)?.tag_ids ?? [])
         .map((tid) => tagById.get(tid))
-        .filter((tg): tg is TagSummary => tg != null)
-    : [];
-
-  // 開いているメールの現在のスター状態（MailDetail は持たないため一覧から解決）。
-  const openedMail = opened
-    ? (mails.find((m) => m.id === opened.id) ?? searchResults.find((m) => m.id === opened.id))
-    : undefined;
-  const openedStarred = openedMail?.is_starred ?? false;
-
-  // 開いているメールのスターを切り替え（楽観更新 → 永続化）。
-  const toggleStarOpened = async () => {
-    if (!opened) return;
-    const id = opened.id;
-    const value = !openedStarred;
-    patchMails(new Set([id]), { is_starred: value });
-    try {
-      await mailSetStarred([id], value);
-    } catch {
-      /* noop */
-    }
-  };
-
-  // 開いているメールにタグを付与（ボタン位置にタグピッカーを開く）。
-  const openTagForOpened = (x: number, y: number) => {
-    if (opened) setTagPicker({ x, y, ids: [opened.id] });
-  };
-
-  // 開いているメールを迷惑としてマーク（学習＋隔離）。一覧から外して詳細を閉じる。
-  const markSpamOpened = async () => {
-    if (!opened) return;
-    const id = opened.id;
-    updateLists((prev) => prev.filter((m) => m.id !== id));
-    setOpened(null);
-    try {
-      await mailMarkSpam([id]);
-    } catch {
-      /* noop */
-    }
+        .filter((tg): tg is TagSummary => tg != null),
+    starredFor: (id) => findMail(id)?.is_starred ?? false,
+    onToggleStar: async (id) => {
+      const value = !(findMail(id)?.is_starred ?? false);
+      patchMails(new Set([id]), { is_starred: value });
+      try {
+        await mailSetStarred([id], value);
+      } catch {
+        /* noop */
+      }
+    },
+    onTag: (id, x, y) => setTagPicker({ x, y, ids: [id] }),
+    onRemoveTag: (id, tagId) => applyTagDelta([id], tagId, false),
+    onMarkSpam: async (id) => {
+      updateLists((prev) => prev.filter((m) => m.id !== id));
+      if (opened?.id === id) setOpened(null);
+      try {
+        await mailMarkSpam([id]);
+      } catch {
+        /* noop */
+      }
+    },
+    // 特定のメッセージへ返信/転送（会話内のどのメールにも返信できる）。
+    onReply: async (mode, messageId) => {
+      try {
+        const source = await mailGet(messageId);
+        setCompose({ mode, source });
+      } catch {
+        /* noop */
+      }
+    },
+    onAddContact,
+    onEditContact: onOpenContact,
+    onComposeTo: (email) => setCompose({ mode: 'new', to: `${email}, ` }),
+    onGreenChange: loadMails,
+    onThreadChanged: loadMails,
   };
 
   const bodyPane = opened ? (
-    <MailBody
-      detail={opened}
-      tags={openedTags}
-      starred={openedStarred}
-      onToggleStar={toggleStarOpened}
-      onTag={openTagForOpened}
-      onRemoveTag={(tagId) => applyTagDelta([opened.id], tagId, false)}
-      onReply={(mode) => setCompose({ mode, source: opened })}
-      onMarkSpam={markSpamOpened}
-      onAddContact={onAddContact}
-      onEditContact={onOpenContact}
-      onComposeTo={(email) => setCompose({ mode: 'new', to: `${email}, ` })}
-      onGreenChange={loadMails}
-    />
+    <Conversation openedId={opened.id} handlers={conversationHandlers} />
   ) : (
     <div className="flex h-full items-center justify-center text-sm text-white/40">
       {t('mailbox.selectMail')}
@@ -1172,9 +1167,7 @@ export function MailboxView({
       ) : (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {/* overflow-hidden は付けない: ポップオーバーを本文側へ重ねて表示するため */}
-          {sidebarOpen && (
-            <div className="h-1/3 min-h-0 border-b border-white/10">{listPane}</div>
-          )}
+          {sidebarOpen && <div className="h-1/3 min-h-0 border-b border-white/10">{listPane}</div>}
           <div className="min-h-0 flex-1 overflow-hidden">{bodyPane}</div>
         </div>
       )}

@@ -2,14 +2,12 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Columns2,
-  Flag,
   Gem,
   LeafyGreen,
   Mail,
   MailOpen,
   PanelLeftClose,
   PanelLeftOpen,
-  Paperclip,
   RefreshCw,
   Rows2,
   Search,
@@ -19,9 +17,7 @@ import {
   Tag,
   ThumbsDown,
   Trash2,
-  UserRound,
   X,
-  type LucideIcon,
 } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
 import type { AccountSummary } from '@bindings/AccountSummary';
@@ -50,6 +46,7 @@ import { parseAddress } from '../utils/address';
 import { MailBody } from './MailBody';
 import { Compose, type ComposeTarget } from './Compose';
 import { FolderIcons } from './FolderIcons';
+import { MAIL_FILTERS, matchesFilters } from './mailFilters';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { DateFilter, matchesDate, type DateRange } from './DateFilter';
 import { TagFilter, matchesTags } from './TagFilter';
@@ -62,28 +59,6 @@ const iconBtn =
 export const MIN_SIDEBAR_WIDTH = 340;
 export const MAX_SIDEBAR_WIDTH = 640;
 export const DEFAULT_SIDEBAR_WIDTH = 340;
-
-/** リスト絞り込みのトグル。flag（要再確認）は設定手段が入るまで非適用（並びのみ）。 */
-const FILTERS: { key: string; Icon: LucideIcon }[] = [
-  { key: 'unread', Icon: Mail },
-  { key: 'star', Icon: Star },
-  { key: 'green', Icon: LeafyGreen },
-  { key: 'vip', Icon: Gem },
-  { key: 'known', Icon: UserRound },
-  { key: 'attachment', Icon: Paperclip },
-  { key: 'flag', Icon: Flag },
-];
-
-function matchesFilters(m: MailSummary, filters: Set<string>): boolean {
-  if (filters.has('unread') && m.is_read) return false;
-  if (filters.has('attachment') && !m.has_real_attachments) return false;
-  if (filters.has('star') && !m.is_starred) return false;
-  if (filters.has('green') && !m.is_green) return false; // 差出人がグリーン（認定ドメイン/本人）
-  if (filters.has('vip') && !m.is_vip) return false; // 差出人が住所録のお気に入り(Gem)
-  if (filters.has('known') && !m.is_known) return false; // 差出人が住所録に登録済み
-  // flag（要再確認）はマーク手段が入るまでフィルタしない（空表示で混乱させない）
-  return true;
-}
 
 function formatDate(d: string | null): string {
   if (!d) return '';
@@ -751,7 +726,7 @@ export function MailboxView({
       </div>
       {/* 絞り込みツールバー: 一覧を絞る操作はリスト直上に置く（トグル/期間/タグ）。アイコンは中央寄せ */}
       <div className="flex shrink-0 flex-wrap items-center justify-center gap-1 border-b border-white/10 px-2 py-1">
-        {FILTERS.map(({ key, Icon }) => {
+        {MAIL_FILTERS.map(({ key, Icon }) => {
           const on = filters.has(key);
           return (
             <button

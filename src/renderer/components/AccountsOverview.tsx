@@ -4,6 +4,7 @@ import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailSummary } from '@bindings/MailSummary';
 import { mailList } from '../services/mail';
 import { getHomeCountMode, getHomeCountShow, PREFS_EVENT } from '../config/prefs';
+import { MAIL_FILTERS, matchesFilters } from './mailFilters';
 
 /**
  * ホーム右カラム：アカウント別の新着（未読）数を“ゴースト”表示（背景なし・文字のみ）。
@@ -19,6 +20,15 @@ export function AccountsOverview({
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState<number | null>(null);
   const [previews, setPreviews] = useState<Record<number, MailSummary[]>>({});
+  // 展開中のプレビューに掛ける絞り込み（メール画面と共通のトグル）。
+  const [filters, setFilters] = useState<Set<string>>(new Set());
+  const toggleFilter = (key: string) =>
+    setFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   // バッジの件数表示（表示トグル＋未読数/全数。設定で変更可）。
   const [countShow, setCountShow] = useState(getHomeCountShow());
   const [countMode, setCountMode] = useState(getHomeCountMode());
@@ -73,12 +83,38 @@ export function AccountsOverview({
 
           {expanded === a.id && (
             <div className="mt-1 flex min-h-0 flex-1 flex-col pl-1">
-              {(previews[a.id] ?? []).length === 0 ? (
-                <p className="text-xs text-white/45">{t('mailbox.syncHint')}</p>
-              ) : (
-                // バー間いっぱいまで伸ばし、超過分はスクロール
-                <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
-                  {(previews[a.id] ?? []).map((m) => (
+              {/* 絞り込みアイコン（メール画面と共通のトグル） */}
+              <div className="mb-1 flex shrink-0 flex-wrap items-center gap-1">
+                {MAIL_FILTERS.map(({ key, Icon }) => {
+                  const on = filters.has(key);
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => toggleFilter(key)}
+                      title={t(`filter.${key}`)}
+                      aria-label={t(`filter.${key}`)}
+                      aria-pressed={on}
+                      className={`flex h-7 w-7 items-center justify-center rounded-md ${
+                        on
+                          ? 'bg-sky-500/40 text-white ring-1 ring-sky-200/50'
+                          : 'text-white/60 hover:bg-white/10 hover:text-white/90'
+                      }`}
+                    >
+                      <Icon size={14} />
+                    </button>
+                  );
+                })}
+              </div>
+              {(() => {
+                const list = (previews[a.id] ?? []).filter((m) => matchesFilters(m, filters));
+                return (previews[a.id] ?? []).length === 0 ? (
+                  <p className="text-xs text-white/45">{t('mailbox.syncHint')}</p>
+                ) : list.length === 0 ? (
+                  <p className="text-xs text-white/45">{t('mailbox.noMatch')}</p>
+                ) : (
+                  // バー間いっぱいまで伸ばし、超過分はスクロール
+                  <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+                    {list.map((m) => (
                     <div
                       key={m.id}
                       className="cursor-pointer"
@@ -95,9 +131,10 @@ export function AccountsOverview({
                         {m.preview}
                       </div>
                     </div>
-                  ))}
-                </div>
-              )}
+                    ))}
+                  </div>
+                );
+              })()}
               <button
                 onClick={() => onOpenMail(a.id)}
                 className="mt-2 shrink-0 text-xs text-sky-200/90 hover:underline"

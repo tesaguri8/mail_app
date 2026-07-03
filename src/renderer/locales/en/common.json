@@ -447,6 +447,7 @@
     "f_spam": "Spam",
     "emptyFolder": "Empty {{folder}}",
     "emptyConfirm": "Permanently delete all mail in {{folder}}. This cannot be undone. Continue?",
+    "noMatch": "No matching mail.",
     "w_n50": "Latest 50",
     "w_n200": "Latest 200",
     "w_3d": "3 days",

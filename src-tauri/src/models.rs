@@ -121,6 +121,23 @@ pub struct MailSummary {
     pub is_known: bool,
     /// 差出人が住所録のお気に入り（VIP／Gem）連絡先か。フィルタ用。
     pub is_vip: bool,
+    /// 差出人がグリーン（本人 or 認定ドメイン）か。フィルタ・バッジ用。docs/GREEN_DOMAINS.md。
+    pub is_green: bool,
+}
+
+/// グリーン／警告ドメインの 1 件（管理タブ用）。docs/GREEN_DOMAINS.md。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct GreenDomainEntry {
+    pub domain: String,
+    /// "green"（認定）| "warning"（除外）。
+    pub kind: String,
+    /// 住所録由来（自動グリーンの対象。フリーメール除く）か。
+    pub auto: bool,
+    /// このドメインを持つ連絡先の件数（参考）。
+    pub contact_count: i32,
+    /// 手動登録時のメモ（任意）。
+    pub note: Option<String>,
 }
 
 /// メール作成の宛先オートコンプリート候補（docs/RECIPIENT_AUTOCOMPLETE.md）。
@@ -446,6 +463,8 @@ pub struct MailDetail {
     pub has_attachments: bool,
     /// 容量節約のため本文を要約保存に落としてある（clean_body のみ）。全文はサーバー再取得可。
     pub body_compacted: bool,
+    /// 差出人がグリーン（本人 or 認定ドメイン）か。バッジ・認定ボタン用。docs/GREEN_DOMAINS.md。
+    pub is_green: bool,
 }
 
 /// 添付ファイル（一覧/ダウンロード状態）。

@@ -39,4 +39,8 @@ is_known: boolean,
 /**
  * 差出人が住所録のお気に入り（VIP／Gem）連絡先か。フィルタ用。
  */
-is_vip: boolean, };
+is_vip: boolean, 
+/**
+ * 差出人がグリーン（本人 or 認定ドメイン）か。フィルタ・バッジ用。docs/GREEN_DOMAINS.md。
+ */
+is_green: boolean, };

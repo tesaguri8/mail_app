@@ -27,4 +27,8 @@ body_html: string | null, has_attachments: boolean,
 /**
  * 容量節約のため本文を要約保存に落としてある（clean_body のみ）。全文はサーバー再取得可。
  */
-body_compacted: boolean, };
+body_compacted: boolean, 
+/**
+ * 差出人がグリーン（本人 or 認定ドメイン）か。バッジ・認定ボタン用。docs/GREEN_DOMAINS.md。
+ */
+is_green: boolean, };

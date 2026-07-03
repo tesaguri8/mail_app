@@ -282,7 +282,27 @@ fn map_mail_summary(r: &rusqlite::Row) -> rusqlite::Result<MailSummary> {
         has_real_attachments: r.get::<_, i64>(10)? != 0,
         is_known: r.get::<_, i64>(12)? != 0,
         is_vip: r.get::<_, i64>(13)? != 0,
+        // グリーンは行取得後にまとめて算出する（グリーン集合を 1 回だけ引くため）。
+        is_green: false,
     })
+}
+
+/// 取得済みの一覧行に is_green をまとめて付与する（グリーン集合を 1 回だけ引く）。
+/// is_green = 差出人が住所録本人(is_known) または 差出人ドメインがグリーン集合。
+fn fill_is_green(conn: &Connection, rows: &mut [MailSummary]) -> rusqlite::Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let set = super::greendomain::green_domain_set(conn)?;
+    for m in rows.iter_mut() {
+        let domain_green = m
+            .from_address
+            .as_deref()
+            .and_then(super::greendomain::domain_of)
+            .is_some_and(|d| set.contains(&d));
+        m.is_green = m.is_known || domain_green;
+    }
+    Ok(())
 }
 
 /// アドレス（素のメールアドレス）に一致する住所録の表示名を返す。
@@ -352,14 +372,16 @@ impl Store {
             known_vip = known_vip_cols("emails.from_address"),
         );
         let mut stmt = conn.prepare(&sql)?;
-        match account_id {
+        let mut rows: Vec<MailSummary> = match account_id {
             Some(a) => stmt
                 .query_map(params![folder, limit, offset, a], map_mail_summary)?
-                .collect(),
+                .collect::<rusqlite::Result<_>>()?,
             None => stmt
                 .query_map(params![folder, limit, offset], map_mail_summary)?
-                .collect(),
-        }
+                .collect::<rusqlite::Result<_>>()?,
+        };
+        fill_is_green(&conn, &mut rows)?;
+        Ok(rows)
     }
 
     /// 件名・差出人・本文（FTS5 索引）を全文検索する。
@@ -395,14 +417,16 @@ impl Store {
             known_vip = known_vip_cols("e.from_address"),
         );
         let mut stmt = conn.prepare(&sql)?;
-        match account_id {
+        let mut rows: Vec<MailSummary> = match account_id {
             Some(a) => stmt
                 .query_map(params![fts, folder, limit, a], map_mail_summary)?
-                .collect(),
+                .collect::<rusqlite::Result<_>>()?,
             None => stmt
                 .query_map(params![fts, folder, limit], map_mail_summary)?
-                .collect(),
-        }
+                .collect::<rusqlite::Result<_>>()?,
+        };
+        fill_is_green(&conn, &mut rows)?;
+        Ok(rows)
     }
 
     /// 指定 ID 群に対し、フラグ列（is_read / is_starred / is_bookmarked）を一括更新する。
@@ -487,6 +511,7 @@ impl Store {
                         body_html,
                         has_attachments: r.get::<_, i64>(9)? != 0,
                         body_compacted: r.get::<_, i64>(10)? != 0,
+                        is_green: false,
                     })
                 },
             )
@@ -494,6 +519,9 @@ impl Store {
         let Some(mut d) = detail else {
             return Ok(None);
         };
+        // グリーン判定（本人 or 認定ドメイン）。
+        let green_set = super::greendomain::green_domain_set(&conn)?;
+        d.is_green = super::greendomain::address_is_green(&conn, &green_set, d.from_address.as_deref())?;
         // ヘッダの表示名が無ければ住所録から補完する（既存メール・表示名なしメール向け）。
         if d.from_name.is_none() {
             d.from_name = contact_name_for(&conn, d.from_address.as_deref())?;

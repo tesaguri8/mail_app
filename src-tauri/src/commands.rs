@@ -1,9 +1,10 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult,
     ContactGroupSummary, ContactInput, ContactMatch, ContactSummary, DataLocation, DbInfo,
-    DuplicateGroup, ImportReport, MailDetail, MailSummary, OrgDuplicateGroup, OrganizationDetail,
-    OrganizationSummary, RecipientSuggestion, RetentionReport, SendInput, ServerAccountSummary,
-    SignatureSummary, SpamSettings, SpamVerdict, StorageInfo, SyncProgress, SyncResult, TagSummary,
+    DuplicateGroup, GreenDomainEntry, ImportReport, MailDetail, MailSummary, OrgDuplicateGroup,
+    OrganizationDetail, OrganizationSummary, RecipientSuggestion, RetentionReport, SendInput,
+    ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict, StorageInfo, SyncProgress,
+    SyncResult, TagSummary,
 };
 use crate::services::autoconfig;
 use crate::services::datadir;
@@ -854,6 +855,48 @@ pub fn contact_merge(
     store
         .merge_contacts(keep_id, &drop_ids)
         .map_err(|e| e.to_string())
+}
+
+/// グリーン／警告ドメインの一覧（管理タブ用。住所録由来の自動グリーンも含む）。
+#[tauri::command]
+pub fn green_domain_list(store: State<Store>) -> Result<Vec<GreenDomainEntry>, String> {
+    store.list_green_domains().map_err(|e| e.to_string())
+}
+
+/// ドメインをグリーンに認定（警告から外し、手動グリーンに登録）。
+#[tauri::command]
+pub fn green_domain_add(
+    store: State<Store>,
+    domain: String,
+    note: Option<String>,
+) -> Result<(), String> {
+    store
+        .add_green_domain(&domain, note.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// ドメインを警告（グリーン解除）にする。住所録由来の自動グリーンを上書き除外し、再登録を防ぐ。
+#[tauri::command]
+pub fn green_domain_warn(
+    store: State<Store>,
+    domain: String,
+    note: Option<String>,
+) -> Result<(), String> {
+    store
+        .warn_green_domain(&domain, note.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// ドメインを中立に戻す（グリーン・警告の両方から外す）。
+#[tauri::command]
+pub fn green_domain_clear(store: State<Store>, domain: String) -> Result<(), String> {
+    store.clear_green_domain(&domain).map_err(|e| e.to_string())
+}
+
+/// 単一アドレスがグリーンか（詳細画面のバッジ・ボタン用）。
+#[tauri::command]
+pub fn green_address_check(store: State<Store>, address: String) -> Result<bool, String> {
+    store.address_green(&address).map_err(|e| e.to_string())
 }
 
 /// 現在のデータ保存先と使用量を返す。

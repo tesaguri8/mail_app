@@ -49,6 +49,33 @@ function splitAddresses(s: string): string[] {
     .filter(Boolean);
 }
 
+/** "名前 <addr>" / "addr" からメールアドレス部分だけを取り出す（小文字化はしない）。 */
+function extractEmail(token: string): string {
+  const m = token.match(/<([^>]+)>/);
+  return (m ? m[1] : token).trim();
+}
+
+/**
+ * 複数のアドレスリスト文字列（"名前 <addr>, ..."）を結合し、exclude のメール（自分・差出人など）と
+ * 重複を除いて 1 本の文字列にする。表示名付きの表記はそのまま残す。全員返信の Cc 生成に使う。
+ */
+function mergeAddressList(lists: string[], exclude: string[]): string {
+  const skip = new Set(exclude.map((e) => extractEmail(e).toLowerCase()).filter(Boolean));
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const list of lists) {
+    for (const token of list.split(',')) {
+      const t = token.trim();
+      if (!t) continue;
+      const email = extractEmail(t).toLowerCase();
+      if (!email || skip.has(email) || seen.has(email)) continue;
+      seen.add(email);
+      out.push(t);
+    }
+  }
+  return out.join(', ');
+}
+
 /**
  * メール作成ページ（新規／返信／全員返信／転送）。別ウィンドウにせず、メール画面内の
  * 全面ペインとして表示する（返信/転送は左=下書き・右=元メールの2分割）。
@@ -108,8 +135,16 @@ export function Compose({
         inReplyTo: null,
       };
     }
-    // reply / replyAll
-    const cc = target.mode === 'replyAll' ? (s.to_addresses ?? '') : '';
+    // reply / replyAll。全員返信の Cc には「元の宛先(To)＋元の Cc」を入れる。
+    // 自分（受信アカウント）と差出人（To に入る）は Cc から除外し、重複も除く。
+    const selfEmail = accounts.find((a) => a.id === s.account_id)?.email ?? '';
+    const cc =
+      target.mode === 'replyAll'
+        ? mergeAddressList(
+            [s.to_addresses ?? '', s.cc_addresses ?? ''],
+            [selfEmail, s.from_address ?? '']
+          )
+        : '';
     return {
       to: s.from_address ?? '',
       cc,
@@ -118,7 +153,7 @@ export function Compose({
       quoted: `\n\n${attribution}\n${quote(body)}`,
       inReplyTo: s.message_id,
     };
-  }, [target, t]);
+  }, [target, t, accounts]);
 
   const [accountId, setAccountId] = useState<number | null>(
     // 下書きの再編集は保存時のアカウントを使う。

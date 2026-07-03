@@ -6,6 +6,7 @@
 
 use base64::Engine;
 use image::ImageFormat;
+use img_parts::{Bytes, ImageEXIF};
 use std::io::Cursor;
 use std::sync::Mutex;
 
@@ -128,6 +129,34 @@ fn load_image(
     }
 }
 
+/// 画像を web 表示用の JPEG レンディション（バイト列）にする。HEIC は JPEG へ変換し、
+/// 大きすぎる画像は max_size に収まるよう縮小する（再エンコードで EXIF 等も落ちる）。
+/// ディスクキャッシュ（リモート画像）にはこのバイト列をそのまま保存する。
+pub fn to_web_jpeg_bytes(
+    bytes: &[u8],
+    content_type: Option<&str>,
+    filename: &str,
+    max_size: u32,
+) -> Result<Vec<u8>, String> {
+    let img = load_image(bytes, content_type, filename)?;
+    let resized = if img.width() > max_size || img.height() > max_size {
+        img.resize(max_size, max_size, image::imageops::FilterType::Lanczos3)
+    } else {
+        img
+    };
+    let mut buf = Cursor::new(Vec::new());
+    resized
+        .write_to(&mut buf, ImageFormat::Jpeg)
+        .map_err(|e| format!("JPEG変換失敗: {e}"))?;
+    Ok(buf.into_inner())
+}
+
+/// JPEG バイト列を data URL（image/jpeg）文字列にする。
+pub fn jpeg_bytes_to_data_url(jpeg: &[u8]) -> String {
+    let b64 = base64::engine::general_purpose::STANDARD.encode(jpeg);
+    format!("data:image/jpeg;base64,{b64}")
+}
+
 /// 画像を web 表示用の JPEG レンディションにして data URL を返す。
 /// HEIC は JPEG へ変換し、大きすぎる画像は max_size に収まるよう縮小する。
 pub fn to_web_data_url(
@@ -136,19 +165,8 @@ pub fn to_web_data_url(
     filename: &str,
     max_size: u32,
 ) -> Result<String, String> {
-    let img = load_image(bytes, content_type, filename)?;
-    let resized = if img.width() > max_size || img.height() > max_size {
-        img.resize(max_size, max_size, image::imageops::FilterType::Lanczos3)
-    } else {
-        img
-    };
-
-    let mut buf = Cursor::new(Vec::new());
-    resized
-        .write_to(&mut buf, ImageFormat::Jpeg)
-        .map_err(|e| format!("JPEG変換失敗: {e}"))?;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(buf.into_inner());
-    Ok(format!("data:image/jpeg;base64,{b64}"))
+    let jpeg = to_web_jpeg_bytes(bytes, content_type, filename, max_size)?;
+    Ok(jpeg_bytes_to_data_url(&jpeg))
 }
 
 /// HEIC をデコードして JPEG バイト列にする（OSで開く用にディスク保存する素材）。
@@ -164,4 +182,101 @@ pub fn heic_to_jpeg_bytes(bytes: &[u8], max_size: u32) -> Result<Vec<u8>, String
         .write_to(&mut buf, ImageFormat::Jpeg)
         .map_err(|e| format!("JPEG変換失敗: {e}"))?;
     Ok(buf.into_inner())
+}
+
+/// content-type/拡張子から JPEG かどうか。
+fn is_jpeg(content_type: Option<&str>, filename: &str) -> bool {
+    if let Some(ct) = content_type {
+        let ct = ct.to_lowercase();
+        if ct.contains("jpeg") || ct.contains("jpg") {
+            return true;
+        }
+    }
+    matches!(ext_lower(filename).as_deref(), Some("jpg" | "jpeg"))
+}
+
+/// 送信前サニタイズ: 画像の EXIF（GPS・撮影日時・機種等）を**無劣化で**除去する。
+/// JPEG は img-parts で APP1(Exif) を外すだけ（画素は再エンコードしないので画質・サイズ劣化なし）。
+/// GPS は実務上ほぼ JPEG/HEIC に入るため主要リスクを潰せる。非 JPEG は現状そのまま返す
+/// （PNG/WebP/HEIC の対応は後続。docs/COMPOSE.md §3）。
+pub fn strip_image_metadata(
+    bytes: &[u8],
+    content_type: Option<&str>,
+    filename: &str,
+) -> Result<Vec<u8>, String> {
+    if !is_jpeg(content_type, filename) {
+        return Ok(bytes.to_vec());
+    }
+    let mut jpeg = img_parts::jpeg::Jpeg::from_bytes(Bytes::copy_from_slice(bytes))
+        .map_err(|e| format!("JPEG解析失敗: {e}"))?;
+    // EXIF を丸ごと外す（GPS はここに入る）。XMP など他メタが残り得る点は後続で対応。
+    jpeg.set_exif(None);
+    let mut out = Vec::with_capacity(bytes.len());
+    jpeg.encoder()
+        .write_to(&mut out)
+        .map_err(|e| format!("JPEG書き出し失敗: {e}"))?;
+    Ok(out)
+}
+
+/// 画像に GPS（位置情報）EXIF が含まれているか。作成画面の「📍 位置情報あり」表示に使う。
+/// EXIF が無い/読めない場合は「GPS 無し」（false）として扱う。
+/// kamadak-exif では GPS タグも ifd_num=PRIMARY で保持されるため、緯度/経度タグの有無で判定する。
+pub fn image_has_gps(bytes: &[u8]) -> bool {
+    use exif::{In, Tag};
+    let mut cursor = Cursor::new(bytes);
+    match exif::Reader::new().read_from_container(&mut cursor) {
+        Ok(meta) => {
+            meta.get_field(Tag::GPSLatitude, In::PRIMARY).is_some()
+                || meta.get_field(Tag::GPSLongitude, In::PRIMARY).is_some()
+        }
+        Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// テスト用の小さな JPEG バイト列を作る（EXIF は含まれない）。
+    fn sample_jpeg() -> Vec<u8> {
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            4,
+            4,
+            image::Rgb([120, 30, 200]),
+        ));
+        let mut buf = Cursor::new(Vec::new());
+        img.write_to(&mut buf, ImageFormat::Jpeg).unwrap();
+        buf.into_inner()
+    }
+
+    #[test]
+    fn strip_keeps_valid_jpeg() {
+        let jpeg = sample_jpeg();
+        let out = strip_image_metadata(&jpeg, Some("image/jpeg"), "a.jpg").unwrap();
+        // 除去後もデコードできる（＝壊れていない）。
+        assert!(image::load_from_memory(&out).is_ok());
+    }
+
+    #[test]
+    fn non_jpeg_passthrough() {
+        let png = {
+            let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+                2,
+                2,
+                image::Rgb([1, 2, 3]),
+            ));
+            let mut buf = Cursor::new(Vec::new());
+            img.write_to(&mut buf, ImageFormat::Png).unwrap();
+            buf.into_inner()
+        };
+        // 非 JPEG は現状そのまま返す（バイト不変）。
+        let out = strip_image_metadata(&png, Some("image/png"), "a.png").unwrap();
+        assert_eq!(out, png);
+    }
+
+    #[test]
+    fn plain_jpeg_has_no_gps() {
+        let jpeg = sample_jpeg();
+        assert!(!image_has_gps(&jpeg));
+    }
 }

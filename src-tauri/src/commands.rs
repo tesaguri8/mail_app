@@ -2,9 +2,9 @@ use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult,
     ContactGroupSummary, ContactInput, ContactMatch, ContactSummary, DataLocation, DbInfo,
     DuplicateGroup, GreenDomainEntry, ImportReport, MailDetail, MailSummary, OrgDuplicateGroup,
-    OrganizationDetail, OrganizationSummary, RecipientSuggestion, RetentionReport, SendInput,
-    ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict, StorageInfo, SyncProgress,
-    SyncResult, TagSummary,
+    OrganizationDetail, OrganizationSummary, RecipientSuggestion, RemoteImage, RetentionReport,
+    SendInput, ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict, StorageInfo,
+    SyncProgress, SyncResult, TagSummary,
 };
 use crate::services::autoconfig;
 use crate::services::datadir;
@@ -375,6 +375,160 @@ pub async fn mail_send(
             Ok(Ok(())) => {}
             Ok(Err(e)) => log::warn!("送信は成功、Sent への保存に失敗: {e}"),
             Err(e) => log::warn!("Sent 保存タスクに失敗: {e}"),
+        }
+    }
+    Ok(())
+}
+
+/// リモート画像のディスクキャッシュ用フォルダ。**許可済み差出人**のときだけ Some を返す。
+/// 添付と同じく data_dir 配下（`<data>/remote_images/<差出人hash>`）。解除時にこの単位で削除する。
+fn remote_cache_dir(store: &Store, sender: Option<&str>) -> Option<std::path::PathBuf> {
+    let addr = sender.map(str::trim).filter(|s| !s.is_empty())?;
+    if !store.remote_images_allowed_for(addr).unwrap_or(false) {
+        return None;
+    }
+    Some(
+        store
+            .data_dir()
+            .join("remote_images")
+            .join(simple_checksum(addr.to_lowercase().as_bytes())),
+    )
+}
+
+/// 明示許可された外部画像を取得し、サニタイズ（再エンコード）した data URL を返す。
+/// http(s) のみ・サイズ/タイムアウト上限つき。取得失敗や非画像は黙って飛ばす（best-effort）。
+/// 取得はユーザー操作（「画像を表示」/差出人許可）時のみ行い、既定では読み込まない
+/// （開封トラッキング防止）。再エンコードでデコーダ攻撃・EXIF も無害化する（docs/MAIL_SECURITY.md §1.1）。
+/// `sender` が許可済みなら添付と同じくディスクキャッシュし、初回だけ取得→以降は再アクセスしない
+/// （トラッキング ping の反復を抑止）。未許可（この1通だけ）はキャッシュせず毎回取得する。
+#[tauri::command]
+pub async fn mail_load_remote(
+    store: State<'_, Store>,
+    urls: Vec<String>,
+    sender: Option<String>,
+) -> Result<Vec<RemoteImage>, String> {
+    const MAX_BYTES: u64 = 15 * 1024 * 1024;
+    let cache_dir = remote_cache_dir(&store, sender.as_deref());
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut out = Vec::new();
+    for url in urls {
+        // http(s) のみ許可（javascript:/file: などを弾く）。
+        let lower = url.trim().to_lowercase();
+        if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+            continue;
+        }
+
+        // キャッシュ命中ならネットワークへ行かずに即返す（＝トラッキング ping を出さない）。
+        let cache_file = cache_dir
+            .as_ref()
+            .map(|d| d.join(simple_checksum(url.as_bytes())));
+        if let Some(cf) = cache_file.as_ref() {
+            if let Ok(jpeg) = std::fs::read(cf) {
+                out.push(RemoteImage {
+                    url,
+                    data_url: media::jpeg_bytes_to_data_url(&jpeg),
+                });
+                continue;
+            }
+        }
+
+        let Ok(resp) = client.get(url.as_str()).send().await else {
+            continue;
+        };
+        if !resp.status().is_success() {
+            continue;
+        }
+        // Content-Length があれば先に上限チェック（無駄なダウンロードを避ける）。
+        if resp.content_length().is_some_and(|len| len > MAX_BYTES) {
+            continue;
+        }
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.split(';').next().unwrap_or(s).trim().to_string());
+        let Ok(bytes) = resp.bytes().await else {
+            continue;
+        };
+        if bytes.len() as u64 > MAX_BYTES {
+            continue;
+        }
+
+        // URL パスからファイル名（拡張子）を拾う（media の形式判定の補助）。
+        let filename = url
+            .split(['?', '#'])
+            .next()
+            .unwrap_or(&url)
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .to_string();
+
+        // 画像でなければ飛ばす。画像なら再エンコードして JPEG バイト列にする（＝サニタイズ）。
+        if !media::is_image(content_type.as_deref(), &filename) {
+            continue;
+        }
+        let jpeg = tauri::async_runtime::spawn_blocking(move || {
+            media::to_web_jpeg_bytes(
+                bytes.as_ref(),
+                content_type.as_deref(),
+                &filename,
+                media::VIEW_MAX,
+            )
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        let Ok(jpeg) = jpeg else {
+            continue;
+        };
+
+        // 許可済み差出人ならキャッシュに保存（best-effort。失敗しても表示は続行）。
+        if let Some(cf) = cache_file.as_ref() {
+            if let Some(parent) = cf.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(cf, &jpeg);
+        }
+        out.push(RemoteImage {
+            url,
+            data_url: media::jpeg_bytes_to_data_url(&jpeg),
+        });
+    }
+    Ok(out)
+}
+
+/// 差出人アドレスの外部画像を常に許可するか（住所録の信頼設定も見る。docs/MAIL_SECURITY.md §1）。
+#[tauri::command]
+pub fn sender_remote_allowed(store: State<Store>, address: String) -> Result<bool, String> {
+    store
+        .remote_images_allowed_for(&address)
+        .map_err(|e| e.to_string())
+}
+
+/// 差出人アドレスの外部画像許可（常に許可/解除）を保存する。
+/// 解除時は、その差出人のキャッシュ画像を丸ごと削除する（もう表示しないため手元にも残さない）。
+#[tauri::command]
+pub fn sender_set_remote_policy(
+    store: State<Store>,
+    address: String,
+    allow: bool,
+) -> Result<(), String> {
+    store
+        .set_remote_images_allowed_for(&address, allow)
+        .map_err(|e| e.to_string())?;
+    if !allow {
+        let addr = address.trim().to_lowercase();
+        if !addr.is_empty() {
+            let dir = store
+                .data_dir()
+                .join("remote_images")
+                .join(simple_checksum(addr.as_bytes()));
+            let _ = std::fs::remove_dir_all(&dir);
         }
     }
     Ok(())

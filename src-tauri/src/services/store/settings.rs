@@ -14,6 +14,9 @@ pub const KEY_SPAM_THRESHOLD_HIGH: &str = "spam.threshold_high";
 /// ゴミ箱（連絡先・組織の論理削除）の保持日数。0 で即時完全削除、上限は緩め。
 pub const KEY_TRASH_RETENTION_DAYS: &str = "trash.retention_days";
 pub const DEFAULT_TRASH_RETENTION_DAYS: i64 = 7;
+/// 差出人ごとの外部画像許可（このアドレスは常に許可）の設定キー接頭辞。
+/// キーは `remote_images.sender.<小文字メール>`（docs/MAIL_SECURITY.md §1）。
+const KEY_REMOTE_IMAGES_SENDER_PREFIX: &str = "remote_images.sender.";
 
 impl Store {
     /// 汎用設定の取得（未設定なら None）。
@@ -80,6 +83,42 @@ impl Store {
         self.set_setting(KEY_SPAM_THRESHOLD_LOW, &s.threshold_low.to_string())?;
         self.set_setting(KEY_SPAM_THRESHOLD_HIGH, &s.threshold_high.to_string())?;
         Ok(())
+    }
+
+    /// 差出人アドレスの外部画像を常に許可するか。
+    /// 明示設定（KV）を最優先し、無ければ住所録の `allow_remote_images`（信頼済み連絡先）を見る。
+    pub fn remote_images_allowed_for(&self, email: &str) -> rusqlite::Result<bool> {
+        let addr = email.trim().to_lowercase();
+        if addr.is_empty() {
+            return Ok(false);
+        }
+        // 1) 明示設定（この差出人を常に許可/解除）。
+        let key = format!("{KEY_REMOTE_IMAGES_SENDER_PREFIX}{addr}");
+        if let Some(v) = self.get_setting(&key)? {
+            return Ok(v == "1" || v == "true");
+        }
+        // 2) 住所録で信頼済み（allow_remote_images=1）の連絡先なら許可。
+        let conn = self.conn.lock().unwrap();
+        let allowed: bool = conn
+            .query_row(
+                "SELECT 1 FROM contacts \
+                 WHERE lower(email) = ?1 AND allow_remote_images = 1 LIMIT 1",
+                params![addr],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        Ok(allowed)
+    }
+
+    /// 差出人アドレスの外部画像許可（常に許可/解除）を保存する。
+    pub fn set_remote_images_allowed_for(&self, email: &str, allow: bool) -> rusqlite::Result<()> {
+        let addr = email.trim().to_lowercase();
+        if addr.is_empty() {
+            return Ok(());
+        }
+        let key = format!("{KEY_REMOTE_IMAGES_SENDER_PREFIX}{addr}");
+        self.set_setting(&key, if allow { "1" } else { "0" })
     }
 }
 

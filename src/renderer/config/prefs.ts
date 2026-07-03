@@ -24,6 +24,24 @@ export function setInlineImages(value: boolean): void {
 }
 
 /**
+ * リモート（外部）画像の既定表示モード（docs/MAIL_SECURITY.md §1）。
+ * 'hidden'=ブロック（プレースホルダ）/ 'thumb'=サムネイル表示 / 'full'=完全表示。
+ * 既定は 'hidden'（トラッキング防止・プライバシー優先）。各メールで一時的に上書きできる。
+ */
+export type RemoteImageMode = 'hidden' | 'thumb' | 'full';
+const REMOTE_IMAGE_MODE_KEY = 'rondine.remoteImageMode';
+
+export function getRemoteImageMode(): RemoteImageMode {
+  const v = localStorage.getItem(REMOTE_IMAGE_MODE_KEY);
+  return v === 'thumb' || v === 'full' ? v : 'hidden';
+}
+
+export function setRemoteImageMode(mode: RemoteImageMode): void {
+  localStorage.setItem(REMOTE_IMAGE_MODE_KEY, mode);
+  window.dispatchEvent(new Event(PREFS_EVENT));
+}
+
+/**
  * 送信時の「つばめが飛ぶ」演出（Fly）を使うか。既定: オン（docs/FLY_SEND.md）。
  * オフ時は送信ボタンを通常の「送信」ボタンにする。
  */

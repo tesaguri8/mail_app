@@ -9,8 +9,11 @@ import { APP } from '../config/appIdentity';
 import {
   getFlyAnimation,
   getInlineImages,
+  getRemoteImageMode,
   setFlyAnimation,
   setInlineImages,
+  setRemoteImageMode,
+  type RemoteImageMode,
   getPhoneRegion,
   setPhoneRegion,
   getPhoneStyle,
@@ -168,6 +171,7 @@ function Toggle({
 function DisplaySettings() {
   const { t, i18n } = useTranslation();
   const [inline, setInline] = useState(getInlineImages());
+  const [remoteImgMode, setRemoteImgMode] = useState<RemoteImageMode>(getRemoteImageMode());
   const [fly, setFly] = useState(getFlyAnimation());
   const [region, setRegion] = useState(getPhoneRegion());
   const [style, setStyle] = useState(getPhoneStyle());
@@ -261,6 +265,32 @@ function DisplaySettings() {
         title={t('settings.inlineImages')}
         hint={t('settings.inlineImagesHint')}
       />
+
+      {/* 外部（リモート）画像の既定表示モード。プライバシー既定は「非表示」。メールごとに一時変更可。 */}
+      <label className="block">
+        <span className="block text-sm text-white/85">{t('settings.remoteImages')}</span>
+        <span className="mt-0.5 block text-xs text-white/45">{t('settings.remoteImagesHint')}</span>
+        <select
+          value={remoteImgMode}
+          onChange={(e) => {
+            const m = e.target.value as RemoteImageMode;
+            setRemoteImgMode(m);
+            setRemoteImageMode(m);
+          }}
+          className="mt-2 w-56 rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
+        >
+          <option value="hidden" className="text-black">
+            {t('settings.remoteHidden')}
+          </option>
+          <option value="thumb" className="text-black">
+            {t('settings.remoteThumb')}
+          </option>
+          <option value="full" className="text-black">
+            {t('settings.remoteFull')}
+          </option>
+        </select>
+      </label>
+
       <Toggle
         checked={fly}
         onChange={() => {

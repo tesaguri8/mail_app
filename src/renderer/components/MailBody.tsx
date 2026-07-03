@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { open, save } from '@tauri-apps/plugin-dialog';
+import { ask, open, save } from '@tauri-apps/plugin-dialog';
 import { downloadDir, join } from '@tauri-apps/api/path';
 import {
   BookOpen,
@@ -8,6 +8,7 @@ import {
   Download,
   Forward,
   Image as ImageIcon,
+  ImageOff,
   LeafyGreen,
   Paperclip,
   Plus,
@@ -30,9 +31,11 @@ import {
   mailAttachments,
   mailRefetch,
 } from '../services/mail';
-import { getInlineImages, PREFS_EVENT } from '../config/prefs';
+import { getInlineImages, getRemoteImageMode, PREFS_EVENT } from '../config/prefs';
 import { greenDomainAdd, greenDomainWarn } from '../services/green';
-import { HtmlText } from './HtmlText';
+import { mailLoadRemote, senderRemoteAllowed, senderSetRemotePolicy } from '../services/mail';
+import { HtmlText, remoteImageUrls } from './HtmlText';
+import { ContextMenu } from './ContextMenu';
 
 function formatDate(d: string | null): string {
   if (!d) return '';
@@ -186,6 +189,22 @@ export function MailBody({
   const [busyId, setBusyId] = useState<number | null>(null);
   // 本文埋め込み画像（content_id → data URL）
   const [inlineImages, setInlineImages] = useState<Record<string, string>>({});
+  // 許可して取得したリモート画像（正規化 URL → サニタイズ済み data URL）。既定は空＝ブロック。
+  const [remoteImages, setRemoteImages] = useState<Record<string, string>>({});
+  // この差出人が「常に許可」済みか（許可解除ボタンの出し分け・自動表示の判定に使う）。
+  const [senderAllowed, setSenderAllowed] = useState(false);
+  // 外部画像を表示するか（アイコンで on/off）。既定はグローバル設定（非表示なら false）。
+  const [remoteShown, setRemoteShown] = useState(() => getRemoteImageMode() !== 'hidden');
+  // 画像の初期サイズを完全表示にするか（グローバル既定が「完全」のとき）。各画像はクリックで切替。
+  const [remoteExpandDefault, setRemoteExpandDefault] = useState(
+    () => getRemoteImageMode() === 'full',
+  );
+  // このメールで取得を一度試みたか（空結果でも再取得しない。メール切替でリセット）。
+  // state ではなく ref にする理由: 依存配列に入れると setState で effect が自己再実行し、
+  // クリーンアップが in-flight の取得を中断して「読み込み中」で固まるため（StrictMode 二重実行対策込み）。
+  const remoteAttemptedRef = useRef(false);
+  // 外部画像アイコンの右クリックメニュー位置（許可の付与/解除・表示切替）。
+  const [remoteMenu, setRemoteMenu] = useState<{ x: number; y: number } | null>(null);
   // 添付画像のアプリ内プレビュー（attachment id → data URL）
   const [previews, setPreviews] = useState<Record<number, string>>({});
   const [inlineEnabled, setInlineEnabled] = useState(getInlineImages());
@@ -195,6 +214,19 @@ export function MailBody({
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [savingAll, setSavingAll] = useState(false);
   const [attachmentsLoaded, setAttachmentsLoaded] = useState(false);
+
+  // メール切替をレンダー中に検知してリモート画像の状態を即リセットする。effect だと 1 コミット
+  // 遅れ、前のメールが「表示中」だと新メールの外部画像を誤って取得＝トラッキング漏れになるため、
+  // 取得を判断する remoteShown 等はレンダー中（effect 前）に確定させる。
+  const [remoteMailId, setRemoteMailId] = useState(detail.id);
+  if (remoteMailId !== detail.id) {
+    setRemoteMailId(detail.id);
+    setRemoteImages({});
+    remoteAttemptedRef.current = false;
+    setSenderAllowed(false);
+    setRemoteShown(getRemoteImageMode() !== 'hidden');
+    setRemoteExpandDefault(getRemoteImageMode() === 'full');
+  }
 
   // 設定（インライン画像の自動取得）の変更に追従する。
   useEffect(() => {
@@ -251,6 +283,95 @@ export function MailBody({
       active = false;
     };
   }, [attachments, hasHtmlBody, inlineEnabled]);
+
+  // 本文（HTML）に含まれる外部画像 URL。モード切替と一括取得に使う。
+  const remoteUrls = useMemo(() => {
+    const h = d.body_html?.trim() ?? '';
+    return h ? remoteImageUrls(h) : [];
+  }, [d.body_html]);
+
+  // 「この差出人を常に許可」/ 解除。許可時はこのメールも表示 on にする。
+  const setRemoteAllow = async (allow: boolean) => {
+    const addr = (d.from_address ?? '').trim();
+    if (!addr) return;
+    try {
+      await senderSetRemotePolicy(addr, allow);
+      setSenderAllowed(allow);
+      if (allow) setRemoteShown(true);
+    } catch (e) {
+      setNote(String(e));
+    }
+  };
+
+  // アイコン左クリック: 表示中なら隠す。未表示なら、未許可の差出人はダイアログで許可方法を選ぶ。
+  const onRemoteIconClick = async () => {
+    if (remoteShown) {
+      setRemoteShown(false);
+      return;
+    }
+    // 許可済み（または差出人不明）は確認なしで表示する。
+    if (senderAllowed || !(d.from_address ?? '').trim()) {
+      setRemoteShown(true);
+      return;
+    }
+    // 未許可の差出人: 「常に許可」か「この1通だけ」かをダイアログで選ぶ。
+    let always = false;
+    try {
+      always = await ask(t('mailbox.remoteAllowAsk'), {
+        title: t('mailbox.remoteAllowTitle'),
+        kind: 'info',
+        okLabel: t('mailbox.remoteAllowSender'),
+        cancelLabel: t('mailbox.remoteShowOnce'),
+      });
+    } catch {
+      /* 非 Tauri プレビュー等ではダイアログを出せないので、この1通だけ表示する */
+    }
+    if (always) await setRemoteAllow(true);
+    else setRemoteShown(true);
+  };
+
+  // メールを開いたとき: 差出人の許可状態を確認し、許可済みなら（既定が非表示でも）表示 on にする。
+  useEffect(() => {
+    let active = true;
+    const addr = (d.from_address ?? '').trim();
+    if (remoteUrls.length === 0 || !addr) return;
+    senderRemoteAllowed(addr)
+      .then((ok) => {
+        if (!active) return;
+        setSenderAllowed(ok);
+        if (ok) setRemoteShown(true);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [remoteUrls, d.from_address]);
+
+  // 表示 on で未取得なら 1 度だけ取得する（on/off・メール切替に追従）。
+  // 「試行済み」は ref（remoteAttemptedRef）で管理し、依存には入れない。試行フラグは取得完了後
+  // （finally）に立てる → StrictMode の二重 mount でも取得が確実に 1 度は完走する。ignore で
+  // 古い応答（メール切替後など）を破棄。setState は依存に無いので自己再実行しない＝固まらない。
+  useEffect(() => {
+    if (!remoteShown || remoteUrls.length === 0 || remoteAttemptedRef.current) return;
+    let ignore = false;
+    setNote('');
+    // 差出人を渡す（バックエンドが許可済みなら data_dir にキャッシュする）。
+    const sender = (d.from_address ?? '').trim() || null;
+    mailLoadRemote(remoteUrls, sender)
+      .then((imgs) => {
+        if (ignore) return;
+        const map: Record<string, string> = {};
+        for (const it of imgs) map[it.url] = it.data_url;
+        setRemoteImages(map);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        remoteAttemptedRef.current = true;
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [remoteShown, remoteUrls, d.from_address]);
 
   // 添付画像をアプリ内でプレビュー表示（トグル）。HEIC も JPEG 化して表示。
   const togglePreview = async (a: AttachmentSummary) => {
@@ -448,6 +569,25 @@ export function MailBody({
                 <Tag size={16} />
               </button>
             )}
+            {/* 外部画像の表示 on/off（このメールに外部画像があるときだけ表示）。
+                左クリック=表示切替（未許可なら許可ダイアログ）／右クリック=許可メニュー。 */}
+            {remoteUrls.length > 0 && (
+              <button
+                onClick={onRemoteIconClick}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setRemoteMenu({ x: e.clientX, y: e.clientY });
+                }}
+                title={remoteShown ? t('mailbox.remoteHide') : t('mailbox.remoteShow')}
+                aria-label={remoteShown ? t('mailbox.remoteHide') : t('mailbox.remoteShow')}
+                aria-pressed={remoteShown}
+                className={`flex h-8 w-8 items-center justify-center rounded-md ${
+                  remoteShown ? 'text-sky-400' : 'text-white/55 hover:text-white/80'
+                }`}
+              >
+                {remoteShown ? <ImageIcon size={16} /> : <ImageOff size={16} />}
+              </button>
+            )}
             {/* グリーン認定/解除（差出人ドメイン単位） */}
             {senderDomain && (
               <button
@@ -564,7 +704,12 @@ export function MailBody({
           </div>
         )}
         {hasHtml ? (
-          <HtmlText html={html} inlineImages={inlineImages} />
+          <HtmlText
+            html={html}
+            inlineImages={inlineImages}
+            remoteImages={remoteShown ? remoteImages : {}}
+            remoteDefaultExpanded={remoteExpandDefault}
+          />
         ) : body.trim() ? (
           <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-white/90">
             <LinkifyEmails text={body} onAdd={onAddContact} />
@@ -699,6 +844,37 @@ export function MailBody({
             {showQuotes ? t('mailbox.hideQuotes') : t('mailbox.showQuotes')}
           </button>
         </div>
+      )}
+
+      {/* 外部画像アイコンの右クリックメニュー: 差出人の許可の付与/解除・表示切替。 */}
+      {remoteMenu && (
+        <ContextMenu
+          x={remoteMenu.x}
+          y={remoteMenu.y}
+          items={[
+            senderAllowed
+              ? {
+                  key: 'revoke',
+                  label: t('mailbox.remoteRevoke'),
+                  Icon: ImageOff,
+                  danger: true,
+                  onClick: () => setRemoteAllow(false),
+                }
+              : {
+                  key: 'allow',
+                  label: t('mailbox.remoteAllowSender'),
+                  Icon: ImageIcon,
+                  onClick: () => setRemoteAllow(true),
+                },
+            {
+              key: 'toggle',
+              label: remoteShown ? t('mailbox.remoteHide') : t('mailbox.remoteShow'),
+              Icon: remoteShown ? ImageOff : ImageIcon,
+              onClick: () => setRemoteShown((v) => !v),
+            },
+          ]}
+          onClose={() => setRemoteMenu(null)}
+        />
       )}
     </div>
   );

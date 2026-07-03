@@ -346,6 +346,16 @@ pub struct ImportReport {
     pub skipped: i32,
 }
 
+/// 明示許可して取得したリモート画像（サニタイズ済み）。docs/MAIL_SECURITY.md §1.1。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct RemoteImage {
+    /// 元の（正規化済み）画像 URL。フロントの src マッチに使う。
+    pub url: String,
+    /// 表示用に再エンコード（＝デコーダ攻撃・EXIF も無害化）した data URL（image/jpeg）。
+    pub data_url: String,
+}
+
 /// 重複候補のグループ（整理 UI 用）。record linkage で束ねた連結成分。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

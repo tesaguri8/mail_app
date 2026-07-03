@@ -1,5 +1,6 @@
 // 背景写真プール（docs/UI_UX_DESIGN.md 背景写真システム）。
 // アプリ同梱のサンプルを Vite の glob で読み込む。将来はユーザー取り込み画像もここへ合流。
+// 同梱サンプルの出所・ライセンスは docs/CREDITS.md を参照（現状は仮素材）。
 const modules = import.meta.glob('../assets/backgrounds/*.{jpg,jpeg,png,svg,webp}', {
   eager: true,
   query: '?url',

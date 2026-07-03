@@ -65,11 +65,11 @@ export function Compose({
 }) {
   const { t } = useTranslation();
 
-  // 元メールから初期値（宛先・件名・In-Reply-To、および署名より下に置く「引用/転送」部分）を
-  // 組み立てる。署名はこの `after`（引用ブロック）の直前へ差し込む。
+  // 元メールから初期値（宛先・件名・In-Reply-To、および送信時に本文末へ足す「引用/転送」部分）を
+  // 組み立てる。引用は編集欄には入れず、送信/下書き保存の直前に本文へ連結する（書く欄を広く保つ）。
   const init = useMemo(() => {
     if (target.mode === 'new') {
-      return { to: '', cc: '', subject: '', after: '', inReplyTo: null as string | null };
+      return { to: '', cc: '', subject: '', quoted: '', inReplyTo: null as string | null };
     }
     const s = target.source;
     const body = s.body_plain ?? s.clean_body ?? '';
@@ -84,7 +84,7 @@ export function Compose({
         `${t('mailbox.to')}: ${s.to_addresses ?? ''}\n` +
         `${t('compose.subject')}: ${s.subject ?? ''}\n\n` +
         body;
-      return { to: '', cc: '', subject: withPrefix(s.subject, 'Fwd'), after: fwd, inReplyTo: null };
+      return { to: '', cc: '', subject: withPrefix(s.subject, 'Fwd'), quoted: fwd, inReplyTo: null };
     }
     // reply / replyAll
     const cc = target.mode === 'replyAll' ? (s.to_addresses ?? '') : '';
@@ -92,7 +92,7 @@ export function Compose({
       to: s.from_address ?? '',
       cc,
       subject: withPrefix(s.subject, 'Re'),
-      after: `\n\n${attribution}\n${quote(body)}`,
+      quoted: `\n\n${attribution}\n${quote(body)}`,
       inReplyTo: s.message_id,
     };
   }, [target, t]);
@@ -105,9 +105,15 @@ export function Compose({
   const [bcc, setBcc] = useState('');
   const [showCc, setShowCc] = useState(Boolean(init.cc));
   const [subject, setSubject] = useState(init.subject);
-  const [body, setBody] = useState(init.after);
+  const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
+
+  // 送信時に本文末へ足す引用/転送ブロック（編集欄には入れない）。
+  const quotedRef = useRef(init.quoted);
+  quotedRef.current = init.quoted;
+  // 送信/下書きに使う「実際に送る本文」＝編集した本文（＋署名）＋引用。
+  const composedBody = useCallback(() => body + quotedRef.current, [body]);
 
   // 署名（差出人ごとに使い回せる本文）。一覧を読み込み、ドロップダウンで切り替える。
   // 既定はアカウントの signature_id。切替時は本文中の署名ブロックだけを置換する。
@@ -115,8 +121,6 @@ export function Compose({
   const [sigId, setSigId] = useState<number | null>(null);
   // 現在 body に埋め込んでいる署名ブロック（"\n\n<署名>"。未挿入は ''）。切替時の除去に使う。
   const sigBlockRef = useRef('');
-  const afterRef = useRef(init.after);
-  afterRef.current = init.after;
 
   useEffect(() => {
     signatureList()
@@ -124,7 +128,8 @@ export function Compose({
       .catch(() => undefined);
   }, []);
 
-  // 署名を選び直す（null=なし）。旧ブロックを剥がし、新ブロックを引用の直前へ差し込む。
+  // 署名を選び直す（null=なし）。旧ブロックを剥がし、新ブロックを本文末へ足す
+  // （引用は送信時に付くので、署名は書いた本文の直後＝末尾でよい）。
   const applySignature = useCallback(
     (id: number | null) => {
       const sig = signatures.find((s) => s.id === id) ?? null;
@@ -132,12 +137,7 @@ export function Compose({
       const old = sigBlockRef.current;
       setBody((prev) => {
         const stripped = old && prev.includes(old) ? prev.replace(old, '') : prev;
-        if (!block) return stripped;
-        const after = afterRef.current;
-        // 引用/転送部分の直前へ。無い（新規や本文編集済み）なら末尾へ足す。
-        return after && stripped.includes(after)
-          ? stripped.replace(after, block + after)
-          : stripped + block;
+        return stripped + block;
       });
       sigBlockRef.current = block;
       setSigId(id);
@@ -178,14 +178,14 @@ export function Compose({
         to: splitAddresses(to),
         cc: splitAddresses(cc),
         subject,
-        body,
+        body: composedBody(),
       });
       draftIdRef.current = id;
       setSaved(true);
     } catch {
       // 自動保存の失敗は致命的でないので黙って無視（次の入力で再試行）。
     }
-  }, [accountId, to, cc, subject, body]);
+  }, [accountId, to, cc, subject, composedBody]);
 
   // 入力のたびにデバウンス（1s）して自動保存。dirty になって初めて走る。
   useEffect(() => {
@@ -230,7 +230,7 @@ export function Compose({
       cc: splitAddresses(cc),
       bcc: splitAddresses(bcc),
       subject,
-      body,
+      body: composedBody(),
       in_reply_to: init.inReplyTo,
     });
     try {
@@ -276,7 +276,7 @@ export function Compose({
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-4">
           {/* 差出人アカウント */}
           <div className="flex items-center gap-2">
             <label className="w-12 shrink-0 text-xs text-white/45">{t('compose.from')}</label>
@@ -382,9 +382,9 @@ export function Compose({
             </div>
           )}
 
-          {/* 本文 */}
+          {/* 本文（引用は編集欄に入れず、送信時に付ける）。ペインの残り高さいっぱいに広げる。 */}
           <textarea
-            className="h-64 w-full resize-none rounded-md bg-white/10 px-3 py-2 text-sm leading-relaxed outline-none placeholder:text-white/30 focus:bg-white/15"
+            className="min-h-[10rem] w-full flex-1 resize-none rounded-md bg-white/10 px-3 py-2 text-sm leading-relaxed outline-none placeholder:text-white/30 focus:bg-white/15"
             value={body}
             onChange={(e) => {
               setBody(e.target.value);
@@ -392,6 +392,9 @@ export function Compose({
             }}
             placeholder={t('compose.bodyPlaceholder')}
           />
+          {quotedRef.current && (
+            <p className="shrink-0 text-[11px] text-white/35">{t('compose.quoteAppendNote')}</p>
+          )}
         </div>
 
         <div className="flex items-center gap-3 border-t border-white/10 px-4 py-2.5">

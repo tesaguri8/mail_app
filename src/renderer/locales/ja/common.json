@@ -104,7 +104,8 @@
     "signature": "署名",
     "noSignature": "（署名なし）",
     "keepDraftConfirm": "書きかけのメールを下書きに残しますか？\n\n［OK］下書きに残す ／ ［キャンセル］破棄",
-    "draftSaved": "下書きを保存しました"
+    "draftSaved": "下書きを保存しました",
+    "quoteAppendNote": "送信時に、右の元メールを引用として本文の下に付けます。"
   },
   "ctx": {
     "markRead": "既読にする",

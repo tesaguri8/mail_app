@@ -25,11 +25,31 @@
   "filter": {
     "unread": "未読",
     "star": "スター",
+    "green": "グリーンのみ",
     "vip": "お気に入り連絡先",
     "known": "知り合い",
     "bookmark": "ブックマーク",
     "attachment": "添付あり",
     "flag": "要再確認"
+  },
+  "green": {
+    "tab": "グリーンドメイン",
+    "badge": "グリーン（認めた差出人）",
+    "certify": "「{{domain}}」をグリーンに認定",
+    "uncertify": "「{{domain}}」のグリーンを解除",
+    "title": "グリーンドメイン",
+    "hint": "自分が認めた安全な差出人ドメイン。住所録のドメインは自動でグリーン（フリーメールは除く）。メールを見て信頼できる差出人のドメインを認定すると、一覧で見分けやすくなります。",
+    "addPlaceholder": "ドメインを追加（例: example.com。メールを貼っても可）",
+    "add": "追加",
+    "greenSection": "グリーン（{{count}} 件）",
+    "greenEmpty": "グリーンのドメインはまだありません。",
+    "fromContacts": "住所録 {{count}} 件",
+    "manual": "手動",
+    "exclude": "除外",
+    "warnSection": "除外（警告）（{{count}} 件）",
+    "warnHint": "意図的に外したドメイン。住所録にあっても自動グリーンにしません（再登録を防止）。",
+    "makeGreen": "グリーンにする",
+    "restore": "元に戻す"
   },
   "search": {
     "placeholder": "メールを検索",

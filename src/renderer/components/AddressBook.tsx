@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Building2, Users } from 'lucide-react';
+import { Building2, LeafyGreen, Users } from 'lucide-react';
 import { ContactsView, type ContactPrefill } from './ContactsView';
 import { OrganizationsView } from './OrganizationsView';
+import { GreenDomainsView } from './GreenDomainsView';
 
 /**
  * 住所録。「連絡先」と「組織」のタブを束ねる。
@@ -16,7 +17,7 @@ export function AddressBook({
   onPrefillConsumed?: () => void;
 }) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<'contacts' | 'orgs'>('contacts');
+  const [tab, setTab] = useState<'contacts' | 'orgs' | 'green'>('contacts');
   // 組織タブの所属クリックから連絡先タブで開く連絡先 ID。
   const [contactOpenId, setContactOpenId] = useState<number | null>(null);
 
@@ -25,7 +26,7 @@ export function AddressBook({
     if (prefill) setTab('contacts');
   }, [prefill]);
 
-  const tabBtn = (key: 'contacts' | 'orgs', icon: React.ReactNode, label: string) => (
+  const tabBtn = (key: 'contacts' | 'orgs' | 'green', icon: React.ReactNode, label: string) => (
     <button
       onClick={() => setTab(key)}
       className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium ${
@@ -42,16 +43,18 @@ export function AddressBook({
       <div className="flex items-center gap-1.5 border-b border-white/10 px-3 py-1.5">
         {tabBtn('contacts', <Users size={15} />, t('org.tabContacts'))}
         {tabBtn('orgs', <Building2 size={15} />, t('org.tab'))}
+        {tabBtn('green', <LeafyGreen size={15} />, t('green.tab'))}
       </div>
       <div className="min-h-0 flex-1">
-        {tab === 'contacts' ? (
+        {tab === 'contacts' && (
           <ContactsView
             prefill={prefill}
             onPrefillConsumed={onPrefillConsumed}
             openId={contactOpenId}
             onOpenIdConsumed={() => setContactOpenId(null)}
           />
-        ) : (
+        )}
+        {tab === 'orgs' && (
           <OrganizationsView
             onOpenContact={(id) => {
               setContactOpenId(id);
@@ -59,6 +62,7 @@ export function AddressBook({
             }}
           />
         )}
+        {tab === 'green' && <GreenDomainsView />}
       </div>
     </div>
   );

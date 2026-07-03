@@ -4,6 +4,7 @@ import {
   Columns2,
   Flag,
   Gem,
+  LeafyGreen,
   Mail,
   MailOpen,
   Paperclip,
@@ -63,6 +64,7 @@ export const DEFAULT_SIDEBAR_WIDTH = 340;
 const FILTERS: { key: string; Icon: LucideIcon }[] = [
   { key: 'unread', Icon: Mail },
   { key: 'star', Icon: Star },
+  { key: 'green', Icon: LeafyGreen },
   { key: 'vip', Icon: Gem },
   { key: 'known', Icon: UserRound },
   { key: 'attachment', Icon: Paperclip },
@@ -73,6 +75,7 @@ function matchesFilters(m: MailSummary, filters: Set<string>): boolean {
   if (filters.has('unread') && m.is_read) return false;
   if (filters.has('attachment') && !m.has_real_attachments) return false;
   if (filters.has('star') && !m.is_starred) return false;
+  if (filters.has('green') && !m.is_green) return false; // 差出人がグリーン（認定ドメイン/本人）
   if (filters.has('vip') && !m.is_vip) return false; // 差出人が住所録のお気に入り(Gem)
   if (filters.has('known') && !m.is_known) return false; // 差出人が住所録に登録済み
   // flag（要再確認）はマーク手段が入るまでフィルタしない（空表示で混乱させない）
@@ -813,6 +816,13 @@ export function MailboxView({
                       )}
                     </span>
                     <span className="flex shrink-0 items-center gap-1 text-[10px] text-white/40">
+                      {m.is_green && (
+                        <LeafyGreen
+                          size={12}
+                          className="text-emerald-400"
+                          aria-label={t('green.badge')}
+                        />
+                      )}
                       {m.is_starred && <Star size={12} className="fill-amber-300 text-amber-300" />}
                       {formatDate(m.date)}
                     </span>
@@ -895,6 +905,7 @@ export function MailboxView({
       onReply={(mode) => setCompose({ mode, source: opened })}
       onMarkSpam={markSpamOpened}
       onAddContact={onAddContact}
+      onGreenChange={loadMails}
     />
   ) : (
     <div className="flex h-full items-center justify-center text-sm text-white/40">

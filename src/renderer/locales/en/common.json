@@ -25,11 +25,31 @@
   "filter": {
     "unread": "Unread",
     "star": "Starred",
+    "green": "Green only",
     "vip": "Favorite contact",
     "known": "Known sender",
     "bookmark": "Bookmarked",
     "attachment": "Has attachment",
     "flag": "Follow-up"
+  },
+  "green": {
+    "tab": "Green domains",
+    "badge": "Green (approved sender)",
+    "certify": "Mark \"{{domain}}\" as green",
+    "uncertify": "Remove green from \"{{domain}}\"",
+    "title": "Green domains",
+    "hint": "Sender domains you've approved as safe. Address-book domains are auto-green (freemail excluded). Approve a trusted sender's domain from an email to make it easy to spot in the list.",
+    "addPlaceholder": "Add a domain (e.g. example.com; pasting an email works too)",
+    "add": "Add",
+    "greenSection": "Green ({{count}})",
+    "greenEmpty": "No green domains yet.",
+    "fromContacts": "{{count}} in contacts",
+    "manual": "Manual",
+    "exclude": "Exclude",
+    "warnSection": "Excluded (warning) ({{count}})",
+    "warnHint": "Domains you intentionally excluded. They won't be auto-greened even if present in the address book (prevents re-adding).",
+    "makeGreen": "Make green",
+    "restore": "Reset"
   },
   "search": {
     "placeholder": "Search mail",

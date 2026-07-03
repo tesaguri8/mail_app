@@ -8,6 +8,7 @@ import {
   Download,
   Forward,
   Image as ImageIcon,
+  LeafyGreen,
   Paperclip,
   Plus,
   RefreshCw,
@@ -30,6 +31,7 @@ import {
   mailRefetch,
 } from '../services/mail';
 import { getInlineImages, PREFS_EVENT } from '../config/prefs';
+import { greenDomainAdd, greenDomainWarn } from '../services/green';
 import { HtmlText } from './HtmlText';
 
 function formatDate(d: string | null): string {
@@ -145,6 +147,7 @@ export function MailBody({
   onReply,
   onMarkSpam,
   onAddContact,
+  onGreenChange,
 }: {
   detail: MailDetail;
   /** このメールに付いているタグ（ヘッダの宛先の下に表示）。 */
@@ -162,6 +165,8 @@ export function MailBody({
   onMarkSpam?: () => void;
   /** ヘッダ/本文のメールアドレスから住所録へ追加（名前・メールを渡す）。 */
   onAddContact?: (name: string | null, email: string) => void;
+  /** グリーン認定/解除で一覧のバッジを更新するための通知。 */
+  onGreenChange?: () => void;
 }) {
   const { t } = useTranslation();
   const [showQuotes, setShowQuotes] = useState(false);
@@ -169,8 +174,14 @@ export function MailBody({
   // 全文再取得（要約保存の解除）の結果でこのメールだけ本文を差し替える。
   const [refreshed, setRefreshed] = useState<MailDetail | null>(null);
   const [refetching, setRefetching] = useState(false);
+  // グリーン認定/解除の即時反映（メール切替でリセット）。null＝props の is_green を使う。
+  const [greenOverride, setGreenOverride] = useState<boolean | null>(null);
   // 表示に使う本文（再取得済みがあればそれ、無ければ props の detail）。
   const d = refreshed ?? detail;
+  const isGreen = greenOverride ?? d.is_green;
+  const senderDomain = (d.from_address ?? '').includes('@')
+    ? (d.from_address ?? '').split('@').pop()?.trim().toLowerCase() || ''
+    : '';
   const [attachments, setAttachments] = useState<AttachmentSummary[]>([]);
   const [busyId, setBusyId] = useState<number | null>(null);
   // 本文埋め込み画像（content_id → data URL）
@@ -202,6 +213,7 @@ export function MailBody({
     setSelected(new Set());
     setAttachmentsLoaded(false);
     setRefreshed(null);
+    setGreenOverride(null);
     if (detail.has_attachments) {
       mailAttachments(detail.id)
         .then((a) => {
@@ -362,6 +374,20 @@ export function MailBody({
     }
   };
 
+  // 差出人ドメインをグリーン認定/解除（一覧のバッジは onGreenChange で更新）。
+  const toggleGreen = async () => {
+    if (!senderDomain) return;
+    const next = !isGreen;
+    try {
+      if (next) await greenDomainAdd(senderDomain);
+      else await greenDomainWarn(senderDomain);
+      setGreenOverride(next);
+      onGreenChange?.();
+    } catch {
+      /* noop */
+    }
+  };
+
   const COMPOSE_ACTIONS = [
     { key: 'reply', Icon: Reply },
     { key: 'replyAll', Icon: ReplyAll },
@@ -422,6 +448,20 @@ export function MailBody({
                 <Tag size={16} />
               </button>
             )}
+            {/* グリーン認定/解除（差出人ドメイン単位） */}
+            {senderDomain && (
+              <button
+                onClick={toggleGreen}
+                title={isGreen ? t('green.uncertify', { domain: senderDomain }) : t('green.certify', { domain: senderDomain })}
+                aria-label={isGreen ? t('green.uncertify', { domain: senderDomain }) : t('green.certify', { domain: senderDomain })}
+                aria-pressed={isGreen}
+                className={`flex h-8 w-8 items-center justify-center rounded-md ${
+                  isGreen ? 'text-emerald-400' : 'text-white/55 hover:text-emerald-300'
+                }`}
+              >
+                <LeafyGreen size={16} />
+              </button>
+            )}
             {/* 迷惑としてマーク（学習＋隔離） */}
             {onMarkSpam && (
               <button
@@ -460,6 +500,13 @@ export function MailBody({
         <div className="mt-1 text-xs text-white/50">
           <div className="flex items-baseline justify-between gap-3">
             <span className="min-w-0 truncate">
+              {isGreen && (
+                <LeafyGreen
+                  size={12}
+                  className="mr-1 inline text-emerald-400 align-[-1px]"
+                  aria-label={t('green.badge')}
+                />
+              )}
               {t('mailbox.from')}:{' '}
               <AddressLine name={d.from_name} address={d.from_address} onAdd={onAddContact} />
             </span>

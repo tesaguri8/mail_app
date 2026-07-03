@@ -100,7 +100,13 @@ export function AccountsOverview({
                           : 'text-white/60 hover:bg-white/10 hover:text-white/90'
                       }`}
                     >
-                      <Icon size={14} />
+                      <span className="relative inline-flex">
+                        <Icon size={14} />
+                        {/* 未読アイコンには青ドットを付ける（メール画面と共通） */}
+                        {key === 'unread' && (
+                          <span className="absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full bg-sky-400 ring-1 ring-neutral-900/60" />
+                        )}
+                      </span>
                     </button>
                   );
                 })}

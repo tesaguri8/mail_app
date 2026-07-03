@@ -25,7 +25,7 @@ export function FolderIcons({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="flex items-center justify-center gap-1">
+    <div className="flex shrink-0 items-center gap-0.5">
       {STANDARD_FOLDERS.map((k) => {
         const Icon = FOLDER_ICON[k];
         const on = value === k;
@@ -36,13 +36,13 @@ export function FolderIcons({
             title={t(`mailbox.f_${k}`)}
             aria-label={t(`mailbox.f_${k}`)}
             aria-pressed={on}
-            className={`flex h-8 w-8 items-center justify-center rounded-md ${
+            className={`flex h-7 w-7 items-center justify-center rounded-md ${
               on
                 ? 'bg-sky-500/30 text-sky-200 ring-1 ring-sky-300/40'
                 : 'text-white/55 hover:text-white/80'
             }`}
           >
-            <Icon size={16} />
+            <Icon size={15} />
           </button>
         );
       })}

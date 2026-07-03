@@ -648,7 +648,7 @@ export function MailboxView({
 
   const listPane = (
     <div className="flex h-full min-h-0 flex-col">
-      {/* アカウント選択: 一覧の対象アカウントを決める（メール一覧なのでメールアドレスで選ぶ） */}
+      {/* アカウント選択＋フォルダ選択（アイコンボタン）を同じ行に置く */}
       <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-2 py-1.5">
         <select
           className="min-w-0 flex-1 rounded-md bg-white/10 px-2 py-1 text-xs outline-none"
@@ -667,9 +667,6 @@ export function MailboxView({
             </option>
           ))}
         </select>
-      </div>
-      {/* フォルダ選択: 受信箱/下書き/送信済/ごみ箱/迷惑メール をアイコンボタンだけで切替 */}
-      <div className="flex shrink-0 items-center justify-center gap-1 border-b border-white/10 px-2 py-1">
         <FolderIcons value={folder} onChange={setFolder} />
       </div>
       {/* 絞り込みツールバー: 一覧を絞る操作はリスト直上に置く（トグル/期間/タグ）。アイコンは中央寄せ */}

@@ -482,6 +482,7 @@
     "w_all": "All",
     "refetch": "Re-fetch full text",
     "bodyCompacted": "To save space, this message's body is stored in compact form (only the new, unquoted part). Use \"Re-fetch full text\" to get the full body from the server.",
-    "cc": "Cc"
+    "cc": "Cc",
+    "composeTo": "New message to {{email}}"
   }
 }

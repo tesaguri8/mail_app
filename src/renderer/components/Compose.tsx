@@ -13,9 +13,10 @@ import { RecipientInput } from './RecipientInput';
 import { FlySwallow, type FlySwallowHandle } from './FlySwallow';
 import swallowUrl from '../assets/swallow.png';
 
-/** 作成モード。返信/転送は元メール（source）を伴う。draft は保存済み下書きの再編集。 */
+/** 作成モード。返信/転送は元メール（source）を伴う。draft は保存済み下書きの再編集。
+ * new は任意で宛先(to)を初期設定できる（アドレスのクリックから「このアドレスへ新規」）。 */
 export type ComposeTarget =
-  | { mode: 'new' }
+  | { mode: 'new'; to?: string }
   | { mode: 'reply' | 'replyAll' | 'forward'; source: MailDetail }
   | { mode: 'draft'; draft: DraftContent };
 
@@ -98,7 +99,14 @@ export function Compose({
   // 組み立てる。引用は編集欄には入れず、送信/下書き保存の直前に本文へ連結する（書く欄を広く保つ）。
   const init = useMemo(() => {
     if (target.mode === 'new') {
-      return { to: '', cc: '', bcc: '', subject: '', quoted: '', inReplyTo: null as string | null };
+      return {
+        to: target.to ?? '',
+        cc: '',
+        bcc: '',
+        subject: '',
+        quoted: '',
+        inReplyTo: null as string | null,
+      };
     }
     if (target.mode === 'draft') {
       // 保存済み下書きの再編集。本文は保存時の全文（署名・引用込み）をそのまま編集する

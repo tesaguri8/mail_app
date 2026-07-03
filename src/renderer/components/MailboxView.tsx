@@ -996,6 +996,7 @@ export function MailboxView({
       onMarkSpam={markSpamOpened}
       onAddContact={onAddContact}
       onEditContact={onOpenContact}
+      onComposeTo={(email) => setCompose({ mode: 'new', to: `${email}, ` })}
       onGreenChange={loadMails}
     />
   ) : (

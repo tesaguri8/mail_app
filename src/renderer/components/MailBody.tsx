@@ -80,11 +80,14 @@ function EmailAdd({
   name,
   onAdd,
   onEdit,
+  onCompose,
 }: {
   email: string;
   name?: string | null;
   onAdd: (name: string | null, email: string) => void;
   onEdit?: (id: number) => void;
+  /** アドレスのクリックでこのアドレス宛の新規メール作成を開く。 */
+  onCompose?: (email: string) => void;
 }) {
   const { t } = useTranslation();
   const [matches, setMatches] = useState<ContactSummary[] | null>(null);
@@ -112,7 +115,18 @@ function EmailAdd({
 
   return (
     <span className="group/email inline-flex items-center gap-0.5 align-baseline">
-      <span>{email}</span>
+      {onCompose ? (
+        <button
+          type="button"
+          onClick={() => onCompose(email)}
+          title={t('mailbox.composeTo', { email })}
+          className="cursor-pointer rounded hover:text-sky-300 hover:underline focus:outline-none focus:text-sky-300"
+        >
+          {email}
+        </button>
+      ) : (
+        <span>{email}</span>
+      )}
       <button
         onClick={handle}
         title={title}
@@ -132,11 +146,13 @@ function AddressLine({
   address,
   onAdd,
   onEdit,
+  onCompose,
 }: {
   name: string | null;
   address: string | null;
   onAdd?: (name: string | null, email: string) => void;
   onEdit?: (id: number) => void;
+  onCompose?: (email: string) => void;
 }) {
   const a = (address ?? '').trim();
   const n = (name ?? '').trim();
@@ -145,7 +161,7 @@ function AddressLine({
   return (
     <span className="inline-flex max-w-full items-center gap-1">
       {n && <span className="truncate">{n} &lt;</span>}
-      <EmailAdd email={a} name={n || null} onAdd={onAdd} onEdit={onEdit} />
+      <EmailAdd email={a} name={n || null} onAdd={onAdd} onEdit={onEdit} onCompose={onCompose} />
       {n && <span>&gt;</span>}
     </span>
   );
@@ -156,10 +172,12 @@ function LinkifyEmails({
   text,
   onAdd,
   onEdit,
+  onCompose,
 }: {
   text: string;
   onAdd?: (name: string | null, email: string) => void;
   onEdit?: (id: number) => void;
+  onCompose?: (email: string) => void;
 }) {
   if (!onAdd) return <>{text}</>;
   const parts = text.split(EMAIL_RE);
@@ -167,7 +185,7 @@ function LinkifyEmails({
     <>
       {parts.map((p, i) =>
         i % 2 === 1 ? (
-          <EmailAdd key={i} email={p} onAdd={onAdd} onEdit={onEdit} />
+          <EmailAdd key={i} email={p} onAdd={onAdd} onEdit={onEdit} onCompose={onCompose} />
         ) : (
           <span key={i}>{p}</span>
         ),
@@ -205,6 +223,7 @@ export function MailBody({
   onMarkSpam,
   onAddContact,
   onEditContact,
+  onComposeTo,
   onGreenChange,
 }: {
   detail: MailDetail;
@@ -225,6 +244,8 @@ export function MailBody({
   onAddContact?: (name: string | null, email: string) => void;
   /** 登録済みアドレスの編集アイコンから、その連絡先を開く。 */
   onEditContact?: (id: number) => void;
+  /** ヘッダ/本文のメールアドレスのクリックで、そのアドレス宛の新規メール作成を開く。 */
+  onComposeTo?: (email: string) => void;
   /** グリーン認定/解除で一覧のバッジを更新するための通知。 */
   onGreenChange?: () => void;
 }) {
@@ -720,6 +741,7 @@ export function MailBody({
                 address={d.from_address}
                 onAdd={onAddContact}
                 onEdit={onEditContact}
+                onCompose={onComposeTo}
               />
             </span>
             <span className="shrink-0">{formatDate(d.date)}</span>
@@ -732,6 +754,7 @@ export function MailBody({
                 address={d.to_addresses}
                 onAdd={onAddContact}
                 onEdit={onEditContact}
+                onCompose={onComposeTo}
               />
             </div>
           )}
@@ -742,6 +765,7 @@ export function MailBody({
                 text={d.cc_addresses}
                 onAdd={onAddContact}
                 onEdit={onEditContact}
+                onCompose={onComposeTo}
               />
             </div>
           )}
@@ -799,7 +823,12 @@ export function MailBody({
           />
         ) : body.trim() ? (
           <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-white/90">
-            <LinkifyEmails text={body} onAdd={onAddContact} onEdit={onEditContact} />
+            <LinkifyEmails
+              text={body}
+              onAdd={onAddContact}
+              onEdit={onEditContact}
+              onCompose={onComposeTo}
+            />
           </pre>
         ) : (
           <p className="text-sm text-white/40">{t('mailbox.noBody')}</p>

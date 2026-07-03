@@ -58,7 +58,9 @@ export function RecipientInput({
         .then((r) => {
           setSuggestions(r);
           setActive(0);
-          setOpen(r.length > 0);
+          // 入力欄にフォーカスがある時だけ開く（返信で宛先が自動入力された起動直後などに、
+          // 候補が件名欄へ勝手に重なって出るのを防ぐ）。フォーカス時は onFocus で開く。
+          setOpen(r.length > 0 && document.activeElement === inputRef.current);
         })
         .catch(() => {
           setSuggestions([]);

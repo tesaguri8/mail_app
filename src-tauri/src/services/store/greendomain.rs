@@ -144,6 +144,23 @@ pub(crate) fn address_is_known(conn: &Connection, address: &str) -> rusqlite::Re
     Ok(n != 0)
 }
 
+/// アドレスが住所録のお気に入り（VIP）連絡先か（完全一致・非削除）。
+pub(crate) fn address_is_vip(conn: &Connection, address: &str) -> rusqlite::Result<bool> {
+    let addr = address.trim();
+    if addr.is_empty() {
+        return Ok(false);
+    }
+    let n: i64 = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM contacts c \
+                        WHERE c.deleted_at IS NULL AND c.is_favorite = 1 AND lower(c.email) = lower(?1)) \
+              OR EXISTS (SELECT 1 FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id \
+                         WHERE c.deleted_at IS NULL AND c.is_favorite = 1 AND lower(ce.value) = lower(?1))",
+        params![addr],
+        |r| r.get(0),
+    )?;
+    Ok(n != 0)
+}
+
 /// アドレスがグリーンか（本人一致 or ドメインがグリーン集合）。
 pub(crate) fn address_is_green(
     conn: &Connection,

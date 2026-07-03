@@ -512,6 +512,7 @@ impl Store {
                         has_attachments: r.get::<_, i64>(9)? != 0,
                         body_compacted: r.get::<_, i64>(10)? != 0,
                         is_green: false,
+                        is_vip: false,
                     })
                 },
             )
@@ -519,9 +520,12 @@ impl Store {
         let Some(mut d) = detail else {
             return Ok(None);
         };
-        // グリーン判定（本人 or 認定ドメイン）。
+        // グリーン判定（本人 or 認定ドメイン）と VIP（お気に入り連絡先）判定。
         let green_set = super::greendomain::green_domain_set(&conn)?;
         d.is_green = super::greendomain::address_is_green(&conn, &green_set, d.from_address.as_deref())?;
+        if let Some(from) = d.from_address.as_deref() {
+            d.is_vip = super::greendomain::address_is_vip(&conn, from)?;
+        }
         // ヘッダの表示名が無ければ住所録から補完する（既存メール・表示名なしメール向け）。
         if d.from_name.is_none() {
             d.from_name = contact_name_for(&conn, d.from_address.as_deref())?;

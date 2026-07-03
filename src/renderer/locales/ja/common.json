@@ -407,6 +407,8 @@
     "from": "差出人",
     "to": "宛先",
     "addContact": "住所録に追加",
+    "editContact": "住所録で編集",
+    "editContactDup": "住所録で編集（{{count}} 件重複）",
     "showQuotes": "引用を表示",
     "hideQuotes": "引用を隠す",
     "close": "閉じる",

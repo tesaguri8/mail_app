@@ -78,6 +78,7 @@ pub fn run() {
             commands::spam_settings_set,
             commands::contact_list,
             commands::contact_get,
+            commands::contact_lookup_email,
             commands::recipient_suggest,
             commands::contact_upsert,
             commands::contact_delete,

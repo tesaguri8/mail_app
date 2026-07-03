@@ -25,6 +25,8 @@ export default function App() {
   const [mailSel, setMailSel] = useState<number | 'all' | null>(null);
   // メールのアドレスから住所録へ追加するときの初期値（住所録の新規フォームに埋める）。
   const [contactPrefill, setContactPrefill] = useState<ContactPrefill | null>(null);
+  // メールのアドレスから既存連絡先を開くときの ID（編集アイコン）。
+  const [contactOpenId, setContactOpenId] = useState<number | null>(null);
   // 背景のかぶせ（暗さ）。写真によって文字が見づらい時に上げる。
   const [dim, setDim] = useState<number>(() => Number(localStorage.getItem('rondine.dim') ?? 0));
   useEffect(() => {
@@ -65,6 +67,12 @@ export default function App() {
     setView('contacts');
   };
 
+  // メールのアドレスから既存連絡先を開く（編集アイコン）。住所録へ切り替えてその連絡先を開く。
+  const openContactFromMail = (id: number) => {
+    setContactOpenId(id);
+    setView('contacts');
+  };
+
   // フッター左に出す「表示中アカウントのメール総数」（メールモード時のみ。'all'=全合計）。
   const mailTotal =
     view !== 'mail'
@@ -100,12 +108,15 @@ export default function App() {
               initialMailId={mailOpenId}
               onAccountChange={setMailSel}
               onAddContact={addContactFromMail}
+              onOpenContact={openContactFromMail}
             />
           )}
           {view === 'contacts' && (
             <AddressBook
               prefill={contactPrefill}
               onPrefillConsumed={() => setContactPrefill(null)}
+              openId={contactOpenId}
+              onOpenIdConsumed={() => setContactOpenId(null)}
             />
           )}
           {view === 'calendar' && <StubView titleKey="nav.calendar" />}

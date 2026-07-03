@@ -106,6 +106,7 @@ export function MailboxView({
   initialMailId,
   onAccountChange,
   onAddContact,
+  onOpenContact,
 }: {
   accounts: AccountSummary[];
   initialAccountId: number | null;
@@ -114,6 +115,8 @@ export function MailboxView({
   onAccountChange?: (id: number | 'all' | null) => void;
   /** メールのアドレスから住所録へ追加（名前・メールを渡す）。 */
   onAddContact?: (name: string | null, email: string) => void;
+  /** メールのアドレスから既存連絡先を開く（編集アイコン）。 */
+  onOpenContact?: (id: number) => void;
 }) {
   const { t } = useTranslation();
   // 'all' = 全アカウント横断表示 / number = 特定アカウント / null = 未選択。
@@ -912,6 +915,7 @@ export function MailboxView({
       onReply={(mode) => setCompose({ mode, source: opened })}
       onMarkSpam={markSpamOpened}
       onAddContact={onAddContact}
+      onEditContact={onOpenContact}
       onGreenChange={loadMails}
     />
   ) : (

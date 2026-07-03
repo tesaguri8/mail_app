@@ -407,6 +407,8 @@
     "from": "From",
     "to": "To",
     "addContact": "Add to contacts",
+    "editContact": "Edit in contacts",
+    "editContactDup": "Edit in contacts ({{count}} duplicates)",
     "showQuotes": "Show quotes",
     "hideQuotes": "Hide quotes",
     "close": "Close",

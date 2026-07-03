@@ -12,19 +12,33 @@ import { GreenDomainsView } from './GreenDomainsView';
 export function AddressBook({
   prefill,
   onPrefillConsumed,
+  openId,
+  onOpenIdConsumed,
 }: {
   prefill?: ContactPrefill | null;
   onPrefillConsumed?: () => void;
+  /** メール等から既存連絡先を開く ID（外部指定）。 */
+  openId?: number | null;
+  onOpenIdConsumed?: () => void;
 }) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<'contacts' | 'orgs' | 'green'>('contacts');
   // 組織タブの所属クリックから連絡先タブで開く連絡先 ID。
-  const [contactOpenId, setContactOpenId] = useState<number | null>(null);
+  const [orgOpenId, setOrgOpenId] = useState<number | null>(null);
+  // 外部（メール）指定と組織由来のどちらかを ContactsView へ渡す。
+  const effectiveOpenId = openId ?? orgOpenId;
+  const consumeOpen = () => {
+    setOrgOpenId(null);
+    onOpenIdConsumed?.();
+  };
 
-  // メールからの＋追加（prefill）が来たら連絡先タブへ。
+  // メールからの＋追加（prefill）／既存を開く（openId）が来たら連絡先タブへ。
   useEffect(() => {
     if (prefill) setTab('contacts');
   }, [prefill]);
+  useEffect(() => {
+    if (openId != null) setTab('contacts');
+  }, [openId]);
 
   const tabBtn = (key: 'contacts' | 'orgs' | 'green', icon: React.ReactNode, label: string) => (
     <button
@@ -50,14 +64,14 @@ export function AddressBook({
           <ContactsView
             prefill={prefill}
             onPrefillConsumed={onPrefillConsumed}
-            openId={contactOpenId}
-            onOpenIdConsumed={() => setContactOpenId(null)}
+            openId={effectiveOpenId}
+            onOpenIdConsumed={consumeOpen}
           />
         )}
         {tab === 'orgs' && (
           <OrganizationsView
             onOpenContact={(id) => {
-              setContactOpenId(id);
+              setOrgOpenId(id);
               setTab('contacts');
             }}
           />

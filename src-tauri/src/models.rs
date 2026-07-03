@@ -465,6 +465,8 @@ pub struct MailDetail {
     pub body_compacted: bool,
     /// 差出人がグリーン（本人 or 認定ドメイン）か。バッジ・認定ボタン用。docs/GREEN_DOMAINS.md。
     pub is_green: bool,
+    /// 差出人が住所録のお気に入り（VIP／Gem）連絡先か。バッジ用。
+    pub is_vip: bool,
 }
 
 /// 添付ファイル（一覧/ダウンロード状態）。

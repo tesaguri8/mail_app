@@ -7,9 +7,11 @@ import {
   ChevronDown,
   Download,
   Forward,
+  Gem,
   Image as ImageIcon,
   LeafyGreen,
   Paperclip,
+  Pencil,
   Plus,
   RefreshCw,
   Reply,
@@ -30,8 +32,10 @@ import {
   mailAttachments,
   mailRefetch,
 } from '../services/mail';
+import type { ContactSummary } from '@bindings/ContactSummary';
 import { getInlineImages, PREFS_EVENT } from '../config/prefs';
 import { greenDomainAdd, greenDomainWarn } from '../services/green';
+import { contactLookupEmail } from '../services/contacts';
 import { HtmlText } from './HtmlText';
 
 function formatDate(d: string | null): string {
@@ -51,41 +55,85 @@ function formatAddress(name: string | null, address: string | null): string {
 /** 本文/ヘッダ中のメールアドレス検出。 */
 const EMAIL_RE = /([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/g;
 
-/** メールアドレス＋（ホバー/フォーカスで現れる）住所録追加ボタン。 */
+/** メールアドレスごとの住所録照合キャッシュ（同一アドレスの重複ルックアップを避ける）。
+ *  住所録が変わり得るので、メール画面を離れるとき（MailBody アンマウント）にクリアする。 */
+const emailLookupCache = new Map<string, Promise<ContactSummary[]>>();
+function lookupEmailCached(email: string): Promise<ContactSummary[]> {
+  const key = email.trim().toLowerCase();
+  let p = emailLookupCache.get(key);
+  if (!p) {
+    p = contactLookupEmail(email).catch(() => [] as ContactSummary[]);
+    emailLookupCache.set(key, p);
+  }
+  return p;
+}
+
+/**
+ * メールアドレス＋（ホバー/フォーカスで現れる）操作ボタン。
+ * 住所録に未登録＝＋（追加）、登録済み＝編集アイコン。重複（複数登録）があれば件数を黄色字で表示。
+ */
 function EmailAdd({
   email,
   name,
   onAdd,
+  onEdit,
 }: {
   email: string;
   name?: string | null;
   onAdd: (name: string | null, email: string) => void;
+  onEdit?: (id: number) => void;
 }) {
   const { t } = useTranslation();
+  const [matches, setMatches] = useState<ContactSummary[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    lookupEmailCached(email).then((r) => alive && setMatches(r));
+    return () => {
+      alive = false;
+    };
+  }, [email]);
+
+  const count = matches?.length ?? 0;
+  const registered = count > 0;
+  const dup = count > 1;
+
+  const handle = () => {
+    if (registered && matches && matches[0] && onEdit) onEdit(matches[0].id);
+    else onAdd(name ?? null, email);
+  };
+  const title = registered
+    ? dup
+      ? t('mailbox.editContactDup', { count })
+      : t('mailbox.editContact')
+    : t('mailbox.addContact');
+
   return (
     <span className="group/email inline-flex items-center gap-0.5 align-baseline">
       <span>{email}</span>
       <button
-        onClick={() => onAdd(name ?? null, email)}
-        title={t('mailbox.addContact')}
-        aria-label={t('mailbox.addContact')}
-        className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-white/10 text-white/60 opacity-0 transition-opacity hover:bg-sky-500/50 hover:text-white focus:opacity-100 focus:outline-none group-hover/email:opacity-100"
+        onClick={handle}
+        title={title}
+        aria-label={title}
+        className="inline-flex h-4 items-center justify-center gap-0.5 rounded-full bg-white/10 px-1 text-white/60 opacity-0 transition-opacity hover:bg-sky-500/50 hover:text-white focus:opacity-100 focus:outline-none group-hover/email:opacity-100"
       >
-        <Plus size={11} />
+        {registered ? <Pencil size={11} /> : <Plus size={11} />}
+        {dup && <span className="text-[9px] font-semibold leading-none text-amber-300">{count}</span>}
       </button>
     </span>
   );
 }
 
-/** ヘッダの差出人/宛先。onAdd があればアドレスに＋を出す（無ければ従来のテキスト）。 */
+/** ヘッダの差出人/宛先。onAdd があればアドレスに＋/編集を出す（無ければ従来のテキスト）。 */
 function AddressLine({
   name,
   address,
   onAdd,
+  onEdit,
 }: {
   name: string | null;
   address: string | null;
   onAdd?: (name: string | null, email: string) => void;
+  onEdit?: (id: number) => void;
 }) {
   const a = (address ?? '').trim();
   const n = (name ?? '').trim();
@@ -94,26 +142,32 @@ function AddressLine({
   return (
     <span className="inline-flex max-w-full items-center gap-1">
       {n && <span className="truncate">{n} &lt;</span>}
-      <EmailAdd email={a} name={n || null} onAdd={onAdd} />
+      <EmailAdd email={a} name={n || null} onAdd={onAdd} onEdit={onEdit} />
       {n && <span>&gt;</span>}
     </span>
   );
 }
 
-/** プレーン本文中のメールアドレスをリンク化し、それぞれに＋を出す。 */
+/** プレーン本文中のメールアドレスをリンク化し、それぞれに＋/編集を出す。 */
 function LinkifyEmails({
   text,
   onAdd,
+  onEdit,
 }: {
   text: string;
   onAdd?: (name: string | null, email: string) => void;
+  onEdit?: (id: number) => void;
 }) {
   if (!onAdd) return <>{text}</>;
   const parts = text.split(EMAIL_RE);
   return (
     <>
       {parts.map((p, i) =>
-        i % 2 === 1 ? <EmailAdd key={i} email={p} onAdd={onAdd} /> : <span key={i}>{p}</span>,
+        i % 2 === 1 ? (
+          <EmailAdd key={i} email={p} onAdd={onAdd} onEdit={onEdit} />
+        ) : (
+          <span key={i}>{p}</span>
+        ),
       )}
     </>
   );
@@ -147,6 +201,7 @@ export function MailBody({
   onReply,
   onMarkSpam,
   onAddContact,
+  onEditContact,
   onGreenChange,
 }: {
   detail: MailDetail;
@@ -165,6 +220,8 @@ export function MailBody({
   onMarkSpam?: () => void;
   /** ヘッダ/本文のメールアドレスから住所録へ追加（名前・メールを渡す）。 */
   onAddContact?: (name: string | null, email: string) => void;
+  /** 登録済みアドレスの編集アイコンから、その連絡先を開く。 */
+  onEditContact?: (id: number) => void;
   /** グリーン認定/解除で一覧のバッジを更新するための通知。 */
   onGreenChange?: () => void;
 }) {
@@ -202,6 +259,9 @@ export function MailBody({
     window.addEventListener(PREFS_EVENT, onPrefs);
     return () => window.removeEventListener(PREFS_EVENT, onPrefs);
   }, []);
+
+  // メール画面を離れるときに住所録照合キャッシュをクリア（連絡先の追加/編集を次回反映）。
+  useEffect(() => () => emailLookupCache.clear(), []);
 
   // メール切り替えごとに添付メタを読み込む（本体は押下時に取得）。
   useEffect(() => {
@@ -500,6 +560,13 @@ export function MailBody({
         <div className="mt-1 text-xs text-white/50">
           <div className="flex items-baseline justify-between gap-3">
             <span className="min-w-0 truncate">
+              {d.is_vip && (
+                <Gem
+                  size={12}
+                  className="mr-1 inline fill-sky-300/30 align-[-1px] text-sky-300"
+                  aria-label={t('filter.vip')}
+                />
+              )}
               {isGreen && (
                 <LeafyGreen
                   size={12}
@@ -508,14 +575,24 @@ export function MailBody({
                 />
               )}
               {t('mailbox.from')}:{' '}
-              <AddressLine name={d.from_name} address={d.from_address} onAdd={onAddContact} />
+              <AddressLine
+                name={d.from_name}
+                address={d.from_address}
+                onAdd={onAddContact}
+                onEdit={onEditContact}
+              />
             </span>
             <span className="shrink-0">{formatDate(d.date)}</span>
           </div>
           {d.to_addresses && (
             <div className="truncate">
               {t('mailbox.to')}:{' '}
-              <AddressLine name={d.to_name} address={d.to_addresses} onAdd={onAddContact} />
+              <AddressLine
+                name={d.to_name}
+                address={d.to_addresses}
+                onAdd={onAddContact}
+                onEdit={onEditContact}
+              />
             </div>
           )}
           {/* タグ（一覧では出さず、詳細ヘッダの宛先の下にまとめて表示。× で個別に外せる） */}
@@ -567,7 +644,7 @@ export function MailBody({
           <HtmlText html={html} inlineImages={inlineImages} />
         ) : body.trim() ? (
           <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-white/90">
-            <LinkifyEmails text={body} onAdd={onAddContact} />
+            <LinkifyEmails text={body} onAdd={onAddContact} onEdit={onEditContact} />
           </pre>
         ) : (
           <p className="text-sm text-white/40">{t('mailbox.noBody')}</p>

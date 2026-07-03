@@ -672,6 +672,17 @@ pub fn contact_get(store: State<Store>, id: i64) -> Result<ContactSummary, Strin
     store.get_contact(id).map_err(|e| e.to_string())
 }
 
+/// 指定メールアドレスを持つ連絡先を返す（非削除）。メールの ＋/編集 切替・重複数表示に使う。
+#[tauri::command]
+pub fn contact_lookup_email(
+    store: State<Store>,
+    email: String,
+) -> Result<Vec<ContactSummary>, String> {
+    store
+        .lookup_contacts_by_email(&email)
+        .map_err(|e| e.to_string())
+}
+
 /// メール作成の宛先オートコンプリート候補（住所録＋過去のやり取り相手）。
 /// docs/RECIPIENT_AUTOCOMPLETE.md
 #[tauri::command]

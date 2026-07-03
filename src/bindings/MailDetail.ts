@@ -31,4 +31,8 @@ body_compacted: boolean,
 /**
  * 差出人がグリーン（本人 or 認定ドメイン）か。バッジ・認定ボタン用。docs/GREEN_DOMAINS.md。
  */
-is_green: boolean, };
+is_green: boolean, 
+/**
+ * 差出人が住所録のお気に入り（VIP／Gem）連絡先か。バッジ用。
+ */
+is_vip: boolean, };

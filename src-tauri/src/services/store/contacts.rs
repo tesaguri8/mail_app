@@ -116,6 +116,28 @@ impl Store {
         Ok(c)
     }
 
+    /// 指定メールアドレスを持つ（非削除の）連絡先を返す。メールアドレスの ＋/編集 アイコン切替と
+    /// 重複数の表示に使う。contacts.email（主）と contact_emails.value のいずれかで完全一致（小文字）。
+    pub fn lookup_contacts_by_email(&self, email: &str) -> rusqlite::Result<Vec<ContactSummary>> {
+        let addr = email.trim();
+        if addr.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT {CONTACT_COLS} FROM contacts c \
+             WHERE c.deleted_at IS NULL AND ( \
+                 lower(c.email) = lower(?1) \
+                 OR EXISTS (SELECT 1 FROM contact_emails ce \
+                            WHERE ce.contact_id = c.id AND lower(ce.value) = lower(?1)) \
+             ) \
+             ORDER BY is_favorite DESC, name_kana COLLATE NOCASE, display_name COLLATE NOCASE"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![addr], row_to_contact)?;
+        rows.collect()
+    }
+
     /// 連絡先を作成または更新し、確定後の行を返す。`input.id` が None なら新規。
     pub fn upsert_contact(&self, input: &ContactInput) -> rusqlite::Result<ContactSummary> {
         let conn = self.conn.lock().unwrap();

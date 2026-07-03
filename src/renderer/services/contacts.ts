@@ -16,6 +16,10 @@ export const contactList = (query?: string, groups?: number[], includeDeleted = 
 
 export const contactGet = (id: number) => invoke<ContactSummary>('contact_get', { id });
 
+/** 指定メールアドレスを持つ連絡先（非削除）を返す。メールの ＋/編集 切替・重複数表示に使う。 */
+export const contactLookupEmail = (email: string) =>
+  invoke<ContactSummary[]>('contact_lookup_email', { email });
+
 export const contactUpsert = (input: ContactInput) =>
   invoke<ContactSummary>('contact_upsert', { input });
 

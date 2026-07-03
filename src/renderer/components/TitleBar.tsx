@@ -30,6 +30,19 @@ export function TitleBar({ onNavigate }: { onNavigate: (v: AppView) => void }) {
   }, []);
 
   const win = () => getCurrentWindow();
+
+  // Ctrl+Q（Mac は Cmd+Q）でアプリを終了する。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'q' || e.key === 'Q')) {
+        e.preventDefault();
+        if (isTauri) win().close();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   const togglePin = async () => {
     if (!isTauri) return;
     const next = !pinned;

@@ -992,6 +992,22 @@ export function MailboxView({
     </div>
   );
 
+  // メール作成はページとして表示（別ウィンドウにしない）。
+  const composeEl = compose ? (
+    <Compose
+      accounts={accounts}
+      // 返信/転送は元メールを受信したアカウントを既定に。新規は選択中（全ての時は先頭）。
+      defaultAccountId={
+        ('source' in compose ? compose.source.account_id : null) ??
+        queryAccount ??
+        accounts[0]?.id ??
+        null
+      }
+      target={compose}
+      onClose={() => setCompose(null)}
+    />
+  ) : null;
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/10 px-4 py-2">
@@ -1100,7 +1116,23 @@ export function MailboxView({
         )}
       </div>
 
-      {layout === 'side' ? (
+      {compose ? (
+        // メール作成はページとして表示（サイドバーは閉じる）。返信/転送は
+        // 左=下書き・右=元メールの2分割で、並べて作成できる。
+        'source' in compose ? (
+          <div
+            className="grid min-h-0 flex-1 overflow-hidden"
+            style={{ gridTemplateColumns: '1fr 1fr' }}
+          >
+            <div className="min-h-0 overflow-hidden">{composeEl}</div>
+            <div className="min-h-0 overflow-hidden border-l border-white/10">
+              <MailBody detail={compose.source} />
+            </div>
+          </div>
+        ) : (
+          <div className="min-h-0 flex-1 overflow-hidden">{composeEl}</div>
+        )
+      ) : layout === 'side' ? (
         <div
           ref={splitRef}
           className="grid min-h-0 flex-1 overflow-hidden"
@@ -1137,21 +1169,6 @@ export function MailboxView({
           header={selectedIds.size > 1 ? t('ctx.selected', { count: selectedIds.size }) : undefined}
           items={buildMenuItems()}
           onClose={() => setMenu(null)}
-        />
-      )}
-
-      {compose && (
-        <Compose
-          accounts={accounts}
-          // 返信/転送は元メールを受信したアカウントを既定に。新規は選択中（全ての時は先頭）。
-          defaultAccountId={
-            ('source' in compose ? compose.source.account_id : null) ??
-            queryAccount ??
-            accounts[0]?.id ??
-            null
-          }
-          target={compose}
-          onClose={() => setCompose(null)}
         />
       )}
 

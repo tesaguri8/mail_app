@@ -45,7 +45,8 @@ function splitAddresses(s: string): string[] {
 }
 
 /**
- * メール作成モーダル（新規／返信／全員返信／転送）。
+ * メール作成ページ（新規／返信／全員返信／転送）。別ウィンドウにせず、メール画面内の
+ * 全面ペインとして表示する（返信/転送は左=下書き・右=元メールの2分割）。
  * プレーン本文で作成し、送信時にバックエンドで plain+HTML を同梱する。
  */
 export function Compose({
@@ -144,14 +145,8 @@ export function Compose({
     'w-full rounded-md bg-white/10 px-3 py-1.5 text-sm outline-none placeholder:text-white/30 focus:bg-white/15';
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !sending) onClose();
-      }}
-    >
-      <div className="flex max-h-[88vh] w-[640px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-white/15 bg-neutral-900/95 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
           <h2 className="text-sm font-semibold">{t(`compose.${target.mode}`)}</h2>
           <button
             onClick={onClose}
@@ -259,7 +254,6 @@ export function Compose({
           </button>
           {error && <span className="flex-1 truncate text-xs text-rose-300">{error}</span>}
         </div>
-      </div>
 
       {flyOn && <FlySwallow ref={flyRef} />}
     </div>

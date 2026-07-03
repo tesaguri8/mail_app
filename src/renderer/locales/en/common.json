@@ -406,6 +406,8 @@
     "result": "Fetched {{fetched}} / New {{stored}}",
     "from": "From",
     "to": "To",
+    "hideSidebar": "Hide sidebar (Ctrl+S)",
+    "showSidebar": "Show sidebar (Ctrl+S)",
     "addContact": "Add to contacts",
     "editContact": "Edit in contacts",
     "editContactDup": "Edit in contacts ({{count}} duplicates)",

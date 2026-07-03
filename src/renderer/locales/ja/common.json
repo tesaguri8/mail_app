@@ -406,6 +406,8 @@
     "result": "取得 {{fetched}} 件 / 新規 {{stored}} 件",
     "from": "差出人",
     "to": "宛先",
+    "hideSidebar": "サイドバーを隠す（Ctrl+S）",
+    "showSidebar": "サイドバーを表示（Ctrl+S）",
     "addContact": "住所録に追加",
     "editContact": "住所録で編集",
     "editContactDup": "住所録で編集（{{count}} 件重複）",

@@ -7,6 +7,8 @@ import {
   LeafyGreen,
   Mail,
   MailOpen,
+  PanelLeftClose,
+  PanelLeftOpen,
   Paperclip,
   RefreshCw,
   Rows2,
@@ -137,6 +139,8 @@ export function MailboxView({
   const [progress, setProgress] = useState<SyncProgress | null>(null);
   const [status, setStatus] = useState('');
   const [layout, setLayout] = useState<'side' | 'top'>('side');
+  // サイドバー（メール一覧ペイン）の表示 ON/OFF。ツールバーのアイコン／Ctrl+S で切替。
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   // サイドバー幅（ドラッグで可変・localStorage 永続）。最小/最大は上部の定数で一括変更可。
   const [sidebarW, setSidebarW] = useState(() => {
     const saved = Number(localStorage.getItem('rondine.mailSidebarW'));
@@ -225,6 +229,18 @@ export function MailboxView({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedIds.size, menu, tagPicker, compose]);
+
+  // Ctrl+S（Mac は Cmd+S）でサイドバー（一覧ペイン）の表示を切替。ブラウザの保存は抑止。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        setSidebarOpen((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     if (selected == null && accounts.length > 0) setSelected(accounts[0].id);
@@ -995,6 +1011,15 @@ export function MailboxView({
           <RefreshCw size={15} className={syncing ? 'animate-spin' : ''} />
         </button>
         <button
+          className={`${iconBtn} ${sidebarOpen ? '' : 'bg-white/10'}`}
+          onClick={() => setSidebarOpen((v) => !v)}
+          title={sidebarOpen ? t('mailbox.hideSidebar') : t('mailbox.showSidebar')}
+          aria-label={sidebarOpen ? t('mailbox.hideSidebar') : t('mailbox.showSidebar')}
+          aria-pressed={!sidebarOpen}
+        >
+          {sidebarOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
+        </button>
+        <button
           className={iconBtn}
           onClick={() => setLayout((l) => (l === 'side' ? 'top' : 'side'))}
           title={layout === 'side' ? t('mailbox.side') : t('mailbox.top')}
@@ -1026,22 +1051,28 @@ export function MailboxView({
         <div
           ref={splitRef}
           className="grid min-h-0 flex-1 overflow-hidden"
-          style={{ gridTemplateColumns: `${sidebarW}px 6px 1fr` }}
+          style={{ gridTemplateColumns: sidebarOpen ? `${sidebarW}px 6px 1fr` : '1fr' }}
         >
           {/* overflow-hidden は付けない: 絞り込みのポップオーバーをコンテンツ側へ重ねて表示するため */}
-          <div className="min-h-0 border-r border-white/10">{listPane}</div>
-          {/* ドラッグでサイドバー幅を変える（幅は上部の MIN/MAX 定数でクランプ） */}
-          <div
-            onMouseDown={startResize}
-            title={t('mailbox.resize')}
-            className="cursor-col-resize bg-transparent transition-colors hover:bg-sky-400/40"
-          />
+          {sidebarOpen && (
+            <>
+              <div className="min-h-0 border-r border-white/10">{listPane}</div>
+              {/* ドラッグでサイドバー幅を変える（幅は上部の MIN/MAX 定数でクランプ） */}
+              <div
+                onMouseDown={startResize}
+                title={t('mailbox.resize')}
+                className="cursor-col-resize bg-transparent transition-colors hover:bg-sky-400/40"
+              />
+            </>
+          )}
           <div className="min-h-0 overflow-hidden">{bodyPane}</div>
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {/* overflow-hidden は付けない: ポップオーバーを本文側へ重ねて表示するため */}
-          <div className="h-1/3 min-h-0 border-b border-white/10">{listPane}</div>
+          {sidebarOpen && (
+            <div className="h-1/3 min-h-0 border-b border-white/10">{listPane}</div>
+          )}
           <div className="min-h-0 flex-1 overflow-hidden">{bodyPane}</div>
         </div>
       )}

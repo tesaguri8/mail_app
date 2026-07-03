@@ -412,6 +412,29 @@ impl Store {
                 m.from_name = contact_name_for(conn, m.from_address.as_deref())?;
             }
         }
+        // ② 内容照合による引用剥がし（形式非依存。docs/THREADING.md §2 優先3）。
+        // 同スレッドの「より古いメールの先頭行」をアンカーに、ヒューリスティックで取り切れなかった
+        // 引用（未知の属性行＋インライン引用など）を各メールの clean_body から追加で落とす。
+        // 表示専用（保存は据え置き。全文は「引用を表示」で確認できる）。
+        let mut anchors: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for m in messages.iter_mut() {
+            if !anchors.is_empty() {
+                if let Some(clean) = m.clean_body.clone() {
+                    let trimmed = crate::services::quotes::cut_at_known_anchor(&clean, &anchors);
+                    if trimmed.len() < clean.len() {
+                        m.has_quotes = true; // 追加で剥がせた＝畳んだ引用がある
+                        m.clean_body = Some(trimmed);
+                    }
+                }
+            }
+            if let Some(a) = m
+                .clean_body
+                .as_deref()
+                .and_then(crate::services::quotes::first_anchor)
+            {
+                anchors.insert(a);
+            }
+        }
         Ok(Some(ThreadView { thread, messages }))
     }
 
@@ -713,6 +736,37 @@ mod tests {
         assert_eq!(split.thread.message_count, 2);
         // 手動割当は固定される。
         assert_eq!(split.messages[0].thread_assignment, "manual");
+    }
+
+    /// ② 内容照合: 未知の属性行＋インライン引用（`>` なし）が残った古いメールでも、
+    /// 会話ビューで同スレッドの過去メールと一致する引用を追加で剥がす。
+    #[test]
+    fn thread_view_content_trims_unrecognized_quote() {
+        let store = test_store();
+        let child_id = {
+            let conn = store.conn.lock().unwrap();
+            let mut parent = mk("p@x", "件名", "you@corp.com", "inbox", 1, None, None);
+            parent.body_plain = Some("見積もりの件、了解しました。".into());
+            parent.clean_body = Some("見積もりの件、了解しました。".into());
+            let mut child = mk("c@x", "Re: 件名", "me@example.com", "sent", 2, Some("p@x"), Some("p@x"));
+            // 旧データ相当: clean_body に未知属性行＋インライン引用が残っている。
+            let child_clean = "承知しました。\n\n田中 が書きました:\n見積もりの件、了解しました。";
+            child.body_plain = Some(format!("{child_clean}\nよろしく"));
+            child.clean_body = Some(child_clean.into());
+            insert_email(&conn, &parent).unwrap();
+            match insert_email(&conn, &child).unwrap() {
+                crate::services::store::InsertOutcome::Inserted(id) => id,
+                _ => panic!("expected insert"),
+            }
+        };
+        let view = store.thread_view(child_id).unwrap().unwrap();
+        let child = view
+            .messages
+            .iter()
+            .find(|m| m.message_id.as_deref() == Some("c@x"))
+            .unwrap();
+        assert_eq!(child.clean_body.as_deref(), Some("承知しました。"));
+        assert!(child.has_quotes);
     }
 
     #[test]

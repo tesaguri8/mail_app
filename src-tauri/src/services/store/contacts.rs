@@ -706,34 +706,36 @@ impl Store {
         self.get_contact(keep_id)
     }
 
-    /// 組織一覧（所属件数つき＝削除済み連絡先は数えない、名前順）。`query` があれば名前で部分一致。
+    /// 組織一覧（所属件数つき＝削除済み連絡先は数えない）。`query` があれば「似た名前」を候補に出す。
+    /// クエリを ASCII 英数字の連なり／それ以外の連なりに分けたトークンにし、そのいずれかを含む
+    /// 組織を拾って（OR）、一致トークン数の多い順（＝関連度）に並べる。
+    /// 例:「sngDESIGN浦添アトリエ」→ tokens[sngdesign, 浦添アトリエ] で「sngDESIGN Inc.」も候補に。
     /// `include_deleted` が true なら論理削除済みの組織も含める（ゴミ箱・赤字表示用）。
-    /// 組織コンボボックスの候補・組織一覧に使う。
     pub fn list_organizations(
         &self,
         query: Option<&str>,
         include_deleted: bool,
     ) -> rusqlite::Result<Vec<OrganizationSummary>> {
         let conn = self.conn.lock().unwrap();
-        // 語順に依存しない部分一致: 空白で分割した各トークンをすべて含む名前に絞る
-        // （「sng 設計」でも「設計 sng」でも当たる）。名前・よみのどちらかに含めばよい。
-        let tokens: Vec<String> = query
+        let tokens = query
             .map(str::trim)
             .filter(|q| !q.is_empty())
-            .map(|q| {
-                q.split_whitespace()
-                    .map(|tk| format!("%{}%", tk.replace('%', "\\%").replace('_', "\\_")))
-                    .collect()
-            })
+            .map(org_search_tokens)
             .unwrap_or_default();
+        let likes: Vec<String> = tokens
+            .iter()
+            .map(|t| format!("%{}%", t.replace('%', "\\%").replace('_', "\\_")))
+            .collect();
+
         let mut conds: Vec<String> = Vec::new();
         if !include_deleted {
             conds.push("o.deleted_at IS NULL".to_string());
         }
-        for n in 1..=tokens.len() {
-            conds.push(format!(
-                "(o.name LIKE ?{n} ESCAPE '\\' OR o.name_kana LIKE ?{n} ESCAPE '\\')"
-            ));
+        if !likes.is_empty() {
+            let ors: Vec<String> = (1..=likes.len())
+                .map(|n| format!("o.name LIKE ?{n} ESCAPE '\\' OR o.name_kana LIKE ?{n} ESCAPE '\\'"))
+                .collect();
+            conds.push(format!("({})", ors.join(" OR ")));
         }
         let where_sql = if conds.is_empty() {
             String::new()
@@ -744,22 +746,32 @@ impl Store {
             "SELECT o.id, o.name, o.name_kana, o.note, \
                     (SELECT count(*) FROM contacts c WHERE c.org_id = o.id AND c.deleted_at IS NULL) AS cnt, \
                     o.deleted_at \
-             FROM organizations o {where_sql} ORDER BY o.deleted_at IS NOT NULL, o.name COLLATE NOCASE"
+             FROM organizations o {where_sql}"
         );
         let mut stmt = conn.prepare(&sql)?;
         let binds: Vec<&dyn rusqlite::ToSql> =
-            tokens.iter().map(|t| t as &dyn rusqlite::ToSql).collect();
-        let rows = stmt.query_map(rusqlite::params_from_iter(binds), |r: &Row| {
-            Ok(OrganizationSummary {
-                id: r.get::<_, i64>(0)? as i32,
-                name: r.get(1)?,
-                name_kana: r.get(2)?,
-                note: r.get(3)?,
-                member_count: r.get::<_, i64>(4)? as i32,
-                deleted_at: r.get(5)?,
-            })
-        })?;
-        rows.collect()
+            likes.iter().map(|t| t as &dyn rusqlite::ToSql).collect();
+        let mut rows: Vec<OrganizationSummary> = stmt
+            .query_map(rusqlite::params_from_iter(binds), |r: &Row| {
+                Ok(OrganizationSummary {
+                    id: r.get::<_, i64>(0)? as i32,
+                    name: r.get(1)?,
+                    name_kana: r.get(2)?,
+                    note: r.get(3)?,
+                    member_count: r.get::<_, i64>(4)? as i32,
+                    deleted_at: r.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        // 関連度順: 一致トークン数 desc → 有効(非削除)優先 → 所属多い順 → 名前。
+        rows.sort_by(|a, b| {
+            org_name_score(&b.name, &tokens)
+                .cmp(&org_name_score(&a.name, &tokens))
+                .then_with(|| a.deleted_at.is_some().cmp(&b.deleted_at.is_some()))
+                .then_with(|| b.member_count.cmp(&a.member_count))
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        Ok(rows)
     }
 
     /// 単一の組織を件数つきで取得（所属件数は削除済み連絡先を除く）。
@@ -1320,6 +1332,39 @@ fn load_tags(conn: &Connection, cid: i64) -> rusqlite::Result<Vec<String>> {
     rows.collect()
 }
 
+/// 組織名検索のトークン化。空白で分割し、各断片を「ASCII 英数字の連なり」と
+/// 「それ以外の連なり」に分けてトークンにする（2 文字以上のみ・重複排除）。
+/// 例: "sngDESIGN浦添アトリエ" → ["sngdesign", "浦添アトリエ"]。共通部分での“似た名前”照合に使う。
+fn org_search_tokens(query: &str) -> Vec<String> {
+    fn flush(cur: &mut String, tokens: &mut Vec<String>) {
+        if cur.chars().count() >= 2 && !tokens.iter().any(|t| t == cur) {
+            tokens.push(cur.clone());
+        }
+        cur.clear();
+    }
+    let mut tokens: Vec<String> = Vec::new();
+    for piece in query.split_whitespace() {
+        let mut cur = String::new();
+        let mut cur_ascii: Option<bool> = None;
+        for ch in piece.chars() {
+            let is_ascii = ch.is_ascii_alphanumeric();
+            if cur_ascii.is_some_and(|prev| prev != is_ascii) {
+                flush(&mut cur, &mut tokens);
+            }
+            cur_ascii = Some(is_ascii);
+            cur.push(if is_ascii { ch.to_ascii_lowercase() } else { ch });
+        }
+        flush(&mut cur, &mut tokens);
+    }
+    tokens
+}
+
+/// 組織名がクエリの各トークンをいくつ含むか（関連度スコア。大文字小文字・全半角を畳んで比較）。
+fn org_name_score(name: &str, tokens: &[String]) -> usize {
+    let folded = fold(name);
+    tokens.iter().filter(|t| folded.contains(t.as_str())).count()
+}
+
 /// 組織名から id を得る（無ければ作成。名前は trim して比較・保存）。
 /// 論理削除された組織に一致した場合は復活させて再利用する（重複作成を避ける）。
 fn find_or_create_org(conn: &Connection, name: &str) -> rusqlite::Result<i64> {
@@ -1760,9 +1805,9 @@ mod tests {
     }
 
     #[test]
-    fn list_organizations_partial_and_order_independent() {
+    fn list_organizations_matches_similar_names() {
         let s = store();
-        for n in ["sngDESIGN Inc.", "設計 sng 名護", "全然別の会社"] {
+        for n in ["sngDESIGN Inc.", "sngDESIGN浦添アトリエ", "全然別の会社"] {
             s.upsert_contact(&ContactInput {
                 display_name: format!("c-{n}"),
                 organization: Some(n.into()),
@@ -1770,12 +1815,20 @@ mod tests {
             })
             .unwrap();
         }
-        // 部分一致（substring）。
+        // 共通部分（sngDESIGN）で似た組織が候補に出る（「浦添アトリエ」編集中でも Inc. が出る）。
+        let r = s.list_organizations(Some("sngDESIGN浦添アトリエ"), false).unwrap();
+        let names: Vec<&str> = r.iter().map(|o| o.name.as_str()).collect();
+        assert!(names.contains(&"sngDESIGN Inc."), "共通部分を含む似た組織が候補に出る");
+        assert!(names.contains(&"sngDESIGN浦添アトリエ"));
+        assert!(!names.contains(&"全然別の会社"));
+        // 関連度順: 両トークン一致の自組織が先頭。
+        assert_eq!(r[0].name, "sngDESIGN浦添アトリエ");
+
+        // 部分一致（substring）は従来どおり。
         assert_eq!(s.list_organizations(Some("sng"), false).unwrap().len(), 2);
-        // 語順非依存（2 トークンを両方含む）。
-        let r = s.list_organizations(Some("名護 sng"), false).unwrap();
-        assert_eq!(r.len(), 1);
-        assert_eq!(r[0].name, "設計 sng 名護");
+        // 語順非依存（両方含むものが上位）。
+        let r2 = s.list_organizations(Some("Inc sngDESIGN"), false).unwrap();
+        assert_eq!(r2[0].name, "sngDESIGN Inc.");
         // 該当なし。
         assert!(s.list_organizations(Some("xyz"), false).unwrap().is_empty());
     }

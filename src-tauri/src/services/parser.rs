@@ -39,6 +39,8 @@ pub struct ParsedEmail {
     pub to_addresses: Option<String>,
     /// 宛先（先頭）の表示名（ヘッダ To の名前部。無ければ None）。
     pub to_name: Option<String>,
+    /// Cc の全アドレス（"名前 <addr>, ..." の表示用文字列。無ければ None）。
+    pub cc_addresses: Option<String>,
     pub date: Option<String>,
     /// 並び替え用の epoch 秒（date を UTC 換算）。インデックスで新しい順に引くのに使う。
     pub date_ts: Option<i64>,
@@ -52,6 +54,27 @@ pub struct ParsedEmail {
     pub has_attachments: bool,
     pub attachments: Vec<ParsedAttachment>,
     pub preview: String,
+}
+
+/// アドレスヘッダ（To/Cc）を "名前 <addr>, ..." の表示用文字列へ整形する（無ければ None）。
+/// 複数宛先も全件を join する（受信ヘッダに Cc を表示するため）。
+fn format_address_list(addr: Option<&mail_parser::Address>) -> Option<String> {
+    let parts: Vec<String> = addr?
+        .iter()
+        .filter_map(|x| {
+            let email = x.address.as_deref().map(str::trim).filter(|s| !s.is_empty())?;
+            let name = x.name.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            Some(match name {
+                Some(n) => format!("{n} <{email}>"),
+                None => email.to_string(),
+            })
+        })
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(", "))
+    }
 }
 
 /// 指定ヘッダの生テキストを取り出す（無い/空なら None）。
@@ -99,6 +122,8 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
         .and_then(|addr| addr.name.as_deref())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    // Cc は全件を表示用文字列に（受信メールのヘッダに Cc を出すため）。
+    let cc_addresses = format_address_list(msg.cc());
     let message_id = msg.message_id().map(|s| s.to_string());
     let date = msg.date().map(|d| d.to_rfc3339());
     // 並び替え用の epoch 秒（UTC）。無効な日付は None。
@@ -154,6 +179,7 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
         from_name,
         to_addresses,
         to_name,
+        cc_addresses,
         date,
         date_ts,
         body_plain,

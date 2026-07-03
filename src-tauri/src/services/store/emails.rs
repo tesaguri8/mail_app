@@ -14,6 +14,8 @@ pub struct NewEmail {
     pub to_addresses: Option<String>,
     /// 宛先（先頭）の表示名（ヘッダ To の名前部。無ければ None）。
     pub to_name: Option<String>,
+    /// Cc の全アドレス（"名前 <addr>, ..." の表示用文字列。無ければ None）。
+    pub cc_addresses: Option<String>,
     pub date: Option<String>,
     /// 並び替え用の epoch 秒（date の UTC 換算）。インデックスで新しい順に引くのに使う。
     pub date_ts: Option<i64>,
@@ -119,8 +121,8 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
     let key = folder_key(&e.folder, &e.canonical_key);
     let changed = conn.execute(
         "INSERT OR IGNORE INTO emails
-           (account_id, message_id, canonical_key, subject, from_address, from_name, to_addresses, to_name, date, date_ts, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+           (account_id, message_id, canonical_key, subject, from_address, from_name, to_addresses, to_name, cc_addresses, date, date_ts, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
         params![
             e.account_id,
             e.message_id,
@@ -130,6 +132,7 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
             e.from_name,
             e.to_addresses,
             e.to_name,
+            e.cc_addresses,
             e.date,
             e.date_ts,
             e.has_attachments as i64,
@@ -205,6 +208,14 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
         let n = conn.execute(
             "UPDATE emails SET to_name = ?1 WHERE id = ?2 AND to_name IS NULL",
             params![e.to_name, id],
+        )?;
+        touched |= n > 0;
+    }
+    // Cc を後付けする（この機能の追加前に取り込んだ古いメールでも、再取り込みで Cc を表示できる）。
+    if e.cc_addresses.is_some() {
+        let n = conn.execute(
+            "UPDATE emails SET cc_addresses = ?1 WHERE id = ?2 AND cc_addresses IS NULL",
+            params![e.cc_addresses, id],
         )?;
         touched |= n > 0;
     }
@@ -628,7 +639,7 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let detail = conn
             .query_row(
-                "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id, from_name, to_name, account_id
+                "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id, from_name, to_name, account_id, cc_addresses
                  FROM emails WHERE id = ?1",
                 params![id],
                 |r| {
@@ -647,6 +658,7 @@ impl Store {
                         from_name: r.get(12)?,
                         to_addresses: r.get(3)?,
                         to_name: r.get(13)?,
+                        cc_addresses: r.get(15)?,
                         date: r.get(4)?,
                         clean_body: r.get(5)?,
                         body_plain: r.get(6)?,
@@ -877,6 +889,7 @@ mod tests {
             from_name: None,
             to_addresses: None,
             to_name: None,
+            cc_addresses: None,
             date: Some("2026-01-01 00:00:00".to_string()),
             date_ts: Some(1_767_225_600),
             body_plain: Some(body.to_string()),
@@ -908,6 +921,7 @@ mod tests {
             from_name: None,
             to_addresses: None,
             to_name: None,
+            cc_addresses: None,
             date: None,
             date_ts: None,
             body_plain: None,

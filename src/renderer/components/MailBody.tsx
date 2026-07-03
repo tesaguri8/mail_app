@@ -735,6 +735,16 @@ export function MailBody({
               />
             </div>
           )}
+          {d.cc_addresses && (
+            <div className="truncate">
+              {t('mailbox.cc')}:{' '}
+              <LinkifyEmails
+                text={d.cc_addresses}
+                onAdd={onAddContact}
+                onEdit={onEditContact}
+              />
+            </div>
+          )}
           {/* タグ（一覧では出さず、詳細ヘッダの宛先の下にまとめて表示。× で個別に外せる） */}
           {tags && tags.length > 0 && (
             <div className="mt-1.5 flex flex-wrap gap-1">

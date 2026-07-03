@@ -19,7 +19,11 @@ from_name: string | null, to_addresses: string | null,
 /**
  * 宛先の表示名（住所録から解決。無ければ None）。
  */
-to_name: string | null, date: string | null, clean_body: string | null, body_plain: string | null, 
+to_name: string | null, 
+/**
+ * Cc の全アドレス（"名前 <addr>, ..." の表示用文字列。無ければ None）。
+ */
+cc_addresses: string | null, date: string | null, clean_body: string | null, body_plain: string | null, 
 /**
  * HTML 本文（あれば）。レンダラ側でテキスト＋リンクのみ安全描画する。
  */

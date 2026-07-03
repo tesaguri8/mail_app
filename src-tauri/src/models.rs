@@ -465,6 +465,8 @@ pub struct MailDetail {
     pub to_addresses: Option<String>,
     /// 宛先の表示名（住所録から解決。無ければ None）。
     pub to_name: Option<String>,
+    /// Cc の全アドレス（"名前 <addr>, ..." の表示用文字列。無ければ None）。
+    pub cc_addresses: Option<String>,
     pub date: Option<String>,
     pub clean_body: Option<String>,
     pub body_plain: Option<String>,

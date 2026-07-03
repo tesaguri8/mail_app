@@ -462,6 +462,7 @@ fn store_fetches<'a>(
                 from_name: p.from_name,
                 to_addresses: p.to_addresses,
                 to_name: p.to_name,
+                cc_addresses: p.cc_addresses,
                 date: p.date,
                 date_ts: p.date_ts,
                 body_plain: p.body_plain,

@@ -147,6 +147,13 @@ export function MailboxView({
     return Number.isFinite(saved) && saved >= MIN_SIDEBAR_WIDTH ? saved : DEFAULT_SIDEBAR_WIDTH;
   });
   const splitRef = useRef<HTMLDivElement>(null);
+  // 矢印キー移動用の「最新値」ref（早期 return より前の effect から参照する）。
+  const keyNavRef = useRef<{
+    mails: MailSummary[];
+    openedId: number | null;
+    open: (id: number) => void;
+    blocked: boolean;
+  }>({ mails: [], openedId: null, open: () => {}, blocked: false });
   useEffect(() => {
     localStorage.setItem('rondine.mailSidebarW', String(sidebarW));
   }, [sidebarW]);
@@ -237,6 +244,35 @@ export function MailboxView({
         e.preventDefault();
         setSidebarOpen((v) => !v);
       }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // 矢印キーで前後のメールへ移動し、本文も切り替える（一覧は ↑↓、本文閲覧中は ←→）。
+  // 端で止まる。最新の一覧/選択は keyNavRef 経由で参照する。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const nav = keyNavRef.current;
+      if (nav.blocked) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))
+        return;
+      let delta = 0;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') delta = 1;
+      else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') delta = -1;
+      else return;
+      const { mails, openedId, open } = nav;
+      if (mails.length === 0) return;
+      const cur = openedId != null ? mails.findIndex((m) => m.id === openedId) : -1;
+      const next = cur === -1 ? (delta > 0 ? 0 : mails.length - 1) : cur + delta;
+      if (next < 0 || next >= mails.length) {
+        e.preventDefault(); // 端では移動しない（既定スクロールも抑止）
+        return;
+      }
+      e.preventDefault();
+      open(mails[next].id);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -662,8 +698,21 @@ export function MailboxView({
   // 送信済・下書きは自分が差出人なので、一覧では宛先(To)を主に見せる。
   const outgoing = folder === 'sent' || folder === 'drafts';
 
+  // 矢印キー移動（下の effect）が参照する最新値を ref に反映する。
+  // effect 自体は早期 return より前に置く必要があるため、ここでは値の受け渡しだけ行う。
+  keyNavRef.current = {
+    mails: visibleMails,
+    openedId: opened?.id ?? null,
+    open: openMail,
+    blocked: Boolean(menu || tagPicker || compose || sugOpen),
+  };
+
   const listPane = (
-    <div className="flex h-full min-h-0 flex-col">
+    <div
+      className={`flex h-full min-h-0 flex-col ${
+        folder === 'spam' ? 'bg-amber-600/15' : ''
+      }`}
+    >
       {/* アカウント選択＋フォルダ選択（アイコンボタン）を同じ行に置く */}
       <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-2 py-1.5">
         <select
@@ -989,7 +1038,8 @@ export function MailboxView({
           )}
         </div>
 
-        <span className="mx-1 h-5 w-px bg-white/15" />
+        {/* 検索窓は左のまま、以降のボタン類を右へ寄せる */}
+        <span className="flex-1" />
         {/* 新規作成 */}
         <button
           className={iconBtn}

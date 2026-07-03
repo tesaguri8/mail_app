@@ -513,6 +513,58 @@ impl Store {
         Ok(n)
     }
 
+    /// 書きかけのメールをローカルの drafts フォルダへ保存/更新する（IMAP へは上げない）。
+    /// `draft_id` があれば既存行を更新、無ければ新規作成する。保存した下書きの emails.id を返す。
+    pub fn save_draft(&self, d: &crate::models::DraftInput) -> rusqlite::Result<i64> {
+        let now = chrono::Utc::now();
+        let iso = now.to_rfc3339();
+        let ts = now.timestamp();
+        let to = d.to.join(", ");
+        let cc = d.cc.join(", ");
+        let conn = self.conn.lock().unwrap();
+        // 差出人アドレス（一覧・検索の見出し用）はアカウントから引く。
+        let from: Option<String> = conn
+            .query_row(
+                "SELECT email FROM accounts WHERE id = ?1",
+                params![d.account_id as i64],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(id) = d.draft_id {
+            let id = id as i64;
+            conn.execute(
+                "UPDATE emails SET subject = ?1, to_addresses = ?2, cc_addresses = ?3, \
+                   body_plain = ?4, clean_body = ?4, date = ?5, date_ts = ?6 \
+                 WHERE id = ?7 AND folder = 'drafts'",
+                params![d.subject, to, cc, d.body, iso, ts, id],
+            )?;
+            conn.execute(
+                "UPDATE email_fts SET subject = ?1, clean_body = ?2 WHERE rowid = ?3",
+                params![d.subject, d.body, id],
+            )?;
+            return Ok(id);
+        }
+        // 新規: フォルダ接頭辞つきの一意キー（UNIQUE(account_id, canonical_key) を満たす）。
+        let key = format!(
+            "drafts:draft-{}-{}",
+            d.account_id,
+            now.timestamp_nanos_opt().unwrap_or(ts)
+        );
+        conn.execute(
+            "INSERT INTO emails \
+               (account_id, canonical_key, subject, from_address, to_addresses, cc_addresses, \
+                date, date_ts, body_plain, clean_body, folder, is_read) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, 'drafts', 1)",
+            params![d.account_id as i64, key, d.subject, from, to, cc, iso, ts, d.body],
+        )?;
+        let id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO email_fts(rowid, subject, from_address, clean_body) VALUES (?1, ?2, ?3, ?4)",
+            params![id, d.subject, from, d.body],
+        )?;
+        Ok(id)
+    }
+
     /// メール本文の取得（表示用）。差出人/宛先の表示名は住所録から解決する。
     pub fn get_email(&self, id: i64) -> rusqlite::Result<Option<MailDetail>> {
         let conn = self.conn.lock().unwrap();

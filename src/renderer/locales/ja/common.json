@@ -102,7 +102,9 @@
     "quoteHeader": "{{date}} に {{from}} さんが書きました:",
     "forwardSep": "-------- 転送メッセージ --------",
     "signature": "署名",
-    "noSignature": "（署名なし）"
+    "noSignature": "（署名なし）",
+    "keepDraftConfirm": "書きかけのメールを下書きに残しますか？\n\n［OK］下書きに残す ／ ［キャンセル］破棄",
+    "draftSaved": "下書きを保存しました"
   },
   "ctx": {
     "markRead": "既読にする",

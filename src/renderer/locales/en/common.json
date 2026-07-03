@@ -102,7 +102,9 @@
     "quoteHeader": "On {{date}}, {{from}} wrote:",
     "forwardSep": "-------- Forwarded message --------",
     "signature": "Signature",
-    "noSignature": "(No signature)"
+    "noSignature": "(No signature)",
+    "keepDraftConfirm": "Keep this unsent message as a draft?\n\n[OK] Keep draft / [Cancel] Discard",
+    "draftSaved": "Draft saved"
   },
   "ctx": {
     "markRead": "Mark as read",

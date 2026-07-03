@@ -6,6 +6,7 @@ import type { AttachmentSummary } from '@bindings/AttachmentSummary';
 import type { StorageInfo } from '@bindings/StorageInfo';
 import type { RetentionReport } from '@bindings/RetentionReport';
 import type { SendInput } from '@bindings/SendInput';
+import type { DraftInput } from '@bindings/DraftInput';
 import type { RemoteImage } from '@bindings/RemoteImage';
 
 // Tauri v2 は camelCase の引数キーを snake_case の Rust 引数へ自動変換する。
@@ -17,6 +18,10 @@ export const mailSyncCancel = (accountId: number) =>
 
 // メールを送信する（SMTP）。input は差出人アカウント・宛先・件名・本文など。
 export const mailSend = (input: SendInput) => invoke<void>('mail_send', { input });
+
+// 書きかけのメールを下書き（drafts）へ保存/更新する。保存した下書きの id を返す。
+// input.draft_id があれば更新、無ければ新規作成。破棄は mailDelete を使う。
+export const mailSaveDraft = (input: DraftInput) => invoke<number>('mail_save_draft', { input });
 
 // 指定フォルダ（'inbox' | 'sent' | 'drafts' | 'trash' | 'spam'）のメール一覧（新しい順）。
 // accountId が null なら全アカウント横断（「全て」表示）。offset でページング（無限スクロール用）。

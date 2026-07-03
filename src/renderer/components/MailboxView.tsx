@@ -1004,7 +1004,11 @@ export function MailboxView({
         null
       }
       target={compose}
-      onClose={() => setCompose(null)}
+      onClose={() => {
+        setCompose(null);
+        // 送信・下書き保存の結果を一覧へ反映（下書きフォルダ表示中でも見えるように）。
+        void loadMails();
+      }}
     />
   ) : null;
 

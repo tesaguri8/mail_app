@@ -1,7 +1,8 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult,
     ContactGroupSummary, ContactInput, ContactMatch, ContactSummary, DataLocation, DbInfo,
-    DuplicateGroup, GreenDomainEntry, ImportReport, MailDetail, MailSummary, OrgDuplicateGroup,
+    DraftInput, DuplicateGroup, GreenDomainEntry, ImportReport, MailDetail, MailSummary,
+    OrgDuplicateGroup,
     OrganizationDetail, OrganizationSummary, RecipientSuggestion, RemoteImage, RetentionReport,
     SendInput, ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict, StorageInfo,
     SyncProgress, SyncResult, TagSummary,
@@ -639,6 +640,13 @@ pub fn mail_empty_folder(
     store
         .empty_folder(account_id, &folder)
         .map_err(|e| e.to_string())
+}
+
+/// 書きかけのメールを下書き（drafts）へ保存/更新する。保存した下書きの emails.id を返す。
+/// `input.draft_id` があれば更新、無ければ新規作成。破棄は `mail_delete` を使う。
+#[tauri::command]
+pub fn mail_save_draft(store: State<Store>, input: DraftInput) -> Result<i64, String> {
+    store.save_draft(&input).map_err(|e| e.to_string())
 }
 
 /// タグ一覧（使用件数つき）。

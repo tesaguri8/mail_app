@@ -571,6 +571,23 @@ pub struct SendInput {
     pub in_reply_to: Option<String>,
 }
 
+/// 下書きの自動保存の入力（フロントから受け取る。docs/COMPOSE.md）。
+/// 書きかけの内容をローカルの drafts フォルダへ保存する（IMAP へは上げない）。
+/// `draft_id` があれば既存の下書きを更新、無ければ新規作成して id を返す。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct DraftInput {
+    /// 更新対象の下書き（emails.id）。新規保存なら None。
+    pub draft_id: Option<i32>,
+    /// 差出人アカウント（accounts.id）。
+    pub account_id: i32,
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    pub subject: String,
+    /// プレーン本文（署名・引用込みの、その時点の全文）。
+    pub body: String,
+}
+
 /// 同期の進捗（Tauri イベント "sync:progress" のペイロード）。
 /// フォルダごとに current/total を通知する（total は取得予定件数の目安）。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

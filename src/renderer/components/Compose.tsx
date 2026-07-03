@@ -4,7 +4,7 @@ import { Send, X } from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { SignatureSummary } from '@bindings/SignatureSummary';
-import { mailSend } from '../services/mail';
+import { mailDelete, mailSaveDraft, mailSend } from '../services/mail';
 import { signatureList } from '../services/signatures';
 import { getFlyAnimation } from '../config/prefs';
 import { playFlySound } from '../utils/flySound';
@@ -152,6 +152,65 @@ export function Compose({
     applySignature(acc?.signature_id ?? null);
   }, [accountId, signatures, accounts, applySignature]);
 
+  // 下書きの自動保存。ユーザーが何か書き込んだら（dirty）ローカルの drafts へ保存する。
+  // 署名の自動挿入や返信の引用だけでは保存しない（実際に書いたものだけ残す）。
+  const draftIdRef = useRef<number | null>(null);
+  const dirtyRef = useRef(false);
+  const [dirty, setDirty] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const markDirty = () => {
+    if (!dirtyRef.current) {
+      dirtyRef.current = true;
+      setDirty(true);
+    }
+  };
+
+  // 送信中フラグ（ref）。送信直前に立て、保留中の自動保存が送信後に下書きを作らないようにする。
+  const sendingRef = useRef(false);
+
+  // 現在の内容で下書きを保存/更新する（自動保存と、閉じる時の確定保存で共有）。
+  const saveDraft = useCallback(async () => {
+    if (accountId == null || sendingRef.current) return;
+    try {
+      const id = await mailSaveDraft({
+        draft_id: draftIdRef.current,
+        account_id: accountId,
+        to: splitAddresses(to),
+        cc: splitAddresses(cc),
+        subject,
+        body,
+      });
+      draftIdRef.current = id;
+      setSaved(true);
+    } catch {
+      // 自動保存の失敗は致命的でないので黙って無視（次の入力で再試行）。
+    }
+  }, [accountId, to, cc, subject, body]);
+
+  // 入力のたびにデバウンス（1s）して自動保存。dirty になって初めて走る。
+  useEffect(() => {
+    if (!dirty) return;
+    const h = setTimeout(() => void saveDraft(), 1000);
+    return () => clearTimeout(h);
+  }, [dirty, saveDraft]);
+
+  // 閉じる時、書きかけがあれば「下書きに残すか」を確認する。破棄なら保存済みの下書きを消す。
+  const closeGuarded = async () => {
+    if (dirty) {
+      const keep = window.confirm(t('compose.keepDraftConfirm'));
+      if (keep) {
+        await saveDraft(); // 最新の内容で確定保存
+      } else if (draftIdRef.current != null) {
+        try {
+          await mailDelete([draftIdRef.current]);
+        } catch {
+          // 破棄の失敗は致命的でないので無視
+        }
+      }
+    }
+    onClose();
+  };
+
   // 送信アニメーション（つばめ）を使うか（設定・既定オン）。開いた時点の値を採用。
   const [flyOn] = useState(getFlyAnimation);
   const flyRef = useRef<FlySwallowHandle>(null);
@@ -161,6 +220,7 @@ export function Compose({
 
   const onSend = async () => {
     if (accountId == null) return;
+    sendingRef.current = true;
     setSending(true);
     setError('');
     // 送信リクエストは即開始し、その完了を待つ間つばめを飛ばす。
@@ -181,9 +241,19 @@ export function Compose({
       } else {
         await send;
       }
+      // 送信できたら、残っている下書きは不要なので消す。
+      if (draftIdRef.current != null) {
+        try {
+          await mailDelete([draftIdRef.current]);
+        } catch {
+          // 下書き削除の失敗は無視（送信自体は成功している）
+        }
+        draftIdRef.current = null;
+      }
       onClose();
     } catch (e) {
       setError(String(e));
+      sendingRef.current = false; // 送信失敗: 自動保存を再開できるように戻す
     } finally {
       setSending(false);
     }
@@ -197,7 +267,7 @@ export function Compose({
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
           <h2 className="text-sm font-semibold">{t(`compose.${target.mode}`)}</h2>
           <button
-            onClick={onClose}
+            onClick={closeGuarded}
             disabled={sending}
             className="flex h-7 w-7 items-center justify-center rounded-md text-white/55 hover:text-white/85 disabled:opacity-40"
             aria-label={t('account.cancel')}
@@ -229,7 +299,10 @@ export function Compose({
             <RecipientInput
               className={inputCls}
               value={to}
-              onChange={setTo}
+              onChange={(v) => {
+                setTo(v);
+                markDirty();
+              }}
               placeholder={t('compose.toPlaceholder')}
               autoFocus={target.mode === 'new' || target.mode === 'forward'}
             />
@@ -250,7 +323,10 @@ export function Compose({
                 <RecipientInput
                   className={inputCls}
                   value={cc}
-                  onChange={setCc}
+                  onChange={(v) => {
+                    setCc(v);
+                    markDirty();
+                  }}
                   placeholder={t('compose.ccPlaceholder')}
                 />
               </div>
@@ -259,7 +335,10 @@ export function Compose({
                 <RecipientInput
                   className={inputCls}
                   value={bcc}
-                  onChange={setBcc}
+                  onChange={(v) => {
+                    setBcc(v);
+                    markDirty();
+                  }}
                   placeholder={t('compose.bccPlaceholder')}
                 />
               </div>
@@ -272,7 +351,10 @@ export function Compose({
             <input
               className={inputCls}
               value={subject}
-              onChange={(e) => setSubject(e.target.value)}
+              onChange={(e) => {
+                setSubject(e.target.value);
+                markDirty();
+              }}
               placeholder={t('compose.subjectPlaceholder')}
             />
           </div>
@@ -304,7 +386,10 @@ export function Compose({
           <textarea
             className="h-64 w-full resize-none rounded-md bg-white/10 px-3 py-2 text-sm leading-relaxed outline-none placeholder:text-white/30 focus:bg-white/15"
             value={body}
-            onChange={(e) => setBody(e.target.value)}
+            onChange={(e) => {
+              setBody(e.target.value);
+              markDirty();
+            }}
             placeholder={t('compose.bodyPlaceholder')}
           />
         </div>
@@ -323,7 +408,11 @@ export function Compose({
             )}
             {sending ? t('compose.sending') : flyOn ? t('compose.fly') : t('compose.send')}
           </button>
-          {error && <span className="flex-1 truncate text-xs text-rose-300">{error}</span>}
+          {error ? (
+            <span className="flex-1 truncate text-xs text-rose-300">{error}</span>
+          ) : (
+            saved && <span className="flex-1 truncate text-xs text-white/40">{t('compose.draftSaved')}</span>
+          )}
         </div>
 
       {flyOn && <FlySwallow ref={flyRef} />}

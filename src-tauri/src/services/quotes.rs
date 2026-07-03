@@ -259,6 +259,26 @@ mod tests {
     }
 
     #[test]
+    fn splits_rondine_own_reply_format() {
+        // Rondine が生成する返信（compose.quoteHeader: "{{date}} に {{from}} さんが書きました:"）を
+        // 入れ子で重ねたもの。新規部分（再テスト4）だけが残るべき。
+        let body = "再テスト4\n\n\
+2026/7/2 0:24:21 に suematsu@sng-design.com さんが書きました:\n\
+> 再テスト3\n\
+> \n\
+> 2026/7/1 20:36:04 に suematsu@sng-design.com さんが書きました:\n\
+> > 再テスト2\n\
+> > \n\
+> > 2026/7/1 18:09:32 に suematsu@sng-design.com さんが書きました:\n\
+> > > 再テスト\n\
+> > > \n\
+> > > 2026-07-01T08:55:35Z に suematsu@sng-design.com さんが書きました:\n\
+> > > > test";
+        let s = split_reply(body);
+        assert_eq!(s.clean, "再テスト4", "clean was: {:?}", s.clean);
+    }
+
+    #[test]
     fn fingerprint_is_whitespace_stable() {
         assert_eq!(fingerprint("hello   world"), fingerprint("hello world\n"));
         assert_ne!(fingerprint("a"), fingerprint("b"));

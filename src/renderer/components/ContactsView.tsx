@@ -14,6 +14,7 @@ import {
   Download,
   Gem,
   Layers,
+  RotateCcw,
   Save,
   Search,
   StickyNote,
@@ -35,8 +36,11 @@ import {
   contactGet,
   contactImport,
   contactList,
+  contactRestore,
   contactUpsert,
 } from '../services/contacts';
+import { trashRetentionGet } from '../services/trash';
+import { trashDaysLeft } from '../utils/trash';
 import type { CountryCode } from 'libphonenumber-js';
 import { ContactDuplicates } from './ContactDuplicates';
 import { OrgDuplicates } from './OrgDuplicates';
@@ -182,15 +186,26 @@ export function ContactsView({
   const [matches, setMatches] = useState<ContactMatch[]>([]);
   // 新規保存前の重複確認ダイアログの表示。
   const [confirmDup, setConfirmDup] = useState(false);
+  // 削除済み（ゴミ箱）を表示するか、と保持日数（残り日数表示用）。
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [retention, setRetention] = useState(7);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    trashRetentionGet()
+      .then(setRetention)
+      .catch(() => undefined);
+  }, []);
 
   const load = useCallback(
     (q: string, groups: Set<number>) => {
       if (!isTauri) return;
-      contactList(q, [...groups])
-        .then(setItems)
+      // 削除済み表示のときはゴミ箱（削除済みのみ）を出す。
+      contactList(q, [...groups], showDeleted)
+        .then((r) => setItems(showDeleted ? r.filter((c) => c.deleted_at != null) : r))
         .catch(() => undefined);
     },
-    [],
+    [showDeleted],
   );
 
   const reloadTags = useCallback(() => {
@@ -406,6 +421,16 @@ export function ContactsView({
     }
   };
 
+  // ゴミ箱からの復元。
+  const restore = async (id: number) => {
+    try {
+      await contactRestore(id);
+      load(query, tagFilter);
+    } catch {
+      /* noop */
+    }
+  };
+
   // 整理モードは専用の2ペイン画面を全幅で表示する。
   if (cleanup) {
     const exitCleanup = () => {
@@ -462,6 +487,16 @@ export function ContactsView({
               </div>
             )}
             <span className="flex-1" />
+            <button
+              onClick={() => setShowDeleted((v) => !v)}
+              title={t('contact.showDeleted')}
+              aria-label={t('contact.showDeleted')}
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 hover:bg-white/10 hover:text-white ${
+                showDeleted ? 'bg-red-500/25 text-red-200' : 'text-white/70'
+              }`}
+            >
+              <Trash2 size={16} />
+            </button>
             <button
               onClick={() => {
                 setCleanupFocusId(null);
@@ -564,37 +599,74 @@ export function ContactsView({
           </div>
         )}
 
+        {showDeleted && (
+          <div className="mx-3 mb-1 flex items-center gap-1.5 text-[11px] text-red-200/80">
+            <Trash2 size={12} />
+            {t('contact.trashHint', { days: retention })}
+          </div>
+        )}
         <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
           {items.length === 0 ? (
-            <li className="px-2 py-6 text-center text-sm text-white/45">{t('contact.empty')}</li>
+            <li className="px-2 py-6 text-center text-sm text-white/45">
+              {showDeleted ? t('contact.trashEmpty') : t('contact.empty')}
+            </li>
           ) : (
-            items.map((c) => (
-              <li key={c.id}>
-                <button
-                  onClick={() => openContact(c)}
-                  className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left ${
-                    selectedId === c.id ? 'bg-white/20' : 'hover:bg-white/10'
-                  }`}
-                >
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/15 text-xs font-semibold uppercase">
-                    {c.display_name.trim().charAt(0) || <User size={15} />}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-1 truncate text-sm font-medium">
-                      {c.is_favorite && (
-                        <Gem size={12} className="shrink-0 fill-sky-300/30 text-sky-300" />
-                      )}
-                      {c.display_name || t('contact.untitled')}
+            items.map((c) =>
+              c.deleted_at ? (
+                // 削除済み（ゴミ箱）: 赤字＋残り日数＋復元。
+                <li key={c.id}>
+                  <div className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-500/15 text-xs font-semibold uppercase text-red-200">
+                      {c.display_name.trim().charAt(0) || <User size={15} />}
                     </span>
-                    {(c.organization || c.email) && (
-                      <span className="truncate text-xs text-white/45">
-                        {c.organization || c.email}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-red-200">
+                        {c.display_name || t('contact.untitled')}
                       </span>
-                    )}
-                  </span>
-                </button>
-              </li>
-            ))
+                      <span className="block truncate text-xs text-red-300/70">
+                        {t('contact.trashDaysLeft', {
+                          count: trashDaysLeft(c.deleted_at, retention),
+                        })}
+                      </span>
+                    </span>
+                    <button
+                      onClick={() => restore(c.id)}
+                      title={t('contact.restore')}
+                      aria-label={t('contact.restore')}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white"
+                    >
+                      <RotateCcw size={15} />
+                    </button>
+                  </div>
+                </li>
+              ) : (
+                <li key={c.id}>
+                  <button
+                    onClick={() => openContact(c)}
+                    className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left ${
+                      selectedId === c.id ? 'bg-white/20' : 'hover:bg-white/10'
+                    }`}
+                  >
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/15 text-xs font-semibold uppercase">
+                      {c.display_name.trim().charAt(0) || <User size={15} />}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1 truncate text-sm font-medium">
+                        {c.is_favorite && (
+                          <Gem size={12} className="shrink-0 fill-sky-300/30 text-sky-300" />
+                        )}
+                        {c.display_name || t('contact.untitled')}
+                      </span>
+                      {(c.organization || c.email) && (
+                        <span className="truncate text-xs text-white/45">
+                          {c.organization || c.email}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                </li>
+              ),
+            )
           )}
         </ul>
       </aside>

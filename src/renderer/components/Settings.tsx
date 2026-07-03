@@ -32,6 +32,7 @@ import {
 import { countryOptions } from '../utils/phone';
 import { spamSettingsGet, spamSettingsSet } from '../services/spam';
 import { dataLocation, dataRelocate, dataResetLocation } from '../services/data';
+import { trashRetentionGet, trashRetentionSet, trashPurge } from '../services/trash';
 import { AccountSetup } from './AccountSetup';
 import { SignatureManager } from './SignatureManager';
 import { TagManager } from './TagManager';
@@ -103,7 +104,14 @@ export function Settings({
         {section === 'tags' && <TagManager />}
         {section === 'display' && <DisplaySettings />}
         {section === 'spam' && <SpamSettings />}
-        {section === 'data' && <DataLocationSettings />}
+        {section === 'data' && (
+          <div className="space-y-6">
+            <DataLocationSettings />
+            <div className="border-t border-white/10 pt-5">
+              <TrashSettings />
+            </div>
+          </div>
+        )}
         {section === 'about' && (
           <div className="space-y-1 text-sm text-white/70">
             <div className="text-base font-semibold text-white">{APP.productName}</div>
@@ -507,5 +515,72 @@ function ThresholdSlider({
       />
       <span className="mt-0.5 block text-xs text-white/45">{hint}</span>
     </label>
+  );
+}
+
+/** 住所録のゴミ箱設定（論理削除の保持日数・今すぐ完全削除）。 */
+function TrashSettings() {
+  const { t } = useTranslation();
+  const [days, setDays] = useState('7');
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    trashRetentionGet()
+      .then((d) => setDays(String(d)))
+      .catch(() => undefined);
+  }, []);
+
+  const commit = async () => {
+    const n = Math.max(0, Math.round(Number(days)) || 0);
+    setDays(String(n));
+    if (!isTauri) return;
+    try {
+      await trashRetentionSet(n);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+    } catch {
+      /* noop */
+    }
+  };
+
+  const purgeNow = async () => {
+    if (!isTauri) return;
+    if (!window.confirm(t('settings.trashPurgeConfirm'))) return;
+    try {
+      await trashPurge();
+    } catch {
+      /* noop */
+    }
+  };
+
+  return (
+    <div>
+      <div className="text-sm font-semibold text-white">{t('settings.trashTitle')}</div>
+      <p className="mt-0.5 text-xs text-white/45">{t('settings.trashHint')}</p>
+      <div className="mt-3 flex items-end gap-3">
+        <label className="block">
+          <span className="mb-1 block text-xs text-white/50">{t('settings.trashRetention')}</span>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={0}
+              value={days}
+              onChange={(e) => setDays(e.target.value)}
+              onBlur={commit}
+              className="w-24 rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
+            />
+            <span className="text-sm text-white/60">{t('settings.trashDaysUnit')}</span>
+          </div>
+        </label>
+        {saved && <span className="pb-1.5 text-xs text-emerald-300">{t('contact.saved')}</span>}
+      </div>
+      <button
+        onClick={purgeNow}
+        className="mt-3 rounded-md border border-white/20 px-3 py-1.5 text-sm text-white/70 hover:bg-white/10"
+      >
+        {t('settings.trashPurgeNow')}
+      </button>
+    </div>
   );
 }

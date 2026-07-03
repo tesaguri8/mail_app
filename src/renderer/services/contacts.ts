@@ -7,10 +7,11 @@ import type { DuplicateGroup } from '@bindings/DuplicateGroup';
 import type { ContactMatch } from '@bindings/ContactMatch';
 
 // Tauri v2 は camelCase の引数キーを snake_case の Rust 引数へ自動変換する。
-export const contactList = (query?: string, groups?: number[]) =>
+export const contactList = (query?: string, groups?: number[], includeDeleted = false) =>
   invoke<ContactSummary[]>('contact_list', {
     query: query ?? null,
     groups: groups && groups.length > 0 ? groups : null,
+    includeDeleted,
   });
 
 export const contactGet = (id: number) => invoke<ContactSummary>('contact_get', { id });
@@ -18,7 +19,11 @@ export const contactGet = (id: number) => invoke<ContactSummary>('contact_get', 
 export const contactUpsert = (input: ContactInput) =>
   invoke<ContactSummary>('contact_upsert', { input });
 
+/** 連絡先を論理削除（ゴミ箱へ。保持期間後に完全削除）。 */
 export const contactDelete = (id: number) => invoke<void>('contact_delete', { id });
+
+/** 論理削除した連絡先を復元。 */
+export const contactRestore = (id: number) => invoke<void>('contact_restore', { id });
 
 export const contactGroupList = () => invoke<ContactGroupSummary[]>('contact_group_list');
 

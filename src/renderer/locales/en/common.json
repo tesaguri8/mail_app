@@ -173,7 +173,12 @@
     "dupDialogBody": "{{count}} similar contact(s) found. Add as a new contact anyway?",
     "dupOpen": "Open",
     "dupCancel": "Cancel",
-    "dupSaveAnyway": "Add as separate contact"
+    "dupSaveAnyway": "Add as separate contact",
+    "showDeleted": "Show deleted (trash)",
+    "restore": "Restore",
+    "trashHint": "Deleted items stay in the trash for {{days}} days, then are permanently removed.",
+    "trashEmpty": "Trash is empty.",
+    "trashDaysLeft": "{{count}} days until permanent deletion"
   },
   "org": {
     "tab": "Organizations",
@@ -196,7 +201,8 @@
     "mergeTitle": "Merge organizations?",
     "mergeBody": "\"{{from}}\" will be merged into the existing \"{{to}}\". Its {{count}} members move to this organization and \"{{from}}\" is deleted.",
     "mergeConfirm": "Merge",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "trashDaysRestore": "Deleted · {{count}}d left (select to restore)"
   },
   "dupes": {
     "title": "Clean up duplicates",
@@ -276,7 +282,13 @@
     "phoneStyleNational": "National (e.g. 090-1234-5678)",
     "phoneStyleInternational": "International (e.g. +81 90 1234 5678)",
     "postalAutoformat": "Auto-format postal codes",
-    "postalAutoformatHint": "Automatically format Japanese postal codes (7 digits) as NNN-NNNN."
+    "postalAutoformatHint": "Automatically format Japanese postal codes (7 digits) as NNN-NNNN.",
+    "trashTitle": "Address book trash",
+    "trashHint": "Deleted contacts/organizations aren't removed immediately; they stay in the trash for a while, then are permanently deleted. Merging does not count as deletion.",
+    "trashRetention": "Retention",
+    "trashDaysUnit": "days",
+    "trashPurgeNow": "Permanently delete expired now",
+    "trashPurgeConfirm": "Permanently delete trash older than the retention period. Continue?"
   },
   "dataloc": {
     "title": "Data location",

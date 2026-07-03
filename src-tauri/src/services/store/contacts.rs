@@ -151,7 +151,15 @@ impl Store {
                 )
                 .optional()?;
             match name {
-                Some(n) => (Some(oid as i64), Some(n)),
+                Some(n) => {
+                    // 削除済み組織に連絡先を紐づけるなら復活させる（ゴミ箱に所属者を残さない）。
+                    conn.execute(
+                        "UPDATE organizations SET deleted_at = NULL \
+                         WHERE id = ?1 AND deleted_at IS NOT NULL",
+                        params![oid],
+                    )?;
+                    (Some(oid as i64), Some(n))
+                }
                 None => (None, None), // 参照先が消えていれば未所属に倒す
             }
         } else if let Some(name) = input
@@ -963,8 +971,10 @@ impl Store {
         {
             let mut conn = self.conn.lock().unwrap();
             let tx = conn.transaction()?;
+            // 統合先は表に残すので、万一ゴミ箱にあっても復活させる。
             tx.execute(
-                "UPDATE organizations SET name = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                "UPDATE organizations SET name = ?1, deleted_at = NULL, \
+                 updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
                 params![name, keep_id],
             )?;
             for did in drop_ids {

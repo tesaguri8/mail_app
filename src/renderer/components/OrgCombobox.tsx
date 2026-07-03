@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Building2, Check, ChevronDown, Plus } from 'lucide-react';
+import { Building2, Check, ChevronDown, Plus, RotateCcw } from 'lucide-react';
 import type { OrganizationSummary } from '@bindings/OrganizationSummary';
-import { organizationList } from '../services/organizations';
+import { organizationList, organizationRestore } from '../services/organizations';
+import { trashRetentionGet } from '../services/trash';
+import { trashDaysLeft } from '../utils/trash';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 const MAX_SUGGESTIONS = 8;
@@ -35,15 +37,23 @@ export function OrgAutocomplete({
   const [results, setResults] = useState<OrganizationSummary[]>([]);
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(-1);
+  const [retention, setRetention] = useState(7);
   const boxRef = useRef<HTMLDivElement>(null);
   const query = value.trim();
 
-  // 開いている間、入力に応じて組織DBを検索（軽いデバウンス。自分自身は除外）。
+  useEffect(() => {
+    if (!isTauri) return;
+    trashRetentionGet()
+      .then(setRetention)
+      .catch(() => undefined);
+  }, []);
+
+  // 開いている間、入力に応じて組織DBを検索（軽いデバウンス。自分自身は除外。削除済みも含める）。
   useEffect(() => {
     if (!isTauri || !open) return;
     let alive = true;
     const h = setTimeout(() => {
-      organizationList(query)
+      organizationList(query, true)
         .then((r) => {
           if (!alive) return;
           const filtered = excludeId != null ? r.filter((o) => o.id !== excludeId) : r;
@@ -72,7 +82,11 @@ export function OrgAutocomplete({
   const visible = results.slice(0, MAX_SUGGESTIONS);
 
   const pick = (o: OrganizationSummary) => {
-    onSelect(o);
+    // 削除済み（ゴミ箱）の組織を選んだら復活させてから使う。
+    if (o.deleted_at && isTauri) {
+      organizationRestore(o.id).catch(() => undefined);
+    }
+    onSelect({ ...o, deleted_at: null });
     setOpen(false);
     setHighlight(-1);
   };
@@ -131,27 +145,42 @@ export function OrgAutocomplete({
 
       {open && visible.length > 0 && (
         <ul className="absolute left-0 right-0 top-full z-20 mt-1 max-h-60 overflow-y-auto rounded-md border border-white/15 bg-[#141a2e] py-1 shadow-xl">
-          {visible.map((o, i) => (
-            <li key={o.id}>
-              <button
-                type="button"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  pick(o);
-                }}
-                onMouseEnter={() => setHighlight(i)}
-                className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${
-                  i === highlight ? 'bg-white/15' : 'hover:bg-white/10'
-                }`}
-              >
-                <Building2 size={13} className="shrink-0 text-white/40" />
-                <span className="min-w-0 flex-1 truncate">{o.name}</span>
-                <span className="shrink-0 text-xs text-white/40">
-                  {t('org.members', { count: o.member_count })}
-                </span>
-              </button>
-            </li>
-          ))}
+          {visible.map((o, i) => {
+            const deleted = o.deleted_at != null;
+            return (
+              <li key={o.id}>
+                <button
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    pick(o);
+                  }}
+                  onMouseEnter={() => setHighlight(i)}
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${
+                    i === highlight ? 'bg-white/15' : 'hover:bg-white/10'
+                  }`}
+                >
+                  {deleted ? (
+                    <RotateCcw size={13} className="shrink-0 text-red-300" />
+                  ) : (
+                    <Building2 size={13} className="shrink-0 text-white/40" />
+                  )}
+                  <span className={`min-w-0 flex-1 truncate ${deleted ? 'text-red-300' : ''}`}>
+                    {o.name}
+                  </span>
+                  <span
+                    className={`shrink-0 text-xs ${deleted ? 'text-red-300/80' : 'text-white/40'}`}
+                  >
+                    {deleted
+                      ? t('org.trashDaysRestore', {
+                          count: trashDaysLeft(o.deleted_at, retention),
+                        })
+                      : t('org.members', { count: o.member_count })}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

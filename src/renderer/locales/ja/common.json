@@ -173,7 +173,12 @@
     "dupDialogBody": "似た連絡先が {{count}} 件あります。このまま新しく登録しますか？",
     "dupOpen": "開く",
     "dupCancel": "キャンセル",
-    "dupSaveAnyway": "別の連絡先として登録"
+    "dupSaveAnyway": "別の連絡先として登録",
+    "showDeleted": "削除済みを表示（ゴミ箱）",
+    "restore": "復元",
+    "trashHint": "削除した項目はゴミ箱に {{days}} 日間残り、その後完全に削除されます。",
+    "trashEmpty": "ゴミ箱は空です。",
+    "trashDaysLeft": "完全削除まで残り {{count}} 日"
   },
   "org": {
     "tab": "組織",
@@ -196,7 +201,8 @@
     "mergeTitle": "組織を統合しますか？",
     "mergeBody": "「{{from}}」を既存の「{{to}}」に統合します。所属 {{count}} 名がこの組織へ移り、「{{from}}」は削除されます。",
     "mergeConfirm": "統合する",
-    "cancel": "キャンセル"
+    "cancel": "キャンセル",
+    "trashDaysRestore": "削除済み・残り {{count}} 日（選ぶと復元）"
   },
   "dupes": {
     "title": "重複の整理",
@@ -276,7 +282,13 @@
     "phoneStyleNational": "国内表記（例: 090-1234-5678）",
     "phoneStyleInternational": "国際表記（例: +81 90 1234 5678）",
     "postalAutoformat": "郵便番号を自動整形",
-    "postalAutoformatHint": "日本の郵便番号（7桁）を NNN-NNNN の形に自動で整えます。"
+    "postalAutoformatHint": "日本の郵便番号（7桁）を NNN-NNNN の形に自動で整えます。",
+    "trashTitle": "住所録のゴミ箱",
+    "trashHint": "削除した連絡先・組織はすぐには消さず、一定期間ゴミ箱に残してから完全に削除します。統合は削除に当たりません。",
+    "trashRetention": "保持日数",
+    "trashDaysUnit": "日",
+    "trashPurgeNow": "期限切れを今すぐ完全削除",
+    "trashPurgeConfirm": "保持期間を過ぎたゴミ箱を完全に削除します。よろしいですか？"
   },
   "dataloc": {
     "title": "データの保存先",

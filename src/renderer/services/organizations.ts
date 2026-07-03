@@ -3,9 +3,14 @@ import type { OrganizationSummary } from '@bindings/OrganizationSummary';
 import type { OrganizationDetail } from '@bindings/OrganizationDetail';
 import type { OrgDuplicateGroup } from '@bindings/OrgDuplicateGroup';
 
-/** 組織一覧（所属件数つき）。query があれば名前で部分一致。組織コンボボックスの候補に使う。 */
-export const organizationList = (query?: string) =>
-  invoke<OrganizationSummary[]>('organization_list', { query: query ?? null });
+/** 組織一覧（所属件数つき）。query があれば名前で部分一致。組織コンボボックスの候補に使う。
+ *  includeDeleted=true で論理削除済み（ゴミ箱）も含める。 */
+export const organizationList = (query?: string, includeDeleted = false) =>
+  invoke<OrganizationSummary[]>('organization_list', { query: query ?? null, includeDeleted });
+
+/** 論理削除した組織を復元。 */
+export const organizationRestore = (id: number) =>
+  invoke<void>('organization_restore', { id });
 
 /** 組織の詳細（所属連絡先＋共有アドレスを件数つきで）。 */
 export const organizationDetail = (id: number) =>

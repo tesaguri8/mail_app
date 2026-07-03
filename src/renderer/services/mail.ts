@@ -71,6 +71,10 @@ export const mailSetBookmarked = (ids: number[], value: boolean) =>
 
 export const mailDelete = (ids: number[]) => invoke<void>('mail_delete', { ids });
 
+/** 指定フォルダ（trash/spam 等）を空にする。accountId=null で全アカウント。削除件数を返す。 */
+export const mailEmptyFolder = (accountId: number | null, folder: string) =>
+  invoke<number>('mail_empty_folder', { accountId, folder });
+
 // 迷惑としてマーク（学習＋隔離）／非迷惑に戻す（学習＋復帰）。docs/SPAM.md §7.5
 export const mailMarkSpam = (ids: number[]) => invoke<void>('mail_mark_spam', { ids });
 

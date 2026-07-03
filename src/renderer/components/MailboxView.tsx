@@ -32,6 +32,7 @@ import type { SyncProgress } from '@bindings/SyncProgress';
 import type { RecipientSuggestion } from '@bindings/RecipientSuggestion';
 import {
   mailDelete,
+  mailEmptyFolder,
   mailGet,
   mailList,
   mailMarkSpam,
@@ -707,6 +708,20 @@ export function MailboxView({
     blocked: Boolean(menu || tagPicker || compose || sugOpen),
   };
 
+  // ゴミ箱/迷惑メールを空にする（完全削除。確認のうえ実行）。
+  const emptyCurrentFolder = async () => {
+    if (folder !== 'trash' && folder !== 'spam') return;
+    if (!window.confirm(t('mailbox.emptyConfirm', { folder: t(`mailbox.f_${folder}`) }))) return;
+    try {
+      await mailEmptyFolder(queryAccount, folder);
+      setOpened(null);
+      setSelectedIds(new Set());
+      await loadMails();
+    } catch {
+      /* noop */
+    }
+  };
+
   const listPane = (
     <div
       className={`flex h-full min-h-0 flex-col ${
@@ -763,6 +778,19 @@ export function MailboxView({
         <DateFilter value={dateFilter} onChange={setDateFilter} />
         <TagFilter tags={tags} value={tagFilter} onChange={setTagFilter} />
       </div>
+      {/* ゴミ箱/迷惑メール: フィルタ群の下に「空にする」（完全削除）ボタン */}
+      {(folder === 'trash' || folder === 'spam') && (
+        <div className="flex shrink-0 items-center justify-center border-b border-white/10 px-2 py-1">
+          <button
+            onClick={emptyCurrentFolder}
+            disabled={mails.length === 0}
+            className="flex items-center gap-1.5 rounded-md border border-red-400/40 px-3 py-1 text-xs text-red-200 hover:bg-red-500/25 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Trash2 size={13} />
+            {t('mailbox.emptyFolder', { folder: t(`mailbox.f_${folder}`) })}
+          </button>
+        </div>
+      )}
       {/* 選択中のタグ: 次の行にチップで並べ、× で個別に解除。右端に全解除ボタン */}
       {tagFilter.size > 0 && (
         <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-white/10 px-2 py-1.5">

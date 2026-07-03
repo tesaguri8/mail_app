@@ -481,6 +481,38 @@ impl Store {
         tx.commit()
     }
 
+    /// 指定フォルダを空にする（全メールを完全削除）。`account_id` が None なら全アカウント。
+    /// 削除件数を返す。ゴミ箱/迷惑メールの「空にする」で使う。
+    pub fn empty_folder(
+        &self,
+        account_id: Option<i64>,
+        folder: &str,
+    ) -> rusqlite::Result<i32> {
+        let ids: Vec<i64> = {
+            let conn = self.conn.lock().unwrap();
+            match account_id {
+                Some(a) => {
+                    let mut stmt = conn
+                        .prepare("SELECT id FROM emails WHERE folder = ?1 AND account_id = ?2")?;
+                    let v: Vec<i64> = stmt
+                        .query_map(params![folder, a], |r| r.get(0))?
+                        .collect::<rusqlite::Result<_>>()?;
+                    v
+                }
+                None => {
+                    let mut stmt = conn.prepare("SELECT id FROM emails WHERE folder = ?1")?;
+                    let v: Vec<i64> = stmt
+                        .query_map(params![folder], |r| r.get(0))?
+                        .collect::<rusqlite::Result<_>>()?;
+                    v
+                }
+            }
+        };
+        let n = ids.len() as i32;
+        self.delete_emails(&ids)?;
+        Ok(n)
+    }
+
     /// メール本文の取得（表示用）。差出人/宛先の表示名は住所録から解決する。
     pub fn get_email(&self, id: i64) -> rusqlite::Result<Option<MailDetail>> {
         let conn = self.conn.lock().unwrap();

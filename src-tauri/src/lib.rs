@@ -64,6 +64,7 @@ pub fn run() {
             commands::mail_set_starred,
             commands::mail_set_bookmarked,
             commands::mail_delete,
+            commands::mail_empty_folder,
             commands::tag_list,
             commands::tag_create,
             commands::tag_update,

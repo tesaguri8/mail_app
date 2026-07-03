@@ -475,6 +475,18 @@ pub fn mail_delete(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
     store.delete_emails(&ids).map_err(|e| e.to_string())
 }
 
+/// 指定フォルダ（trash/spam 等）を空にする。`account_id` が None なら全アカウント。削除件数を返す。
+#[tauri::command]
+pub fn mail_empty_folder(
+    store: State<Store>,
+    account_id: Option<i64>,
+    folder: String,
+) -> Result<i32, String> {
+    store
+        .empty_folder(account_id, &folder)
+        .map_err(|e| e.to_string())
+}
+
 /// タグ一覧（使用件数つき）。
 #[tauri::command]
 pub fn tag_list(store: State<Store>) -> Result<Vec<TagSummary>, String> {

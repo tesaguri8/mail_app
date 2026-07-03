@@ -322,6 +322,34 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
             log::warn!("スレッド再割当に失敗（email_id={id}）: {err}");
         }
     }
+    // clean_body（引用/署名を除いた新規部分）を新エンジンの分離結果に更新する。
+    // 旧パーサ（行頭 `>` を消すだけ）で取り込んだ古いメールは、`-----Original Message-----` や
+    // `On … wrote:` の引用が本文に残ったままになっている。点検再取り込みでバブル表示を正す。
+    // 全文(body_plain)は据え置き（「引用を表示」用）。
+    if let Some(new_clean) = e.clean_body.as_deref() {
+        let stored_clean: Option<String> = conn.query_row(
+            "SELECT clean_body FROM emails WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )?;
+        if stored_clean.as_deref() != Some(new_clean) {
+            let fp = if new_clean.trim().is_empty() {
+                None
+            } else {
+                Some(crate::services::quotes::fingerprint(new_clean))
+            };
+            conn.execute(
+                "UPDATE emails SET clean_body = ?1, body_fingerprint = ?2 WHERE id = ?3",
+                params![new_clean, fp, id],
+            )?;
+            // FTS（clean_body 索引）も揃える。
+            conn.execute(
+                "UPDATE email_fts SET clean_body = ?1 WHERE rowid = ?2",
+                params![new_clean, id],
+            )?;
+            touched = true;
+        }
+    }
     // 添付行が無ければ挿入する（重複防止）。
     let existing: i64 = conn.query_row(
         "SELECT count(*) FROM attachments WHERE email_id = ?1",
@@ -1086,6 +1114,70 @@ mod tests {
         // ローカルで既読のものは、サーバー未読でも未読へ巻き戻さない。
         insert_email(&conn, &mk("k-seen", false)).unwrap();
         assert_eq!(read_of("k-seen"), 1);
+    }
+
+    /// 点検再取り込み（backfill）で、旧パーサ由来の clean_body が新エンジンの分離結果に更新される。
+    #[test]
+    fn resync_recomputes_clean_body() {
+        let store = test_store();
+        let conn = store.conn.lock().unwrap();
+        let mk = |clean: &str| NewEmail {
+            account_id: 1,
+            message_id: Some("m@x".into()),
+            canonical_key: "m@x".into(),
+            subject: Some("s".into()),
+            from_address: Some("a@b".into()),
+            from_name: None,
+            to_addresses: None,
+            to_name: None,
+            cc_addresses: None,
+            date: Some("2026-01-01T00:00:00Z".into()),
+            date_ts: Some(1_767_225_600),
+            body_plain: Some("新規部分\n-----Original Message-----\n古い引用".into()),
+            clean_body: Some(clean.into()),
+            body_html: None,
+            auth_result: None,
+            list_id: None,
+            in_reply_to: None,
+            references_ids: None,
+            thread_index: None,
+            raw_headers: None,
+            quotes: vec![],
+            has_attachments: false,
+            is_read: true,
+            uid: None,
+            folder: "inbox".into(),
+            attachments: vec![],
+        };
+        // 旧データ相当: 引用が残ったままの clean_body で保存。
+        let old_clean = "新規部分\n-----Original Message-----\n古い引用";
+        assert!(matches!(
+            insert_email(&conn, &mk(old_clean)).unwrap(),
+            InsertOutcome::Inserted(_)
+        ));
+        // 再取り込み: 新エンジンの分離結果（新規部分だけ）で backfill。
+        let did = matches!(
+            insert_email(&conn, &mk("新規部分")).unwrap(),
+            InsertOutcome::Backfilled
+        );
+        assert!(did);
+        let stored: String = conn
+            .query_row(
+                "SELECT clean_body FROM emails WHERE canonical_key = 'm@x'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "新規部分");
+        // FTS も更新され、引用語では当たらず新規部分で当たる。
+        let hit_new: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM email_fts WHERE email_fts MATCH '新規部分'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hit_new, 1);
     }
 
     #[test]

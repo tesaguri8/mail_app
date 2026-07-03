@@ -6,6 +6,12 @@
 # 作業ツリーを CRLF にしないことで「改行だけの差分（見かけ上の M）」を消す。
 src/bindings/** text eol=lf
 
+# Tauri/cargo/sync スクリプトが書き換える設定ファイルは LF 固定。
+# autocrlf=true でも作業ツリーを CRLF にせず、「改行だけの差分（見かけ上の M）」を消す。
+src-tauri/tauri.conf.json text eol=lf
+src-tauri/Cargo.toml text eol=lf
+src-tauri/Cargo.lock text eol=lf
+
 # バイナリ（改行変換しない）
 *.png binary
 *.jpg binary

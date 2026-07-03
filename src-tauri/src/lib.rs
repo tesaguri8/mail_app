@@ -21,6 +21,12 @@ pub fn run() {
             let db_path = datadir::db_path(&base);
             log::info!("opening database at {}", db_path.display());
             let store = Store::open(&db_path).expect("failed to open database");
+            // 起動時に、保持期間を過ぎたゴミ箱（連絡先・組織の論理削除）を完全削除する。
+            if let Ok(days) = store.trash_retention_days() {
+                if let Err(e) = store.purge_expired_trash(days) {
+                    log::warn!("trash purge on startup failed: {e}");
+                }
+            }
             app.manage(store);
             // 同期のキャンセル状態（中断ボタン用）。
             app.manage(commands::SyncControl::default());
@@ -75,13 +81,18 @@ pub fn run() {
             commands::recipient_suggest,
             commands::contact_upsert,
             commands::contact_delete,
+            commands::contact_restore,
             commands::contact_group_list,
             commands::organization_list,
             commands::organization_detail,
             commands::organization_upsert,
             commands::organization_delete,
+            commands::organization_restore,
             commands::organization_find_duplicates,
             commands::organization_merge,
+            commands::trash_retention_get,
+            commands::trash_retention_set,
+            commands::trash_purge,
             commands::contact_import,
             commands::contact_find_duplicates,
             commands::contact_find_matches,

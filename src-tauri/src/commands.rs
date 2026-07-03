@@ -654,9 +654,14 @@ pub fn contact_list(
     store: State<Store>,
     query: Option<String>,
     groups: Option<Vec<i64>>,
+    include_deleted: Option<bool>,
 ) -> Result<Vec<ContactSummary>, String> {
     store
-        .list_contacts(query.as_deref(), &groups.unwrap_or_default())
+        .list_contacts(
+            query.as_deref(),
+            &groups.unwrap_or_default(),
+            include_deleted.unwrap_or(false),
+        )
         .map_err(|e| e.to_string())
 }
 
@@ -688,10 +693,16 @@ pub fn contact_upsert(store: State<Store>, input: ContactInput) -> Result<Contac
     store.upsert_contact(&input).map_err(|e| e.to_string())
 }
 
-/// 連絡先を削除。
+/// 連絡先を論理削除（ゴミ箱へ。保持期間後に完全削除）。
 #[tauri::command]
 pub fn contact_delete(store: State<Store>, id: i64) -> Result<(), String> {
     store.delete_contact(id).map_err(|e| e.to_string())
+}
+
+/// 論理削除した連絡先を復元。
+#[tauri::command]
+pub fn contact_restore(store: State<Store>, id: i64) -> Result<(), String> {
+    store.restore_contact(id).map_err(|e| e.to_string())
 }
 
 /// 連絡先グループ一覧（所属件数つき）。
@@ -705,9 +716,10 @@ pub fn contact_group_list(store: State<Store>) -> Result<Vec<ContactGroupSummary
 pub fn organization_list(
     store: State<Store>,
     query: Option<String>,
+    include_deleted: Option<bool>,
 ) -> Result<Vec<OrganizationSummary>, String> {
     store
-        .list_organizations(query.as_deref())
+        .list_organizations(query.as_deref(), include_deleted.unwrap_or(false))
         .map_err(|e| e.to_string())
 }
 
@@ -717,7 +729,7 @@ pub fn organization_detail(store: State<Store>, id: i64) -> Result<OrganizationD
     store.organization_detail(id).map_err(|e| e.to_string())
 }
 
-/// 組織を削除する。所属している連絡先があるときは削除しない（安全側）。
+/// 組織を論理削除する。所属している連絡先があるときは削除しない（安全側）。
 #[tauri::command]
 pub fn organization_delete(store: State<Store>, id: i64) -> Result<(), String> {
     if store.delete_organization(id).map_err(|e| e.to_string())? {
@@ -725,6 +737,31 @@ pub fn organization_delete(store: State<Store>, id: i64) -> Result<(), String> {
     } else {
         Err("所属している連絡先がある組織は削除できません".to_string())
     }
+}
+
+/// 論理削除した組織を復元。
+#[tauri::command]
+pub fn organization_restore(store: State<Store>, id: i64) -> Result<(), String> {
+    store.restore_organization(id).map_err(|e| e.to_string())
+}
+
+/// ゴミ箱の保持日数を取得（既定 7 日）。
+#[tauri::command]
+pub fn trash_retention_get(store: State<Store>) -> Result<i64, String> {
+    store.trash_retention_days().map_err(|e| e.to_string())
+}
+
+/// ゴミ箱の保持日数を保存。
+#[tauri::command]
+pub fn trash_retention_set(store: State<Store>, days: i64) -> Result<(), String> {
+    store.set_trash_retention_days(days).map_err(|e| e.to_string())
+}
+
+/// 保持期間を過ぎたゴミ箱を今すぐ完全削除する（設定変更後などに呼べる）。
+#[tauri::command]
+pub fn trash_purge(store: State<Store>) -> Result<(), String> {
+    let days = store.trash_retention_days().map_err(|e| e.to_string())?;
+    store.purge_expired_trash(days).map_err(|e| e.to_string())
 }
 
 /// 組織を作成/編集する（名前・メモ）。id 指定で更新、無ければ新規。

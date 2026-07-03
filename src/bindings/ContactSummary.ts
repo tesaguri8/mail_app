@@ -69,6 +69,10 @@ is_business: boolean,
  */
 allow_remote_images: boolean, 
 /**
+ * 論理削除（ゴミ箱）の日時（UTC 文字列）。非 null＝削除済み（保持期間後に完全削除）。
+ */
+deleted_at: string | null, 
+/**
  * ラベル付き複数メール（詳細取得時のみ充填。一覧では空）。
  */
 emails: Array<ContactValue>, 

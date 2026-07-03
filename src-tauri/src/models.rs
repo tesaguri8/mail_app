@@ -225,6 +225,8 @@ pub struct ContactSummary {
     pub is_business: bool,
     /// この相手からのメールで外部画像を許可（docs/MAIL_SECURITY.md）。
     pub allow_remote_images: bool,
+    /// 論理削除（ゴミ箱）の日時（UTC 文字列）。非 null＝削除済み（保持期間後に完全削除）。
+    pub deleted_at: Option<String>,
     /// ラベル付き複数メール（詳細取得時のみ充填。一覧では空）。
     pub emails: Vec<ContactValue>,
     /// ラベル付き複数電話（同上）。
@@ -368,8 +370,10 @@ pub struct OrganizationSummary {
     pub name: String,
     pub name_kana: Option<String>,
     pub note: Option<String>,
-    /// この組織に所属する連絡先の件数。
+    /// この組織に所属する連絡先の件数（削除済みは除く）。
     pub member_count: i32,
+    /// 論理削除（ゴミ箱）の日時（UTC 文字列）。非 null＝削除済み。
+    pub deleted_at: Option<String>,
 }
 
 /// 組織の共有アドレス（会社の代表 info@ / 代表電話 / 代表FAX 等）。

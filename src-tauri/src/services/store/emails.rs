@@ -297,9 +297,10 @@ fn contact_name_for(
     let lower = addr.to_lowercase();
     conn.query_row(
         "SELECT display_name FROM contacts c
-         WHERE lower(c.email) = ?1
-            OR EXISTS (SELECT 1 FROM contact_emails ce
-                       WHERE ce.contact_id = c.id AND lower(ce.value) = ?1)
+         WHERE c.deleted_at IS NULL
+            AND (lower(c.email) = ?1
+                 OR EXISTS (SELECT 1 FROM contact_emails ce
+                            WHERE ce.contact_id = c.id AND lower(ce.value) = ?1))
          ORDER BY c.is_favorite DESC LIMIT 1",
         params![lower],
         |r| r.get::<_, Option<String>>(0),
@@ -313,11 +314,12 @@ fn contact_name_for(
 /// from_address は素のメールアドレスなので、小文字化の完全一致（式インデックス）で高速に照合する。
 fn known_vip_cols(from_col: &str) -> String {
     format!(
-        "(EXISTS (SELECT 1 FROM contacts c WHERE lower(c.email) = lower({from_col})) \
-          OR EXISTS (SELECT 1 FROM contact_emails ce WHERE lower(ce.value) = lower({from_col}))) AS is_known, \
-         (EXISTS (SELECT 1 FROM contacts c WHERE c.is_favorite = 1 AND lower(c.email) = lower({from_col})) \
+        "(EXISTS (SELECT 1 FROM contacts c WHERE c.deleted_at IS NULL AND lower(c.email) = lower({from_col})) \
+          OR EXISTS (SELECT 1 FROM contact_emails ce JOIN contacts c3 ON c3.id = ce.contact_id \
+                     WHERE c3.deleted_at IS NULL AND lower(ce.value) = lower({from_col}))) AS is_known, \
+         (EXISTS (SELECT 1 FROM contacts c WHERE c.deleted_at IS NULL AND c.is_favorite = 1 AND lower(c.email) = lower({from_col})) \
           OR EXISTS (SELECT 1 FROM contact_emails ce JOIN contacts c2 ON c2.id = ce.contact_id \
-                     WHERE c2.is_favorite = 1 AND lower(ce.value) = lower({from_col}))) AS is_vip"
+                     WHERE c2.deleted_at IS NULL AND c2.is_favorite = 1 AND lower(ce.value) = lower({from_col}))) AS is_vip"
     )
 }
 

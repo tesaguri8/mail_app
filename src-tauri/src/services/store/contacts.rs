@@ -31,6 +31,7 @@ fn row_to_contact(r: &Row) -> rusqlite::Result<ContactSummary> {
         is_business: r.get::<_, i64>(16)? != 0,
         allow_remote_images: r.get::<_, i64>(17)? != 0,
         org_id: r.get::<_, Option<i64>>(18)?.map(|v| v as i32),
+        deleted_at: r.get(19)?,
         emails: Vec::new(),
         phones: Vec::new(),
         addresses: Vec::new(),
@@ -40,16 +41,18 @@ fn row_to_contact(r: &Row) -> rusqlite::Result<ContactSummary> {
 
 const CONTACT_COLS: &str = "id, display_name, family_name, given_name, phonetic_family, \
      phonetic_given, name_kana, email, phone, organization, org_title, org_department, \
-     address, birthday, note, is_favorite, is_business, allow_remote_images, org_id";
+     address, birthday, note, is_favorite, is_business, allow_remote_images, org_id, deleted_at";
 
 impl Store {
     /// 連絡先一覧。`query` があれば名前/よみ/メール/組織を部分一致で絞り込む。
     /// `groups` が非空なら、いずれかのタグを持つ連絡先に絞る（OR。メール側と同じ挙動）。
+    /// `include_deleted` が false なら論理削除済みを除く（既定の一覧）。true なら削除済みも含める。
     /// お気に入りを先頭に、次いで よみ→表示名 で並べる。
     pub fn list_contacts(
         &self,
         query: Option<&str>,
         groups: &[i64],
+        include_deleted: bool,
     ) -> rusqlite::Result<Vec<ContactSummary>> {
         let conn = self.conn.lock().unwrap();
         let order = "ORDER BY is_favorite DESC, \
@@ -63,6 +66,9 @@ impl Store {
         let mut conds: Vec<String> = Vec::new();
         let mut binds: Vec<&dyn rusqlite::ToSql> = Vec::new();
         let mut n = 0;
+        if !include_deleted {
+            conds.push("deleted_at IS NULL".to_string());
+        }
         if let Some(l) = &like {
             n += 1;
             conds.push(format!(
@@ -248,10 +254,40 @@ impl Store {
         self.get_contact(id)
     }
 
-    /// 連絡先を削除（グループ所属も外れる。ON DELETE CASCADE）。
+    /// 連絡先を論理削除（ゴミ箱へ。deleted_at を立てて一覧から隠す。保持期間後に完全削除）。
     pub fn delete_contact(&self, id: i64) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM contacts WHERE id = ?1", params![id])?;
+        conn.execute(
+            "UPDATE contacts SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    /// 論理削除した連絡先を復元する（deleted_at をクリア）。
+    pub fn restore_contact(&self, id: i64) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE contacts SET deleted_at = NULL WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    /// 保持期間（日数）を過ぎたゴミ箱を完全削除する（連絡先・組織）。起動時などに呼ぶ。
+    pub fn purge_expired_trash(&self, retention_days: i64) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let cutoff = format!("-{} days", retention_days.max(0));
+        conn.execute(
+            "DELETE FROM contacts WHERE deleted_at IS NOT NULL \
+             AND deleted_at <= datetime('now', ?1)",
+            params![cutoff],
+        )?;
+        conn.execute(
+            "DELETE FROM organizations WHERE deleted_at IS NOT NULL \
+             AND deleted_at <= datetime('now', ?1)",
+            params![cutoff],
+        )?;
         Ok(())
     }
 
@@ -322,7 +358,7 @@ impl Store {
     /// 重複候補を record linkage で束ねて返す（2 件以上のみ、確信度順）。
     /// 検出ロジックは services::dedupe。全メール/全電話（子テーブル）を材料に渡す。
     pub fn find_duplicate_groups(&self) -> rusqlite::Result<Vec<DuplicateGroup>> {
-        let mut contacts = self.list_contacts(None, &[])?;
+        let mut contacts = self.list_contacts(None, &[], false)?;
         let conn = self.conn.lock().unwrap();
         let collect =
             |table: &str| -> rusqlite::Result<std::collections::HashMap<i64, Vec<String>>> {
@@ -414,7 +450,8 @@ impl Store {
                 continue;
             }
             let mut stmt = conn.prepare(
-                "SELECT contact_id FROM contact_emails WHERE lower(value) = ?1 AND is_shared = 0",
+                "SELECT ce.contact_id FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id \
+                 WHERE lower(ce.value) = ?1 AND ce.is_shared = 0 AND c.deleted_at IS NULL",
             )?;
             let rows = stmt.query_map(params![norm], |r| r.get::<_, i64>(0))?;
             for cid in rows {
@@ -424,8 +461,11 @@ impl Store {
 
         // 電話/FAX 一致（数字正規化・共有は除外。元の入力文字列を返す）。
         if !want_phones.is_empty() {
-            let mut stmt =
-                conn.prepare("SELECT contact_id, value FROM contact_phones WHERE is_shared = 0")?;
+            let mut stmt = conn.prepare(
+                "SELECT cp.contact_id, cp.value FROM contact_phones cp \
+                 JOIN contacts c ON c.id = cp.contact_id \
+                 WHERE cp.is_shared = 0 AND c.deleted_at IS NULL",
+            )?;
             let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
             for row in rows {
                 let (cid, val) = row?;
@@ -441,9 +481,10 @@ impl Store {
             }
         }
 
-        // 氏名一致（畳んで空白除去した完全一致）。
+        // 氏名一致（畳んで空白除去した完全一致。削除済みは除く）。
         if let Some(name) = &want_name {
-            let mut stmt = conn.prepare("SELECT id, display_name FROM contacts")?;
+            let mut stmt =
+                conn.prepare("SELECT id, display_name FROM contacts WHERE deleted_at IS NULL")?;
             let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
             for row in rows {
                 let (cid, dn) = row?;
@@ -657,11 +698,13 @@ impl Store {
         self.get_contact(keep_id)
     }
 
-    /// 組織一覧（所属件数つき、名前順）。`query` があれば名前で部分一致。
+    /// 組織一覧（所属件数つき＝削除済み連絡先は数えない、名前順）。`query` があれば名前で部分一致。
+    /// `include_deleted` が true なら論理削除済みの組織も含める（ゴミ箱・赤字表示用）。
     /// 組織コンボボックスの候補・組織一覧に使う。
     pub fn list_organizations(
         &self,
         query: Option<&str>,
+        include_deleted: bool,
     ) -> rusqlite::Result<Vec<OrganizationSummary>> {
         let conn = self.conn.lock().unwrap();
         // 語順に依存しない部分一致: 空白で分割した各トークンをすべて含む名前に絞る
@@ -675,20 +718,25 @@ impl Store {
                     .collect()
             })
             .unwrap_or_default();
-        let where_sql = if tokens.is_empty() {
+        let mut conds: Vec<String> = Vec::new();
+        if !include_deleted {
+            conds.push("o.deleted_at IS NULL".to_string());
+        }
+        for n in 1..=tokens.len() {
+            conds.push(format!(
+                "(o.name LIKE ?{n} ESCAPE '\\' OR o.name_kana LIKE ?{n} ESCAPE '\\')"
+            ));
+        }
+        let where_sql = if conds.is_empty() {
             String::new()
         } else {
-            let conds: Vec<String> = (1..=tokens.len())
-                .map(|n| {
-                    format!("(o.name LIKE ?{n} ESCAPE '\\' OR o.name_kana LIKE ?{n} ESCAPE '\\')")
-                })
-                .collect();
             format!("WHERE {}", conds.join(" AND "))
         };
         let sql = format!(
             "SELECT o.id, o.name, o.name_kana, o.note, \
-                    (SELECT count(*) FROM contacts c WHERE c.org_id = o.id) AS cnt \
-             FROM organizations o {where_sql} ORDER BY o.name COLLATE NOCASE"
+                    (SELECT count(*) FROM contacts c WHERE c.org_id = o.id AND c.deleted_at IS NULL) AS cnt, \
+                    o.deleted_at \
+             FROM organizations o {where_sql} ORDER BY o.deleted_at IS NOT NULL, o.name COLLATE NOCASE"
         );
         let mut stmt = conn.prepare(&sql)?;
         let binds: Vec<&dyn rusqlite::ToSql> =
@@ -700,17 +748,19 @@ impl Store {
                 name_kana: r.get(2)?,
                 note: r.get(3)?,
                 member_count: r.get::<_, i64>(4)? as i32,
+                deleted_at: r.get(5)?,
             })
         })?;
         rows.collect()
     }
 
-    /// 単一の組織を件数つきで取得。
+    /// 単一の組織を件数つきで取得（所属件数は削除済み連絡先を除く）。
     pub fn get_organization(&self, id: i64) -> rusqlite::Result<OrganizationSummary> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
             "SELECT o.id, o.name, o.name_kana, o.note, \
-                    (SELECT count(*) FROM contacts c WHERE c.org_id = o.id) \
+                    (SELECT count(*) FROM contacts c WHERE c.org_id = o.id AND c.deleted_at IS NULL), \
+                    o.deleted_at \
              FROM organizations o WHERE o.id = ?1",
             params![id],
             |r| {
@@ -720,6 +770,7 @@ impl Store {
                     name_kana: r.get(2)?,
                     note: r.get(3)?,
                     member_count: r.get::<_, i64>(4)? as i32,
+                    deleted_at: r.get(5)?,
                 })
             },
         )
@@ -761,20 +812,33 @@ impl Store {
         self.get_organization(oid)
     }
 
-    /// 組織を削除する。所属連絡先があるときは削除せず false を返す（安全側）。
-    /// 削除できたら true。
+    /// 組織を論理削除する（ゴミ箱へ）。所属連絡先（削除済みを除く）があるときは
+    /// 削除せず false を返す（安全側）。削除できたら true。保持期間後に完全削除。
     pub fn delete_organization(&self, id: i64) -> rusqlite::Result<bool> {
         let conn = self.conn.lock().unwrap();
         let count: i64 = conn.query_row(
-            "SELECT count(*) FROM contacts WHERE org_id = ?1",
+            "SELECT count(*) FROM contacts WHERE org_id = ?1 AND deleted_at IS NULL",
             params![id],
             |r| r.get(0),
         )?;
         if count > 0 {
             return Ok(false);
         }
-        conn.execute("DELETE FROM organizations WHERE id = ?1", params![id])?;
+        conn.execute(
+            "UPDATE organizations SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?1",
+            params![id],
+        )?;
         Ok(true)
+    }
+
+    /// 論理削除した組織を復元する（deleted_at をクリア）。
+    pub fn restore_organization(&self, id: i64) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE organizations SET deleted_at = NULL WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
     }
 
     /// 組織の詳細（所属連絡先＋共有アドレスを件数つきで）。住所録の「組織」タブ用。
@@ -783,7 +847,7 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         // 所属連絡先（軽量。お気に入り→よみ→表示名）。
         let sql = format!(
-            "SELECT {CONTACT_COLS} FROM contacts WHERE org_id = ?1 \
+            "SELECT {CONTACT_COLS} FROM contacts WHERE org_id = ?1 AND deleted_at IS NULL \
              ORDER BY is_favorite DESC, name_kana COLLATE NOCASE, display_name COLLATE NOCASE"
         );
         let members: Vec<ContactSummary> = {
@@ -852,7 +916,7 @@ impl Store {
     /// 「株式会社◯◯」と「(株)◯◯」など法人格・表記ゆれを同一グループにする。
     pub fn find_organization_duplicates(&self) -> rusqlite::Result<Vec<OrgDuplicateGroup>> {
         use std::collections::HashMap;
-        let orgs = self.list_organizations(None)?;
+        let orgs = self.list_organizations(None, false)?;
         let mut map: HashMap<String, Vec<OrganizationSummary>> = HashMap::new();
         for o in orgs {
             let key = crate::services::dedupe::normalize_org(&o.name);
@@ -1247,16 +1311,23 @@ fn load_tags(conn: &Connection, cid: i64) -> rusqlite::Result<Vec<String>> {
 }
 
 /// 組織名から id を得る（無ければ作成。名前は trim して比較・保存）。
+/// 論理削除された組織に一致した場合は復活させて再利用する（重複作成を避ける）。
 fn find_or_create_org(conn: &Connection, name: &str) -> rusqlite::Result<i64> {
     let name = name.trim();
-    if let Some(id) = conn
+    if let Some((id, deleted)) = conn
         .query_row(
-            "SELECT id FROM organizations WHERE name = ?1",
+            "SELECT id, deleted_at IS NOT NULL FROM organizations WHERE name = ?1",
             params![name],
-            |r| r.get::<_, i64>(0),
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)? != 0)),
         )
         .optional()?
     {
+        if deleted {
+            conn.execute(
+                "UPDATE organizations SET deleted_at = NULL WHERE id = ?1",
+                params![id],
+            )?;
+        }
         return Ok(id);
     }
     conn.execute("INSERT INTO organizations (name) VALUES (?1)", params![name])?;
@@ -1374,7 +1445,7 @@ mod tests {
             "BEGIN:VCARD\nVERSION:3.0\nFN:多重 花子\nEMAIL;type=pref:a@x.jp\nEMAIL:b@x.jp\nEMAIL:c@x.jp\nTEL:090-1\nEND:VCARD\n",
         );
         s.import_contacts(&p).unwrap();
-        let c = s.list_contacts(None, &[]).unwrap().remove(0);
+        let c = s.list_contacts(None, &[], false).unwrap().remove(0);
         let got = s.get_contact(c.id as i64).unwrap();
         assert_eq!(got.emails.len(), 3, "追加メールも子テーブルに入る");
         assert!(got.emails[0].is_primary);
@@ -1458,7 +1529,7 @@ mod tests {
             "BEGIN:VCARD\nVERSION:3.0\nFN:タグ 太郎\nCATEGORIES:施主,設計事務所\nEND:VCARD\n",
         );
         s.import_contacts(&p).unwrap();
-        let id = s.list_contacts(None, &[]).unwrap()[0].id as i64;
+        let id = s.list_contacts(None, &[], false).unwrap()[0].id as i64;
         let c = s.get_contact(id).unwrap();
         assert!(c.tags.contains(&"施主".to_string()));
         assert!(c.tags.contains(&"設計事務所".to_string()));
@@ -1479,7 +1550,7 @@ mod tests {
             conn.query_row("SELECT id FROM tags WHERE name = 'VIP'", [], |r| r.get(0))
                 .unwrap()
         };
-        let filtered = s.list_contacts(None, &[tag_id]).unwrap();
+        let filtered = s.list_contacts(None, &[tag_id], false).unwrap();
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].id, c.id);
     }
@@ -1491,7 +1562,7 @@ mod tests {
             "BEGIN:VCARD\nVERSION:3.0\nFN:多値 太郎\nTEL;type=CELL:090-1111\nTEL;type=WORK:03-2222\nTEL:03-3333\nADR;type=HOME:;;番地1;那覇市;沖縄県;9000001;日本\nTITLE:部長\nORG:テスト社;営業部\nEND:VCARD\n",
         );
         s.import_contacts(&p).unwrap();
-        let id = s.list_contacts(None, &[]).unwrap()[0].id as i64;
+        let id = s.list_contacts(None, &[], false).unwrap()[0].id as i64;
         let c = s.get_contact(id).unwrap();
         // 電話3件（1件目=CELL が主）。
         assert_eq!(c.phones.len(), 3, "全電話を保持");
@@ -1520,7 +1591,7 @@ mod tests {
         assert_eq!((r1.total, r1.imported, r1.updated), (1, 1, 0));
 
         // ユーザーがお気に入り＆取引先に設定。
-        let c = s.list_contacts(None, &[]).unwrap().remove(0);
+        let c = s.list_contacts(None, &[], false).unwrap().remove(0);
         s.upsert_contact(&ContactInput {
             id: Some(c.id),
             display_name: c.display_name.clone(),
@@ -1546,7 +1617,7 @@ mod tests {
         assert_eq!((r2.total, r2.imported, r2.updated), (1, 0, 1));
 
         // 重複は増えず、フラグは温存、フィールドは更新されている。
-        let all = s.list_contacts(None, &[]).unwrap();
+        let all = s.list_contacts(None, &[], false).unwrap();
         assert_eq!(all.len(), 1);
         let c = &all[0];
         assert!(c.is_favorite && c.is_business); // 温存
@@ -1564,7 +1635,7 @@ mod tests {
         );
         let r = s.import_contacts(&csv).unwrap();
         assert_eq!((r.imported, r.updated), (2, 0));
-        assert_eq!(s.list_contacts(None, &[]).unwrap().len(), 2);
+        assert_eq!(s.list_contacts(None, &[], false).unwrap().len(), 2);
     }
 
     #[test]
@@ -1661,7 +1732,7 @@ mod tests {
         assert_eq!(a.org_id, b.org_id);
 
         // 一覧は件数つき。
-        let orgs = s.list_organizations(None).unwrap();
+        let orgs = s.list_organizations(None, false).unwrap();
         assert_eq!(orgs.len(), 1);
         assert_eq!(orgs[0].name, "株式会社テスト");
         assert_eq!(orgs[0].member_count, 2);
@@ -1690,13 +1761,60 @@ mod tests {
             .unwrap();
         }
         // 部分一致（substring）。
-        assert_eq!(s.list_organizations(Some("sng")).unwrap().len(), 2);
+        assert_eq!(s.list_organizations(Some("sng"), false).unwrap().len(), 2);
         // 語順非依存（2 トークンを両方含む）。
-        let r = s.list_organizations(Some("名護 sng")).unwrap();
+        let r = s.list_organizations(Some("名護 sng"), false).unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].name, "設計 sng 名護");
         // 該当なし。
-        assert!(s.list_organizations(Some("xyz")).unwrap().is_empty());
+        assert!(s.list_organizations(Some("xyz"), false).unwrap().is_empty());
+    }
+
+    #[test]
+    fn soft_delete_hides_restore_and_purge() {
+        let s = store();
+        let a = s
+            .upsert_contact(&ContactInput {
+                display_name: "消える太郎".into(),
+                email: Some("x@y.jp".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        // 削除で一覧から消える（include_deleted なら見える）。
+        s.delete_contact(a.id as i64).unwrap();
+        assert!(s.list_contacts(None, &[], false).unwrap().is_empty());
+        assert_eq!(s.list_contacts(None, &[], true).unwrap().len(), 1);
+        // 重複照合の対象からも外れる。
+        assert!(s
+            .find_contact_matches(&["x@y.jp".into()], &[], None, None)
+            .unwrap()
+            .is_empty());
+        // 復元で戻る。
+        s.restore_contact(a.id as i64).unwrap();
+        assert_eq!(s.list_contacts(None, &[], false).unwrap().len(), 1);
+        // 再削除 → 保持 0 日でパージ → 完全削除。
+        s.delete_contact(a.id as i64).unwrap();
+        s.purge_expired_trash(0).unwrap();
+        assert!(s.list_contacts(None, &[], true).unwrap().is_empty());
+    }
+
+    #[test]
+    fn org_soft_delete_hides_and_revives_on_reuse() {
+        let s = store();
+        let oid = s.upsert_organization(None, "テスト社", None, None).unwrap().id as i64;
+        assert!(s.delete_organization(oid).unwrap());
+        assert!(s.list_organizations(None, false).unwrap().is_empty());
+        assert_eq!(s.list_organizations(None, true).unwrap().len(), 1);
+        // 同名で連絡先を作ると、削除済み組織が復活して再利用される（重複を作らない）。
+        let c = s
+            .upsert_contact(&ContactInput {
+                display_name: "田中".into(),
+                organization: Some("テスト社".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(c.org_id, Some(oid as i32));
+        assert_eq!(s.list_organizations(None, false).unwrap().len(), 1);
     }
 
     #[test]
@@ -1712,11 +1830,11 @@ mod tests {
         let oid = a.org_id.unwrap() as i64;
         // 所属があるうちは削除しない（false）。
         assert!(!s.delete_organization(oid).unwrap());
-        assert_eq!(s.list_organizations(None).unwrap().len(), 1);
+        assert_eq!(s.list_organizations(None, false).unwrap().len(), 1);
         // 連絡先を消して所属 0 にすると削除できる。
         s.delete_contact(a.id as i64).unwrap();
         assert!(s.delete_organization(oid).unwrap());
-        assert_eq!(s.list_organizations(None).unwrap().len(), 0);
+        assert_eq!(s.list_organizations(None, false).unwrap().len(), 0);
     }
 
     #[test]
@@ -1753,7 +1871,7 @@ mod tests {
         assert_eq!(merged.member_count, 2); // 両名が keep 所属へ
 
         // drop 組織は消え、連絡先は付け替え＆organization 文字列も同期。
-        assert_eq!(s.list_organizations(None).unwrap().len(), 1);
+        assert_eq!(s.list_organizations(None, false).unwrap().len(), 1);
         let bb = s.get_contact(b.id as i64).unwrap();
         assert_eq!(bb.org_id, Some(keep as i32));
         assert_eq!(bb.organization.as_deref(), Some("株式会社テスト"));
@@ -1805,7 +1923,7 @@ mod tests {
         assert_eq!(groups[0].contacts.len(), 2);
 
         let merged = s.merge_contacts(id_a, &[id_b]).unwrap();
-        assert_eq!(s.list_contacts(None, &[]).unwrap().len(), 1);
+        assert_eq!(s.list_contacts(None, &[], false).unwrap().len(), 1);
         assert!(merged.is_favorite && merged.is_business); // OR で温存
         assert_eq!(merged.name_kana.as_deref(), Some("タナカタロウ")); // 空きを補完
         assert_eq!(merged.organization.as_deref(), Some("B社"));
@@ -1871,7 +1989,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        assert_eq!(s.list_contacts(None, &[]).unwrap().len(), 2);
+        assert_eq!(s.list_contacts(None, &[], false).unwrap().len(), 2);
 
         drop(s);
         let _ = std::fs::remove_dir_all(&root);
@@ -1925,7 +2043,7 @@ mod tests {
         );
         let r = s.import_contacts(&b).unwrap();
         assert_eq!((r.imported, r.updated), (0, 1));
-        let all = s.list_contacts(None, &[]).unwrap();
+        let all = s.list_contacts(None, &[], false).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].email.as_deref(), Some("new@x.jp"));
     }

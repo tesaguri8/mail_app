@@ -5,6 +5,10 @@
  */
 export type OrganizationSummary = { id: number, name: string, name_kana: string | null, note: string | null, 
 /**
- * この組織に所属する連絡先の件数。
+ * この組織に所属する連絡先の件数（削除済みは除く）。
  */
-member_count: number, };
+member_count: number, 
+/**
+ * 論理削除（ゴミ箱）の日時（UTC 文字列）。非 null＝削除済み。
+ */
+deleted_at: string | null, };

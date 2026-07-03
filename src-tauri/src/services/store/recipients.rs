@@ -73,7 +73,7 @@ impl Store {
             let mut stmt = conn.prepare(
                 "SELECT id, display_name, email, is_favorite
                  FROM contacts
-                 WHERE email IS NOT NULL AND email <> ''
+                 WHERE email IS NOT NULL AND email <> '' AND deleted_at IS NULL
                    AND (display_name LIKE ?1 ESCAPE '\\' OR name_kana LIKE ?1 ESCAPE '\\'
                         OR email LIKE ?1 ESCAPE '\\' OR organization LIKE ?1 ESCAPE '\\')",
             )?;

@@ -482,6 +482,7 @@ mod tests {
             is_favorite: false,
             is_business: false,
             allow_remote_images: false,
+            deleted_at: None,
             emails: Vec::new(),
             phones: Vec::new(),
             addresses: Vec::new(),

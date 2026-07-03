@@ -11,6 +11,9 @@ use rusqlite::{params, OptionalExtension};
 pub const KEY_SPAM_ENABLED: &str = "spam.enabled";
 pub const KEY_SPAM_THRESHOLD_LOW: &str = "spam.threshold_low";
 pub const KEY_SPAM_THRESHOLD_HIGH: &str = "spam.threshold_high";
+/// ゴミ箱（連絡先・組織の論理削除）の保持日数。0 で即時完全削除、上限は緩め。
+pub const KEY_TRASH_RETENTION_DAYS: &str = "trash.retention_days";
+pub const DEFAULT_TRASH_RETENTION_DAYS: i64 = 7;
 
 impl Store {
     /// 汎用設定の取得（未設定なら None）。
@@ -55,6 +58,20 @@ impl Store {
             threshold_low,
             threshold_high,
         })
+    }
+
+    /// ゴミ箱の保持日数を読む（未設定なら既定 7 日。負値は 0 に丸める）。
+    pub fn trash_retention_days(&self) -> rusqlite::Result<i64> {
+        Ok(self
+            .get_setting(KEY_TRASH_RETENTION_DAYS)?
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(DEFAULT_TRASH_RETENTION_DAYS)
+            .max(0))
+    }
+
+    /// ゴミ箱の保持日数を保存する（負値は 0 に丸める）。
+    pub fn set_trash_retention_days(&self, days: i64) -> rusqlite::Result<()> {
+        self.set_setting(KEY_TRASH_RETENTION_DAYS, &days.max(0).to_string())
     }
 
     /// 迷惑メール設定を保存する（呼び出し側で正規化済みを渡す）。

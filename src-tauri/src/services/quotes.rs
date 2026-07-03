@@ -59,7 +59,11 @@ fn parse_attribution(line: &str) -> Option<(Option<String>, Option<String>)> {
     }
 
     // 日本語: "2026年6月30日(月) 10:00 佐藤 <sato@example.com>:" や "…さんは（次のように）書きました:"。
-    if l.ends_with("書きました:") || l.ends_with("書きました：") || l.ends_with("wrote:")
+    // 誤検知抑制: 「〜書きました:」で終わる本文の一文（例: 会議録を彼は書きました:）で誤って
+    // 切らないよう、属性行の裏付け（送信元アドレス @ か 4 桁の西暦）を要求する。
+    // メールクライアントの属性行はほぼ必ず日付か差出人アドレスを含むため、これで区別できる。
+    if (l.ends_with("書きました:") || l.ends_with("書きました：") || l.ends_with("wrote:"))
+        && line_has_date_or_email(l)
     {
         // "<誰か>さんは…書きました:" の "さんは" より前を差出人とみなす。
         if let Some(pos) = l.find("さんは") {
@@ -95,6 +99,27 @@ fn parse_attribution(line: &str) -> Option<(Option<String>, Option<String>)> {
     }
 
     None
+}
+
+/// 属性行の裏付け（送信元アドレス @ か 4 桁連続の西暦）を含むか。
+/// 本文中の「〜書きました:」のような一文を属性行と誤認しないための足切りに使う。
+fn line_has_date_or_email(l: &str) -> bool {
+    if l.contains('@') {
+        return true;
+    }
+    // 4 桁連続の数字（西暦らしさ）。
+    let mut run = 0u32;
+    for c in l.chars() {
+        if c.is_ascii_digit() {
+            run += 1;
+            if run >= 4 {
+                return true;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    false
 }
 
 /// "<addr>" を含む行から山括弧内のアドレスを返す。
@@ -276,6 +301,25 @@ mod tests {
 > > > > test";
         let s = split_reply(body);
         assert_eq!(s.clean, "再テスト4", "clean was: {:?}", s.clean);
+    }
+
+    #[test]
+    fn body_sentence_ending_with_wrote_is_not_a_boundary() {
+        // 本文中の「〜書きました:」（日付もアドレスも無い）は属性行と誤認しない。
+        let body = "議事録をまとめて共有すると彼は書きました:\nよろしくお願いします。";
+        let s = split_reply(body);
+        assert_eq!(s.clean, body.trim());
+        assert!(s.quotes.is_empty());
+    }
+
+    #[test]
+    fn attribution_with_date_or_email_still_splits() {
+        // 日付/アドレスの裏付けがあれば従来どおり属性行として切る。
+        let with_email =
+            "本文です。\n\nsato@example.com さんが書きました:\n> 以前のメール";
+        assert_eq!(split_reply(with_email).clean, "本文です。");
+        let with_date = "本文です。\n\n2026/07/03 10:00 に 佐藤 さんが書きました:\n> 以前のメール";
+        assert_eq!(split_reply(with_date).clean, "本文です。");
     }
 
     #[test]

@@ -1,9 +1,11 @@
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Send, X } from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailDetail } from '@bindings/MailDetail';
+import type { SignatureSummary } from '@bindings/SignatureSummary';
 import { mailSend } from '../services/mail';
+import { signatureList } from '../services/signatures';
 import { getFlyAnimation } from '../config/prefs';
 import { playFlySound } from '../utils/flySound';
 import { RecipientInput } from './RecipientInput';
@@ -63,10 +65,11 @@ export function Compose({
 }) {
   const { t } = useTranslation();
 
-  // 元メールから初期値（宛先・件名・本文・In-Reply-To）を組み立てる。
+  // 元メールから初期値（宛先・件名・In-Reply-To、および署名より下に置く「引用/転送」部分）を
+  // 組み立てる。署名はこの `after`（引用ブロック）の直前へ差し込む。
   const init = useMemo(() => {
     if (target.mode === 'new') {
-      return { to: '', cc: '', subject: '', body: '', inReplyTo: null as string | null };
+      return { to: '', cc: '', subject: '', after: '', inReplyTo: null as string | null };
     }
     const s = target.source;
     const body = s.body_plain ?? s.clean_body ?? '';
@@ -81,7 +84,7 @@ export function Compose({
         `${t('mailbox.to')}: ${s.to_addresses ?? ''}\n` +
         `${t('compose.subject')}: ${s.subject ?? ''}\n\n` +
         body;
-      return { to: '', cc: '', subject: withPrefix(s.subject, 'Fwd'), body: fwd, inReplyTo: null };
+      return { to: '', cc: '', subject: withPrefix(s.subject, 'Fwd'), after: fwd, inReplyTo: null };
     }
     // reply / replyAll
     const cc = target.mode === 'replyAll' ? (s.to_addresses ?? '') : '';
@@ -89,7 +92,7 @@ export function Compose({
       to: s.from_address ?? '',
       cc,
       subject: withPrefix(s.subject, 'Re'),
-      body: `\n\n${attribution}\n${quote(body)}`,
+      after: `\n\n${attribution}\n${quote(body)}`,
       inReplyTo: s.message_id,
     };
   }, [target, t]);
@@ -102,9 +105,52 @@ export function Compose({
   const [bcc, setBcc] = useState('');
   const [showCc, setShowCc] = useState(Boolean(init.cc));
   const [subject, setSubject] = useState(init.subject);
-  const [body, setBody] = useState(init.body);
+  const [body, setBody] = useState(init.after);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
+
+  // 署名（差出人ごとに使い回せる本文）。一覧を読み込み、ドロップダウンで切り替える。
+  // 既定はアカウントの signature_id。切替時は本文中の署名ブロックだけを置換する。
+  const [signatures, setSignatures] = useState<SignatureSummary[]>([]);
+  const [sigId, setSigId] = useState<number | null>(null);
+  // 現在 body に埋め込んでいる署名ブロック（"\n\n<署名>"。未挿入は ''）。切替時の除去に使う。
+  const sigBlockRef = useRef('');
+  const afterRef = useRef(init.after);
+  afterRef.current = init.after;
+
+  useEffect(() => {
+    signatureList()
+      .then(setSignatures)
+      .catch(() => undefined);
+  }, []);
+
+  // 署名を選び直す（null=なし）。旧ブロックを剥がし、新ブロックを引用の直前へ差し込む。
+  const applySignature = useCallback(
+    (id: number | null) => {
+      const sig = signatures.find((s) => s.id === id) ?? null;
+      const block = sig && sig.body.trim() ? `\n\n${sig.body.replace(/\s+$/, '')}` : '';
+      const old = sigBlockRef.current;
+      setBody((prev) => {
+        const stripped = old && prev.includes(old) ? prev.replace(old, '') : prev;
+        if (!block) return stripped;
+        const after = afterRef.current;
+        // 引用/転送部分の直前へ。無い（新規や本文編集済み）なら末尾へ足す。
+        return after && stripped.includes(after)
+          ? stripped.replace(after, block + after)
+          : stripped + block;
+      });
+      sigBlockRef.current = block;
+      setSigId(id);
+    },
+    [signatures]
+  );
+
+  // 署名が読み込めたら（およびアカウント変更時に）そのアカウントの既定署名を適用する。
+  useEffect(() => {
+    if (signatures.length === 0) return;
+    const acc = accounts.find((a) => a.id === accountId);
+    applySignature(acc?.signature_id ?? null);
+  }, [accountId, signatures, accounts, applySignature]);
 
   // 送信アニメーション（つばめ）を使うか（設定・既定オン）。開いた時点の値を採用。
   const [flyOn] = useState(getFlyAnimation);
@@ -230,6 +276,29 @@ export function Compose({
               placeholder={t('compose.subjectPlaceholder')}
             />
           </div>
+
+          {/* 署名の選択（切り替え）。署名が 1 つも無いときは行ごと隠す。 */}
+          {signatures.length > 0 && (
+            <div className="flex items-center gap-2">
+              <label className="w-12 shrink-0 text-xs text-white/45">
+                {t('compose.signature')}
+              </label>
+              <select
+                className="rounded-md bg-white/10 px-2 py-1.5 text-sm outline-none"
+                value={sigId ?? ''}
+                onChange={(e) => applySignature(e.target.value ? Number(e.target.value) : null)}
+              >
+                <option value="" className="text-black">
+                  {t('compose.noSignature')}
+                </option>
+                {signatures.map((s) => (
+                  <option key={s.id} value={s.id} className="text-black">
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* 本文 */}
           <textarea

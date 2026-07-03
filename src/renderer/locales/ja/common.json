@@ -100,7 +100,9 @@
     "fly": "Fly",
     "sending": "送信中…",
     "quoteHeader": "{{date}} に {{from}} さんが書きました:",
-    "forwardSep": "-------- 転送メッセージ --------"
+    "forwardSep": "-------- 転送メッセージ --------",
+    "signature": "署名",
+    "noSignature": "（署名なし）"
   },
   "ctx": {
     "markRead": "既読にする",

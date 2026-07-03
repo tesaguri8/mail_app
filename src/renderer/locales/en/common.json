@@ -100,7 +100,9 @@
     "fly": "Fly",
     "sending": "Sending…",
     "quoteHeader": "On {{date}}, {{from}} wrote:",
-    "forwardSep": "-------- Forwarded message --------"
+    "forwardSep": "-------- Forwarded message --------",
+    "signature": "Signature",
+    "noSignature": "(No signature)"
   },
   "ctx": {
     "markRead": "Mark as read",

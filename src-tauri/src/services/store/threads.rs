@@ -505,8 +505,10 @@ impl Store {
             }
         }
         recompute_thread(&tx, new_thread)?;
+        super::emails::recompute_reps_for_thread(&tx, new_thread)?;
         if let Some(t) = old_thread {
             recompute_thread(&tx, t)?;
+            super::emails::recompute_reps_for_thread(&tx, t)?;
         }
         tx.commit()?;
         Ok(new_thread)
@@ -526,6 +528,7 @@ impl Store {
         )?;
         recompute_thread(&tx, source_thread)?; // 空になるので削除される
         recompute_thread(&tx, target_thread)?;
+        super::emails::recompute_reps_for_thread(&tx, target_thread)?;
         tx.commit()?;
         Ok(())
     }
@@ -549,9 +552,11 @@ impl Store {
         if let Some(o) = old {
             if o != target_thread {
                 recompute_thread(&tx, o)?;
+                super::emails::recompute_reps_for_thread(&tx, o)?;
             }
         }
         recompute_thread(&tx, target_thread)?;
+        super::emails::recompute_reps_for_thread(&tx, target_thread)?;
         tx.commit()?;
         Ok(())
     }
@@ -588,6 +593,21 @@ impl Store {
         for id in ids {
             assign_thread(&tx, id)?;
         }
+        // 代表フラグをアカウント全体で貼り直す（各 (スレッド/単独, フォルダ) の最新のみ 1）。
+        tx.execute(
+            "UPDATE emails SET is_folder_rep = 0 WHERE account_id = ?1",
+            params![account_id],
+        )?;
+        tx.execute(
+            "UPDATE emails SET is_folder_rep = 1 WHERE id IN (
+                SELECT id FROM (
+                    SELECT id, ROW_NUMBER() OVER (
+                        PARTITION BY COALESCE(logical_thread_id, -id), folder
+                        ORDER BY date_ts DESC, id DESC) AS rn
+                    FROM emails WHERE account_id = ?1
+                ) WHERE rn = 1)",
+            params![account_id],
+        )?;
         tx.commit()?;
         Ok(())
     }

@@ -196,7 +196,80 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
     if let Err(err) = super::threads::assign_thread(conn, id) {
         log::warn!("スレッド割当に失敗（email_id={id}）: {err}");
     }
+    // フォルダ内代表フラグを O(1) で更新（一覧を索引で先頭 N 件引くため。docs/THREADING.md §5）。
+    if let Err(err) = maintain_folder_rep_on_insert(conn, id) {
+        log::warn!("代表フラグ更新に失敗（email_id={id}）: {err}");
+    }
     Ok(InsertOutcome::Inserted(id))
+}
+
+/// 新規挿入したメール 1 通について、その (スレッド, フォルダ) の代表フラグを更新する（O(1)）。
+/// 挿入直後は is_folder_rep=1（既定）。既存代表より新しければ既存を降格、古ければ自分を降格。
+pub fn maintain_folder_rep_on_insert(conn: &Connection, email_id: i64) -> rusqlite::Result<()> {
+    let row: Option<(Option<i64>, String, Option<i64>)> = conn
+        .query_row(
+            "SELECT logical_thread_id, folder, date_ts FROM emails WHERE id = ?1",
+            params![email_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    // スレッド未割当（NULL）は各自が代表（既定 1 のまま）。
+    let Some((Some(tid), folder, dts)) = row else {
+        return Ok(());
+    };
+    let dts = dts.unwrap_or(0);
+    // 自分以外の現代表（この thread+folder）。通常 1 件。
+    let prev: Option<(i64, i64)> = conn
+        .query_row(
+            "SELECT id, COALESCE(date_ts, 0) FROM emails
+             WHERE logical_thread_id = ?1 AND folder = ?2 AND is_folder_rep = 1 AND id <> ?3
+             ORDER BY date_ts DESC, id DESC LIMIT 1",
+            params![tid, folder, email_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    if let Some((pid, pts)) = prev {
+        if (dts, email_id) > (pts, pid) {
+            // 自分が新しい → 旧代表を降格（自分は既定 1 のまま）。
+            conn.execute(
+                "UPDATE emails SET is_folder_rep = 0 WHERE id = ?1",
+                params![pid],
+            )?;
+        } else {
+            // 自分が古い → 自分を降格。
+            conn.execute(
+                "UPDATE emails SET is_folder_rep = 0 WHERE id = ?1",
+                params![email_id],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// 指定スレッドの各フォルダについて、代表フラグを 1 つだけ（最新）に貼り直す（堅牢版）。
+/// 削除・手動の分割/結合/再割当・ヘッダ後付けの再割当など、任意の状態から正す用途。
+pub fn recompute_reps_for_thread(conn: &Connection, thread_id: i64) -> rusqlite::Result<()> {
+    let folders: Vec<String> = {
+        let mut stmt =
+            conn.prepare("SELECT DISTINCT folder FROM emails WHERE logical_thread_id = ?1")?;
+        let rows = stmt.query_map(params![thread_id], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    for folder in folders {
+        // まず当該 (thread, folder) の代表を全て降格し、最新 1 通だけ立てる。
+        conn.execute(
+            "UPDATE emails SET is_folder_rep = 0
+             WHERE logical_thread_id = ?1 AND folder = ?2 AND is_folder_rep = 1",
+            params![thread_id, folder],
+        )?;
+        conn.execute(
+            "UPDATE emails SET is_folder_rep = 1 WHERE id = (
+                SELECT id FROM emails WHERE logical_thread_id = ?1 AND folder = ?2
+                ORDER BY date_ts DESC, id DESC LIMIT 1)",
+            params![thread_id, folder],
+        )?;
+    }
+    Ok(())
 }
 
 /// 引用ブロック（message_quotes）を一括挿入する。
@@ -318,8 +391,33 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
     }
     // ヘッダを後付けできたなら、auto 割当のスレッドを引き直す（manual は assign 側で保持）。
     if header_backfilled {
+        // 割当が変わると旧/新スレッドの代表がずれるので、前後で代表を貼り直す。
+        let old_tid: Option<i64> = conn
+            .query_row(
+                "SELECT logical_thread_id FROM emails WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
         if let Err(err) = super::threads::assign_thread(conn, id) {
             log::warn!("スレッド再割当に失敗（email_id={id}）: {err}");
+        }
+        let new_tid: Option<i64> = conn
+            .query_row(
+                "SELECT logical_thread_id FROM emails WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        if let Some(t) = new_tid {
+            recompute_reps_for_thread(conn, t)?;
+        }
+        if let Some(t) = old_tid {
+            if Some(t) != new_tid {
+                recompute_reps_for_thread(conn, t)?;
+            }
         }
     }
     // clean_body（引用/署名を除いた新規部分）を新エンジンの分離結果に更新する。
@@ -565,26 +663,14 @@ impl Store {
     ) -> rusqlite::Result<Vec<ThreadListItem>> {
         let conn = self.conn.lock().unwrap();
         let acct = if account_id.is_some() {
-            "AND e.account_id = ?4"
+            "AND r.account_id = ?4"
         } else {
             ""
         };
-        // 代表＝グループ（COALESCE(logical_thread_id, -id)）内でフォルダの最新 1 通（rn=1）。
-        // まず reps で「表示ページの代表 id」だけを絞り（軽い列のみ）、重い集計サブクエリは
-        // その 100 件に対してだけ評価する（全スレッド分の集計を避けて高速化）。
+        // 代表フラグ（is_folder_rep=1）を部分索引で先頭 N 件だけ引く（全走査しない）。
+        // 重い集計サブクエリはその N 件に対してだけ評価される（docs/THREADING.md §5）。
         let sql = format!(
-            "WITH reps AS (
-                SELECT id, logical_thread_id, date_ts FROM (
-                    SELECT e.id, e.logical_thread_id, e.date_ts,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY COALESCE(e.logical_thread_id, -e.id)
-                               ORDER BY e.date_ts DESC, e.id DESC) AS rn
-                    FROM emails e WHERE e.folder = ?1 {acct}
-                ) WHERE rn = 1
-                ORDER BY date_ts DESC, id DESC
-                LIMIT ?2 OFFSET ?3
-             )
-             SELECT r.id, COALESCE(r.logical_thread_id, -r.id) AS gkey, r.account_id,
+            "SELECT r.id, COALESCE(r.logical_thread_id, -r.id) AS gkey, r.account_id,
                     COALESCE(lt.title, r.subject) AS subject,
                     r.from_address, r.from_name, r.to_addresses, r.to_name, r.date,
                     substr(COALESCE(r.clean_body, r.body_plain, ''), 1, 140) AS preview,
@@ -601,10 +687,11 @@ impl Store {
                      WHERE t.folder = ?1
                        AND (CASE WHEN r.logical_thread_id IS NULL THEN t.id = r.id
                                  ELSE t.logical_thread_id = r.logical_thread_id END)) AS folder_ids
-             FROM reps
-             JOIN emails r ON r.id = reps.id
+             FROM emails r
              LEFT JOIN logical_threads lt ON lt.id = r.logical_thread_id
-             ORDER BY reps.date_ts DESC, reps.id DESC",
+             WHERE r.folder = ?1 {acct} AND r.is_folder_rep = 1
+             ORDER BY r.date_ts DESC, r.id DESC
+             LIMIT ?2 OFFSET ?3",
             known_vip = known_vip_cols("r.from_address"),
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -697,16 +784,29 @@ impl Store {
         }
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
+        // 削除で代表が消える (スレッド,フォルダ) を後で貼り直すため、影響スレッドを控える。
+        let mut affected: std::collections::HashSet<i64> = std::collections::HashSet::new();
         {
+            let mut thread_of = tx.prepare("SELECT logical_thread_id FROM emails WHERE id = ?1")?;
             let mut fts = tx.prepare("DELETE FROM email_fts WHERE rowid = ?1")?;
             let mut etags = tx.prepare("DELETE FROM email_tags WHERE email_id = ?1")?;
             let mut att = tx.prepare("DELETE FROM attachments WHERE email_id = ?1")?;
             let mut del = tx.prepare("DELETE FROM emails WHERE id = ?1")?;
             for id in ids {
+                if let Ok(Some(t)) = thread_of
+                    .query_row(params![id], |r| r.get::<_, Option<i64>>(0))
+                    .optional()
+                    .map(Option::flatten)
+                {
+                    affected.insert(t);
+                }
                 fts.execute(params![id])?;
                 etags.execute(params![id])?;
                 att.execute(params![id])?; // FK 制約のため先に添付を削除
                 del.execute(params![id])?;
+            }
+            for t in &affected {
+                recompute_reps_for_thread(&tx, *t)?;
             }
         }
         tx.commit()
@@ -1344,6 +1444,62 @@ mod tests {
         assert_eq!(a.unread_count, 1);
         assert!(!a.is_read);
         assert_eq!(a.email_ids.len(), 2);
+    }
+
+    /// 代表フラグ: 代表メールを削除したら、その (スレッド,フォルダ) の残りの最新が代表に昇格する。
+    #[test]
+    fn folder_rep_promotes_after_delete() {
+        let store = test_store();
+        let base = |mid: &str, ts: i64, refs: Option<&str>| NewEmail {
+            account_id: 1,
+            message_id: Some(mid.into()),
+            canonical_key: mid.into(),
+            subject: Some("件名".into()),
+            from_address: Some("you@corp.com".into()),
+            from_name: None,
+            to_addresses: None,
+            to_name: None,
+            cc_addresses: None,
+            date: Some(format!("2026-06-{:02}T10:00:00Z", ts)),
+            date_ts: Some(1_767_000_000 + ts * 86400),
+            body_plain: Some("body".into()),
+            clean_body: Some("body".into()),
+            body_html: None,
+            auth_result: None,
+            list_id: None,
+            in_reply_to: refs.map(str::to_string),
+            references_ids: refs.map(str::to_string),
+            thread_index: None,
+            raw_headers: None,
+            quotes: vec![],
+            has_attachments: false,
+            is_read: true,
+            uid: None,
+            folder: "inbox".into(),
+            attachments: vec![],
+        };
+        let (a0, a1) = {
+            let conn = store.conn.lock().unwrap();
+            let a0 = match insert_email(&conn, &base("a0@x", 1, None)).unwrap() {
+                InsertOutcome::Inserted(id) => id,
+                _ => panic!(),
+            };
+            let a1 = match insert_email(&conn, &base("a1@x", 2, Some("a0@x"))).unwrap() {
+                InsertOutcome::Inserted(id) => id,
+                _ => panic!(),
+            };
+            (a0, a1)
+        };
+        // 1 スレッドに畳まれ、代表は最新の a1。
+        let rows = store.list_threads(Some(1), "inbox", 50, 0).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id as i64, a1);
+        // 代表 a1 を削除 → a0 が代表へ昇格し、スレッドは 1 行のまま。
+        store.delete_emails(&[a1]).unwrap();
+        let rows = store.list_threads(Some(1), "inbox", 50, 0).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id as i64, a0);
+        assert_eq!(rows[0].message_count, 1);
     }
 
     #[test]

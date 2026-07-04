@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, Plus } from 'lucide-react';
 import type { TagSummary } from '@bindings/TagSummary';
-import type { MailSummary } from '@bindings/MailSummary';
 import { DEFAULT_TAG_COLOR } from '../utils/tagColors';
 
 type ApplyState = 'all' | 'some' | 'none';
@@ -23,7 +22,8 @@ export function TagPicker({
   x: number;
   y: number;
   tags: TagSummary[];
-  selectedMails: MailSummary[];
+  /** 選択中の対象（tag_ids だけ参照。一覧の行＝スレッド/メールどちらでも可）。 */
+  selectedMails: { tag_ids: number[] }[];
   /** add=true で選択メール全件に付与、false で全件から解除。 */
   onToggle: (tagId: number, add: boolean) => void;
   /** 新規タグを作成し、選択メールに付与する。 */

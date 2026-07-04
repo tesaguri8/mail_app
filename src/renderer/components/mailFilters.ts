@@ -13,8 +13,14 @@ export const MAIL_FILTERS: { key: string; Icon: LucideIcon }[] = [
   { key: 'flag', Icon: Flag },
 ];
 
+/** matchesFilters が参照する最小フィールド（一覧の行＝メール/スレッドどちらでも可）。 */
+type FilterableRow = Pick<
+  MailSummary,
+  'is_read' | 'has_real_attachments' | 'is_starred' | 'is_green' | 'is_vip' | 'is_known'
+>;
+
 /** 選択中のトグルにメールが一致するか（AND）。 */
-export function matchesFilters(m: MailSummary, filters: Set<string>): boolean {
+export function matchesFilters(m: FilterableRow, filters: Set<string>): boolean {
   if (filters.has('unread') && m.is_read) return false;
   if (filters.has('attachment') && !m.has_real_attachments) return false;
   if (filters.has('star') && !m.is_starred) return false;

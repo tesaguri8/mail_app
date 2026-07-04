@@ -22,6 +22,7 @@ import {
 import { listen } from '@tauri-apps/api/event';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailSummary } from '@bindings/MailSummary';
+import type { ThreadListItem } from '@bindings/ThreadListItem';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { TagSummary } from '@bindings/TagSummary';
 import type { SyncProgress } from '@bindings/SyncProgress';
@@ -31,7 +32,6 @@ import {
   mailEmptyFolder,
   mailGet,
   mailGetDraft,
-  mailList,
   mailMarkSpam,
   mailSearch,
   mailSetRead,
@@ -46,6 +46,7 @@ import { pickTagColor, DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import { parseAddress } from '../utils/address';
 import { MailBody } from './MailBody';
 import { Conversation, type ConversationHandlers } from './Conversation';
+import { threadList } from '../services/threads';
 import { Compose, type ComposeTarget } from './Compose';
 import { FolderIcons } from './FolderIcons';
 import { MAIL_FILTERS, matchesFilters } from './mailFilters';
@@ -73,6 +74,33 @@ function formatScrollDate(d: string | null): string {
   if (!d) return '';
   const dt = new Date(d);
   return isNaN(dt.getTime()) ? '' : `${dt.getFullYear()}/${dt.getMonth() + 1}/${dt.getDate()}`;
+}
+
+/** 検索結果（メッセージ単位）を、一覧（スレッド単位）と同じ行の形へ写像する（1 通=1 スレッド相当）。 */
+function searchRowToThread(m: MailSummary): ThreadListItem {
+  return {
+    thread_id: -m.id,
+    id: m.id,
+    account_id: m.account_id,
+    subject: m.subject,
+    from_address: m.from_address,
+    from_name: m.from_name,
+    to_addresses: m.to_addresses,
+    to_name: m.to_name,
+    date: m.date,
+    preview: m.preview,
+    is_read: m.is_read,
+    has_real_attachments: m.has_real_attachments,
+    is_starred: m.is_starred,
+    is_bookmarked: m.is_bookmarked,
+    tag_ids: m.tag_ids,
+    is_known: m.is_known,
+    is_vip: m.is_vip,
+    is_green: m.is_green,
+    message_count: 1,
+    unread_count: m.is_read ? 0 : 1,
+    email_ids: [m.id],
+  };
 }
 
 /**
@@ -109,7 +137,8 @@ export function MailboxView({
   }, [selected, onAccountChange]);
   // 遷移直後に開くべきメッセージ（ホームの新着クリック）
   const pendingOpen = useRef<number | null>(initialMailId);
-  const [mails, setMails] = useState<MailSummary[]>([]);
+  // 一覧はスレッド単位（代表＋件数）。検索結果も同じ形へ写像して扱いを揃える。
+  const [mails, setMails] = useState<ThreadListItem[]>([]);
   const [opened, setOpened] = useState<MailDetail | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [progress, setProgress] = useState<SyncProgress | null>(null);
@@ -125,7 +154,7 @@ export function MailboxView({
   const splitRef = useRef<HTMLDivElement>(null);
   // 矢印キー移動用の「最新値」ref（早期 return より前の effect から参照する）。
   const keyNavRef = useRef<{
-    mails: MailSummary[];
+    mails: ThreadListItem[];
     openedId: number | null;
     open: (id: number) => void;
     blocked: boolean;
@@ -167,7 +196,7 @@ export function MailboxView({
   const [tagPicker, setTagPicker] = useState<{ x: number; y: number; ids: number[] } | null>(null);
   // 全文検索（件名・差出人・本文）。query が空でなければ検索モード。
   const [query, setQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<MailSummary[]>([]);
+  const [searchResults, setSearchResults] = useState<ThreadListItem[]>([]);
   const [searching, setSearching] = useState(false);
   const searchMode = query.trim().length > 0;
   // 検索窓の入力補助: 住所録＋履歴の候補ドロップダウン。
@@ -283,7 +312,7 @@ export function MailboxView({
     const token = ++loadTokenRef.current;
     pageKeyRef.current = `${selected}:${folder}`;
     loadingMoreRef.current = false;
-    return mailList(queryAccount, folder, PAGE_SIZE, 0)
+    return threadList(queryAccount, folder, PAGE_SIZE, 0)
       .then((rows) => {
         if (loadTokenRef.current !== token) return;
         setMails(rows);
@@ -297,7 +326,7 @@ export function MailboxView({
     if (selected == null || searchMode || loadingMoreRef.current || !hasMore) return;
     const key = pageKeyRef.current;
     loadingMoreRef.current = true;
-    mailList(queryAccount, folder, PAGE_SIZE, mails.length)
+    threadList(queryAccount, folder, PAGE_SIZE, mails.length)
       .then((rows) => {
         if (pageKeyRef.current !== key) return; // 切替後の結果は破棄
         setMails((prev) => [...prev, ...rows]);
@@ -359,7 +388,7 @@ export function MailboxView({
   }, [selected, folder]);
 
   // 通常一覧・検索結果の両方へ同じ更新（既読/スター/削除/タグ）を反映する。
-  const updateLists = (fn: (list: MailSummary[]) => MailSummary[]) => {
+  const updateLists = (fn: (list: ThreadListItem[]) => ThreadListItem[]) => {
     setMails(fn);
     setSearchResults(fn);
   };
@@ -384,8 +413,9 @@ export function MailboxView({
     }
     setSearching(true);
     const h = setTimeout(() => {
+      // 検索はメッセージ単位。行の扱いを一覧（スレッド）と揃えるため 1 通=1 スレッド相当へ写像。
       mailSearch(queryAccount, folder, q, 200)
-        .then(setSearchResults)
+        .then((rows) => setSearchResults(rows.map(searchRowToThread)))
         .catch(() => setSearchResults([]))
         .finally(() => setSearching(false));
     }, 250);
@@ -497,7 +527,15 @@ export function MailboxView({
     try {
       const d = await mailGet(id);
       setOpened(d);
-      updateLists((prev) => prev.map((m) => (m.id === id ? { ...m, is_read: true } : m)));
+      // スレッドを開いたら、そのスレッド（フォルダ内）全メールを既読にする（会話を見た＝既読）。
+      const row = mails.find((m) => m.id === id) ?? searchResults.find((m) => m.id === id);
+      const ids = row && row.email_ids.length ? row.email_ids : [id];
+      updateLists((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, is_read: true, unread_count: 0 } : m))
+      );
+      if (ids.length > 1) {
+        mailSetRead(ids, true).catch(() => undefined);
+      }
     } catch {
       /* noop */
     }
@@ -561,34 +599,42 @@ export function MailboxView({
     anchorId.current = id;
   };
 
-  const patchMails = (ids: Set<number>, patch: Partial<MailSummary>) =>
+  const patchMails = (ids: Set<number>, patch: Partial<ThreadListItem>) =>
     updateLists((prev) => prev.map((m) => (ids.has(m.id) ? { ...m, ...patch } : m)));
 
   const targetIds = () => [...selectedIds];
 
+  // 選択した行（＝スレッド代表）を、そのフォルダ内のスレッド全メール id へ展開する。
+  // 既読/削除/迷惑はスレッド全体に効かせる（スター/タグは代表に付ける）。
+  const emailIdsFor = (rowIds: number[]): number[] => {
+    const set = new Set(rowIds);
+    const rows = [...mails, ...searchResults].filter((m) => set.has(m.id));
+    const out = rows.flatMap((m) => (m.email_ids.length ? m.email_ids : [m.id]));
+    return out.length ? out : rowIds;
+  };
+
   const actRead = async (read: boolean) => {
-    const ids = targetIds();
-    patchMails(selectedIds, { is_read: read });
+    patchMails(selectedIds, { is_read: read, unread_count: read ? 0 : 1 });
     try {
-      await mailSetRead(ids, read);
+      await mailSetRead(emailIdsFor(targetIds()), read);
     } catch {
       /* noop */
     }
   };
   const actStar = async (value: boolean) => {
-    const ids = targetIds();
+    // スターは代表メールに付ける（メール単位のフラグ）。
     patchMails(selectedIds, { is_starred: value });
     try {
-      await mailSetStarred(ids, value);
+      await mailSetStarred(targetIds(), value);
     } catch {
       /* noop */
     }
   };
   const actDelete = async () => {
-    const ids = targetIds();
-    const idSet = new Set(ids);
+    const idSet = new Set(targetIds());
+    const ids = emailIdsFor(targetIds());
     updateLists((prev) => prev.filter((m) => !idSet.has(m.id)));
-    if (opened && idSet.has(opened.id)) setOpened(null);
+    if (opened && ids.includes(opened.id)) setOpened(null);
     setSelectedIds(new Set());
     try {
       await mailDelete(ids);
@@ -596,12 +642,12 @@ export function MailboxView({
       /* noop */
     }
   };
-  // 迷惑としてマーク: 学習＋隔離。楽観更新で受信一覧から外す（迷惑フォルダへ）。
+  // 迷惑としてマーク: 学習＋隔離。楽観更新で受信一覧から外す（迷惑フォルダへ。スレッド全体）。
   const actMarkSpam = async () => {
-    const ids = targetIds();
-    const idSet = new Set(ids);
+    const idSet = new Set(targetIds());
+    const ids = emailIdsFor(targetIds());
     updateLists((prev) => prev.filter((m) => !idSet.has(m.id)));
-    if (opened && idSet.has(opened.id)) setOpened(null);
+    if (opened && ids.includes(opened.id)) setOpened(null);
     setSelectedIds(new Set());
     try {
       await mailMarkSpam(ids);
@@ -919,8 +965,13 @@ export function MailboxView({
                             {formatDate(m.date)}
                           </span>
                         </div>
-                        {/* 件名 */}
+                        {/* 件名（スレッド複数通なら「N通」バッジを先頭に） */}
                         <div className="truncate text-sm text-white/80">
+                          {m.message_count > 1 && (
+                            <span className="mr-1 inline-flex items-center rounded-full bg-sky-400/20 px-1.5 text-[10px] font-medium text-sky-200 align-[1px]">
+                              {t('thread.count', { count: m.message_count })}
+                            </span>
+                          )}
                           {m.subject ?? '(no subject)'} {m.has_real_attachments && '📎'}
                         </div>
                         {/* 本文（詰めて2行折り返し） */}

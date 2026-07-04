@@ -1,5 +1,5 @@
 use super::Store;
-use crate::models::{AttachmentSummary, MailDetail, MailSummary};
+use crate::models::{AttachmentSummary, MailDetail, MailSummary, ThreadListItem};
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// メール挿入用（内部）。
@@ -550,6 +550,108 @@ impl Store {
                 .collect::<rusqlite::Result<_>>()?,
         };
         fill_is_green(&conn, &mut rows)?;
+        Ok(rows)
+    }
+
+    /// スレッド単位のメール一覧（代表＝フォルダ内最新）。docs/THREADING.md §5。
+    /// 論理スレッド未割当の旧データは 1 通ずつ（負値の擬似 gkey）で扱う。
+    /// message_count は全フォルダ横断のスレッド総件数、unread_count は当フォルダの未読。
+    pub fn list_threads(
+        &self,
+        account_id: Option<i64>,
+        folder: &str,
+        limit: i64,
+        offset: i64,
+    ) -> rusqlite::Result<Vec<ThreadListItem>> {
+        let conn = self.conn.lock().unwrap();
+        let acct = if account_id.is_some() {
+            "AND e.account_id = ?4"
+        } else {
+            ""
+        };
+        // 代表＝グループ（COALESCE(logical_thread_id, -id)）内でフォルダの最新 1 通（rn=1）。
+        let sql = format!(
+            "WITH ranked AS (
+                SELECT e.*, COALESCE(e.logical_thread_id, -e.id) AS gkey,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY COALESCE(e.logical_thread_id, -e.id)
+                           ORDER BY e.date_ts DESC, e.id DESC) AS rn
+                FROM emails e WHERE e.folder = ?1 {acct}
+             )
+             SELECT r.id, COALESCE(r.logical_thread_id, -r.id) AS gkey, r.account_id,
+                    COALESCE(lt.title, r.subject) AS subject,
+                    r.from_address, r.from_name, r.to_addresses, r.to_name, r.date,
+                    substr(COALESCE(r.clean_body, r.body_plain, ''), 1, 140) AS preview,
+                    r.is_flagged, r.is_bookmarked,
+                    (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = r.id) AS tag_ids,
+                    (r.has_attachments = 1
+                     OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = r.id AND COALESCE(a.kind,'attachment') <> 'inline')) AS has_real,
+                    {known_vip},
+                    CASE WHEN r.logical_thread_id IS NULL THEN 1
+                         ELSE (SELECT count(*) FROM emails t WHERE t.logical_thread_id = r.logical_thread_id) END AS msg_count,
+                    CASE WHEN r.logical_thread_id IS NULL THEN (CASE WHEN r.is_read = 0 THEN 1 ELSE 0 END)
+                         ELSE (SELECT count(*) FROM emails t WHERE t.logical_thread_id = r.logical_thread_id AND t.folder = ?1 AND t.is_read = 0) END AS unread_cnt,
+                    (SELECT group_concat(t.id) FROM emails t
+                     WHERE t.folder = ?1
+                       AND (CASE WHEN r.logical_thread_id IS NULL THEN t.id = r.id
+                                 ELSE t.logical_thread_id = r.logical_thread_id END)) AS folder_ids
+             FROM ranked r
+             LEFT JOIN logical_threads lt ON lt.id = r.logical_thread_id
+             WHERE r.rn = 1
+             ORDER BY r.date_ts DESC, r.id DESC
+             LIMIT ?2 OFFSET ?3",
+            known_vip = known_vip_cols("r.from_address"),
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let map = |row: &rusqlite::Row| -> rusqlite::Result<ThreadListItem> {
+            let parse_ids = |s: Option<String>| -> Vec<i32> {
+                s.map(|s| s.split(',').filter_map(|p| p.parse::<i32>().ok()).collect())
+                    .unwrap_or_default()
+            };
+            // 列: 16=msg_count, 17=unread_cnt, 18=folder_ids。
+            let unread_count = row.get::<_, i64>(17)? as i32;
+            Ok(ThreadListItem {
+                id: row.get::<_, i64>(0)? as i32,
+                thread_id: row.get::<_, i64>(1)? as i32,
+                account_id: row.get::<_, i64>(2)? as i32,
+                subject: row.get(3)?,
+                from_address: row.get(4)?,
+                from_name: row.get(5)?,
+                to_addresses: row.get(6)?,
+                to_name: row.get(7)?,
+                date: row.get(8)?,
+                preview: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
+                is_starred: row.get::<_, i64>(10)? != 0,
+                is_bookmarked: row.get::<_, i64>(11)? != 0,
+                tag_ids: parse_ids(row.get(12)?),
+                has_real_attachments: row.get::<_, i64>(13)? != 0,
+                is_known: row.get::<_, i64>(14)? != 0,
+                is_vip: row.get::<_, i64>(15)? != 0,
+                is_green: false,
+                message_count: row.get::<_, i64>(16)? as i32,
+                unread_count,
+                is_read: unread_count == 0,
+                email_ids: parse_ids(row.get(18)?),
+            })
+        };
+        let mut rows: Vec<ThreadListItem> = match account_id {
+            Some(a) => stmt
+                .query_map(params![folder, limit, offset, a], map)?
+                .collect::<rusqlite::Result<_>>()?,
+            None => stmt
+                .query_map(params![folder, limit, offset], map)?
+                .collect::<rusqlite::Result<_>>()?,
+        };
+        // グリーン（本人 or 認定ドメイン）をまとめて付与する。
+        let set = super::greendomain::green_domain_set(&conn)?;
+        for m in rows.iter_mut() {
+            let domain_green = m
+                .from_address
+                .as_deref()
+                .and_then(super::greendomain::domain_of)
+                .is_some_and(|d| set.contains(&d));
+            m.is_green = m.is_known || domain_green;
+        }
         Ok(rows)
     }
 
@@ -1178,6 +1280,65 @@ mod tests {
             )
             .unwrap();
         assert_eq!(hit_new, 1);
+    }
+
+    /// スレッド一覧: 同スレッドは 1 行に畳まれ、代表＝最新・件数・未読が正しい。
+    #[test]
+    fn list_threads_collapses_and_counts() {
+        let store = test_store();
+        let mk = |mid: &str, ts: i64, read: bool, irt: Option<&str>, refs: Option<&str>| NewEmail {
+            account_id: 1,
+            message_id: Some(mid.into()),
+            canonical_key: mid.into(),
+            subject: Some("件名".into()),
+            from_address: Some("you@corp.com".into()),
+            from_name: None,
+            to_addresses: None,
+            to_name: None,
+            cc_addresses: None,
+            date: Some(format!("2026-06-{:02}T10:00:00Z", ts)),
+            date_ts: Some(1_767_000_000 + ts * 86400),
+            body_plain: Some("body".into()),
+            clean_body: Some("body".into()),
+            body_html: None,
+            auth_result: None,
+            list_id: None,
+            in_reply_to: irt.map(str::to_string),
+            references_ids: refs.map(str::to_string),
+            thread_index: None,
+            raw_headers: None,
+            quotes: vec![],
+            has_attachments: false,
+            is_read: read,
+            uid: None,
+            folder: "inbox".into(),
+            attachments: vec![],
+        };
+        {
+            let conn = store.conn.lock().unwrap();
+            // スレッドA: 2 通（root + 返信）。返信は未読。
+            insert_email(&conn, &mk("a0@x", 1, true, None, None)).unwrap();
+            insert_email(&conn, &mk("a1@x", 2, false, Some("a0@x"), Some("a0@x"))).unwrap();
+            // 単独メール B（別 root）。既読。
+            insert_email(&conn, &mk("b0@x", 3, true, None, None)).unwrap();
+        }
+        let rows = store.list_threads(Some(1), "inbox", 50, 0).unwrap();
+        // 2 行（スレッドA と 単独B）。新しい順なので先頭は B（ts=3）。
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, {
+            // B の代表 id を引く。
+            let conn = store.conn.lock().unwrap();
+            conn.query_row("SELECT id FROM emails WHERE message_id='b0@x'", [], |r| r.get::<_, i64>(0))
+                .unwrap() as i32
+        });
+        assert_eq!(rows[0].message_count, 1);
+        assert!(rows[0].is_read);
+        // スレッドA: 代表＝最新(a1)・件数2・未読1。
+        let a = &rows[1];
+        assert_eq!(a.message_count, 2);
+        assert_eq!(a.unread_count, 1);
+        assert!(!a.is_read);
+        assert_eq!(a.email_ids.len(), 2);
     }
 
     #[test]

@@ -1,5 +1,21 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { ThreadView } from '@bindings/ThreadView';
+import type { ThreadListItem } from '@bindings/ThreadListItem';
+
+// スレッド単位のメール一覧（代表＝フォルダ内最新＋「N通」件数）。docs/THREADING.md §5。
+// accountId が null なら全アカウント横断。offset でページング。
+export const threadList = (
+  accountId: number | null,
+  folder: string,
+  limit: number,
+  offset = 0,
+) =>
+  invoke<ThreadListItem[]>('thread_list', {
+    accountId: accountId ?? null,
+    folder,
+    limit,
+    offset,
+  });
 
 // 指定メールが属する論理スレッドの会話（時系列・古い順）を取得する。
 // 未割当の旧データはバックエンドが遅延割当する（docs/THREADING.md §5）。

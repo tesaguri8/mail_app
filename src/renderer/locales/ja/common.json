@@ -489,6 +489,7 @@
   "thread": {
     "you": "自分",
     "untitled": "（無題のスレッド）",
+    "count": "{{count}}通",
     "messages": "{{count}} 通",
     "rename": "スレッド名を変更（再件名）",
     "renameSave": "保存",

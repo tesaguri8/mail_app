@@ -489,6 +489,7 @@
   "thread": {
     "you": "You",
     "untitled": "(untitled thread)",
+    "count": "{{count}}",
     "messages": "{{count}} messages",
     "rename": "Rename thread",
     "renameSave": "Save",

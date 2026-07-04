@@ -541,6 +541,42 @@ pub struct ThreadView {
     pub messages: Vec<ThreadMessage>,
 }
 
+/// スレッド単位のメール一覧の 1 行（代表メール＋件数）。docs/THREADING.md §5。
+/// 代表＝そのフォルダ内で最新のメール（受信箱なら最新の受信。自分の送信は代表にしない）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ThreadListItem {
+    /// 論理スレッド id（未割当の旧データは負値の擬似 id）。
+    pub thread_id: i32,
+    /// 代表メール id（クリックで会話を開く対象＝フォルダ内最新）。
+    pub id: i32,
+    pub account_id: i32,
+    /// 表示件名（再件名 title があればそれ、無ければ代表メールの件名）。
+    pub subject: Option<String>,
+    pub from_address: Option<String>,
+    pub from_name: Option<String>,
+    pub to_addresses: Option<String>,
+    pub to_name: Option<String>,
+    /// 代表メールの日時。
+    pub date: Option<String>,
+    pub preview: String,
+    /// スレッド（フォルダ内）に未読が無いか。一覧の未読ドット判定に使う。
+    pub is_read: bool,
+    pub has_real_attachments: bool,
+    pub is_starred: bool,
+    pub is_bookmarked: bool,
+    pub tag_ids: Vec<i32>,
+    pub is_known: bool,
+    pub is_vip: bool,
+    pub is_green: bool,
+    /// スレッド総件数（全フォルダ横断）。「N通」バッジに使う。
+    pub message_count: i32,
+    /// このフォルダの未読件数。
+    pub unread_count: i32,
+    /// このフォルダに属するスレッド内メール id 群（既読/削除/迷惑の一括操作用）。
+    pub email_ids: Vec<i32>,
+}
+
 /// 添付ファイル（一覧/ダウンロード状態）。
 /// `is_downloaded` が false のときは本体未取得（メタのみ）。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

@@ -4,7 +4,7 @@ use crate::models::{
     DraftContent, DraftInput, DuplicateGroup, GreenDomainEntry, ImportReport, MailDetail,
     MailSummary, OrgDuplicateGroup, OrganizationDetail, OrganizationSummary, RecipientSuggestion,
     RemoteImage, RetentionReport, SendInput, ServerAccountSummary, SignatureSummary, SpamSettings,
-    SpamVerdict, StorageInfo, SyncProgress, SyncResult, TagSummary, ThreadView,
+    SpamVerdict, StorageInfo, SyncProgress, SyncResult, TagSummary, ThreadListItem, ThreadView,
 };
 use crate::services::autoconfig;
 use crate::services::datadir;
@@ -612,6 +612,20 @@ pub fn mail_list(
 ) -> Result<Vec<MailSummary>, String> {
     store
         .list_emails(account_id, &folder, limit, offset)
+        .map_err(|e| e.to_string())
+}
+
+/// スレッド単位のメール一覧（代表＝フォルダ内最新＋件数バッジ）。docs/THREADING.md §5。
+#[tauri::command]
+pub fn thread_list(
+    store: State<Store>,
+    account_id: Option<i64>,
+    folder: String,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<ThreadListItem>, String> {
+    store
+        .list_threads(account_id, &folder, limit, offset)
         .map_err(|e| e.to_string())
 }
 

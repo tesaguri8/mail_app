@@ -570,13 +570,19 @@ impl Store {
             ""
         };
         // 代表＝グループ（COALESCE(logical_thread_id, -id)）内でフォルダの最新 1 通（rn=1）。
+        // まず reps で「表示ページの代表 id」だけを絞り（軽い列のみ）、重い集計サブクエリは
+        // その 100 件に対してだけ評価する（全スレッド分の集計を避けて高速化）。
         let sql = format!(
-            "WITH ranked AS (
-                SELECT e.*, COALESCE(e.logical_thread_id, -e.id) AS gkey,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY COALESCE(e.logical_thread_id, -e.id)
-                           ORDER BY e.date_ts DESC, e.id DESC) AS rn
-                FROM emails e WHERE e.folder = ?1 {acct}
+            "WITH reps AS (
+                SELECT id, logical_thread_id, date_ts FROM (
+                    SELECT e.id, e.logical_thread_id, e.date_ts,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY COALESCE(e.logical_thread_id, -e.id)
+                               ORDER BY e.date_ts DESC, e.id DESC) AS rn
+                    FROM emails e WHERE e.folder = ?1 {acct}
+                ) WHERE rn = 1
+                ORDER BY date_ts DESC, id DESC
+                LIMIT ?2 OFFSET ?3
              )
              SELECT r.id, COALESCE(r.logical_thread_id, -r.id) AS gkey, r.account_id,
                     COALESCE(lt.title, r.subject) AS subject,
@@ -595,11 +601,10 @@ impl Store {
                      WHERE t.folder = ?1
                        AND (CASE WHEN r.logical_thread_id IS NULL THEN t.id = r.id
                                  ELSE t.logical_thread_id = r.logical_thread_id END)) AS folder_ids
-             FROM ranked r
+             FROM reps
+             JOIN emails r ON r.id = reps.id
              LEFT JOIN logical_threads lt ON lt.id = r.logical_thread_id
-             WHERE r.rn = 1
-             ORDER BY r.date_ts DESC, r.id DESC
-             LIMIT ?2 OFFSET ?3",
+             ORDER BY reps.date_ts DESC, reps.id DESC",
             known_vip = known_vip_cols("r.from_address"),
         );
         let mut stmt = conn.prepare(&sql)?;

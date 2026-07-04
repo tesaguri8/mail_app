@@ -122,7 +122,8 @@ export function AccountSetup({
 
   const checkConn = (id: number) => {
     setConn((c) => ({ ...c, [id]: { state: 'checking' } }));
-    accountCheck(id)
+    // Promise を返して呼び出し側で直列化できるようにする（同時ログインを避ける）。
+    return accountCheck(id)
       .then(() => setConn((c) => ({ ...c, [id]: { state: 'ok' } })))
       .catch((e) => setConn((c) => ({ ...c, [id]: { state: 'error', msg: String(e) } })));
   };
@@ -263,12 +264,15 @@ export function AccountSetup({
   const checkedRef = useRef<Set<number>>(new Set());
   useEffect(() => {
     if (!isTauri) return;
-    accounts.forEach((a) => {
-      if (!checkedRef.current.has(a.id)) {
-        checkedRef.current.add(a.id);
-        checkConn(a.id);
+    const toCheck = accounts.filter((a) => !checkedRef.current.has(a.id));
+    if (toCheck.length === 0) return;
+    toCheck.forEach((a) => checkedRef.current.add(a.id));
+    // 同時に複数ログインを開かず、1件ずつ順番に確認する（サーバーの多重接続制限に配慮）。
+    (async () => {
+      for (const a of toCheck) {
+        await checkConn(a.id);
       }
-    });
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accounts]);
 

@@ -14,8 +14,14 @@ export const MAIL_SYNCED_EVENT = 'rondine:mail-synced';
  * - 戻り値 syncNow で任意タイミングの即時同期も呼べる（ボタン押下時用）。
  * - 多重実行はガードし、1 巡完了ごとに MAIL_SYNCED_EVENT を発火する。
  */
+/** 全アカウントの同期が失敗（接続不可等）した後、自動再試行を止める時間（ミリ秒）。
+ *  遮断中のサーバーへ叩き続けて遮断を延長させないための安全弁。手動同期には効かない。 */
+const AUTOSYNC_COOLDOWN_MS = 5 * 60 * 1000;
+
 export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => void {
   const busy = useRef(false);
+  // 直近の一括失敗でクールダウン中なら、この時刻まで自動（定期）同期を止める。
+  const cooldownUntil = useRef(0);
   // アカウント増減にだけ追従（unread_count 等の変化で作り直さない）。
   const idsKey = accounts.map((a) => a.id).join(',');
 
@@ -26,15 +32,19 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
     busy.current = true;
     (async () => {
       let synced = false;
+      let failed = false;
       for (const id of ids) {
         try {
           await mailSync(id);
           synced = true;
         } catch {
-          /* アカウント単位の失敗は無視して次へ */
+          // アカウント単位の失敗は無視して次へ（ただし全滅ならクールダウン）。
+          failed = true;
         }
       }
       busy.current = false;
+      // 1件も成功せず全滅＝接続不可の可能性大 → しばらく自動再試行を止める（手動は可）。
+      cooldownUntil.current = failed && !synced ? Date.now() + AUTOSYNC_COOLDOWN_MS : 0;
       if (synced) window.dispatchEvent(new Event(MAIL_SYNCED_EVENT));
     })();
   }, [idsKey]);
@@ -48,14 +58,18 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
   }, []);
 
   // 対象モードに入った時に即同期（起動直後のホーム表示・ホーム↔メール遷移を含む）。
+  // クールダウン中（直近の接続失敗後）は自動では叩かない（手動同期は別途可）。
   useEffect(() => {
-    if (active) syncNow();
+    if (active && Date.now() >= cooldownUntil.current) syncNow();
   }, [active, syncNow]);
 
-  // 滞在中は設定間隔で定期同期（0=オフ）。
+  // 滞在中は設定間隔で定期同期（0=オフ）。直近の一括失敗でクールダウン中は
+  // 定期同期をスキップして、遮断中のサーバーを叩き続けないようにする（手動同期は別途可）。
   useEffect(() => {
     if (!active || intervalSec <= 0) return;
-    const h = setInterval(syncNow, intervalSec * 1000);
+    const h = setInterval(() => {
+      if (Date.now() >= cooldownUntil.current) syncNow();
+    }, intervalSec * 1000);
     return () => clearInterval(h);
   }, [active, intervalSec, syncNow]);
 

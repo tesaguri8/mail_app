@@ -10,6 +10,7 @@ import {
   accountAutoconfig,
   accountCheck,
   accountDelete,
+  accountPing,
   accountReorder,
   accountTestLogin,
   accountUpdate,
@@ -120,10 +121,12 @@ export function AccountSetup({
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const checkConn = (id: number) => {
+  // 接続ドットのチェック。既定は軽量な TCP 到達確認（速い・固まらない・連続ログインにならない）。
+  // full=true（ドットのクリック）のときだけ、資格情報での実 LOGIN で厳密に確認する。
+  const checkConn = (id: number, full = false) => {
     setConn((c) => ({ ...c, [id]: { state: 'checking' } }));
     // Promise を返して呼び出し側で直列化できるようにする（同時ログインを避ける）。
-    return accountCheck(id)
+    return (full ? accountCheck(id) : accountPing(id))
       .then(() => setConn((c) => ({ ...c, [id]: { state: 'ok' } })))
       .catch((e) => setConn((c) => ({ ...c, [id]: { state: 'error', msg: String(e) } })));
   };
@@ -406,7 +409,7 @@ export function AccountSetup({
                   <span
                     onClick={(e) => {
                       e.stopPropagation();
-                      checkConn(a.id);
+                      checkConn(a.id, true); // クリック時は実 LOGIN で厳密確認
                     }}
                     title={conn[a.id]?.msg ?? conn[a.id]?.state ?? ''}
                     className={`h-2.5 w-2.5 shrink-0 rounded-full ${

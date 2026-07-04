@@ -1815,6 +1815,31 @@ pub async fn account_check(
     .map_err(|e| e.to_string())?
 }
 
+/// 登録済みアカウントの IMAP サーバーへ TCP 到達確認だけ行う（LOGIN しない・タイムアウトつき）。
+/// 接続ドットの軽量チェック用。都度フル LOGIN すると遅いサーバーで緑になるまで待たされ、
+/// かつ連続ログインとみなされやすいため、状態表示はこの軽い疎通で済ませる。
+#[tauri::command]
+pub async fn account_ping(store: State<'_, Store>, account_id: i64) -> Result<(), String> {
+    let (_email, _login, host, port) = store
+        .get_account_imap(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "アカウントが見つかりません".to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::net::{TcpStream, ToSocketAddrs};
+        use std::time::Duration;
+        let addr = format!("{host}:{port}")
+            .to_socket_addrs()
+            .map_err(|e| format!("名前解決に失敗: {e}"))?
+            .next()
+            .ok_or_else(|| "アドレスを解決できませんでした".to_string())?;
+        TcpStream::connect_timeout(&addr, Duration::from_secs(6))
+            .map(|_| ())
+            .map_err(|e| format!("接続できませんでした: {e}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// アカウントを削除（受信メールと keyring の資格情報も削除）。
 #[tauri::command]
 pub fn account_delete(app: AppHandle, store: State<Store>, account_id: i64) -> Result<(), String> {

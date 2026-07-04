@@ -33,6 +33,10 @@ export const accountReorder = (ids: number[]) => invoke<void>('account_reorder',
 export const accountCheck = (accountId: number) =>
   invoke<void>('account_check', { accountId });
 
+// IMAP サーバーへの TCP 到達確認だけ（LOGIN しない・タイムアウトつき）。接続ドットの軽量チェック用。
+export const accountPing = (accountId: number) =>
+  invoke<void>('account_ping', { accountId });
+
 export const accountUpdate = (
   accountId: number,
   displayName: string | null,

@@ -275,11 +275,8 @@ pub fn assign_thread(conn: &Connection, email_id: i64) -> rusqlite::Result<Optio
         return Ok(None);
     };
 
-    // 手動割当は尊重する（再解析で動かさない）。集計だけ更新。
+    // 手動割当は尊重する（再解析で動かさない）。集計は表示時に算出するのでここでは何もしない。
     if assignment == "manual" {
-        if let Some(t) = current_thread {
-            recompute_thread(conn, t)?;
-        }
         return Ok(current_thread);
     }
 
@@ -300,13 +297,9 @@ pub fn assign_thread(conn: &Connection, email_id: i64) -> rusqlite::Result<Optio
          WHERE id = ?1",
         params![email_id, tid, root_key],
     )?;
-    // 以前に別スレッドへ属していた場合はそちらの集計も更新（空なら掃除）。
-    if let Some(prev) = current_thread {
-        if prev != tid {
-            recompute_thread(conn, prev)?;
-        }
-    }
-    recompute_thread(conn, tid)?;
+    // 集計（件数・参加者・タイトル）は保存時に再計算しない（取り込み1通ごとに数クエリ走らせると
+    // 全体が重くなるため）。会話ビューは表示時にメッセージから直接算出する（recompute_thread は
+    // 手動の分割/結合/再割当でのみ使い、空スレッドの掃除を担う）。
     Ok(Some(tid))
 }
 
@@ -366,26 +359,17 @@ impl Store {
     }
 
     /// スレッド id から会話を組み立てる（内部）。
+    /// 集計（件数・未読・参加者・既定タイトル）は保存値に頼らず、読み込んだメッセージから算出する
+    /// （取り込み時の再計算コストを無くすため）。ユーザー名（title/rename フラグ）だけ保存値を使う。
     fn load_thread_view(conn: &Connection, tid: i64) -> rusqlite::Result<Option<ThreadView>> {
-        let thread: Option<ThreadSummary> = conn
+        let head: Option<(Option<String>, bool)> = conn
             .query_row(
-                "SELECT id, title, auto_title, message_count, unread_count, participants, is_user_renamed
-                 FROM logical_threads WHERE id = ?1",
+                "SELECT title, is_user_renamed FROM logical_threads WHERE id = ?1",
                 params![tid],
-                |r| {
-                    Ok(ThreadSummary {
-                        id: r.get::<_, i64>(0)? as i32,
-                        title: r.get(1)?,
-                        auto_title: r.get(2)?,
-                        message_count: r.get::<_, i64>(3)? as i32,
-                        unread_count: r.get::<_, i64>(4)? as i32,
-                        participants: r.get(5)?,
-                        is_user_renamed: r.get::<_, i64>(6)? != 0,
-                    })
-                },
+                |r| Ok((r.get(0)?, r.get::<_, i64>(1)? != 0)),
             )
             .optional()?;
-        let Some(thread) = thread else {
+        let Some((title, is_user_renamed)) = head else {
             return Ok(None);
         };
         let sql = "SELECT e.id, e.account_id, e.message_id, e.from_address, e.from_name,
@@ -435,6 +419,33 @@ impl Store {
                 anchors.insert(a);
             }
         }
+        // 集計はメッセージから算出（保存値に依存しない）。
+        let message_count = messages.len() as i32;
+        let unread_count = messages.iter().filter(|m| !m.is_read).count() as i32;
+        // 既定タイトル＝最古メール（先頭）の件名。
+        let auto_title = messages.first().and_then(|m| m.subject.clone());
+        // 参加者＝差出人アドレスの重複なし（先頭数件）。
+        let mut seen = std::collections::HashSet::new();
+        let participants: Vec<String> = messages
+            .iter()
+            .filter_map(|m| m.from_address.clone())
+            .filter(|a| seen.insert(a.clone()))
+            .take(8)
+            .collect();
+        let participants = if participants.is_empty() {
+            None
+        } else {
+            Some(participants.join(", "))
+        };
+        let thread = ThreadSummary {
+            id: tid as i32,
+            title,
+            auto_title,
+            message_count,
+            unread_count,
+            participants,
+            is_user_renamed,
+        };
         Ok(Some(ThreadView { thread, messages }))
     }
 

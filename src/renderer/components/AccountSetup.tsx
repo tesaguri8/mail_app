@@ -240,10 +240,19 @@ export function AccountSetup({
     }
   };
 
-  // アカウントが変わるたびに各接続状態をチェック
+  // 各アカウントの接続状態は「初めて見た時に1回だけ」チェックする。
+  // accounts は同期で件数が更新されるたびに新配列になるため、そのたびに全アカウントへ
+  // IMAP ログインを投げるとサーバーに連続ログインとみなされ遮断される（さくら等）。
+  // 手動チェックは接続ドットのクリックで随時できる。
+  const checkedRef = useRef<Set<number>>(new Set());
   useEffect(() => {
     if (!isTauri) return;
-    accounts.forEach((a) => checkConn(a.id));
+    accounts.forEach((a) => {
+      if (!checkedRef.current.has(a.id)) {
+        checkedRef.current.add(a.id);
+        checkConn(a.id);
+      }
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accounts]);
 

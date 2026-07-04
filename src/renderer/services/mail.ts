@@ -110,6 +110,11 @@ export const accountSetBodyWindow = (accountId: number, window: string) =>
 // 点検つき再取り込み（フル再取得＋既存メールへ uid/添付メタを埋め戻し）。
 export const mailResync = (accountId: number) => invoke<SyncResult>('mail_resync', { accountId });
 
+// ローカル再加工（再ダウンロード不要）: 保存済み本文から clean_body・引用・スレッド・代表フラグを
+// 作り直す。パーサ改良を既存メールへ反映する用途。処理件数を返す。
+export const mailReprocess = (accountId: number) =>
+  invoke<number>('mail_reprocess', { accountId });
+
 // アカウントのローカル保存容量（使用量・上限）。
 export const accountStorageInfo = (accountId: number) =>
   invoke<StorageInfo>('account_storage_info', { accountId });

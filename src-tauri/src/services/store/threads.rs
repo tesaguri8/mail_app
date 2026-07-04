@@ -565,52 +565,134 @@ impl Store {
     pub fn rebuild_threads(&self, account_id: i64) -> rusqlite::Result<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        // auto メールの割当を一旦外す。
-        tx.execute(
-            "UPDATE emails SET logical_thread_id = NULL, thread_id = NULL
-             WHERE account_id = ?1 AND COALESCE(thread_assignment,'auto') <> 'manual'",
-            params![account_id],
-        )?;
-        // メンバーが居なくなった auto スレッド（root_key 非 NULL）を掃除する。
-        tx.execute(
-            "DELETE FROM logical_threads
-             WHERE account_id = ?1 AND root_key IS NOT NULL
-               AND id NOT IN (SELECT logical_thread_id FROM emails WHERE logical_thread_id IS NOT NULL)",
-            params![account_id],
-        )?;
-        // 古い順に再割当（親→子の順で継承が効く）。
-        let ids: Vec<i64> = {
-            let mut stmt = tx.prepare(
-                "SELECT id FROM emails
-                 WHERE account_id = ?1 AND COALESCE(thread_assignment,'auto') <> 'manual'
-                 ORDER BY date_ts ASC, id ASC",
-            )?;
-            let rows = stmt
-                .query_map(params![account_id], |r| r.get(0))?
-                .collect::<rusqlite::Result<_>>()?;
-            rows
-        };
-        for id in ids {
-            assign_thread(&tx, id)?;
-        }
-        // 代表フラグをアカウント全体で貼り直す（各 (スレッド/単独, フォルダ) の最新のみ 1）。
-        tx.execute(
-            "UPDATE emails SET is_folder_rep = 0 WHERE account_id = ?1",
-            params![account_id],
-        )?;
-        tx.execute(
-            "UPDATE emails SET is_folder_rep = 1 WHERE id IN (
-                SELECT id FROM (
-                    SELECT id, ROW_NUMBER() OVER (
-                        PARTITION BY COALESCE(logical_thread_id, -id), folder
-                        ORDER BY date_ts DESC, id DESC) AS rn
-                    FROM emails WHERE account_id = ?1
-                ) WHERE rn = 1)",
-            params![account_id],
-        )?;
+        rebuild_threads_conn(&tx, account_id)?;
         tx.commit()?;
         Ok(())
     }
+
+    /// 取り込み後のローカル加工パス: まだスレッド未割当（logical_thread_id IS NULL）の auto メールに
+    /// スレッドを割り当て、代表フラグを立てる。ネットワーク不要。処理件数を返す。
+    /// 同期ごとに（接続を閉じた後に）呼ぶ。
+    pub fn process_pending(&self, account_id: i64) -> rusqlite::Result<usize> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let n = process_pending_conn(&tx, account_id)?;
+        tx.commit()?;
+        Ok(n)
+    }
+
+    /// ローカル再加工（再ダウンロード不要）: 保存済み本文から clean_body・引用・fingerprint を作り直し、
+    /// スレッド割当と代表フラグを全面的に貼り直す。パーサ改良を既存メールへ反映する用途。処理件数を返す。
+    pub fn reprocess_all(&self, account_id: i64) -> rusqlite::Result<usize> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        // (1) 保存済み body_plain から clean_body / body_fingerprint / FTS / message_quotes を再生成。
+        let rows: Vec<(i64, Option<String>)> = {
+            let mut stmt = tx.prepare("SELECT id, body_plain FROM emails WHERE account_id = ?1")?;
+            let mapped = stmt.query_map(params![account_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            mapped.collect::<rusqlite::Result<_>>()?
+        };
+        let count = rows.len();
+        {
+            let mut up =
+                tx.prepare("UPDATE emails SET clean_body = ?2, body_fingerprint = ?3 WHERE id = ?1")?;
+            let mut upfts = tx.prepare("UPDATE email_fts SET clean_body = ?1 WHERE rowid = ?2")?;
+            let mut delq = tx.prepare("DELETE FROM message_quotes WHERE email_id = ?1")?;
+            let mut insq = tx.prepare(
+                "INSERT INTO message_quotes (email_id, block_order, quoted_from, quoted_at, fingerprint)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            for (id, body) in &rows {
+                let Some(body) = body else { continue };
+                let split = crate::services::quotes::split_reply(body);
+                let fp = if split.clean.trim().is_empty() {
+                    None
+                } else {
+                    Some(crate::services::quotes::fingerprint(&split.clean))
+                };
+                up.execute(params![id, split.clean, fp])?;
+                upfts.execute(params![split.clean, id])?;
+                delq.execute(params![id])?;
+                for q in &split.quotes {
+                    insq.execute(params![id, q.order, q.quoted_from, q.quoted_at, q.fingerprint])?;
+                }
+            }
+        }
+        // (2) スレッド割当・代表フラグを作り直す。
+        rebuild_threads_conn(&tx, account_id)?;
+        tx.commit()?;
+        Ok(count)
+    }
+}
+
+/// rebuild_threads の本体（接続を受け取る版。reprocess_all からも使う）。
+fn rebuild_threads_conn(conn: &Connection, account_id: i64) -> rusqlite::Result<()> {
+    // auto メールの割当を一旦外す。
+    conn.execute(
+        "UPDATE emails SET logical_thread_id = NULL, thread_id = NULL
+         WHERE account_id = ?1 AND COALESCE(thread_assignment,'auto') <> 'manual'",
+        params![account_id],
+    )?;
+    // メンバーが居なくなった auto スレッド（root_key 非 NULL）を掃除する。
+    conn.execute(
+        "DELETE FROM logical_threads
+         WHERE account_id = ?1 AND root_key IS NOT NULL
+           AND id NOT IN (SELECT logical_thread_id FROM emails WHERE logical_thread_id IS NOT NULL)",
+        params![account_id],
+    )?;
+    // 古い順に再割当（親→子の順で継承が効く）。
+    let ids: Vec<i64> = {
+        let mut stmt = conn.prepare(
+            "SELECT id FROM emails
+             WHERE account_id = ?1 AND COALESCE(thread_assignment,'auto') <> 'manual'
+             ORDER BY date_ts ASC, id ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![account_id], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        rows
+    };
+    for id in ids {
+        assign_thread(conn, id)?;
+    }
+    // 代表フラグをアカウント全体で貼り直す（各 (スレッド/単独, フォルダ) の最新のみ 1）。
+    conn.execute(
+        "UPDATE emails SET is_folder_rep = 0 WHERE account_id = ?1",
+        params![account_id],
+    )?;
+    conn.execute(
+        "UPDATE emails SET is_folder_rep = 1 WHERE id IN (
+            SELECT id FROM (
+                SELECT id, ROW_NUMBER() OVER (
+                    PARTITION BY COALESCE(logical_thread_id, -id), folder
+                    ORDER BY date_ts DESC, id DESC) AS rn
+                FROM emails WHERE account_id = ?1
+            ) WHERE rn = 1)",
+        params![account_id],
+    )?;
+    Ok(())
+}
+
+/// 取り込み後のローカル加工（接続版）: 未割当（NULL）の auto メールに、古い順で
+/// スレッド割当＋代表フラグ更新を行う。処理件数を返す。
+pub fn process_pending_conn(conn: &Connection, account_id: i64) -> rusqlite::Result<usize> {
+    let ids: Vec<i64> = {
+        let mut stmt = conn.prepare(
+            "SELECT id FROM emails
+             WHERE account_id = ?1 AND logical_thread_id IS NULL
+               AND COALESCE(thread_assignment,'auto') <> 'manual'
+             ORDER BY date_ts ASC, id ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![account_id], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        rows
+    };
+    for id in &ids {
+        assign_thread(conn, *id)?;
+        super::emails::maintain_folder_rep_on_insert(conn, *id)?;
+    }
+    Ok(ids.len())
 }
 
 /// アドレスに一致する住所録の表示名（emails.rs の同名ヘルパと同等の軽量版）。
@@ -733,6 +815,8 @@ mod tests {
                 _ => panic!("expected insert"),
             }
         }
+        // 取り込み後のローカル加工（スレッド割当・代表フラグ）。
+        process_pending_conn(&conn, 1).unwrap();
         ids
     }
 
@@ -785,10 +869,12 @@ mod tests {
             child.body_plain = Some(format!("{child_clean}\nよろしく"));
             child.clean_body = Some(child_clean.into());
             insert_email(&conn, &parent).unwrap();
-            match insert_email(&conn, &child).unwrap() {
+            let cid = match insert_email(&conn, &child).unwrap() {
                 crate::services::store::InsertOutcome::Inserted(id) => id,
                 _ => panic!("expected insert"),
-            }
+            };
+            process_pending_conn(&conn, 1).unwrap();
+            cid
         };
         let view = store.thread_view(child_id).unwrap().unwrap();
         let child = view

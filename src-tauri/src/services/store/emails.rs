@@ -192,14 +192,9 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
     )?;
     insert_attachments(conn, id, &e.attachments)?;
     insert_quotes(conn, id, &e.quotes)?;
-    // 論理スレッドへ割り当てる（docs/THREADING.md §2〜§4）。失敗しても取り込み自体は続行する。
-    if let Err(err) = super::threads::assign_thread(conn, id) {
-        log::warn!("スレッド割当に失敗（email_id={id}）: {err}");
-    }
-    // フォルダ内代表フラグを O(1) で更新（一覧を索引で先頭 N 件引くため。docs/THREADING.md §5）。
-    if let Err(err) = maintain_folder_rep_on_insert(conn, id) {
-        log::warn!("代表フラグ更新に失敗（email_id={id}）: {err}");
-    }
+    // 取り込み（download＋保存）はここまで。スレッド割当・代表フラグ（＝他メール参照が要る
+    // クロス処理）は接続を閉じた後のローカル加工パス process_pending で行う（docs/THREADING.md §5）。
+    // ここで logical_thread_id は NULL のまま＝一覧では 1 通ずつ即表示され、加工後に束ねられる。
     Ok(InsertOutcome::Inserted(id))
 }
 
@@ -389,36 +384,15 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
         insert_quotes(conn, id, &e.quotes)?;
         touched = true;
     }
-    // ヘッダを後付けできたなら、auto 割当のスレッドを引き直す（manual は assign 側で保持）。
+    // ヘッダを後付けできたら、auto 割当を「未処理」に戻して次のローカル加工で引き直させる
+    // （ここでは再割当しない＝取り込みは保存に徹する）。manual は動かさない。
     if header_backfilled {
-        // 割当が変わると旧/新スレッドの代表がずれるので、前後で代表を貼り直す。
-        let old_tid: Option<i64> = conn
-            .query_row(
-                "SELECT logical_thread_id FROM emails WHERE id = ?1",
-                params![id],
-                |r| r.get(0),
-            )
-            .optional()?
-            .flatten();
-        if let Err(err) = super::threads::assign_thread(conn, id) {
-            log::warn!("スレッド再割当に失敗（email_id={id}）: {err}");
-        }
-        let new_tid: Option<i64> = conn
-            .query_row(
-                "SELECT logical_thread_id FROM emails WHERE id = ?1",
-                params![id],
-                |r| r.get(0),
-            )
-            .optional()?
-            .flatten();
-        if let Some(t) = new_tid {
-            recompute_reps_for_thread(conn, t)?;
-        }
-        if let Some(t) = old_tid {
-            if Some(t) != new_tid {
-                recompute_reps_for_thread(conn, t)?;
-            }
-        }
+        let n = conn.execute(
+            "UPDATE emails SET logical_thread_id = NULL, thread_id = NULL
+             WHERE id = ?1 AND COALESCE(thread_assignment,'auto') <> 'manual'",
+            params![id],
+        )?;
+        touched |= n > 0;
     }
     // clean_body（引用/署名を除いた新規部分）を新エンジンの分離結果に更新する。
     // 旧パーサ（行頭 `>` を消すだけ）で取り込んだ古いメールは、`-----Original Message-----` や
@@ -1427,6 +1401,8 @@ mod tests {
             // 単独メール B（別 root）。既読。
             insert_email(&conn, &mk("b0@x", 3, true, None, None)).unwrap();
         }
+        // 取り込み後のローカル加工（スレッド割当・代表フラグ）。
+        store.process_pending(1).unwrap();
         let rows = store.list_threads(Some(1), "inbox", 50, 0).unwrap();
         // 2 行（スレッドA と 単独B）。新しい順なので先頭は B（ts=3）。
         assert_eq!(rows.len(), 2);
@@ -1444,6 +1420,80 @@ mod tests {
         assert_eq!(a.unread_count, 1);
         assert!(!a.is_read);
         assert_eq!(a.email_ids.len(), 2);
+    }
+
+    /// 取り込みと加工の分離: 取り込み直後はスレッド未束ね（各メール1行）。process_pending で束ねる。
+    /// 併せて reprocess_all が保存済み本文から clean_body を作り直すことも確認する。
+    #[test]
+    fn ingest_defers_threading_then_process_and_reprocess() {
+        let store = test_store();
+        let mk = |mid: &str, ts: i64, refs: Option<&str>, clean: &str, body: &str| NewEmail {
+            account_id: 1,
+            message_id: Some(mid.into()),
+            canonical_key: mid.into(),
+            subject: Some("件名".into()),
+            from_address: Some("you@corp.com".into()),
+            from_name: None,
+            to_addresses: None,
+            to_name: None,
+            cc_addresses: None,
+            date: Some(format!("2026-06-{:02}T10:00:00Z", ts)),
+            date_ts: Some(1_767_000_000 + ts * 86400),
+            body_plain: Some(body.into()),
+            clean_body: Some(clean.into()),
+            body_html: None,
+            auth_result: None,
+            list_id: None,
+            in_reply_to: refs.map(str::to_string),
+            references_ids: refs.map(str::to_string),
+            thread_index: None,
+            raw_headers: None,
+            quotes: vec![],
+            has_attachments: false,
+            is_read: true,
+            uid: None,
+            folder: "inbox".into(),
+            attachments: vec![],
+        };
+        {
+            let conn = store.conn.lock().unwrap();
+            insert_email(&conn, &mk("t0@x", 1, None, "本文0", "本文0")).unwrap();
+            // stale な clean_body（引用が残ったまま）で保存 → reprocess で直る想定。
+            insert_email(
+                &conn,
+                &mk(
+                    "t1@x",
+                    2,
+                    Some("t0@x"),
+                    "新規1\n\n2026/01/01 に a@b さんが書きました:\n> 引用",
+                    "新規1\n\n2026/01/01 に a@b さんが書きました:\n> 引用",
+                ),
+            )
+            .unwrap();
+        }
+        // 取り込み直後: スレッド未束ね＝各メール1行。
+        let before = store.list_threads(Some(1), "inbox", 50, 0).unwrap();
+        assert_eq!(before.len(), 2);
+        assert!(before.iter().all(|r| r.message_count == 1));
+
+        // ローカル加工: スレッドに束ねる。
+        store.process_pending(1).unwrap();
+        let after = store.list_threads(Some(1), "inbox", 50, 0).unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].message_count, 2);
+
+        // ローカル再加工: 保存済み本文から clean_body を作り直す（stale を修正）。
+        store.reprocess_all(1).unwrap();
+        let clean: String = {
+            let conn = store.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT clean_body FROM emails WHERE message_id = 't1@x'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(clean, "新規1");
     }
 
     /// 代表フラグ: 代表メールを削除したら、その (スレッド,フォルダ) の残りの最新が代表に昇格する。
@@ -1490,6 +1540,8 @@ mod tests {
             };
             (a0, a1)
         };
+        // 取り込み後のローカル加工でスレッド割当・代表フラグを付ける。
+        store.process_pending(1).unwrap();
         // 1 スレッドに畳まれ、代表は最新の a1。
         let rows = store.list_threads(Some(1), "inbox", 50, 0).unwrap();
         assert_eq!(rows.len(), 1);

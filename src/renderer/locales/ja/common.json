@@ -351,7 +351,11 @@
     "resync": "点検再取り込み",
     "resyncHint": "取り込み範囲をサーバーから取り直し、古いメールにも添付情報（uid）を補完します。",
     "resyncing": "再取り込み中…",
-    "resynced": "取得 {{fetched}} / 新規 {{stored}} / 補完 {{backfilled}}"
+    "resynced": "取得 {{fetched}} / 新規 {{stored}} / 補完 {{backfilled}}",
+    "reprocess": "ローカル再解析",
+    "reprocessing": "再解析中…",
+    "reprocessed": "{{count}} 件を再解析しました",
+    "reprocessHint": "サーバーから取り直さず、保存済みの本文だけで引用分離・スレッド束ねを作り直します（パーサ改良の反映用・通信なし）。"
   },
   "lang": {
     "switch": "EN"

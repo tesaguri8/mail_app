@@ -299,8 +299,13 @@ pub async fn mail_sync(
     // （解放漏れは以後の同期が全てスキップされる原因になるため）。
     control.end(account_id);
     let result = result.map_err(|e| e.to_string())?;
-    // 同期後に保持ポリシーを適用（古い添付の削除・本文の要約保存・容量保険）。best-effort。
     if result.is_ok() {
+        // 取り込み後のローカル加工（スレッド割当・代表フラグ）。IMAP 接続は閉じており、
+        // サーバーとは無関係のローカル処理（docs/THREADING.md §5）。best-effort。
+        if let Err(e) = store.process_pending(account_id) {
+            log::warn!("取り込み後の加工に失敗: {e}");
+        }
+        // 保持ポリシーを適用（古い添付の削除・本文の要約保存・容量保険）。
         let _ = store.apply_retention(account_id);
     }
     result
@@ -1357,6 +1362,16 @@ pub fn thread_rebuild(store: State<Store>, account_id: i64) -> Result<(), String
     store.rebuild_threads(account_id).map_err(|e| e.to_string())
 }
 
+/// ローカル再加工（再ダウンロード不要）: 保存済み本文から clean_body・引用・スレッド・代表フラグを
+/// 作り直す。パーサ改良を既存メールへ反映する用途（docs/THREADING.md §5）。処理件数を返す。
+#[tauri::command]
+pub fn mail_reprocess(store: State<Store>, account_id: i64) -> Result<i64, String> {
+    store
+        .reprocess_all(account_id)
+        .map(|n| n as i64)
+        .map_err(|e| e.to_string())
+}
+
 /// 1通の全文をサーバーから再取得して本文キャッシュを復元する（要約保存の解除）。
 /// emails.uid で該当メッセージだけを取り直すので、アカウント全体の再同期は不要。
 /// 復元後の本文（body_compacted=false）を返す。
@@ -1689,7 +1704,15 @@ pub async fn mail_resync(
     })
     .await;
     control.end(account_id);
-    out.map_err(|e| e.to_string())?
+    let result = out.map_err(|e| e.to_string())?;
+    if result.is_ok() {
+        // フル再取得後は、保存済み本文からローカルで全面再加工（clean_body・スレッド・代表フラグ）。
+        // 接続は閉じており、サーバーとは無関係。
+        if let Err(e) = store.reprocess_all(account_id) {
+            log::warn!("再取り込み後の再加工に失敗: {e}");
+        }
+    }
+    result
 }
 
 /// ファイル名を保存に安全な形へ正規化する（パス区切り・禁止文字を除去）。

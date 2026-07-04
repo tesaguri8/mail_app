@@ -21,6 +21,7 @@ import {
   accountSetFullWindow,
   accountSetStorageLimit,
   accountStorageInfo,
+  mailReprocess,
   storageOptimize,
 } from '../services/mail';
 import type { StorageInfo } from '@bindings/StorageInfo';
@@ -201,6 +202,21 @@ export function AccountSetup({
 
   // 点検再取り込みをバックグラウンドで開始（進捗・中断・完了トーストは共通インジケータ）。
   const startResync = (id: number, email: string) => sync.start(id, email, 'resync');
+
+  // ローカル再解析（再ダウンロード不要）: 保存済み本文から引用分離・スレッド束ねを作り直す。
+  const [reprocessing, setReprocessing] = useState<number | null>(null);
+  const startReprocess = async (id: number) => {
+    setReprocessing(id);
+    try {
+      const n = await mailReprocess(id);
+      sync.toast(t('storage.reprocessed', { count: n }));
+      onChanged();
+    } catch (e) {
+      sync.toast(String(e), 'error');
+    } finally {
+      setReprocessing(null);
+    }
+  };
 
   const saveEdit = async (id: number) => {
     try {
@@ -590,6 +606,18 @@ export function AccountSetup({
                     )}
                     <span className="mt-1 block text-[11px] leading-snug text-white/40">
                       {t('storage.resyncHint')}
+                    </span>
+                    {/* ローカル再解析: サーバーから取り直さず、保存済み本文で引用分離・スレッド束ねを作り直す */}
+                    <button
+                      className={`${btnCls} mt-2`}
+                      disabled={reprocessing === a.id || !!sync.active}
+                      onClick={() => startReprocess(a.id)}
+                      title={t('storage.reprocessHint')}
+                    >
+                      {reprocessing === a.id ? t('storage.reprocessing') : t('storage.reprocess')}
+                    </button>
+                    <span className="mt-1 block text-[11px] leading-snug text-white/40">
+                      {t('storage.reprocessHint')}
                     </span>
                   </div>
                 </div>

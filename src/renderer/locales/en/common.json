@@ -351,7 +351,11 @@
     "resync": "Repair re-import",
     "resyncHint": "Re-fetch the import range from the server and backfill attachment info (uid) for older mail too.",
     "resyncing": "Re-importing…",
-    "resynced": "Fetched {{fetched}} / New {{stored}} / Backfilled {{backfilled}}"
+    "resynced": "Fetched {{fetched}} / New {{stored}} / Backfilled {{backfilled}}",
+    "reprocess": "Local re-analyze",
+    "reprocessing": "Re-analyzing…",
+    "reprocessed": "Re-analyzed {{count}} messages",
+    "reprocessHint": "Rebuild quote separation and threading from the stored bodies only, without re-fetching from the server (applies parser improvements, no network)."
   },
   "lang": {
     "switch": "JP"

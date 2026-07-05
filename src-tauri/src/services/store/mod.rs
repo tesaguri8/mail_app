@@ -43,13 +43,18 @@ impl Store {
         conn.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
         )?;
+        let t = std::time::Instant::now();
         migrations::run(&conn)?;
+        log::info!("[perf] migrations took {:?}", t.elapsed());
         let store = Self {
             conn: Mutex::new(conn),
             path: Mutex::new(path.to_path_buf()),
         };
         // 旧 TEXT 本文を一度だけ圧縮列へ移す（初回のみ実行、以降は no-op）。
-        match store.compress_legacy_bodies() {
+        let t = std::time::Instant::now();
+        let comp = store.compress_legacy_bodies();
+        log::info!("[perf] compress_legacy_bodies took {:?}", t.elapsed());
+        match comp {
             Ok(n) if n > 0 => {
                 log::info!("compressed {n} legacy HTML bodies");
                 // 解放ページを実ファイルに反映（圧縮した初回だけ実行）。

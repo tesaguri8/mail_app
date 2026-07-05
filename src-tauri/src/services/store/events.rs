@@ -30,7 +30,9 @@ fn trimmed(s: &Option<String>) -> Option<&str> {
 
 impl Store {
     /// 期間 [from, to)（'YYYY-MM-DD' 等の ISO 文字列）に重なる予定を開始順で返す。
-    /// 重なり判定は overlap: start_at < to AND coalesce(end_at, start_at) >= from。
+    /// 単発は overlap: start_at < to AND coalesce(end_at, start_at) >= from で抽出。
+    /// 繰り返し（recurrence 非 null）は基準日が範囲外でも展開元として常に返し、
+    /// 実際の出現はフロント側で範囲内に展開する（src/renderer/utils/recurrence.ts）。
     /// ゼロ詰め ISO の辞書順＝時刻順なので、単純な文字列比較で範囲抽出できる。
     /// `include_deleted` が false なら論理削除済みを除く（既定の一覧）。
     pub fn list_events(
@@ -47,7 +49,8 @@ impl Store {
         };
         let sql = format!(
             "SELECT {EVENT_COLS} FROM events \
-             WHERE start_at < ?2 AND COALESCE(end_at, start_at) >= ?1 {del} \
+             WHERE (recurrence IS NOT NULL \
+                    OR (start_at < ?2 AND COALESCE(end_at, start_at) >= ?1)) {del} \
              ORDER BY all_day DESC, start_at, title COLLATE NOCASE"
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -223,6 +226,18 @@ mod tests {
         assert_eq!(s.list_trashed_events().unwrap().len(), 1);
         s.restore_event(a.id as i64).unwrap();
         assert_eq!(s.list_events("2026-07-01", "2026-08-01", false).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn recurring_master_returned_regardless_of_range() {
+        let s = mem_store();
+        let mut e = ev("朝会", "2026-01-05T09:00", None, false);
+        e.recurrence = Some("FREQ=WEEKLY".into());
+        s.upsert_event(&e).unwrap();
+        // 1月始まりの週次は、7月の範囲でも展開元として返る（実際の展開はフロント側）。
+        let july = s.list_events("2026-07-01", "2026-08-01", false).unwrap();
+        assert_eq!(july.len(), 1);
+        assert_eq!(july[0].recurrence.as_deref(), Some("FREQ=WEEKLY"));
     }
 
     #[test]

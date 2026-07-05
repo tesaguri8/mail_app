@@ -48,7 +48,15 @@
     "restore": "Restore",
     "deleteConfirm": "Delete this event?",
     "trash": "Trash",
-    "trashEmpty": "Trash is empty"
+    "trashEmpty": "Trash is empty",
+    "repeatUntil": "Repeat until",
+    "seriesNote": "This is a recurring event. Changes apply to the whole series.",
+    "r_none": "Does not repeat",
+    "r_daily": "Daily",
+    "r_weekly": "Weekly",
+    "r_biweekly": "Every 2 weeks",
+    "r_monthly": "Monthly",
+    "r_yearly": "Yearly"
   },
   "comingSoon": "Coming soon",
   "filter": {

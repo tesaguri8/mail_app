@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronLeft, ChevronRight, Plus, Trash2, X, Clock, MapPin, RotateCcw } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Trash2, X, Clock, MapPin, RotateCcw, Repeat } from 'lucide-react';
 import type { EventSummary } from '@bindings/EventSummary';
 import type { EventInput } from '@bindings/EventInput';
-import { eventList, eventListTrashed, eventUpsert, eventDelete, eventRestore } from '../services/calendar';
+import { eventList, eventListTrashed, eventUpsert, eventDelete, eventRestore, eventGet } from '../services/calendar';
+import { expandEvents, presetToRule, ruleToPreset, RECUR_PRESETS, type RecurPreset } from '../utils/recurrence';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -171,7 +172,9 @@ export function CalendarView() {
       eventListTrashed().then(setTrashed).catch(() => setTrashed([]));
       return;
     }
-    eventList(period.from, period.to).then(setEvents).catch(() => setEvents([]));
+    eventList(period.from, period.to)
+      .then((rows) => setEvents(expandEvents(rows, period.from, period.to)))
+      .catch(() => setEvents([]));
   }, [period.from, period.to, showTrash]);
   useEffect(reload, [reload]);
 
@@ -189,7 +192,17 @@ export function CalendarView() {
     reload();
   };
   const newAt = (day: string, time?: string, allDay?: boolean) => setEditing({ mode: 'new', day, time, allDay });
-  const openEvent = (event: EventSummary) => setEditing({ mode: 'edit', event });
+  // 繰り返しの出現をクリックした場合は「元（シリーズ）」を取り直して編集する
+  // （出現の日付で元を上書きしないため）。編集はシリーズ全体に適用。
+  const openEvent = (event: EventSummary) => {
+    if (event.recurrence) {
+      eventGet(event.id)
+        .then((master) => setEditing({ mode: 'edit', event: master }))
+        .catch(() => setEditing({ mode: 'edit', event }));
+    } else {
+      setEditing({ mode: 'edit', event });
+    }
+  };
   const selectedList = eventsOn(events, selected);
   const maxVisible = mode === 'fortnight' ? 5 : 3;
 
@@ -719,6 +732,7 @@ function AgendaPanel({
                 <span className="mt-0.5 flex items-center gap-1 text-xs text-white/55">
                   <Clock size={11} />
                   {e.all_day ? t('cal.allDay') : timeRange(e)}
+                  {e.recurrence && <Repeat size={11} className="text-white/45" />}
                 </span>
                 {e.location && (
                   <span className="mt-0.5 flex items-center gap-1 truncate text-xs text-white/55">
@@ -812,6 +826,9 @@ function EventModal({
   const [location, setLocation] = useState(event?.location ?? '');
   const [description, setDescription] = useState(event?.description ?? '');
   const [color, setColor] = useState(event?.color ?? DEFAULT_COLOR);
+  const initialRecur = ruleToPreset(event?.recurrence ?? null);
+  const [recur, setRecur] = useState<RecurPreset>(initialRecur.preset);
+  const [until, setUntil] = useState<string>(initialRecur.until ?? '');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -843,7 +860,7 @@ function EventModal({
       end_at,
       all_day: allDay,
       color,
-      recurrence: null,
+      recurrence: presetToRule(recur, until || null),
       reminder_minutes: null,
       related_email_id: null,
     };
@@ -945,6 +962,35 @@ function EventModal({
           rows={2}
           className="mb-3 w-full resize-none rounded-lg bg-white/10 px-3 py-2 text-sm outline-none ring-1 ring-white/10 placeholder:text-white/40 focus:ring-white/30"
         />
+
+        {/* 繰り返し */}
+        <div className="mb-3 flex items-center gap-2">
+          <Repeat size={14} className="text-white/55" />
+          <select
+            value={recur}
+            onChange={(e) => setRecur(e.target.value as RecurPreset)}
+            className="flex-1 rounded-lg bg-white/10 px-2 py-1.5 text-sm outline-none ring-1 ring-white/10 [color-scheme:dark] focus:ring-white/30"
+          >
+            {RECUR_PRESETS.map((p) => (
+              <option key={p} value={p} className="bg-neutral-800">
+                {t(`cal.r_${p}`)}
+              </option>
+            ))}
+          </select>
+          {recur !== 'none' && (
+            <input
+              type="date"
+              value={until}
+              min={startDate}
+              onChange={(e) => setUntil(e.target.value)}
+              title={t('cal.repeatUntil')}
+              className="w-40 rounded-lg bg-white/10 px-2 py-1.5 text-sm outline-none ring-1 ring-white/10 [color-scheme:dark] focus:ring-white/30"
+            />
+          )}
+        </div>
+        {event && event.recurrence && (
+          <p className="mb-3 text-xs text-white/45">{t('cal.seriesNote')}</p>
+        )}
 
         <div className="mb-4 flex items-center gap-2">
           <span className="text-xs text-white/55">{t('cal.fColor')}</span>

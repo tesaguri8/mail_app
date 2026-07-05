@@ -48,7 +48,15 @@
     "restore": "復元",
     "deleteConfirm": "この予定を削除しますか？",
     "trash": "ゴミ箱",
-    "trashEmpty": "ゴミ箱は空です"
+    "trashEmpty": "ゴミ箱は空です",
+    "repeatUntil": "繰り返しの終了日",
+    "seriesNote": "繰り返し予定です。変更はシリーズ全体に適用されます。",
+    "r_none": "繰り返さない",
+    "r_daily": "毎日",
+    "r_weekly": "毎週",
+    "r_biweekly": "隔週",
+    "r_monthly": "毎月",
+    "r_yearly": "毎年"
   },
   "comingSoon": "準備中です",
   "filter": {

@@ -186,10 +186,7 @@ pub fn account_add(
 /// 登録済みアカウント一覧（資格情報は含めない）。
 #[tauri::command]
 pub fn account_list(store: State<Store>) -> Result<Vec<AccountSummary>, String> {
-    let t = std::time::Instant::now();
-    let r = store.list_accounts().map_err(|e| e.to_string());
-    log::info!("[perf] account_list took {:?}", t.elapsed());
-    r
+    store.list_accounts().map_err(|e| e.to_string())
 }
 
 /// 登録済みのメールサーバーアカウント設定一覧（再利用の選択肢）。
@@ -310,7 +307,6 @@ pub async fn mail_sync(
                 },
             );
         };
-        let ts = std::time::Instant::now();
         let res = imap_sync::sync_account(
             &db_path,
             account_id,
@@ -322,16 +318,13 @@ pub async fn mail_sync(
             &cancel_task,
             &session_slot,
         );
-        log::info!("[perf] sync_account acct={account_id} took {:?}", ts.elapsed());
         // 取り込み後のローカル加工（スレッド割当・代表フラグ）は「このブロッキングスレッド上で」
         // 実行する。async ランタイム上で同期的に走らせると、その間 Tauri の IPC 配送が止まり、
         // 一覧取得の呼び出しまで待たされる（起動直後に一覧が数十秒出ない原因だった）。
         // 別接続・小分けなので UI 用接続はブロックしない（docs/THREADING.md §5）。
         if res.is_ok() {
-            let tp = std::time::Instant::now();
-            match crate::services::store::process_pending_at(&db_path, account_id) {
-                Ok(n) => log::info!("[perf] process_pending acct={account_id} n={n} took {:?}", tp.elapsed()),
-                Err(e) => log::warn!("取り込み後の加工に失敗: {e}"),
+            if let Err(e) = crate::services::store::process_pending_at(&db_path, account_id) {
+                log::warn!("取り込み後の加工に失敗: {e}");
             }
         }
         res
@@ -343,9 +336,7 @@ pub async fn mail_sync(
     let result = result.map_err(|e| e.to_string())?;
     if result.is_ok() {
         // 保持ポリシーを適用（古い添付の削除・本文の要約保存・容量保険）。best-effort。
-        let tr = std::time::Instant::now();
         let _ = store.apply_retention(account_id);
-        log::info!("[perf] apply_retention acct={account_id} took {:?}", tr.elapsed());
     }
     result
 }
@@ -666,12 +657,9 @@ pub fn thread_count(
     account_id: Option<i64>,
     folder: String,
 ) -> Result<i64, String> {
-    let t = std::time::Instant::now();
-    let r = store
+    store
         .thread_count(account_id, &folder)
-        .map_err(|e| e.to_string());
-    log::info!("[perf] thread_count folder={folder} took {:?}", t.elapsed());
-    r
+        .map_err(|e| e.to_string())
 }
 
 /// スレッド単位のメール一覧（代表＝フォルダ内最新＋件数バッジ）。docs/THREADING.md §5。
@@ -683,16 +671,9 @@ pub fn thread_list(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<ThreadListItem>, String> {
-    let t = std::time::Instant::now();
-    let r = store
+    store
         .list_threads(account_id, &folder, limit, offset)
-        .map_err(|e| e.to_string());
-    log::info!(
-        "[perf] thread_list folder={folder} offset={offset} rows={} took {:?}",
-        r.as_ref().map(|v| v.len()).unwrap_or(0),
-        t.elapsed()
-    );
-    r
+        .map_err(|e| e.to_string())
 }
 
 /// 全文検索。件名・差出人・本文を対象に絞り込む。`account_id` が None なら全アカウント横断。

@@ -664,31 +664,16 @@ impl Store {
                     CASE WHEN r.logical_thread_id IS NULL THEN 1
                          ELSE (SELECT count(*) FROM emails t WHERE t.logical_thread_id = r.logical_thread_id) END AS msg_count,
                     CASE WHEN r.logical_thread_id IS NULL THEN (CASE WHEN r.is_read = 0 THEN 1 ELSE 0 END)
-                         ELSE (SELECT count(*) FROM emails t WHERE t.logical_thread_id = r.logical_thread_id AND t.folder = ?1 AND t.is_read = 0) END AS unread_cnt,
+                         ELSE (SELECT count(*) FROM emails t INDEXED BY idx_emails_thread_folder
+                               WHERE t.logical_thread_id = r.logical_thread_id AND t.folder = ?1 AND t.is_read = 0) END AS unread_cnt,
                     CASE WHEN r.logical_thread_id IS NULL THEN CAST(r.id AS TEXT)
-                         ELSE (SELECT group_concat(t.id) FROM emails t
+                         ELSE (SELECT group_concat(t.id) FROM emails t INDEXED BY idx_emails_thread_folder
                                WHERE t.logical_thread_id = r.logical_thread_id AND t.folder = ?1) END AS folder_ids
              FROM page JOIN emails r ON r.id = page.id
              LEFT JOIN logical_threads lt ON lt.id = r.logical_thread_id
              ORDER BY page.date_ts DESC, page.id DESC",
             known_vip = known_vip_cols("r.from_address"),
         );
-        // [perf] 実行計画をログ出力（全走査 SCAN の特定用。確認後に外す）。
-        if let Ok(mut ex) = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")) {
-            let details: rusqlite::Result<Vec<String>> = match account_id {
-                Some(a) => ex
-                    .query_map(params![folder, limit, offset, a], |r| r.get::<_, String>(3))
-                    .and_then(|m| m.collect()),
-                None => ex
-                    .query_map(params![folder, limit, offset], |r| r.get::<_, String>(3))
-                    .and_then(|m| m.collect()),
-            };
-            if let Ok(details) = details {
-                for d in details {
-                    log::info!("[plan] {d}");
-                }
-            }
-        }
         let mut stmt = conn.prepare(&sql)?;
         let map = |row: &rusqlite::Row| -> rusqlite::Result<ThreadListItem> {
             let parse_ids = |s: Option<String>| -> Vec<i32> {

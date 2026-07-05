@@ -8,7 +8,7 @@
 
 use super::Store;
 use crate::models::GreenDomainEntry;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
 
 /// 代表的なフリーメール（無料メール）ドメイン。住所録に 1 人いても

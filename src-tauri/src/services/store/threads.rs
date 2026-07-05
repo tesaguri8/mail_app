@@ -572,33 +572,9 @@ impl Store {
 
     /// 取り込み後のローカル加工パス: まだスレッド未割当（logical_thread_id IS NULL）の auto メールに
     /// スレッドを割り当て、代表フラグを立てる。ネットワーク不要。処理件数を返す。
-    /// 同期ごとに（接続を閉じた後に）呼ぶ。
     /// UI 用の接続（self.conn）を長時間ロックしないよう別接続で・小分けに実行する（WAL で並行読み取り可）。
     pub fn process_pending(&self, account_id: i64) -> rusqlite::Result<usize> {
-        let mut conn = self.open_worker_conn()?;
-        let ids: Vec<i64> = {
-            let mut stmt = conn.prepare(
-                "SELECT id FROM emails
-                 WHERE account_id = ?1 AND logical_thread_id IS NULL
-                   AND COALESCE(thread_assignment,'auto') <> 'manual'
-                 ORDER BY date_ts ASC, id ASC",
-            )?;
-            let rows = stmt
-                .query_map(params![account_id], |r| r.get(0))?
-                .collect::<rusqlite::Result<Vec<i64>>>()?;
-            rows
-        };
-        let total = ids.len();
-        // 200 件ずつのトランザクションでロックを短く握る（UI の書き込みを妨げない）。
-        for chunk in ids.chunks(200) {
-            let tx = conn.transaction()?;
-            for id in chunk {
-                assign_thread(&tx, *id)?;
-                super::emails::maintain_folder_rep_on_insert(&tx, *id)?;
-            }
-            tx.commit()?;
-        }
-        Ok(total)
+        process_pending_at(&self.path(), account_id)
     }
 
     /// ローカル再加工（再ダウンロード不要）: 保存済み本文から clean_body・引用・fingerprint を作り直し、
@@ -615,6 +591,38 @@ impl Store {
         conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
         Ok(conn)
     }
+}
+
+/// 取り込み後のローカル加工を db_path から実行する（同期のブロッキングスレッドから呼べる）。
+/// 別接続・200件ずつのトランザクションで、UI 用接続を長時間ロックしない。
+pub fn process_pending_at(
+    db_path: &std::path::Path,
+    account_id: i64,
+) -> rusqlite::Result<usize> {
+    let mut conn = Connection::open(db_path)?;
+    conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
+    let ids: Vec<i64> = {
+        let mut stmt = conn.prepare(
+            "SELECT id FROM emails
+             WHERE account_id = ?1 AND logical_thread_id IS NULL
+               AND COALESCE(thread_assignment,'auto') <> 'manual'
+             ORDER BY date_ts ASC, id ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![account_id], |r| r.get(0))?
+            .collect::<rusqlite::Result<Vec<i64>>>()?;
+        rows
+    };
+    let total = ids.len();
+    for chunk in ids.chunks(200) {
+        let tx = conn.transaction()?;
+        for id in chunk {
+            assign_thread(&tx, *id)?;
+            super::emails::maintain_folder_rep_on_insert(&tx, *id)?;
+        }
+        tx.commit()?;
+    }
+    Ok(total)
 }
 
 /// reprocess_all の本体（接続を受け取る版。テストからも使う）。

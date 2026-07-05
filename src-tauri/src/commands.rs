@@ -307,7 +307,7 @@ pub async fn mail_sync(
                 },
             );
         };
-        imap_sync::sync_account(
+        let res = imap_sync::sync_account(
             &db_path,
             account_id,
             &host,
@@ -317,7 +317,17 @@ pub async fn mail_sync(
             &progress,
             &cancel_task,
             &session_slot,
-        )
+        );
+        // 取り込み後のローカル加工（スレッド割当・代表フラグ）は「このブロッキングスレッド上で」
+        // 実行する。async ランタイム上で同期的に走らせると、その間 Tauri の IPC 配送が止まり、
+        // 一覧取得の呼び出しまで待たされる（起動直後に一覧が数十秒出ない原因だった）。
+        // 別接続・小分けなので UI 用接続はブロックしない（docs/THREADING.md §5）。
+        if res.is_ok() {
+            if let Err(e) = crate::services::store::process_pending_at(&db_path, account_id) {
+                log::warn!("取り込み後の加工に失敗: {e}");
+            }
+        }
+        res
     })
     .await;
     // JoinError（タスクパニック）でも同期枠を必ず解放してから伝播する
@@ -325,12 +335,7 @@ pub async fn mail_sync(
     control.end(account_id);
     let result = result.map_err(|e| e.to_string())?;
     if result.is_ok() {
-        // 取り込み後のローカル加工（スレッド割当・代表フラグ）。IMAP 接続は閉じており、
-        // サーバーとは無関係のローカル処理（docs/THREADING.md §5）。best-effort。
-        if let Err(e) = store.process_pending(account_id) {
-            log::warn!("取り込み後の加工に失敗: {e}");
-        }
-        // 保持ポリシーを適用（古い添付の削除・本文の要約保存・容量保険）。
+        // 保持ポリシーを適用（古い添付の削除・本文の要約保存・容量保険）。best-effort。
         let _ = store.apply_retention(account_id);
     }
     result

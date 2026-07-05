@@ -17,6 +17,7 @@ pub use emails::{
     insert_email, AttachmentFetchInfo, InsertOutcome, NewAttachment, NewEmail, NewQuote,
 };
 pub use server_accounts::NewServerAccount;
+pub use threads::process_pending_at;
 pub use spam::SpamFeatures;
 
 use rusqlite::Connection;

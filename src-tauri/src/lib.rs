@@ -27,6 +27,12 @@ pub fn run() {
                     log::warn!("trash purge on startup failed: {e}");
                 }
             }
+            // 起動時に、保持期間を過ぎたメールのゴミ箱を完全削除する（0=無期限は何もしない）。
+            if let Ok(days) = store.mail_trash_retention_days() {
+                if let Err(e) = store.purge_expired_mail_trash(days) {
+                    log::warn!("mail trash purge on startup failed: {e}");
+                }
+            }
             app.manage(store);
             // 同期のキャンセル状態（中断ボタン用）。
             app.manage(commands::SyncControl::default());
@@ -79,6 +85,8 @@ pub fn run() {
             commands::mail_set_starred,
             commands::mail_set_bookmarked,
             commands::mail_delete,
+            commands::mail_trash,
+            commands::mail_restore,
             commands::mail_empty_folder,
             commands::mail_save_draft,
             commands::mail_get_draft,
@@ -114,6 +122,9 @@ pub fn run() {
             commands::trash_retention_get,
             commands::trash_retention_set,
             commands::trash_purge,
+            commands::mail_trash_retention_get,
+            commands::mail_trash_retention_set,
+            commands::mail_trash_purge,
             commands::green_domain_list,
             commands::green_domain_add,
             commands::green_domain_warn,

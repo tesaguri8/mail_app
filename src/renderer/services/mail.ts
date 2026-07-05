@@ -85,7 +85,14 @@ export const mailSetStarred = (ids: number[], value: boolean) =>
 export const mailSetBookmarked = (ids: number[], value: boolean) =>
   invoke<void>('mail_set_bookmarked', { ids, value });
 
+/** 完全削除（ゴミ箱内からの削除など。復元不可）。 */
 export const mailDelete = (ids: number[]) => invoke<void>('mail_delete', { ids });
+
+/** ゴミ箱（trash フォルダ）へ移動する（既定の削除。復元可能）。 */
+export const mailTrash = (ids: number[]) => invoke<void>('mail_trash', { ids });
+
+/** ゴミ箱から元のフォルダへ復元する。 */
+export const mailRestore = (ids: number[]) => invoke<void>('mail_restore', { ids });
 
 /** 指定フォルダ（trash/spam 等）を空にする。accountId=null で全アカウント。削除件数を返す。 */
 export const mailEmptyFolder = (accountId: number | null, folder: string) =>

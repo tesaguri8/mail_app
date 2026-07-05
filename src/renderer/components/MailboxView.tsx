@@ -9,6 +9,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
+  RotateCcw,
   Rows2,
   Search,
   SquarePen,
@@ -17,6 +18,7 @@ import {
   Tag,
   ThumbsDown,
   Trash2,
+  Undo2,
   X,
 } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
@@ -29,6 +31,8 @@ import type { SyncProgress } from '@bindings/SyncProgress';
 import type { RecipientSuggestion } from '@bindings/RecipientSuggestion';
 import {
   mailDelete,
+  mailTrash,
+  mailRestore,
   mailEmptyFolder,
   mailGet,
   mailGetDraft,
@@ -159,6 +163,17 @@ export function MailboxView({
     open: (id: number) => void;
     blocked: boolean;
   }>({ mails: [], openedId: null, open: () => {}, blocked: false });
+  // Del / Ctrl+D 削除キー（下の effect）が参照する最新の削除処理と抑止状態。
+  const delKeyRef = useRef<{ del: () => void; blocked: boolean }>({
+    del: () => {},
+    blocked: false,
+  });
+  // Ctrl+Z 取消キー（下の effect）が参照する最新の復元処理と抑止状態。
+  const undoKeyRef = useRef<{ canUndo: boolean; undo: () => void; blocked: boolean }>({
+    canUndo: false,
+    undo: () => {},
+    blocked: false,
+  });
   useEffect(() => {
     localStorage.setItem('rondine.mailSidebarW', String(sidebarW));
   }, [sidebarW]);
@@ -217,6 +232,8 @@ export function MailboxView({
   // 複数選択（右クリックメニュー対象）。anchor は Shift 範囲選択の基点。
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const anchorId = useRef<number | null>(null);
+  // 直前のゴミ箱移動の取消情報（Ctrl+Z／トーストで復元）。ids は移動したメール id。
+  const [undoTrash, setUndoTrash] = useState<{ ids: number[]; count: number } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   // 選択モード（チェックボックス表示中）。1件でも明示選択したら on。
   const [selecting, setSelecting] = useState(false);
@@ -253,6 +270,54 @@ export function MailboxView({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // Del / Ctrl+D（Mac は Cmd+D）で、選択中（未選択なら閲覧中）のメールを削除する。
+  // 重なり UI（メニュー/タグピッカー/作成モーダル/候補）や入力欄フォーカス中は対象外。
+  // 最新の削除処理・抑止状態は delKeyRef 経由で参照する。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      const isDel = e.key === 'Delete';
+      const isCtrlD =
+        (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'd' || e.key === 'D');
+      if (!isDel && !isCtrlD) return;
+      const d = delKeyRef.current;
+      if (d.blocked) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      e.preventDefault();
+      d.del();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Ctrl+Z（Mac は Cmd+Z）で、直前のゴミ箱移動を元に戻す（復元）。
+  // 取消対象が無い／重なり UI／入力欄フォーカス中は対象外。最新値は undoKeyRef 経由で参照。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      if (
+        !((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'z' || e.key === 'Z'))
+      )
+        return;
+      const u = undoKeyRef.current;
+      if (!u.canUndo || u.blocked) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      e.preventDefault();
+      u.undo();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // 取消トーストは一定時間で自動的に消す（その後は Ctrl+Z も無効）。
+  useEffect(() => {
+    if (!undoTrash) return;
+    const tmr = setTimeout(() => setUndoTrash(null), 6000);
+    return () => clearTimeout(tmr);
+  }, [undoTrash]);
 
   // 矢印キーで前後のメールへ移動し、本文も切り替える（一覧は ↑↓、本文閲覧中は ←→）。
   // 端で止まる。最新の一覧/選択は keyNavRef 経由で参照する。
@@ -638,17 +703,60 @@ export function MailboxView({
       /* noop */
     }
   };
-  const actDelete = async () => {
-    const idSet = new Set(targetIds());
-    const ids = emailIdsFor(targetIds());
+  // 楽観更新で一覧から外し、閲覧中なら閉じる（削除／ゴミ箱移動／復元の共通処理）。
+  const dropRows = (rowIds: number[], emailIds: number[]) => {
+    const idSet = new Set(rowIds);
     updateLists((prev) => prev.filter((m) => !idSet.has(m.id)));
-    if (opened && ids.includes(opened.id)) setOpened(null);
+    if (opened && emailIds.includes(opened.id)) setOpened(null);
     setSelectedIds(new Set());
+  };
+  // 指定した行（スレッド代表）を削除する。既定はゴミ箱へ移動（復元可）。
+  // ゴミ箱フォルダ内では完全削除（確認あり・復元不可）。
+  const deleteRows = async (rowIds: number[]) => {
+    if (rowIds.length === 0) return;
+    const ids = emailIdsFor(rowIds);
+    if (folder === 'trash') {
+      if (!window.confirm(t('mailbox.deletePermanentConfirm', { count: rowIds.length }))) return;
+      dropRows(rowIds, ids);
+      try {
+        await mailDelete(ids);
+      } catch {
+        /* noop */
+      }
+      return;
+    }
+    dropRows(rowIds, ids);
+    setUndoTrash({ ids, count: rowIds.length }); // Ctrl+Z／トーストで復元できるようにする
     try {
-      await mailDelete(ids);
+      await mailTrash(ids);
     } catch {
       /* noop */
     }
+  };
+  const actDelete = () => deleteRows(targetIds());
+  // ゴミ箱の選択メールを元のフォルダへ復元する（メニュー「復元」／復元ボタン）。
+  const actRestore = async () => {
+    const rowIds = targetIds();
+    if (rowIds.length === 0) return;
+    const ids = emailIdsFor(rowIds);
+    dropRows(rowIds, ids);
+    try {
+      await mailRestore(ids);
+    } catch {
+      /* noop */
+    }
+  };
+  // 直前のゴミ箱移動を取り消す（Ctrl+Z／トースト）。復元後は一覧を読み直して元の位置へ戻す。
+  const undoLastTrash = async () => {
+    if (!undoTrash) return;
+    const ids = undoTrash.ids;
+    setUndoTrash(null);
+    try {
+      await mailRestore(ids);
+    } catch {
+      /* noop */
+    }
+    await loadMails();
   };
   // 迷惑としてマーク: 学習＋隔離。楽観更新で受信一覧から外す（迷惑フォルダへ。スレッド全体）。
   const actMarkSpam = async () => {
@@ -699,6 +807,7 @@ export function MailboxView({
   const buildMenuItems = (): MenuItem[] => {
     const sel = mails.filter((m) => selectedIds.has(m.id));
     const allStarred = sel.length > 0 && sel.every((m) => m.is_starred);
+    const inTrash = folder === 'trash';
     return [
       { key: 'read', label: t('ctx.markRead'), Icon: MailOpen, onClick: () => actRead(true) },
       { key: 'unread', label: t('ctx.markUnread'), Icon: Mail, onClick: () => actRead(false) },
@@ -713,8 +822,18 @@ export function MailboxView({
           if (menu) setTagPicker({ x: menu.x, y: menu.y, ids: targetIds() });
         },
       },
-      { key: 'spam', label: t('ctx.markSpam'), Icon: ThumbsDown, onClick: actMarkSpam },
-      { key: 'delete', label: t('ctx.delete'), Icon: Trash2, danger: true, onClick: actDelete },
+      // ゴミ箱内は「復元」、それ以外は「迷惑」。
+      inTrash
+        ? { key: 'restore', label: t('ctx.restore'), Icon: RotateCcw, onClick: actRestore }
+        : { key: 'spam', label: t('ctx.markSpam'), Icon: ThumbsDown, onClick: actMarkSpam },
+      {
+        key: 'delete',
+        // ゴミ箱内は完全削除（復元不可）、それ以外はゴミ箱へ移動。
+        label: inTrash ? t('ctx.deletePermanent') : t('ctx.delete'),
+        Icon: Trash2,
+        danger: true,
+        onClick: actDelete,
+      },
     ];
   };
 
@@ -750,6 +869,20 @@ export function MailboxView({
     open: openMail,
     blocked: Boolean(menu || tagPicker || compose || sugOpen),
   };
+  // Del / Ctrl+D 用: 選択中があればそれを、なければ閲覧中のメールを削除対象にする。
+  delKeyRef.current = {
+    del: () => {
+      const rowIds = selectedIds.size > 0 ? [...selectedIds] : opened ? [opened.id] : [];
+      void deleteRows(rowIds);
+    },
+    blocked: Boolean(menu || tagPicker || compose || sugOpen),
+  };
+  // Ctrl+Z 用: 直前のゴミ箱移動があれば復元する。
+  undoKeyRef.current = {
+    canUndo: undoTrash != null,
+    undo: () => void undoLastTrash(),
+    blocked: Boolean(menu || tagPicker || compose || sugOpen),
+  };
 
   // ゴミ箱/迷惑メールを空にする（完全削除。確認のうえ実行）。
   const emptyCurrentFolder = async () => {
@@ -766,7 +899,24 @@ export function MailboxView({
   };
 
   const listPane = (
-    <div className={`flex h-full min-h-0 flex-col ${folder === 'spam' ? 'bg-amber-600/15' : ''}`}>
+    <div
+      className={`relative flex h-full min-h-0 flex-col ${folder === 'spam' ? 'bg-amber-600/15' : ''}`}
+    >
+      {/* ゴミ箱移動の取消トースト（数秒で自動的に消える。Ctrl+Z でも取消可） */}
+      {undoTrash && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex justify-center px-3">
+          <div className="pointer-events-auto flex items-center gap-3 rounded-lg bg-neutral-800/95 px-3 py-2 text-sm text-white shadow-lg ring-1 ring-white/10">
+            <span>{t('mailbox.trashedToast', { count: undoTrash.count })}</span>
+            <button
+              onClick={() => void undoLastTrash()}
+              className="flex items-center gap-1 rounded-md bg-white/10 px-2 py-1 text-xs text-sky-200 hover:bg-white/20"
+            >
+              <Undo2 size={13} />
+              {t('mailbox.undo')} (Ctrl+Z)
+            </button>
+          </div>
+        </div>
+      )}
       {/* アカウント選択＋フォルダ選択（アイコンボタン）を同じ行に置く */}
       <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-2 py-1.5">
         <select
@@ -1045,12 +1195,23 @@ export function MailboxView({
         /* noop */
       }
     },
-    // 単一メールをゴミ箱へ。一覧は再読込で正す（代表・件数が変わるため）。
+    // 単一メールを削除。既定はゴミ箱へ移動（Ctrl+Z で取消可）。ゴミ箱内は完全削除（確認あり）。
+    // 一覧は再読込で正す（代表・件数が変わるため）。
     onDelete: async (id) => {
-      try {
-        await mailDelete([id]);
-      } catch {
-        /* noop */
+      if (folder === 'trash') {
+        if (!window.confirm(t('mailbox.deletePermanentConfirm', { count: 1 }))) return;
+        try {
+          await mailDelete([id]);
+        } catch {
+          /* noop */
+        }
+      } else {
+        try {
+          await mailTrash([id]);
+        } catch {
+          /* noop */
+        }
+        setUndoTrash({ ids: [id], count: 1 });
       }
       await loadMails();
     },

@@ -14,6 +14,10 @@ pub const KEY_SPAM_THRESHOLD_HIGH: &str = "spam.threshold_high";
 /// ゴミ箱（連絡先・組織の論理削除）の保持日数。0 で即時完全削除、上限は緩め。
 pub const KEY_TRASH_RETENTION_DAYS: &str = "trash.retention_days";
 pub const DEFAULT_TRASH_RETENTION_DAYS: i64 = 7;
+/// メールのゴミ箱（trash フォルダ）の保持日数。0 = 無期限（自動削除しない）、1 以上で N 日後に完全削除。
+/// 連絡先用（上記）とは別系統。既定は 30 日。
+pub const KEY_MAIL_TRASH_RETENTION_DAYS: &str = "trash.mail_retention_days";
+pub const DEFAULT_MAIL_TRASH_RETENTION_DAYS: i64 = 30;
 /// 差出人ごとの外部画像許可（このアドレスは常に許可）の設定キー接頭辞。
 /// キーは `remote_images.sender.<小文字メール>`（docs/MAIL_SECURITY.md §1）。
 const KEY_REMOTE_IMAGES_SENDER_PREFIX: &str = "remote_images.sender.";
@@ -75,6 +79,20 @@ impl Store {
     /// ゴミ箱の保持日数を保存する（負値は 0 に丸める）。
     pub fn set_trash_retention_days(&self, days: i64) -> rusqlite::Result<()> {
         self.set_setting(KEY_TRASH_RETENTION_DAYS, &days.max(0).to_string())
+    }
+
+    /// メールのゴミ箱の保持日数を読む（未設定なら既定 30 日。負値は 0=無期限に丸める）。
+    pub fn mail_trash_retention_days(&self) -> rusqlite::Result<i64> {
+        Ok(self
+            .get_setting(KEY_MAIL_TRASH_RETENTION_DAYS)?
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(DEFAULT_MAIL_TRASH_RETENTION_DAYS)
+            .max(0))
+    }
+
+    /// メールのゴミ箱の保持日数を保存する（負値は 0=無期限 に丸める）。
+    pub fn set_mail_trash_retention_days(&self, days: i64) -> rusqlite::Result<()> {
+        self.set_setting(KEY_MAIL_TRASH_RETENTION_DAYS, &days.max(0).to_string())
     }
 
     /// 迷惑メール設定を保存する（呼び出し側で正規化済みを渡す）。
@@ -143,6 +161,21 @@ mod tests {
         assert!(s.enabled);
         assert_eq!(s.threshold_low, spam::DEFAULT_THRESHOLD_LOW);
         assert_eq!(s.threshold_high, spam::DEFAULT_THRESHOLD_HIGH);
+    }
+
+    #[test]
+    fn mail_trash_retention_default_and_roundtrip() {
+        let store = store();
+        // 未設定なら既定 30 日。
+        assert_eq!(store.mail_trash_retention_days().unwrap(), 30);
+        // 保存して読み戻し。
+        store.set_mail_trash_retention_days(7).unwrap();
+        assert_eq!(store.mail_trash_retention_days().unwrap(), 7);
+        // 0 = 無期限、負値は 0 に丸める。
+        store.set_mail_trash_retention_days(-5).unwrap();
+        assert_eq!(store.mail_trash_retention_days().unwrap(), 0);
+        // 連絡先用（既定 7）とは独立。
+        assert_eq!(store.trash_retention_days().unwrap(), 7);
     }
 
     #[test]

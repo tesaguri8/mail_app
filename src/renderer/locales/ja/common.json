@@ -120,6 +120,8 @@
     "removeTag": "このタグを外す",
     "markSpam": "迷惑メールに設定",
     "delete": "削除",
+    "restore": "復元",
+    "deletePermanent": "完全に削除",
     "selected": "{{count}} 件を選択中"
   },
   "tag": {
@@ -322,7 +324,13 @@
     "trashRetention": "保持日数",
     "trashDaysUnit": "日",
     "trashPurgeNow": "期限切れを今すぐ完全削除",
-    "trashPurgeConfirm": "保持期間を過ぎたゴミ箱を完全に削除します。よろしいですか？"
+    "trashPurgeConfirm": "保持期間を過ぎたゴミ箱を完全に削除します。よろしいですか？",
+    "mailTrashTitle": "メールのゴミ箱",
+    "mailTrashHint": "削除したメールはすぐには消さず、一定期間ゴミ箱に残してから完全に削除します。ゴミ箱の中では「復元」で元のフォルダに戻せます。",
+    "mailTrashRetention": "自動削除までの日数",
+    "mailTrashUnlimited": "無期限（自動削除しない）",
+    "mailTrashPurgeNow": "期限切れを今すぐ完全削除",
+    "mailTrashPurgeConfirm": "保持期間を過ぎたゴミ箱メールを完全に削除します。よろしいですか？"
   },
   "dataloc": {
     "title": "データの保存先",
@@ -475,6 +483,9 @@
     "f_spam": "スパム",
     "emptyFolder": "{{folder}}を空にする",
     "emptyConfirm": "{{folder}}のメールをすべて完全に削除します。元に戻せません。よろしいですか？",
+    "deletePermanentConfirm": "{{count}} 件を完全に削除します。元に戻せません。よろしいですか？",
+    "trashedToast": "{{count}} 件をゴミ箱に移動しました",
+    "undo": "元に戻す",
     "noMatch": "一致するメールはありません。",
     "w_n50": "最新50件",
     "w_n200": "最新200件",

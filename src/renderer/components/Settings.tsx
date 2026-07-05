@@ -35,7 +35,14 @@ import {
 import { countryOptions } from '../utils/phone';
 import { spamSettingsGet, spamSettingsSet } from '../services/spam';
 import { dataLocation, dataRelocate, dataResetLocation } from '../services/data';
-import { trashRetentionGet, trashRetentionSet, trashPurge } from '../services/trash';
+import {
+  trashRetentionGet,
+  trashRetentionSet,
+  trashPurge,
+  mailTrashRetentionGet,
+  mailTrashRetentionSet,
+  mailTrashPurge,
+} from '../services/trash';
 import { AccountSetup } from './AccountSetup';
 import { SignatureManager } from './SignatureManager';
 import { TagManager } from './TagManager';
@@ -110,6 +117,9 @@ export function Settings({
         {section === 'data' && (
           <div className="space-y-6">
             <DataLocationSettings />
+            <div className="border-t border-white/10 pt-5">
+              <MailTrashSettings />
+            </div>
             <div className="border-t border-white/10 pt-5">
               <TrashSettings />
             </div>
@@ -610,6 +620,105 @@ function TrashSettings() {
         className="mt-3 rounded-md border border-white/20 px-3 py-1.5 text-sm text-white/70 hover:bg-white/10"
       >
         {t('settings.trashPurgeNow')}
+      </button>
+    </div>
+  );
+}
+
+/** メールのゴミ箱設定（自動削除日数・無期限・今すぐ空にする）。連絡先用とは別系統。 */
+function MailTrashSettings() {
+  const { t } = useTranslation();
+  const [days, setDays] = useState('30');
+  const [unlimited, setUnlimited] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    mailTrashRetentionGet()
+      .then((d) => {
+        setUnlimited(d === 0);
+        // 無期限（0）でも数値欄には目安として 30 を残す。
+        setDays(d === 0 ? '30' : String(d));
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const persist = async (value: number) => {
+    if (!isTauri) return;
+    try {
+      await mailTrashRetentionSet(value);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+    } catch {
+      /* noop */
+    }
+  };
+
+  const commitDays = async () => {
+    const n = Math.max(1, Math.round(Number(days)) || 30);
+    setDays(String(n));
+    if (unlimited) return; // 無期限中は数値の変更を保存しない
+    await persist(n);
+  };
+
+  const toggleUnlimited = async (on: boolean) => {
+    setUnlimited(on);
+    if (on) {
+      await persist(0); // 0 = 無期限（自動削除しない）
+    } else {
+      const n = Math.max(1, Math.round(Number(days)) || 30);
+      setDays(String(n));
+      await persist(n);
+    }
+  };
+
+  const purgeNow = async () => {
+    if (!isTauri) return;
+    if (!window.confirm(t('settings.mailTrashPurgeConfirm'))) return;
+    try {
+      await mailTrashPurge();
+    } catch {
+      /* noop */
+    }
+  };
+
+  return (
+    <div>
+      <div className="text-sm font-semibold text-white">{t('settings.mailTrashTitle')}</div>
+      <p className="mt-0.5 text-xs text-white/45">{t('settings.mailTrashHint')}</p>
+      <div className="mt-3 flex items-end gap-3">
+        <label className="block">
+          <span className="mb-1 block text-xs text-white/50">
+            {t('settings.mailTrashRetention')}
+          </span>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={1}
+              value={days}
+              disabled={unlimited}
+              onChange={(e) => setDays(e.target.value)}
+              onBlur={commitDays}
+              className="w-24 rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15 disabled:opacity-40"
+            />
+            <span className="text-sm text-white/60">{t('settings.trashDaysUnit')}</span>
+          </div>
+        </label>
+        {saved && <span className="pb-1.5 text-xs text-emerald-300">{t('contact.saved')}</span>}
+      </div>
+      <label className="mt-2 flex items-center gap-2 text-sm text-white/70">
+        <input
+          type="checkbox"
+          checked={unlimited}
+          onChange={(e) => toggleUnlimited(e.target.checked)}
+        />
+        {t('settings.mailTrashUnlimited')}
+      </label>
+      <button
+        onClick={purgeNow}
+        className="mt-3 rounded-md border border-white/20 px-3 py-1.5 text-sm text-white/70 hover:bg-white/10"
+      >
+        {t('settings.mailTrashPurgeNow')}
       </button>
     </div>
   );

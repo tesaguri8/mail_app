@@ -712,10 +712,24 @@ pub fn mail_set_bookmarked(store: State<Store>, ids: Vec<i64>, value: bool) -> R
         .map_err(|e| e.to_string())
 }
 
-/// 複数メールを一括削除。
+/// 複数メールを一括削除（完全削除。ゴミ箱内からの削除や内部利用向け）。
 #[tauri::command]
 pub fn mail_delete(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
     store.delete_emails(&ids).map_err(|e| e.to_string())
+}
+
+/// 複数メールをゴミ箱（trash フォルダ）へ移動する（既定の削除操作）。復元可能。
+#[tauri::command]
+pub fn mail_trash(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
+    store.move_emails_to_trash(&ids).map_err(|e| e.to_string())
+}
+
+/// ゴミ箱の複数メールを元のフォルダ（prev_folder、無ければ inbox）へ復元する。
+#[tauri::command]
+pub fn mail_restore(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
+    store
+        .restore_emails_from_trash(&ids)
+        .map_err(|e| e.to_string())
 }
 
 /// 指定フォルダ（trash/spam 等）を空にする。`account_id` が None なら全アカウント。削除件数を返す。
@@ -1164,6 +1178,31 @@ pub fn trash_retention_set(store: State<Store>, days: i64) -> Result<(), String>
 pub fn trash_purge(store: State<Store>) -> Result<(), String> {
     let days = store.trash_retention_days().map_err(|e| e.to_string())?;
     store.purge_expired_trash(days).map_err(|e| e.to_string())
+}
+
+/// メールのゴミ箱の保持日数を取得（既定 30 日。0 = 無期限）。
+#[tauri::command]
+pub fn mail_trash_retention_get(store: State<Store>) -> Result<i64, String> {
+    store.mail_trash_retention_days().map_err(|e| e.to_string())
+}
+
+/// メールのゴミ箱の保持日数を保存（0 = 無期限）。
+#[tauri::command]
+pub fn mail_trash_retention_set(store: State<Store>, days: i64) -> Result<(), String> {
+    store
+        .set_mail_trash_retention_days(days)
+        .map_err(|e| e.to_string())
+}
+
+/// 保持期間を過ぎたゴミ箱メールを今すぐ完全削除する（0 = 無期限なら何もしない）。
+#[tauri::command]
+pub fn mail_trash_purge(store: State<Store>) -> Result<(), String> {
+    let days = store
+        .mail_trash_retention_days()
+        .map_err(|e| e.to_string())?;
+    store
+        .purge_expired_mail_trash(days)
+        .map_err(|e| e.to_string())
 }
 
 /// 組織を作成/編集する（名前・メモ）。id 指定で更新、無ければ新規。
@@ -1712,7 +1751,9 @@ pub async fn mail_resync(
         }
     }
     let Some(cancel) = control.try_begin(account_id) else {
-        return Err("実行中の同期を中断できませんでした。少し待ってから再度お試しください。".to_string());
+        return Err(
+            "実行中の同期を中断できませんでした。少し待ってから再度お試しください。".to_string(),
+        );
     };
     // これ以降のエラーは同期枠を必ず解放してから返す。
     if let Err(e) = store.reset_sync_state(account_id) {

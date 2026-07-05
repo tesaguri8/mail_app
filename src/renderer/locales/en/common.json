@@ -120,6 +120,8 @@
     "removeTag": "Remove this tag",
     "markSpam": "Mark as spam",
     "delete": "Delete",
+    "restore": "Restore",
+    "deletePermanent": "Delete permanently",
     "selected": "{{count}} selected"
   },
   "tag": {
@@ -322,7 +324,13 @@
     "trashRetention": "Retention",
     "trashDaysUnit": "days",
     "trashPurgeNow": "Permanently delete expired now",
-    "trashPurgeConfirm": "Permanently delete trash older than the retention period. Continue?"
+    "trashPurgeConfirm": "Permanently delete trash older than the retention period. Continue?",
+    "mailTrashTitle": "Mail trash",
+    "mailTrashHint": "Deleted mail isn't removed immediately; it stays in the trash for a while, then is permanently deleted. In the trash, use \"Restore\" to move it back to its original folder.",
+    "mailTrashRetention": "Auto-delete after",
+    "mailTrashUnlimited": "Keep forever (no auto-delete)",
+    "mailTrashPurgeNow": "Permanently delete expired now",
+    "mailTrashPurgeConfirm": "Permanently delete mail older than the retention period. Continue?"
   },
   "dataloc": {
     "title": "Data location",
@@ -475,6 +483,9 @@
     "f_spam": "Spam",
     "emptyFolder": "Empty {{folder}}",
     "emptyConfirm": "Permanently delete all mail in {{folder}}. This cannot be undone. Continue?",
+    "deletePermanentConfirm": "Permanently delete {{count}} message(s)? This cannot be undone.",
+    "trashedToast": "Moved {{count}} to Trash",
+    "undo": "Undo",
     "noMatch": "No matching mail.",
     "w_n50": "Latest 50",
     "w_n200": "Latest 200",

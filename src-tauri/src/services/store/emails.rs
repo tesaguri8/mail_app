@@ -838,6 +838,94 @@ impl Store {
         Ok(n)
     }
 
+    /// 選択メールをゴミ箱（trash フォルダ）へ移す（ローカル）。移動前の folder を prev_folder に控え、
+    /// trashed_at を打つ。既に trash の行は対象外。移動で代表が変わるスレッドを貼り直す。
+    pub fn move_emails_to_trash(&self, ids: &[i64]) -> rusqlite::Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let mut affected: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        {
+            let mut thread_of = tx.prepare("SELECT logical_thread_id FROM emails WHERE id = ?1")?;
+            let mut upd = tx.prepare(
+                "UPDATE emails SET prev_folder = folder, folder = 'trash', \
+                   trashed_at = CURRENT_TIMESTAMP, is_folder_rep = 0 \
+                 WHERE id = ?1 AND folder != 'trash'",
+            )?;
+            for id in ids {
+                if upd.execute(params![id])? > 0 {
+                    if let Ok(Some(t)) = thread_of
+                        .query_row(params![id], |r| r.get::<_, Option<i64>>(0))
+                        .optional()
+                        .map(Option::flatten)
+                    {
+                        affected.insert(t);
+                    }
+                }
+            }
+            for t in &affected {
+                recompute_reps_for_thread(&tx, *t)?;
+            }
+        }
+        tx.commit()
+    }
+
+    /// ゴミ箱の選択メールを元のフォルダ（prev_folder、無ければ inbox）へ復元する（ローカル）。
+    /// 現在 trash の行のみ対象。復元で代表が変わるスレッドを貼り直す。
+    pub fn restore_emails_from_trash(&self, ids: &[i64]) -> rusqlite::Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let mut affected: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        {
+            let mut thread_of = tx.prepare("SELECT logical_thread_id FROM emails WHERE id = ?1")?;
+            let mut upd = tx.prepare(
+                "UPDATE emails SET folder = COALESCE(prev_folder, 'inbox'), prev_folder = NULL, \
+                   trashed_at = NULL, is_folder_rep = 0 \
+                 WHERE id = ?1 AND folder = 'trash'",
+            )?;
+            for id in ids {
+                if upd.execute(params![id])? > 0 {
+                    if let Ok(Some(t)) = thread_of
+                        .query_row(params![id], |r| r.get::<_, Option<i64>>(0))
+                        .optional()
+                        .map(Option::flatten)
+                    {
+                        affected.insert(t);
+                    }
+                }
+            }
+            for t in &affected {
+                recompute_reps_for_thread(&tx, *t)?;
+            }
+        }
+        tx.commit()
+    }
+
+    /// 保持期間を過ぎたゴミ箱メールを完全削除する。days<=0 は無期限として何もしない。
+    pub fn purge_expired_mail_trash(&self, days: i64) -> rusqlite::Result<()> {
+        if days <= 0 {
+            return Ok(());
+        }
+        let ids: Vec<i64> = {
+            let conn = self.conn.lock().unwrap();
+            let cutoff = format!("-{days} days");
+            let mut stmt = conn.prepare(
+                "SELECT id FROM emails WHERE folder = 'trash' AND trashed_at IS NOT NULL \
+                   AND trashed_at <= datetime('now', ?1)",
+            )?;
+            let v: Vec<i64> = stmt
+                .query_map(params![cutoff], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            v
+        };
+        self.delete_emails(&ids)
+    }
+
     /// 書きかけのメールをローカルの drafts フォルダへ保存/更新する（サーバー同期は別途）。
     /// `draft_id` があれば既存行を更新、無ければ新規作成する。保存した下書きの emails.id を返す。
     /// 新規時は再送・サーバー同期で使う Message-ID を採番して保存する（更新時は据え置き）。
@@ -1321,6 +1409,81 @@ mod tests {
         assert_eq!(read_of("k-seen"), 1);
     }
 
+    /// ゴミ箱: inbox→trash 移動（prev_folder/trashed_at）、trash→元フォルダ復元、
+    /// 保持日数パージ（期限内は残す／期限切れは消す／0=無期限は何もしない）。
+    #[test]
+    fn mail_trash_move_restore_and_purge() {
+        let store = test_store();
+        seed(&store, "S1", "a@x", "b1", "inbox", "k1");
+        seed(&store, "S2", "a@x", "b2", "inbox", "k2");
+
+        let folder_of = |id: i64| -> String {
+            let conn = store.conn.lock().unwrap();
+            conn.query_row("SELECT folder FROM emails WHERE id=?1", params![id], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+        let prev_of = |id: i64| -> Option<String> {
+            let conn = store.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT prev_folder FROM emails WHERE id=?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let id_of = |key: &str| -> i64 {
+            let conn = store.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT id FROM emails WHERE canonical_key=?1",
+                params![key],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let exists = |id: i64| -> bool {
+            let conn = store.conn.lock().unwrap();
+            conn.query_row("SELECT 1 FROM emails WHERE id=?1", params![id], |_| Ok(()))
+                .optional()
+                .unwrap()
+                .is_some()
+        };
+
+        let id1 = id_of("k1");
+        let id2 = id_of("k2");
+
+        // 移動: inbox → trash（prev_folder=inbox、trashed_at セット、他は不変）。
+        store.move_emails_to_trash(&[id1]).unwrap();
+        assert_eq!(folder_of(id1), "trash");
+        assert_eq!(prev_of(id1).as_deref(), Some("inbox"));
+        assert_eq!(folder_of(id2), "inbox");
+
+        // 復元: trash → inbox（prev_folder/trashed_at をクリア）。
+        store.restore_emails_from_trash(&[id1]).unwrap();
+        assert_eq!(folder_of(id1), "inbox");
+        assert_eq!(prev_of(id1), None);
+
+        // パージ: 期限内は残る。
+        store.move_emails_to_trash(&[id1]).unwrap();
+        store.purge_expired_mail_trash(30).unwrap();
+        assert!(exists(id1), "30日以内の trash は残る");
+
+        // trashed_at を 40 日前に偽装 → 0=無期限は消さない／30日で完全削除。
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE emails SET trashed_at=datetime('now','-40 days') WHERE id=?1",
+                params![id1],
+            )
+            .unwrap();
+        }
+        store.purge_expired_mail_trash(0).unwrap();
+        assert!(exists(id1), "0=無期限は何も消さない");
+        store.purge_expired_mail_trash(30).unwrap();
+        assert!(!exists(id1), "40日前の trash は完全削除される");
+    }
+
     /// 点検再取り込み（backfill）で、旧パーサ由来の clean_body が新エンジンの分離結果に更新される。
     #[test]
     fn resync_recomputes_clean_body() {
@@ -1433,8 +1596,10 @@ mod tests {
         assert_eq!(rows[0].id, {
             // B の代表 id を引く。
             let conn = store.conn.lock().unwrap();
-            conn.query_row("SELECT id FROM emails WHERE message_id='b0@x'", [], |r| r.get::<_, i64>(0))
-                .unwrap() as i32
+            conn.query_row("SELECT id FROM emails WHERE message_id='b0@x'", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap() as i32
         });
         assert_eq!(rows[0].message_count, 1);
         assert!(rows[0].is_read);

@@ -646,7 +646,7 @@ impl Store {
         // ※ 副問い合わせを本体 SELECT に直書きすると、ORDER BY+LIMIT より前に該当全行
         //   （代表フラグ全件＝数千件）へ評価され得るため、必ず先に件数を絞る。
         let sql = format!(
-            "WITH page AS (
+            "WITH page AS MATERIALIZED (
                 SELECT id, date_ts FROM emails
                 WHERE folder = ?1 {acct} AND is_folder_rep = 1
                 ORDER BY date_ts DESC, id DESC
@@ -673,6 +673,22 @@ impl Store {
              ORDER BY page.date_ts DESC, page.id DESC",
             known_vip = known_vip_cols("r.from_address"),
         );
+        // [perf] 実行計画をログ出力（全走査 SCAN の特定用。確認後に外す）。
+        if let Ok(mut ex) = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")) {
+            let details: rusqlite::Result<Vec<String>> = match account_id {
+                Some(a) => ex
+                    .query_map(params![folder, limit, offset, a], |r| r.get::<_, String>(3))
+                    .and_then(|m| m.collect()),
+                None => ex
+                    .query_map(params![folder, limit, offset], |r| r.get::<_, String>(3))
+                    .and_then(|m| m.collect()),
+            };
+            if let Ok(details) = details {
+                for d in details {
+                    log::info!("[plan] {d}");
+                }
+            }
+        }
         let mut stmt = conn.prepare(&sql)?;
         let map = |row: &rusqlite::Row| -> rusqlite::Result<ThreadListItem> {
             let parse_ids = |s: Option<String>| -> Vec<i32> {

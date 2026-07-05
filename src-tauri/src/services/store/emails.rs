@@ -657,10 +657,9 @@ impl Store {
                          ELSE (SELECT count(*) FROM emails t WHERE t.logical_thread_id = r.logical_thread_id) END AS msg_count,
                     CASE WHEN r.logical_thread_id IS NULL THEN (CASE WHEN r.is_read = 0 THEN 1 ELSE 0 END)
                          ELSE (SELECT count(*) FROM emails t WHERE t.logical_thread_id = r.logical_thread_id AND t.folder = ?1 AND t.is_read = 0) END AS unread_cnt,
-                    (SELECT group_concat(t.id) FROM emails t
-                     WHERE t.folder = ?1
-                       AND (CASE WHEN r.logical_thread_id IS NULL THEN t.id = r.id
-                                 ELSE t.logical_thread_id = r.logical_thread_id END)) AS folder_ids
+                    CASE WHEN r.logical_thread_id IS NULL THEN CAST(r.id AS TEXT)
+                         ELSE (SELECT group_concat(t.id) FROM emails t
+                               WHERE t.logical_thread_id = r.logical_thread_id AND t.folder = ?1) END AS folder_ids
              FROM emails r
              LEFT JOIN logical_threads lt ON lt.id = r.logical_thread_id
              WHERE r.folder = ?1 {acct} AND r.is_folder_rep = 1

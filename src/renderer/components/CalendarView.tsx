@@ -966,7 +966,7 @@ function MiniMonth({
               onDoubleClick={() => onOpenDay(ds)}
               className={`relative flex h-5 items-center justify-center rounded text-[10px] hover:bg-white/15 ${
                 inM ? '' : 'opacity-25'
-              } ${isSel ? 'ring-1 ring-white/70' : ''}`}
+              } ${isSel && !isToday ? 'ring-1 ring-white/70' : ''}`}
             >
               <span className={`flex h-4 w-4 items-center justify-center rounded-full ${isToday ? 'bg-blue-500 text-white' : ''}`}>
                 {d.getDate()}
@@ -1537,7 +1537,7 @@ function EventEditor({
         <button
           onClick={save}
           disabled={!canSave}
-          className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium hover:bg-blue-400 disabled:opacity-40"
+          className="rounded-lg px-4 py-2 text-sm font-medium ring-1 ring-white/30 hover:bg-white/15 disabled:opacity-40"
         >
           {t('cal.save')}
         </button>

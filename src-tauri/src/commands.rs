@@ -452,15 +452,21 @@ pub async fn mail_send(
 
     // 送信成功後、送信控えを IMAP の Sent フォルダへ保存する（best-effort）。
     // 失敗しても送信自体は成功しているので、警告ログにとどめてエラーにはしない。
+    // ただし Gmail 等はサーバーが送信時に自動で控えを保存するため、APPEND すると二重に
+    // なる。該当プロバイダでは APPEND をスキップし、サーバー保存分を次回同期で取り込む。
     if let Ok(Some((_email, login, host, port))) = store.get_account_imap(input.account_id as i64) {
-        let res = tauri::async_runtime::spawn_blocking(move || {
-            imap_sync::append_to_sent(&host, port, &login, &password, &raw)
-        })
-        .await;
-        match res {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => log::warn!("送信は成功、Sent への保存に失敗: {e}"),
-            Err(e) => log::warn!("Sent 保存タスクに失敗: {e}"),
+        if imap_sync::server_saves_sent_copy(&host) {
+            log::info!("Sent への APPEND をスキップ（サーバーが自動保存: {host}）");
+        } else {
+            let res = tauri::async_runtime::spawn_blocking(move || {
+                imap_sync::append_to_sent(&host, port, &login, &password, &raw)
+            })
+            .await;
+            match res {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => log::warn!("送信は成功、Sent への保存に失敗: {e}"),
+                Err(e) => log::warn!("Sent 保存タスクに失敗: {e}"),
+            }
         }
     }
     Ok(())

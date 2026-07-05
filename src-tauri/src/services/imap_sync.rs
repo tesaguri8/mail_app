@@ -549,6 +549,16 @@ fn store_fetches<'a>(
     Ok(())
 }
 
+/// SMTP 送信時にサーバー側が自動で送信控えを Sent に保存するプロバイダか（IMAP ホストで判定）。
+/// Gmail は smtp.gmail.com からの送信で必ず「送信済みメール」に控えを残す（無効化不可）ため、
+/// クライアントが APPEND すると同じ控えが 2 通になる。該当プロバイダでは APPEND をスキップし、
+/// サーバーが保存した 1 通を次回の Sent 同期で取り込む。
+pub fn server_saves_sent_copy(imap_host: &str) -> bool {
+    let h = imap_host.trim().to_ascii_lowercase();
+    // Gmail / Google Workspace はいずれも imap.gmail.com（旧 googlemail 表記も一応許容）。
+    h == "imap.gmail.com" || h == "imap.googlemail.com"
+}
+
 /// 送信済みメッセージを IMAP の Sent フォルダへ保存する（APPEND）。best-effort。
 /// Sent フォルダ名はサーバーで異なるため、特殊用途属性(\Sent)→よくある名前 の順で判定する。
 /// Sent が見つからないときはエラーを返す（呼び出し側で送信自体は成功扱いにする）。
@@ -768,4 +778,26 @@ pub fn fetch_message(
         parser::parse_message(raw).ok_or_else(|| "メッセージを解析できませんでした".to_string())?;
     let _ = session.logout();
     Ok(parsed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gmail_hosts_auto_save_sent() {
+        // Gmail はサーバーが自動保存するので APPEND しない。
+        assert!(server_saves_sent_copy("imap.gmail.com"));
+        assert!(server_saves_sent_copy("IMAP.GMAIL.COM")); // 大小無視
+        assert!(server_saves_sent_copy("imap.googlemail.com"));
+    }
+
+    #[test]
+    fn other_hosts_need_append() {
+        // Gmail 以外はクライアントが APPEND する必要がある。
+        assert!(!server_saves_sent_copy("outlook.office365.com"));
+        assert!(!server_saves_sent_copy("imap.mail.me.com"));
+        assert!(!server_saves_sent_copy("sngdesign.sakura.ne.jp"));
+        assert!(!server_saves_sent_copy(""));
+    }
 }

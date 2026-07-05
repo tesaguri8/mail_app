@@ -710,8 +710,9 @@ fn rebuild_threads_conn(conn: &Connection, account_id: i64) -> rusqlite::Result<
     Ok(())
 }
 
-/// 取り込み後のローカル加工（接続版）: 未割当（NULL）の auto メールに、古い順で
-/// スレッド割当＋代表フラグ更新を行う。処理件数を返す。
+/// 取り込み後のローカル加工（接続版・テスト用）: 未割当（NULL）の auto メールに、古い順で
+/// スレッド割当＋代表フラグ更新を行う。処理件数を返す。本番は Store::process_pending（別接続・小分け）。
+#[cfg(test)]
 pub fn process_pending_conn(conn: &Connection, account_id: i64) -> rusqlite::Result<usize> {
     let ids: Vec<i64> = {
         let mut stmt = conn.prepare(

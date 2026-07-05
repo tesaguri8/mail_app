@@ -667,8 +667,17 @@ pub struct SendInput {
     pub cc: Vec<String>,
     pub bcc: Vec<String>,
     pub subject: String,
-    /// プレーン本文（作成はプレーン。HTML は送信時に自動生成）。
+    /// 新規に書いた本文（プレーン。署名込み・引用は含まない）。HTML は送信時に自動生成する。
     pub body: String,
+    /// 返信/転送で本文末に足す「プレーン引用」（属性行＋`>` 引用）。新規なら None。
+    /// プレーン本文はこれを body の後ろに連結して送る。
+    #[serde(default)]
+    pub quoted_plain: Option<String>,
+    /// 返信/転送で HTML 本文末に足す「HTML 引用」（属性行＋オリジナル HTML を blockquote で
+    /// そのまま引用。フロントでサニタイズ済み）。指定時は HTML 本文にこれを使う（オリジナルを
+    /// 再構築せず丸ごと引用＝崩れない）。元メールが HTML を持たない/新規なら None。
+    #[serde(default)]
+    pub quoted_html: Option<String>,
     /// 返信元の Message-ID（スレッド化用。新規なら None）。
     pub in_reply_to: Option<String>,
     /// References チェーン（祖先 Message-ID を空白区切り・古い順。相手メーラーで正しく

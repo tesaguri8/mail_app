@@ -346,15 +346,28 @@ pub async fn mail_sync(
 /// プレーン本文から最小限の HTML を作る（エスケープ＋改行を <br> 化）。
 /// multipart/alternative の HTML パート用。改行は CSS(pre-wrap) ではなく <br> で表現する
 /// （テキスト主体の安全描画でも確実に改行されるように）。リンク化などは後続。
-fn plain_to_html(plain: &str) -> String {
-    let escaped = plain
+/// プレーン本文を HTML エスケープ＋改行を <br> 化した断片にする（本文/引用で共有）。
+fn plain_to_html_fragment(plain: &str) -> String {
+    plain
         .replace('&', "&amp;")
         .replace('<', "&lt;")
-        .replace('>', "&gt;");
-    let with_breaks = escaped.replace("\r\n", "\n").replace('\n', "<br>\n");
+        .replace('>', "&gt;")
+        .replace("\r\n", "\n")
+        .replace('\n', "<br>\n")
+}
+
+fn plain_to_html(plain: &str) -> String {
+    compose_html(plain, None)
+}
+
+/// 送信用 HTML 本文を組み立てる。新規本文（プレーン→HTML）の後ろに、指定があれば
+/// サニタイズ済みの HTML 引用（オリジナル HTML の blockquote 等）をそのまま足す。
+fn compose_html(new_body_plain: &str, quoted_html: Option<&str>) -> String {
+    let body = plain_to_html_fragment(new_body_plain);
+    let quote = quoted_html.unwrap_or("");
     format!(
         "<!DOCTYPE html><html><body>\
-         <div style=\"font-family:sans-serif;font-size:14px;line-height:1.5\">{with_breaks}</div>\
+         <div style=\"font-family:sans-serif;font-size:14px;line-height:1.5\">{body}{quote}</div>\
          </body></html>"
     )
 }
@@ -392,7 +405,15 @@ pub async fn mail_send(
         .and_then(|e| e.get_password())
         .map_err(|e| format!("資格情報を取得できません: {e}"))?;
 
-    let body_html = plain_to_html(&input.body);
+    // プレーン本文＝新規本文＋プレーン引用。HTML 本文＝新規本文の HTML に、あれば
+    // サニタイズ済みの HTML 引用（オリジナル HTML の blockquote）をそのまま足す（B 案）。
+    // HTML 引用が無い（新規メール・元が text/plain）ときは従来どおり全プレーンを HTML 化する。
+    let quoted_plain = input.quoted_plain.as_deref().unwrap_or("");
+    let body_plain = format!("{}{}", input.body, quoted_plain);
+    let body_html = match input.quoted_html.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(qh) => compose_html(&input.body, Some(qh)),
+        None => plain_to_html(&body_plain),
+    };
     // References チェーン: フロント指定が無ければ、返信元（in_reply_to）から親の祖先連鎖を組む。
     let references = match input.references.filter(|s| !s.trim().is_empty()) {
         Some(r) => Some(r),
@@ -414,7 +435,7 @@ pub async fn mail_send(
         cc,
         bcc,
         subject: input.subject,
-        body_plain: input.body,
+        body_plain,
         body_html: Some(body_html),
         in_reply_to: input.in_reply_to,
         references,
@@ -1960,4 +1981,33 @@ pub fn account_test_connection(host: String, port: u16) -> Result<(), String> {
     TcpStream::connect_timeout(&sock, Duration::from_secs(8))
         .map(|_| ())
         .map_err(|e| format!("接続できませんでした: {e}"))
+}
+
+#[cfg(test)]
+mod compose_tests {
+    use super::{compose_html, plain_to_html};
+
+    #[test]
+    fn quoted_html_is_placed_inside_body() {
+        let quote = "<br><br>X さんが書きました:<br><blockquote>元のHTML</blockquote>";
+        let html = compose_html("返信本文\n2行目", Some(quote));
+        // 新規本文が <br> 化され、引用はその後ろ・body の内側に入る（</html> の外に出ない）。
+        assert!(html.contains("返信本文<br>\n2行目"));
+        let body_end = html.find("</div></body></html>").expect("has closing");
+        let quote_pos = html.find("<blockquote>元のHTML</blockquote>").expect("has quote");
+        assert!(quote_pos < body_end, "quote must be inside body div");
+    }
+
+    #[test]
+    fn html_escapes_new_body_but_keeps_quoted_html_verbatim() {
+        // 新規本文の < > & はエスケープ、引用済み HTML はそのまま。
+        let html = compose_html("a<b>&c", Some("<blockquote><b>bold</b></blockquote>"));
+        assert!(html.contains("a&lt;b&gt;&amp;c"));
+        assert!(html.contains("<blockquote><b>bold</b></blockquote>"));
+    }
+
+    #[test]
+    fn no_quote_matches_plain_to_html() {
+        assert_eq!(compose_html("hi", None), plain_to_html("hi"));
+    }
 }

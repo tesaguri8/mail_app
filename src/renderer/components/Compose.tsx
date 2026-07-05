@@ -35,6 +35,45 @@ function quote(body: string): string {
     .join('\n');
 }
 
+/** テキストを HTML 属性/本文へ安全に埋め込むためのエスケープ。 */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * 返信で引用するオリジナル HTML を安全化する。原文を再構築せず、危険/解決不能な要素だけ除く：
+ * - script / style / head / meta / link / base などは削除
+ * - cid: インライン画像は返信では解決できないためプレースホルダに置換
+ * - 返す innerHTML を blockquote で包んで使う（呼び出し側）
+ */
+function sanitizeQuotedHtml(html: string): string {
+  let doc: Document;
+  try {
+    doc = new DOMParser().parseFromString(html, 'text/html');
+  } catch {
+    return '';
+  }
+  doc
+    .querySelectorAll('script,style,head,title,noscript,meta,link,base,iframe,object,embed')
+    .forEach((el) => el.remove());
+  doc.querySelectorAll('img').forEach((img) => {
+    const src = (img.getAttribute('src') ?? '').trim().toLowerCase();
+    if (src.startsWith('cid:')) {
+      img.replaceWith(doc.createTextNode(`[${img.getAttribute('alt') || '画像'}]`));
+    }
+  });
+  return doc.body.innerHTML;
+}
+
+/** 引用スタイル付き blockquote（Apple Mail / Thunderbird 風の左罫線）。 */
+function blockquote(innerHtml: string): string {
+  return `<blockquote type="cite" style="margin:0 0 0 0.8ex;border-left:1px solid #ccc;padding-left:1ex;color:inherit">${innerHtml}</blockquote>`;
+}
+
 /** 引用ヘッダ用に日付をローカル時刻表記へ（生の ISO/UTC 文字列を見せない）。 */
 function formatQuoteDate(d: string | null): string {
   if (!d) return '';
@@ -105,6 +144,7 @@ export function Compose({
         bcc: '',
         subject: '',
         quoted: '',
+        quotedHtml: null as string | null,
         inReplyTo: null as string | null,
       };
     }
@@ -118,6 +158,7 @@ export function Compose({
         bcc: d.bcc,
         subject: d.subject,
         quoted: '',
+        quotedHtml: null as string | null,
         inReplyTo: d.in_reply_to,
       };
     }
@@ -127,6 +168,9 @@ export function Compose({
       from: s.from_address ?? '',
       date: formatQuoteDate(s.date),
     });
+    // 元メールが HTML を持つなら、その HTML をサニタイズして「丸ごと引用」に使う（B 案）。
+    // 持たない（text/plain 元）ならプレーン引用だけで送る。
+    const srcHtml = s.body_html?.trim() ? sanitizeQuotedHtml(s.body_html) : '';
     if (target.mode === 'forward') {
       const fwd =
         `\n\n${t('compose.forwardSep')}\n` +
@@ -134,12 +178,19 @@ export function Compose({
         `${t('mailbox.to')}: ${s.to_addresses ?? ''}\n` +
         `${t('compose.subject')}: ${s.subject ?? ''}\n\n` +
         body;
+      const fwdHeaderHtml = [
+        escapeHtml(t('compose.forwardSep')),
+        `${escapeHtml(t('mailbox.from'))}: ${escapeHtml(s.from_address ?? '')}`,
+        `${escapeHtml(t('mailbox.to'))}: ${escapeHtml(s.to_addresses ?? '')}`,
+        `${escapeHtml(t('compose.subject'))}: ${escapeHtml(s.subject ?? '')}`,
+      ].join('<br>');
       return {
         to: '',
         cc: '',
         bcc: '',
         subject: withPrefix(s.subject, 'Fwd'),
         quoted: fwd,
+        quotedHtml: srcHtml.trim() ? `<br><br>${fwdHeaderHtml}<br><br>${srcHtml}` : null,
         inReplyTo: null,
       };
     }
@@ -162,6 +213,9 @@ export function Compose({
       bcc: '',
       subject: withPrefix(s.subject, 'Re'),
       quoted: `\n\n${attribution}\n${quote(body)}`,
+      quotedHtml: srcHtml.trim()
+        ? `<br><br>${escapeHtml(attribution)}<br>${blockquote(srcHtml)}`
+        : null,
       inReplyTo: s.message_id,
     };
   }, [target, t, accounts]);
@@ -182,10 +236,12 @@ export function Compose({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
 
-  // 送信時に本文末へ足す引用/転送ブロック（編集欄には入れない）。
+  // 送信時に本文末へ足す引用/転送ブロック（編集欄には入れない）。プレーンと、あれば HTML。
   const quotedRef = useRef(init.quoted);
   quotedRef.current = init.quoted;
-  // 送信/下書きに使う「実際に送る本文」＝編集した本文（＋署名）＋引用。
+  const quotedHtmlRef = useRef(init.quotedHtml);
+  quotedHtmlRef.current = init.quotedHtml;
+  // 下書き保存に使う「プレーン全文」＝編集した本文（＋署名）＋プレーン引用。
   const composedBody = useCallback(() => body + quotedRef.current, [body]);
 
   // 署名（差出人ごとに使い回せる本文）。一覧を読み込み、ドロップダウンで切り替える。
@@ -313,7 +369,11 @@ export function Compose({
       cc: splitAddresses(cc),
       bcc: splitAddresses(bcc),
       subject,
-      body: composedBody(),
+      // 新規本文（＋署名）と引用を分けて渡す。HTML 引用があればオリジナル HTML を
+      // 丸ごと引用し、無ければプレーン引用のみ（Rust 側で組み立て）。
+      body,
+      quoted_plain: quotedRef.current || null,
+      quoted_html: quotedHtmlRef.current || null,
       in_reply_to: init.inReplyTo,
       // References チェーンは Rust 側で in_reply_to から祖先を辿って積む（docs/THREADING.md）。
       references: null,

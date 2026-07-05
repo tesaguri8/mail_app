@@ -2,6 +2,7 @@
 // フロントが取得可否などを判断する。変更は 'rondine:prefs' イベントで通知する。
 
 const INLINE_IMAGES_KEY = 'rondine.inlineImages';
+const BUBBLE_HTML_KEY = 'rondine.bubbleHtml';
 const FLY_ANIMATION_KEY = 'rondine.flyAnimation';
 const PHONE_REGION_KEY = 'rondine.phoneRegion';
 const PHONE_STYLE_KEY = 'rondine.phoneStyle';
@@ -20,6 +21,21 @@ export function getInlineImages(): boolean {
 
 export function setInlineImages(value: boolean): void {
   localStorage.setItem(INLINE_IMAGES_KEY, value ? '1' : '0');
+  window.dispatchEvent(new Event(PREFS_EVENT));
+}
+
+/**
+ * 会話バブル（折りたたみ表示）を、プレーンではなく HTML 本文で描画するか。既定: オン。
+ * 画像は取得せずプレースホルダのまま（軽量・外部画像のトラッキングも起きない）。
+ * 引用のある返信はチャット感を保つため描画側でプレーン（新規部分のみ）にフォールバックする
+ * ので、実質「引用のないメール（ニュースレター等）を HTML 描画」する設定。
+ */
+export function getBubbleHtml(): boolean {
+  return localStorage.getItem(BUBBLE_HTML_KEY) !== '0';
+}
+
+export function setBubbleHtml(value: boolean): void {
+  localStorage.setItem(BUBBLE_HTML_KEY, value ? '1' : '0');
   window.dispatchEvent(new Event(PREFS_EVENT));
 }
 

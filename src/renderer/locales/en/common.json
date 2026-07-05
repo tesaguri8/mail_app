@@ -304,6 +304,8 @@
     "remoteHidden": "Hidden (block)",
     "remoteThumb": "Thumbnail",
     "remoteFull": "Full size",
+    "bubbleHtml": "Render chat bubbles as HTML",
+    "bubbleHtmlHint": "Draws collapsed chat bubbles from the HTML body for mail without quotes (e.g. newsletters), keeping links and formatting. Replies that contain quotes stay as plain, new-part-only text to keep the chat feel. Images are not fetched and stay as placeholders — lightweight, with no external-image tracking.",
     "flyAnimation": "Send animation (swallow)",
     "flyAnimationHint": "Turns the send button into a swallow that flies across the window to deliver your letter while sending. When off, a plain \"Send\" button is used.",
     "spamEnabled": "Enable spam filtering",

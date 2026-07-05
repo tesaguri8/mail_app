@@ -1390,7 +1390,7 @@ export function MailboxView({
             style={{ gridTemplateColumns: '1fr 1fr' }}
           >
             <div className="min-h-0 overflow-hidden">{composeEl}</div>
-            <div className="min-h-0 overflow-hidden border-l border-white/10">
+            <div className="flex min-h-0 flex-col overflow-hidden border-l border-white/10">
               <MailBody detail={compose.source} />
             </div>
           </div>

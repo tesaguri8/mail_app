@@ -226,6 +226,7 @@ export function MailBody({
   onComposeTo,
   onGreenChange,
   highlight,
+  onCollapse,
 }: {
   detail: MailDetail;
   /** このメールに付いているタグ（ヘッダの宛先の下に表示）。 */
@@ -251,6 +252,8 @@ export function MailBody({
   onGreenChange?: () => void;
   /** 検索語（複数）。本文中の一致を <mark> でハイライトする。 */
   highlight?: string[];
+  /** ヘッダに「とじる（畳む）」ボタンを出す。会話バブルの展開解除に使う。 */
+  onCollapse?: () => void;
 }) {
   const { t } = useTranslation();
   const [showQuotes, setShowQuotes] = useState(false);
@@ -613,7 +616,9 @@ export function MailBody({
   const body = showQuotes ? full : clean || full;
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* ヘッダ（件名・差出人・操作）。本文は下の body で内部スクロールするため、ヘッダは
+          カード上部に据え置かれる（裏を本文が流れない＝カードと同じ透過のまま保てる）。 */}
       <div className="border-b border-white/10 px-5 py-3">
         <div className="flex items-start justify-between gap-3">
           <h3 className="min-w-0 truncate text-base font-semibold">
@@ -724,6 +729,17 @@ export function MailBody({
                 <Paperclip size={16} />
               </button>
             )}
+            {/* 全文展開を畳む（会話バブルから渡されたときだけ）。固定ヘッダから常に押せる。 */}
+            {onCollapse && (
+              <button
+                onClick={onCollapse}
+                title={t('thread.collapse')}
+                aria-label={t('thread.collapse')}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80"
+              >
+                <ChevronDown size={16} className="rotate-180" />
+              </button>
+            )}
             {note && <span className="ml-1 text-[10px] text-white/45">{note}</span>}
           </div>
         </div>
@@ -820,7 +836,7 @@ export function MailBody({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
         {d.body_compacted && (
           <div className="mb-3 flex items-center gap-2 rounded-md border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-[11px] leading-snug text-amber-100/80">
             <span className="flex-1">{t('mailbox.bodyCompacted')}</span>

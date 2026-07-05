@@ -9,9 +9,11 @@ import { APP } from '../config/appIdentity';
 import {
   getFlyAnimation,
   getInlineImages,
+  getBubbleHtml,
   getRemoteImageMode,
   setFlyAnimation,
   setInlineImages,
+  setBubbleHtml,
   setRemoteImageMode,
   type RemoteImageMode,
   getPhoneRegion,
@@ -181,6 +183,7 @@ function Toggle({
 function DisplaySettings() {
   const { t, i18n } = useTranslation();
   const [inline, setInline] = useState(getInlineImages());
+  const [bubbleHtml, setBubbleHtmlState] = useState(getBubbleHtml());
   const [remoteImgMode, setRemoteImgMode] = useState<RemoteImageMode>(getRemoteImageMode());
   const [fly, setFly] = useState(getFlyAnimation());
   const [region, setRegion] = useState(getPhoneRegion());
@@ -300,6 +303,18 @@ function DisplaySettings() {
           </option>
         </select>
       </label>
+
+      {/* 会話バブルを HTML 本文で描画（既定オフ）。画像は取得せずプレースホルダのまま＝軽量。 */}
+      <Toggle
+        checked={bubbleHtml}
+        onChange={() => {
+          const next = !bubbleHtml;
+          setBubbleHtmlState(next);
+          setBubbleHtml(next);
+        }}
+        title={t('settings.bubbleHtml')}
+        hint={t('settings.bubbleHtmlHint')}
+      />
 
       <Toggle
         checked={fly}

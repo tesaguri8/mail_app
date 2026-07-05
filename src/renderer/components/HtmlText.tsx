@@ -85,25 +85,6 @@ function RemoteImg({
   );
 }
 
-/** テキスト中のメールアドレスを検出するための正規表現（キャプチャ付き）。 */
-const EMAIL_RE = /([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/g;
-
-/** テキストノードを、メールアドレス（renderEmail）と検索語（re）を考慮して描画する。 */
-function renderTextWithEmails(
-  text: string,
-  renderEmail: ((email: string) => ReactNode) | undefined,
-  re: RegExp | null,
-): ReactNode {
-  const parts = renderEmail ? text.split(EMAIL_RE) : [text];
-  return parts.map((p, i) =>
-    renderEmail && i % 2 === 1 ? (
-      <Fragment key={i}>{renderEmail(p)}</Fragment>
-    ) : (
-      <Fragment key={i}>{highlightText(p, re, `hn${i}`)}</Fragment>
-    ),
-  );
-}
-
 function renderNode(
   node: Node,
   key: number,
@@ -112,11 +93,15 @@ function renderNode(
   remoteDefaultExpanded: boolean,
   renderEmail: ((email: string) => ReactNode) | undefined,
   highlightRe: RegExp | null,
+  insideLink = false,
 ): ReactNode {
   if (node.nodeType === Node.TEXT_NODE) {
     const text = node.textContent ?? '';
-    if ((!renderEmail && !highlightRe) || !text) return text;
-    return renderTextWithEmails(text, renderEmail, highlightRe);
+    if (!text) return text;
+    // 既に <a> の内側のテキストは、リンクの二重化を避けて再リンク化しない（ハイライトのみ）。
+    if (insideLink) return highlightText(text, highlightRe, `hl${key}`);
+    // 生の URL / メールアドレスを自動リンク化（プレーンの AutoLinkText と同じロジック）。
+    return linkifyToNodes(text, renderEmail, highlightRe);
   }
   if (node.nodeType !== Node.ELEMENT_NODE) return null;
 
@@ -170,10 +155,21 @@ function renderNode(
     );
   }
 
+  // <a> の内側では子テキストを再リンク化しない（insideLink を子へ伝播）。
+  const insideChildLink = insideLink || tag === 'a';
   const children: ReactNode[] = [];
   el.childNodes.forEach((c, i) =>
     children.push(
-      renderNode(c, i, inlineImages, remoteImages, remoteDefaultExpanded, renderEmail, highlightRe),
+      renderNode(
+        c,
+        i,
+        inlineImages,
+        remoteImages,
+        remoteDefaultExpanded,
+        renderEmail,
+        highlightRe,
+        insideChildLink,
+      ),
     ),
   );
 
@@ -188,6 +184,8 @@ function renderNode(
         href={href}
         onClick={(e) => {
           e.preventDefault();
+          // バブル等でリンククリックが親の展開トグルへ伝播しないよう止める。
+          e.stopPropagation();
           openExternal(href);
         }}
         // リンクは下線なしの水色
@@ -267,31 +265,24 @@ function stripTrailingPunct(url: string): [string, string] {
 }
 
 /**
- * プレーン本文を、URL・メールアドレスをリンク化して描画する。
- * 会話バブルと全文表示（プレーン経路）で共有し、リンクの見た目とクリック挙動
- *（外部ブラウザで開く）を HTML 本文（HtmlText）と揃えるためのコンポーネント。
+ * プレーンテキストを、URL・メールアドレスをリンク化した ReactNode 配列にする。
+ * プレーン本文（AutoLinkText）と HTML 本文のテキストノード（HtmlText）で共有し、生の
+ * URL/メールの見た目とクリック挙動（外部ブラウザで開く）を揃える。
  * - URL: 水色リンク。クリックで外部ブラウザ（親要素へは伝播させない＝バブルを開かない）。
- * - メール: renderEmail があればそれで描画（＋登録／新規作成の導線）、無ければ素のテキスト。
+ * - メール: renderEmail があればそれで描画（＋登録/新規作成の導線）、無ければ素のテキスト。
+ * - 検索語（re）は一致部分を <mark> でハイライトする。
  */
-export function AutoLinkText({
-  text,
-  renderEmail,
-  highlight,
-  className = '',
-}: {
-  text: string;
-  renderEmail?: (email: string) => ReactNode;
-  /** 検索語（複数）。本文中の一致を <mark> でハイライトする。 */
-  highlight?: string[];
-  className?: string;
-}) {
+function linkifyToNodes(
+  text: string,
+  renderEmail: ((email: string) => ReactNode) | undefined,
+  re: RegExp | null,
+): ReactNode[] {
   const nodes: ReactNode[] = [];
-  const re = buildHighlightRe(highlight);
   let last = 0;
   let key = 0;
   const pushText = (s: string) => {
     if (!s) return;
-    nodes.push(<Fragment key={key++}>{highlightText(s, re, `t${key}`)}</Fragment>);
+    nodes.push(<Fragment key={key++}>{highlightText(s, re, `lt${key}`)}</Fragment>);
   };
   for (const m of text.matchAll(AUTOLINK_RE)) {
     const match = m[0];
@@ -314,7 +305,7 @@ export function AutoLinkText({
         href={href}
         onClick={(e) => {
           e.preventDefault();
-          // バブル内のクリックで全文展開が誘発されないよう伝播を止める。
+          // クリックが親（バブルの展開トグル等）へ伝播しないよう止める。
           e.stopPropagation();
           openExternal(href);
         }}
@@ -326,7 +317,34 @@ export function AutoLinkText({
     if (trail) pushText(trail);
   }
   if (last < text.length) pushText(text.slice(last));
-  return <pre className={`whitespace-pre-wrap break-words font-sans ${className}`}>{nodes}</pre>;
+  return nodes;
+}
+
+/**
+ * プレーン本文を、URL・メールアドレスをリンク化して描画する。
+ * 会話バブルと全文表示（プレーン経路）で共有し、リンクの見た目とクリック挙動
+ *（外部ブラウザで開く）を HTML 本文（HtmlText）と揃えるためのコンポーネント。
+ * - URL: 水色リンク。クリックで外部ブラウザ（親要素へは伝播させない＝バブルを開かない）。
+ * - メール: renderEmail があればそれで描画（＋登録／新規作成の導線）、無ければ素のテキスト。
+ */
+export function AutoLinkText({
+  text,
+  renderEmail,
+  highlight,
+  className = '',
+}: {
+  text: string;
+  renderEmail?: (email: string) => ReactNode;
+  /** 検索語（複数）。本文中の一致を <mark> でハイライトする。 */
+  highlight?: string[];
+  className?: string;
+}) {
+  const re = buildHighlightRe(highlight);
+  return (
+    <pre className={`whitespace-pre-wrap break-words font-sans ${className}`}>
+      {linkifyToNodes(text, renderEmail, re)}
+    </pre>
+  );
 }
 
 /**

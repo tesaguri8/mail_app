@@ -27,8 +27,9 @@ import type { TagSummary } from '@bindings/TagSummary';
 import { mailGet } from '../services/mail';
 import { threadRename, threadSplit, threadView } from '../services/threads';
 import { parseAddress } from '../utils/address';
+import { getBubbleHtml, PREFS_EVENT } from '../config/prefs';
 import { MailBody } from './MailBody';
-import { AutoLinkText } from './HtmlText';
+import { AutoLinkText, HtmlText } from './HtmlText';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 
 /** 会話ビューが親（MailboxView）に要求する、メール1通単位の操作・状態。 */
@@ -82,6 +83,7 @@ function Bubble({
   expanded,
   onToggleExpand,
   highlight,
+  htmlBody,
 }: {
   m: ThreadMessage;
   you: string;
@@ -90,6 +92,8 @@ function Bubble({
   onToggleExpand: () => void;
   /** 検索語（複数）。本文中の一致をハイライトする。 */
   highlight?: string[];
+  /** 設定オン時、body_html があればバブルを HTML 本文で描画する（画像はプレースホルダ）。 */
+  htmlBody?: boolean;
 }) {
   const { t } = useTranslation();
   const out = m.direction === 'out';
@@ -125,6 +129,10 @@ function Bubble({
   const clean = (m.clean_body ?? '').trim();
   const full = (m.body_plain ?? '').trim();
   const body = showQuotes ? full : clean || full;
+  // 設定オンで HTML 本文があるときは HtmlText で描画（画像は取得せずプレースホルダのまま）。
+  // ただし HTML には引用除去版が無いので、引用のある返信（has_quotes）はチャット感を保つため
+  // プレーン（新規部分のみ）にフォールバックする。実質「引用のないメールだけ HTML 描画」。
+  const renderHtml = !!htmlBody && !!m.body_html?.trim() && !m.has_quotes;
 
   // 右クリック（と「…」ボタン）のメニュー。一覧の右クリックと同じ操作をメール単位で提供する。
   const menuItems: MenuItem[] = [
@@ -212,17 +220,10 @@ function Bubble({
 
         {expanded && detail ? (
           // 全文表示: 従来の MailBody をそのまま埋め込む（添付・HTML・外部画像・タグ・スター）。
-          // 閉じるボタンは上下両方に置き、長文でもスクロールせずに畳めるようにする。
-          <div className="rounded-xl border border-white/15 bg-neutral-900/40">
-            <div className="flex justify-end border-b border-white/10 px-3 py-1.5">
-              <button
-                onClick={onToggleExpand}
-                className="flex items-center gap-1 text-[11px] text-white/50 hover:text-white/80"
-              >
-                <ChevronDown size={12} className="rotate-180" />
-                {t('thread.collapse')}
-              </button>
-            </div>
+          // カードは高さ上限（max-h）＋ overflow-hidden にして「ヘッダ固定・本文だけ内部スクロール」
+          // のセクション構成にする。裏を本文が流れないのでヘッダはカードと同じ透過のまま保て、角の
+          // はみ出しも切れる。畳むボタンは固定ヘッダ内（onCollapse）にあるので常に押せる。
+          <div className="flex max-h-[70vh] min-h-0 flex-col overflow-hidden rounded-xl border border-white/15 bg-neutral-900/40">
             <MailBody
               detail={detail}
               tags={handlers.tagsFor(m.id)}
@@ -237,16 +238,8 @@ function Bubble({
               onComposeTo={handlers.onComposeTo}
               onGreenChange={handlers.onGreenChange}
               highlight={highlight}
+              onCollapse={onToggleExpand}
             />
-            <div className="flex justify-end border-t border-white/10 px-3 py-1.5">
-              <button
-                onClick={onToggleExpand}
-                className="flex items-center gap-1 text-[11px] text-white/50 hover:text-white/80"
-              >
-                <ChevronDown size={12} className="rotate-180" />
-                {t('thread.collapse')}
-              </button>
-            </div>
           </div>
         ) : (
           // 通常バブル: clean_body（新規部分）だけを chat 風に。クリックで全文展開する
@@ -280,7 +273,9 @@ function Bubble({
                 </button>
               </div>
             )}
-            {body ? (
+            {renderHtml ? (
+              <HtmlText html={m.body_html as string} highlight={highlight} />
+            ) : body ? (
               <AutoLinkText text={body} highlight={highlight} />
             ) : (
               <span className="text-white/40">{t('mailbox.noBody')}</span>
@@ -292,7 +287,7 @@ function Bubble({
                 out ? 'justify-end' : 'justify-start'
               }`}
             >
-              {m.has_quotes && (
+              {!renderHtml && m.has_quotes && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -358,6 +353,8 @@ export function Conversation({
   const { t } = useTranslation();
   const [view, setView] = useState<ThreadView | null>(null);
   const [loading, setLoading] = useState(true);
+  // バブルを HTML で描画するか（設定。PREFS_EVENT で即時反映）。
+  const [htmlBubbles, setHtmlBubbles] = useState(getBubbleHtml());
   // 既定は全メール折りたたみ（バブルのみ）。クリックしたメールだけ展開する。
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   // タイトル編集
@@ -418,6 +415,13 @@ export function Conversation({
     setExpandedIds(new Set());
     load();
   }, [openedId, load]);
+
+  // バブルの HTML 表示設定の変更に追従する。
+  useEffect(() => {
+    const onPrefs = () => setHtmlBubbles(getBubbleHtml());
+    window.addEventListener(PREFS_EVENT, onPrefs);
+    return () => window.removeEventListener(PREFS_EVENT, onPrefs);
+  }, []);
 
   // メール切替後、開いたメッセージまでスクロールする（検索語が無いときのみ。
   // 検索中は下の効果で最初の一致へ移動する）。
@@ -612,6 +616,7 @@ export function Conversation({
                 expanded={expandedIds.has(m.id)}
                 onToggleExpand={() => toggleExpand(m.id)}
                 highlight={terms}
+                htmlBody={htmlBubbles}
               />
             </div>
           ))}

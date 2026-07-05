@@ -1,4 +1,5 @@
 mod accounts;
+mod calendars;
 mod contacts;
 mod emails;
 mod events;

@@ -159,6 +159,10 @@ const MIGRATIONS: &[Migration] = &[
         version: 38,
         sql: include_str!("migrations/0038_calendar.sql"),
     },
+    Migration {
+        version: 39,
+        sql: include_str!("migrations/0039_calendar_meta.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

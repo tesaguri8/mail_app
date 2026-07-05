@@ -65,7 +65,22 @@
     "rem_60": "1 hour before",
     "rem_1440": "1 day before",
     "map": "Map",
-    "openMap": "Open in Google Maps"
+    "openMap": "Open in Google Maps",
+    "toggleSidebar": "Toggle sidebar",
+    "calendars": "Calendars",
+    "newCalendar": "Add calendar",
+    "newCalendarPrompt": "New calendar name",
+    "renameCalendarPrompt": "Rename calendar",
+    "deleteCalendarConfirm": "Delete calendar \"{{name}}\"? (Its events move to the default calendar.)",
+    "cannotDeleteDefault": "The default calendar can't be deleted.",
+    "defaultCalendar": "My calendar",
+    "availability": "Busy / Free",
+    "visibility": "Visibility",
+    "av_busy": "Busy",
+    "av_free": "Free",
+    "vis_default": "Default visibility",
+    "vis_public": "Public",
+    "vis_private": "Private"
   },
   "comingSoon": "Coming soon",
   "filter": {

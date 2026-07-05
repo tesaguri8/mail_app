@@ -15,4 +15,16 @@ reminder_minutes: number | null,
 /**
  * メールから作成した場合の紐付け（後続段階）。
  */
-related_email_id: number | null, };
+related_email_id: number | null, 
+/**
+ * 所属カレンダー（未指定なら既定カレンダーに割り当て）。
+ */
+calendar_id: number | null, 
+/**
+ * 予定あり/なし。未指定は 'busy'。
+ */
+availability: string | null, 
+/**
+ * 公開設定。未指定は 'default'。
+ */
+visibility: string | null, };

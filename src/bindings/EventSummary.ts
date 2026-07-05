@@ -32,4 +32,16 @@ related_email_id: number | null,
 /**
  * 論理削除（ゴミ箱）の日時（UTC 文字列）。非 null＝削除済み。
  */
-deleted_at: string | null, };
+deleted_at: string | null, 
+/**
+ * 所属カレンダー（複数カレンダー。null は既定扱い）。
+ */
+calendar_id: number | null, 
+/**
+ * 予定あり/なし（Google の Busy/Free）。'busy' | 'free'。
+ */
+availability: string, 
+/**
+ * 公開設定。'default' | 'public' | 'private'。
+ */
+visibility: string, };

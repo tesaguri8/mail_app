@@ -1,8 +1,8 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult,
-    ContactGroupSummary, ContactInput, ContactMatch, ContactSummary, DataLocation, DbInfo,
-    DraftContent, DraftInput, DuplicateGroup, EventInput, EventSummary, GreenDomainEntry,
-    ImportReport, MailDetail,
+    CalendarInput, CalendarSummary, ContactGroupSummary, ContactInput, ContactMatch,
+    ContactSummary, DataLocation, DbInfo, DraftContent, DraftInput, DuplicateGroup, EventInput,
+    EventSummary, GreenDomainEntry, ImportReport, MailDetail,
     MailSummary, OrgDuplicateGroup, OrganizationDetail, OrganizationSummary, RebuildAction,
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict, StorageInfo, SyncProgress,
@@ -1375,6 +1375,38 @@ pub fn event_delete(store: State<Store>, id: i64) -> Result<(), String> {
 #[tauri::command]
 pub fn event_restore(store: State<Store>, id: i64) -> Result<(), String> {
     store.restore_event(id).map_err(|e| e.to_string())
+}
+
+/// カレンダー一覧（マイ→他）。
+#[tauri::command]
+pub fn calendar_list(store: State<Store>) -> Result<Vec<CalendarSummary>, String> {
+    store.list_calendars().map_err(|e| e.to_string())
+}
+
+/// カレンダーを作成または更新（確定後の行を返す）。
+#[tauri::command]
+pub fn calendar_upsert(
+    store: State<Store>,
+    input: CalendarInput,
+) -> Result<CalendarSummary, String> {
+    if input.name.trim().is_empty() {
+        return Err("カレンダー名を入力してください".to_string());
+    }
+    store.upsert_calendar(&input).map_err(|e| e.to_string())
+}
+
+/// カレンダーの表示オン/オフを切り替える。
+#[tauri::command]
+pub fn calendar_set_visible(store: State<Store>, id: i64, visible: bool) -> Result<(), String> {
+    store
+        .set_calendar_visible(id, visible)
+        .map_err(|e| e.to_string())
+}
+
+/// カレンダーを削除（既定は不可。所属予定は既定へ付け替え）。削除できたら true。
+#[tauri::command]
+pub fn calendar_delete(store: State<Store>, id: i64) -> Result<bool, String> {
+    store.delete_calendar(id).map_err(|e| e.to_string())
 }
 
 /// グリーン／警告ドメインの一覧（管理タブ用。住所録由来の自動グリーンも含む）。

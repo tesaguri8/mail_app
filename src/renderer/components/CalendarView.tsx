@@ -1,10 +1,34 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronLeft, ChevronRight, Plus, Trash2, X, Clock, MapPin, RotateCcw, Repeat, Bell } from 'lucide-react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  Trash2,
+  X,
+  Clock,
+  MapPin,
+  RotateCcw,
+  Repeat,
+  Bell,
+  PanelLeft,
+} from 'lucide-react';
 import type { EventSummary } from '@bindings/EventSummary';
 import type { EventInput } from '@bindings/EventInput';
+import type { CalendarSummary } from '@bindings/CalendarSummary';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import { eventList, eventListTrashed, eventUpsert, eventDelete, eventRestore, eventGet } from '../services/calendar';
+import {
+  eventList,
+  eventListTrashed,
+  eventUpsert,
+  eventDelete,
+  eventRestore,
+  eventGet,
+  calendarList,
+  calendarUpsert,
+  calendarSetVisible,
+  calendarDelete,
+} from '../services/calendar';
 import { expandEvents, presetToRule, ruleToPreset, RECUR_PRESETS, type RecurPreset } from '../utils/recurrence';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -16,6 +40,10 @@ const DEFAULT_COLOR = COLORS[0];
 /** リマインダーの選択肢（開始何分前。null=なし / 0=開始時刻）。 */
 const REMINDERS: (number | null)[] = [null, 0, 5, 10, 30, 60, 1440];
 const reminderKey = (m: number | null) => (m === null ? 'cal.rem_none' : `cal.rem_${m}`);
+/** 予定あり/なし（Google の Busy/Free）。 */
+const AVAILABILITY = ['busy', 'free'];
+/** 公開設定。 */
+const VISIBILITY = ['default', 'public', 'private'];
 
 /** 場所を Google マップ検索で外部ブラウザに開く。 */
 function openMaps(location: string) {
@@ -84,6 +112,9 @@ const toInput = (e: EventSummary): EventInput => ({
   recurrence: e.recurrence,
   reminder_minutes: e.reminder_minutes,
   related_email_id: e.related_email_id,
+  calendar_id: e.calendar_id,
+  availability: e.availability,
+  visibility: e.visibility,
 });
 
 /** 予定が日付 d（'YYYY-MM-DD'）に掛かるか。開始日〜終了日（終日は最終日を含む）で判定。 */
@@ -194,6 +225,11 @@ export function CalendarView() {
   const [trashed, setTrashed] = useState<EventSummary[]>([]);
   const [showTrash, setShowTrash] = useState(false);
   const [editing, setEditing] = useState<EditTarget | null>(null);
+  const [calendars, setCalendars] = useState<CalendarSummary[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => localStorage.getItem('rondine.cal.sidebar') !== '0');
+  useEffect(() => {
+    localStorage.setItem('rondine.cal.sidebar', sidebarOpen ? '1' : '0');
+  }, [sidebarOpen]);
   const todayStr = ymd(new Date());
 
   const period = useMemo(() => computePeriod(mode, anchor, i18n.language), [mode, anchor, i18n.language]);
@@ -209,6 +245,17 @@ export function CalendarView() {
       .catch(() => setEvents([]));
   }, [period.from, period.to, showTrash]);
   useEffect(reload, [reload]);
+
+  const loadCalendars = useCallback(() => {
+    if (!isTauri) return;
+    calendarList().then(setCalendars).catch(() => setCalendars([]));
+  }, []);
+  useEffect(loadCalendars, [loadCalendars]);
+  // カレンダーの表示切替・追加・削除の後は、カレンダー一覧と予定（表示フィルタ）を両方更新。
+  const onCalendarsChanged = () => {
+    loadCalendars();
+    reload();
+  };
 
   const eventDays = useMemo(() => new Set(events.flatMap(coveredDays)), [events]);
   const weekdayShort = useMemo(() => weekdayLabels(i18n.language, 'short'), [i18n.language]);
@@ -275,7 +322,14 @@ export function CalendarView() {
     <div className="flex h-full min-h-0 flex-col px-4 pb-3 pt-1 text-white">
       {/* ツールバー */}
       <div className="flex flex-wrap items-center gap-2 py-2">
-        <h2 className="min-w-[9rem] text-lg font-semibold">{period.label}</h2>
+        <button
+          onClick={() => setSidebarOpen((v) => !v)}
+          title={t('cal.toggleSidebar')}
+          className={`rounded p-1.5 hover:bg-white/20 ${sidebarOpen ? 'bg-white/15' : ''}`}
+        >
+          <PanelLeft size={16} />
+        </button>
+        <h2 className="min-w-[8rem] text-lg font-semibold">{period.label}</h2>
         {!showTrash && (
           <>
             <div className="flex items-center gap-1">
@@ -325,7 +379,29 @@ export function CalendarView() {
         <TrashList items={trashed} onRestore={(id) => eventRestore(id).then(reload)} i18nLang={i18n.language} />
       ) : (
         <div className="flex min-h-0 flex-1 gap-3">
-          {/* メイン（左）: 表示単位ごと */}
+          {/* 左サイドバー: ミニ月ナビ＋カレンダー一覧（表示オン/オフ） */}
+          {sidebarOpen && (
+            <CalendarSidebar
+              calendars={calendars}
+              anchor={anchor}
+              selected={selected}
+              todayStr={todayStr}
+              weekdayNarrow={weekdayNarrow}
+              eventDays={eventDays}
+              locale={i18n.language}
+              onPickDate={(ds) => {
+                setSelected(ds);
+                setAnchor(new Date(`${ds}T00:00`));
+              }}
+              onNewAt={(ds) => newAt(ds)}
+              onGotoMonth={(y, m) => {
+                setAnchor(new Date(y, m, 1));
+                setMode('month');
+              }}
+              onChanged={onCalendarsChanged}
+            />
+          )}
+          {/* メイン（中央）: 表示単位ごと */}
           {period.kind === 'time' ? (
             <TimeGrid
               days={period.days}
@@ -399,6 +475,7 @@ export function CalendarView() {
             <EventEditor
               key={editing.mode === 'edit' ? `e${editing.event.id}` : `new-${editing.day}-${editing.time ?? ''}-${editing.allDay ? 'a' : ''}`}
               target={editing}
+              calendars={calendars}
               onClose={() => setEditing(null)}
               onSaved={onSaved}
               onDeleted={onSaved}
@@ -913,14 +990,133 @@ function TrashList({
   );
 }
 
+/** 左サイドバー: ミニ月ナビ＋カレンダー一覧（iCloud のようにフラット。表示オン/オフ・色・追加）。 */
+function CalendarSidebar({
+  calendars,
+  anchor,
+  selected,
+  todayStr,
+  weekdayNarrow,
+  eventDays,
+  locale,
+  onPickDate,
+  onNewAt,
+  onGotoMonth,
+  onChanged,
+}: {
+  calendars: CalendarSummary[];
+  anchor: Date;
+  selected: string;
+  todayStr: string;
+  weekdayNarrow: string[];
+  eventDays: Set<string>;
+  locale: string;
+  onPickDate: (ds: string) => void;
+  onNewAt: (ds: string) => void;
+  onGotoMonth: (year: number, month: number) => void;
+  onChanged: () => void;
+}) {
+  const { t } = useTranslation();
+  const addCalendar = async () => {
+    const name = window.prompt(t('cal.newCalendarPrompt'));
+    if (!name || !name.trim()) return;
+    const color = COLORS[calendars.length % COLORS.length];
+    await calendarUpsert({ id: null, name: name.trim(), color, kind: null }).catch(() => undefined);
+    onChanged();
+  };
+  const rename = async (c: CalendarSummary) => {
+    const name = window.prompt(t('cal.renameCalendarPrompt'), c.name);
+    if (name == null || !name.trim()) return;
+    await calendarUpsert({ id: c.id, name: name.trim(), color: c.color, kind: c.kind }).catch(() => undefined);
+    onChanged();
+  };
+  const cycleColor = async (c: CalendarSummary) => {
+    const idx = COLORS.indexOf(c.color ?? '');
+    const color = COLORS[(idx + 1) % COLORS.length];
+    await calendarUpsert({ id: c.id, name: c.name, color, kind: c.kind }).catch(() => undefined);
+    onChanged();
+  };
+  const remove = async (c: CalendarSummary) => {
+    if (!window.confirm(t('cal.deleteCalendarConfirm', { name: c.name || t('cal.defaultCalendar') }))) return;
+    const ok = await calendarDelete(c.id).catch(() => false);
+    if (!ok) window.alert(t('cal.cannotDeleteDefault'));
+    onChanged();
+  };
+  const toggle = async (c: CalendarSummary) => {
+    await calendarSetVisible(c.id, !c.visible).catch(() => undefined);
+    onChanged();
+  };
+
+  return (
+    <aside className="flex w-56 shrink-0 flex-col gap-3 overflow-y-auto text-white">
+      <div className="rounded-xl bg-white/5 p-2 ring-1 ring-white/10">
+        <MiniMonth
+          year={anchor.getFullYear()}
+          month={anchor.getMonth()}
+          weekdayNarrow={weekdayNarrow}
+          eventDays={eventDays}
+          selected={selected}
+          todayStr={todayStr}
+          locale={locale}
+          onSelectDay={onPickDate}
+          onOpenDay={onNewAt}
+          onOpenMonth={(m) => onGotoMonth(anchor.getFullYear(), m)}
+        />
+      </div>
+
+      <div className="rounded-xl bg-white/5 p-2 ring-1 ring-white/10">
+        <div className="mb-1 flex items-center justify-between px-1">
+          <span className="text-xs font-semibold text-white/70">{t('cal.calendars')}</span>
+          <button onClick={addCalendar} title={t('cal.newCalendar')} className="rounded p-1 hover:bg-white/15">
+            <Plus size={13} />
+          </button>
+        </div>
+        <ul className="space-y-0.5">
+          {calendars.map((c) => (
+            <li key={c.id} className="group flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-white/10">
+              <input
+                type="checkbox"
+                checked={c.visible}
+                onChange={() => toggle(c)}
+                className="shrink-0"
+                style={{ accentColor: c.color ?? DEFAULT_COLOR }}
+              />
+              <button
+                onClick={() => cycleColor(c)}
+                title={t('cal.fColor')}
+                className="h-3 w-3 shrink-0 rounded-full ring-1 ring-white/20"
+                style={{ backgroundColor: c.color ?? DEFAULT_COLOR }}
+              />
+              <button onClick={() => rename(c)} className="min-w-0 flex-1 truncate text-left text-sm">
+                {c.name || t('cal.defaultCalendar')}
+              </button>
+              {!c.is_default && (
+                <button
+                  onClick={() => remove(c)}
+                  title={t('cal.delete')}
+                  className="hidden shrink-0 rounded p-0.5 text-white/50 hover:bg-white/15 hover:text-white group-hover:block"
+                >
+                  <Trash2 size={12} />
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </aside>
+  );
+}
+
 /** 予定の作成/編集パネル（右サイドに常設。2週表示の右サイドと同じ場所・見た目）。 */
 function EventEditor({
   target,
+  calendars,
   onClose,
   onSaved,
   onDeleted,
 }: {
   target: EditTarget;
+  calendars: CalendarSummary[];
   onClose: () => void;
   onSaved: () => void;
   onDeleted: () => void;
@@ -930,6 +1126,7 @@ function EventEditor({
   const prefDay = target.mode === 'new' ? target.day : dayOf(target.event.start_at);
   const prefTime = target.mode === 'new' ? target.time : undefined;
   const prefAllDay = target.mode === 'new' ? target.allDay ?? false : target.event.all_day;
+  const defaultCal = calendars.find((c) => c.is_default) ?? calendars[0];
 
   const [title, setTitle] = useState(event?.title ?? '');
   const [allDay, setAllDay] = useState(prefAllDay);
@@ -941,11 +1138,14 @@ function EventEditor({
   );
   const [location, setLocation] = useState(event?.location ?? '');
   const [description, setDescription] = useState(event?.description ?? '');
-  const [color, setColor] = useState(event?.color ?? DEFAULT_COLOR);
+  const [color, setColor] = useState(event?.color ?? defaultCal?.color ?? DEFAULT_COLOR);
   const initialRecur = ruleToPreset(event?.recurrence ?? null);
   const [recur, setRecur] = useState<RecurPreset>(initialRecur.preset);
   const [until, setUntil] = useState<string>(initialRecur.until ?? '');
   const [reminder, setReminder] = useState<number | null>(event?.reminder_minutes ?? null);
+  const [calendarId, setCalendarId] = useState<number | null>(event?.calendar_id ?? defaultCal?.id ?? null);
+  const [availability, setAvailability] = useState(event?.availability ?? 'busy');
+  const [visibility, setVisibility] = useState(event?.visibility ?? 'default');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -979,7 +1179,10 @@ function EventEditor({
       color,
       recurrence: presetToRule(recur, until || null),
       reminder_minutes: reminder,
-      related_email_id: null,
+      related_email_id: event?.related_email_id ?? null,
+      calendar_id: calendarId,
+      availability,
+      visibility,
     };
     try {
       await eventUpsert(input);
@@ -1119,6 +1322,45 @@ function EventEditor({
               style={{ backgroundColor: c }}
             />
           ))}
+        </div>
+
+        {/* カレンダー */}
+        {calendars.length > 0 && (
+          <div className="flex items-center gap-2">
+            <span
+              className="h-3 w-3 shrink-0 rounded-full"
+              style={{ backgroundColor: calendars.find((c) => c.id === calendarId)?.color ?? DEFAULT_COLOR }}
+            />
+            <select
+              value={calendarId ?? ''}
+              onChange={(e) => setCalendarId(e.target.value === '' ? null : Number(e.target.value))}
+              className={`flex-1 ${small}`}
+            >
+              {calendars.map((c) => (
+                <option key={c.id} value={c.id} className="bg-neutral-800">
+                  {c.name || t('cal.defaultCalendar')}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* 予定あり/なし・公開設定 */}
+        <div className="flex items-center gap-2">
+          <select value={availability} onChange={(e) => setAvailability(e.target.value)} title={t('cal.availability')} className={`flex-1 ${small}`}>
+            {AVAILABILITY.map((a) => (
+              <option key={a} value={a} className="bg-neutral-800">
+                {t(`cal.av_${a}`)}
+              </option>
+            ))}
+          </select>
+          <select value={visibility} onChange={(e) => setVisibility(e.target.value)} title={t('cal.visibility')} className={`flex-1 ${small}`}>
+            {VISIBILITY.map((v) => (
+              <option key={v} value={v} className="bg-neutral-800">
+                {t(`cal.vis_${v}`)}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 

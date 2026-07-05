@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { EventSummary } from '@bindings/EventSummary';
 import type { EventInput } from '@bindings/EventInput';
+import type { CalendarSummary } from '@bindings/CalendarSummary';
+import type { CalendarInput } from '@bindings/CalendarInput';
 
 // Tauri v2 は camelCase の引数キーを snake_case の Rust 引数へ自動変換する。
 
@@ -22,3 +24,19 @@ export const eventDelete = (id: number) => invoke<void>('event_delete', { id });
 
 /** 論理削除した予定を復元。 */
 export const eventRestore = (id: number) => invoke<void>('event_restore', { id });
+
+// ── カレンダー（マイ/他） ──
+
+/** カレンダー一覧。 */
+export const calendarList = () => invoke<CalendarSummary[]>('calendar_list');
+
+/** カレンダーを作成または更新。 */
+export const calendarUpsert = (input: CalendarInput) =>
+  invoke<CalendarSummary>('calendar_upsert', { input });
+
+/** カレンダーの表示オン/オフを切り替える。 */
+export const calendarSetVisible = (id: number, visible: boolean) =>
+  invoke<void>('calendar_set_visible', { id, visible });
+
+/** カレンダーを削除（既定は不可。所属予定は既定へ付け替え）。削除できたら true。 */
+export const calendarDelete = (id: number) => invoke<boolean>('calendar_delete', { id });

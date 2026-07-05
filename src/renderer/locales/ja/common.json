@@ -65,7 +65,22 @@
     "rem_60": "1時間前",
     "rem_1440": "1日前",
     "map": "地図",
-    "openMap": "Googleマップで開く"
+    "openMap": "Googleマップで開く",
+    "toggleSidebar": "サイドバーを表示/隠す",
+    "calendars": "カレンダー",
+    "newCalendar": "カレンダーを追加",
+    "newCalendarPrompt": "新しいカレンダーの名前",
+    "renameCalendarPrompt": "カレンダー名を変更",
+    "deleteCalendarConfirm": "カレンダー「{{name}}」を削除しますか？（予定は既定カレンダーへ移動します）",
+    "cannotDeleteDefault": "既定のカレンダーは削除できません。",
+    "defaultCalendar": "マイカレンダー",
+    "availability": "予定あり/なし",
+    "visibility": "公開設定",
+    "av_busy": "予定あり",
+    "av_free": "予定なし",
+    "vis_default": "既定の公開設定",
+    "vis_public": "公開",
+    "vis_private": "非公開"
   },
   "comingSoon": "準備中です",
   "filter": {

@@ -1,6 +1,6 @@
 use super::Store;
 use crate::models::{EventInput, EventSummary};
-use rusqlite::{params, Row};
+use rusqlite::{params, OptionalExtension, Row};
 
 /// events の 1 行を EventSummary に写す（列順は EVENT_COLS と対応）。
 fn row_to_event(r: &Row) -> rusqlite::Result<EventSummary> {
@@ -17,11 +17,15 @@ fn row_to_event(r: &Row) -> rusqlite::Result<EventSummary> {
         reminder_minutes: r.get::<_, Option<i64>>(9)?.map(|v| v as i32),
         related_email_id: r.get::<_, Option<i64>>(10)?.map(|v| v as i32),
         deleted_at: r.get(11)?,
+        calendar_id: r.get::<_, Option<i64>>(12)?.map(|v| v as i32),
+        availability: r.get(13)?,
+        visibility: r.get(14)?,
     })
 }
 
 const EVENT_COLS: &str = "id, title, description, location, start_at, end_at, all_day, color, \
-     recurrence, reminder_minutes, related_email_id, deleted_at";
+     recurrence, reminder_minutes, related_email_id, deleted_at, calendar_id, availability, \
+     visibility";
 
 /// 任意テキストを trim し、空なら None に倒す（保存時に空文字を NULL 化して表示分岐を単純化）。
 fn trimmed(s: &Option<String>) -> Option<&str> {
@@ -47,10 +51,13 @@ impl Store {
         } else {
             "AND deleted_at IS NULL"
         };
+        // 非表示カレンダーの予定は隠す（calendar_id が null＝既定扱いは常に表示）。
         let sql = format!(
             "SELECT {EVENT_COLS} FROM events \
              WHERE (recurrence IS NOT NULL \
                     OR (start_at < ?2 AND COALESCE(end_at, start_at) >= ?1)) {del} \
+               AND (calendar_id IS NULL \
+                    OR calendar_id IN (SELECT id FROM calendars WHERE visible = 1)) \
              ORDER BY all_day DESC, start_at, title COLLATE NOCASE"
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -82,15 +89,28 @@ impl Store {
         let id = {
             let conn = self.conn.lock().unwrap();
             let end_at = trimmed(&input.end_at);
+            let availability = input.availability.as_deref().unwrap_or("busy");
+            let visibility = input.visibility.as_deref().unwrap_or("default");
+            // カレンダー未指定なら既定カレンダーに割り当てる（無ければ NULL＝既定扱い）。
+            let calendar_id: Option<i64> = match input.calendar_id {
+                Some(c) => Some(c as i64),
+                None => conn
+                    .query_row(
+                        "SELECT id FROM calendars WHERE is_default = 1 LIMIT 1",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .optional()?,
+            };
             match input.id {
                 Some(id) => {
                     conn.execute(
                         "UPDATE events SET \
                              title = ?1, description = ?2, location = ?3, start_at = ?4, \
                              end_at = ?5, all_day = ?6, color = ?7, recurrence = ?8, \
-                             reminder_minutes = ?9, related_email_id = ?10, \
-                             updated_at = CURRENT_TIMESTAMP \
-                         WHERE id = ?11",
+                             reminder_minutes = ?9, related_email_id = ?10, calendar_id = ?11, \
+                             availability = ?12, visibility = ?13, updated_at = CURRENT_TIMESTAMP \
+                         WHERE id = ?14",
                         params![
                             input.title.trim(),
                             trimmed(&input.description),
@@ -102,6 +122,9 @@ impl Store {
                             trimmed(&input.recurrence),
                             input.reminder_minutes,
                             input.related_email_id,
+                            calendar_id,
+                            availability,
+                            visibility,
                             id,
                         ],
                     )?;
@@ -111,8 +134,9 @@ impl Store {
                     conn.execute(
                         "INSERT INTO events \
                              (title, description, location, start_at, end_at, all_day, color, \
-                              recurrence, reminder_minutes, related_email_id) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                              recurrence, reminder_minutes, related_email_id, calendar_id, \
+                              availability, visibility) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                         params![
                             input.title.trim(),
                             trimmed(&input.description),
@@ -124,6 +148,9 @@ impl Store {
                             trimmed(&input.recurrence),
                             input.reminder_minutes,
                             input.related_email_id,
+                            calendar_id,
+                            availability,
+                            visibility,
                         ],
                     )?;
                     conn.last_insert_rowid()

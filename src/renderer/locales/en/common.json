@@ -58,7 +58,9 @@
     "placeholder": "Search mail",
     "clear": "Clear search",
     "searching": "Searching…",
-    "noResults": "No matching mail"
+    "noResults": "No matching mail",
+    "prevMatch": "Previous match",
+    "nextMatch": "Next match"
   },
   "date": {
     "filter": "Filter by date",

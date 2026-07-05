@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Check,
   ChevronDown,
+  ChevronUp,
   Forward,
   Mail,
   MailOpen,
@@ -80,12 +81,15 @@ function Bubble({
   handlers,
   expanded,
   onToggleExpand,
+  highlight,
 }: {
   m: ThreadMessage;
   you: string;
   handlers: ConversationHandlers;
   expanded: boolean;
   onToggleExpand: () => void;
+  /** 検索語（複数）。本文中の一致をハイライトする。 */
+  highlight?: string[];
 }) {
   const { t } = useTranslation();
   const out = m.direction === 'out';
@@ -232,6 +236,7 @@ function Bubble({
               onEditContact={handlers.onEditContact}
               onComposeTo={handlers.onComposeTo}
               onGreenChange={handlers.onGreenChange}
+              highlight={highlight}
             />
             <div className="flex justify-end border-t border-white/10 px-3 py-1.5">
               <button
@@ -276,7 +281,7 @@ function Bubble({
               </div>
             )}
             {body ? (
-              <AutoLinkText text={body} />
+              <AutoLinkText text={body} highlight={highlight} />
             ) : (
               <span className="text-white/40">{t('mailbox.noBody')}</span>
             )}
@@ -341,11 +346,14 @@ export function Conversation({
   openedId,
   folder,
   handlers,
+  query,
 }: {
   openedId: number;
   /** 閲覧中のフォルダ。trash/spam を見ているとき以外は、それらのメールを会話から隠す。 */
   folder?: string;
   handlers: ConversationHandlers;
+  /** 検索中の語句。会話内で一致をハイライトし、上下ボタンで移動できるようにする。 */
+  query?: string;
 }) {
   const { t } = useTranslation();
   const [view, setView] = useState<ThreadView | null>(null);
@@ -356,6 +364,44 @@ export function Conversation({
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // 検索語（空白区切り・全半角）。会話内ハイライトと <>移動に使う。
+  const terms = useMemo(
+    () =>
+      (query ?? '')
+        .split(/\s+/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+    [query],
+  );
+  const termsKey = terms.join('');
+  // 検索一致の現在位置（1 始まり）と総数。
+  const [match, setMatch] = useState({ idx: 0, total: 0 });
+  const matchEls = useCallback(
+    () =>
+      Array.from(
+        scrollRef.current?.querySelectorAll<HTMLElement>('[data-search-match]') ?? [],
+      ),
+    [],
+  );
+  const applyActive = useCallback(
+    (i: number) => {
+      const els = matchEls();
+      els.forEach((e, k) => e.classList.toggle('search-hl-active', k === i));
+      els[i]?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    },
+    [matchEls],
+  );
+  const gotoMatch = useCallback(
+    (dir: 1 | -1) => {
+      const total = matchEls().length;
+      if (!total) return;
+      const next = (match.idx - 1 + dir + total) % total; // 0 始まり
+      applyActive(next);
+      setMatch({ idx: next + 1, total });
+    },
+    [match.idx, matchEls, applyActive],
+  );
 
   const load = useCallback(() => {
     setLoading(true);
@@ -373,12 +419,33 @@ export function Conversation({
     load();
   }, [openedId, load]);
 
-  // メール切替後、開いたメッセージまでスクロールする。
+  // メール切替後、開いたメッセージまでスクロールする（検索語が無いときのみ。
+  // 検索中は下の効果で最初の一致へ移動する）。
   useEffect(() => {
-    if (!view) return;
+    if (!view || terms.length > 0) return;
     const el = document.getElementById(`bubble-${openedId}`);
     el?.scrollIntoView({ block: 'center' });
-  }, [view, openedId]);
+  }, [view, openedId, terms.length]);
+
+  // 会話の描画後に検索一致を数え、最初の一致へ移動する（展開・語句変更にも追従）。
+  useEffect(() => {
+    if (!view || terms.length === 0) {
+      setMatch({ idx: 0, total: 0 });
+      return;
+    }
+    const id = window.setTimeout(() => {
+      const total = matchEls().length;
+      if (total > 0) {
+        setMatch({ idx: 1, total });
+        applyActive(0);
+      } else {
+        setMatch({ idx: 0, total: 0 });
+      }
+    }, 0);
+    return () => window.clearTimeout(id);
+    // termsKey で語句の実質変化のみに反応（配列の参照変化では動かさない）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, termsKey, expandedIds, matchEls, applyActive]);
 
   const toggleExpand = (id: number) =>
     setExpandedIds((prev) => {
@@ -510,19 +577,45 @@ export function Conversation({
         )}
       </div>
 
-      {/* 時系列バブル（古い順・自分=右／相手=左） */}
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
-        {visibleMessages.map((m) => (
-          <div key={m.id} id={`bubble-${m.id}`}>
-            <Bubble
-              m={m}
-              you={you}
-              handlers={bubbleHandlers}
-              expanded={expandedIds.has(m.id)}
-              onToggleExpand={() => toggleExpand(m.id)}
-            />
+      {/* 時系列バブル（古い順・自分=右／相手=左）。検索中は一致移動バーを重ねる。 */}
+      <div className="relative min-h-0 flex-1">
+        {terms.length > 0 && match.total > 0 && (
+          <div className="absolute right-4 top-2 z-20 flex items-center gap-1 rounded-full border border-white/10 bg-neutral-800/95 px-2 py-1 text-[11px] text-white/80 shadow-lg backdrop-blur">
+            <span className="px-1 tabular-nums">
+              {match.idx}/{match.total}
+            </span>
+            <button
+              onClick={() => gotoMatch(-1)}
+              title={t('search.prevMatch')}
+              aria-label={t('search.prevMatch')}
+              className="flex h-6 w-6 items-center justify-center rounded-full hover:bg-white/15"
+            >
+              <ChevronUp size={14} />
+            </button>
+            <button
+              onClick={() => gotoMatch(1)}
+              title={t('search.nextMatch')}
+              aria-label={t('search.nextMatch')}
+              className="flex h-6 w-6 items-center justify-center rounded-full hover:bg-white/15"
+            >
+              <ChevronDown size={14} />
+            </button>
           </div>
-        ))}
+        )}
+        <div ref={scrollRef} className="h-full space-y-3 overflow-y-auto px-4 py-4">
+          {visibleMessages.map((m) => (
+            <div key={m.id} id={`bubble-${m.id}`}>
+              <Bubble
+                m={m}
+                you={you}
+                handlers={bubbleHandlers}
+                expanded={expandedIds.has(m.id)}
+                onToggleExpand={() => toggleExpand(m.id)}
+                highlight={terms}
+              />
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

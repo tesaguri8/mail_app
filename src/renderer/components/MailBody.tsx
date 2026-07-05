@@ -225,6 +225,7 @@ export function MailBody({
   onEditContact,
   onComposeTo,
   onGreenChange,
+  highlight,
 }: {
   detail: MailDetail;
   /** このメールに付いているタグ（ヘッダの宛先の下に表示）。 */
@@ -248,6 +249,8 @@ export function MailBody({
   onComposeTo?: (email: string) => void;
   /** グリーン認定/解除で一覧のバッジを更新するための通知。 */
   onGreenChange?: () => void;
+  /** 検索語（複数）。本文中の一致を <mark> でハイライトする。 */
+  highlight?: string[];
 }) {
   const { t } = useTranslation();
   const [showQuotes, setShowQuotes] = useState(false);
@@ -837,6 +840,7 @@ export function MailBody({
             inlineImages={inlineImages}
             remoteImages={remoteShown ? remoteImages : {}}
             remoteDefaultExpanded={remoteExpandDefault}
+            highlight={highlight}
             renderEmail={
               onAddContact
                 ? (email) => (
@@ -854,6 +858,7 @@ export function MailBody({
           <AutoLinkText
             text={body}
             className="text-sm leading-relaxed text-white/90"
+            highlight={highlight}
             renderEmail={
               onAddContact
                 ? (email) => (

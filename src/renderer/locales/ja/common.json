@@ -58,7 +58,9 @@
     "placeholder": "メールを検索",
     "clear": "検索をクリア",
     "searching": "検索中…",
-    "noResults": "該当するメールがありません"
+    "noResults": "該当するメールがありません",
+    "prevMatch": "前の一致へ",
+    "nextMatch": "次の一致へ"
   },
   "date": {
     "filter": "期間で絞り込み",

@@ -88,14 +88,19 @@ function RemoteImg({
 /** テキスト中のメールアドレスを検出するための正規表現（キャプチャ付き）。 */
 const EMAIL_RE = /([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/g;
 
-/** テキストノード内のメールアドレスを renderEmail で描画（クリックで新規作成／＋登録）。 */
+/** テキストノードを、メールアドレス（renderEmail）と検索語（re）を考慮して描画する。 */
 function renderTextWithEmails(
   text: string,
-  renderEmail: (email: string) => ReactNode,
+  renderEmail: ((email: string) => ReactNode) | undefined,
+  re: RegExp | null,
 ): ReactNode {
-  const parts = text.split(EMAIL_RE);
+  const parts = renderEmail ? text.split(EMAIL_RE) : [text];
   return parts.map((p, i) =>
-    i % 2 === 1 ? <Fragment key={i}>{renderEmail(p)}</Fragment> : p,
+    renderEmail && i % 2 === 1 ? (
+      <Fragment key={i}>{renderEmail(p)}</Fragment>
+    ) : (
+      <Fragment key={i}>{highlightText(p, re, `hn${i}`)}</Fragment>
+    ),
   );
 }
 
@@ -105,12 +110,13 @@ function renderNode(
   inlineImages: InlineImages,
   remoteImages: RemoteImages,
   remoteDefaultExpanded: boolean,
-  renderEmail?: (email: string) => ReactNode,
+  renderEmail: ((email: string) => ReactNode) | undefined,
+  highlightRe: RegExp | null,
 ): ReactNode {
   if (node.nodeType === Node.TEXT_NODE) {
     const text = node.textContent ?? '';
-    if (!renderEmail || !text) return text;
-    return renderTextWithEmails(text, renderEmail);
+    if ((!renderEmail && !highlightRe) || !text) return text;
+    return renderTextWithEmails(text, renderEmail, highlightRe);
   }
   if (node.nodeType !== Node.ELEMENT_NODE) return null;
 
@@ -166,7 +172,9 @@ function renderNode(
 
   const children: ReactNode[] = [];
   el.childNodes.forEach((c, i) =>
-    children.push(renderNode(c, i, inlineImages, remoteImages, remoteDefaultExpanded, renderEmail)),
+    children.push(
+      renderNode(c, i, inlineImages, remoteImages, remoteDefaultExpanded, renderEmail, highlightRe),
+    ),
   );
 
   if (tag === 'br') return <br key={key} />;
@@ -219,6 +227,35 @@ export function remoteImageUrls(html: string): string[] {
 /** リンク（HTML 本文とプレーン本文で共通の見た目）。下線なしの水色・折返し可。 */
 const LINK_CLASS = 'cursor-pointer text-sky-400 no-underline hover:text-sky-300 break-all';
 
+/** 検索語（複数）を大文字小文字無視でマッチする正規表現を作る（無ければ null）。 */
+export function buildHighlightRe(terms: string[] | undefined): RegExp | null {
+  const esc = (terms ?? [])
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (esc.length === 0) return null;
+  // 長い語を先に（部分被りで短い方が先に食わないように）。
+  esc.sort((a, b) => b.length - a.length);
+  return new RegExp(`(${esc.join('|')})`, 'gi');
+}
+
+/** テキストを、検索語を <mark> で囲んで描画する。各マッチに data-search-match を付ける。 */
+function highlightText(text: string, re: RegExp | null, keyBase: string): ReactNode {
+  if (!re) return text;
+  re.lastIndex = 0;
+  const parts = text.split(re);
+  if (parts.length === 1) return text;
+  return parts.map((p, i) =>
+    i % 2 === 1 ? (
+      <mark key={`${keyBase}-${i}`} data-search-match className="search-hl">
+        {p}
+      </mark>
+    ) : (
+      <Fragment key={`${keyBase}-${i}`}>{p}</Fragment>
+    ),
+  );
+}
+
 /** プレーン本文中の URL（http(s)/ www. 始まり）とメールアドレスを 1 パスで検出する。 */
 const AUTOLINK_RE =
   /((?:https?:\/\/|www\.)[^\s<>]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/g;
@@ -239,27 +276,34 @@ function stripTrailingPunct(url: string): [string, string] {
 export function AutoLinkText({
   text,
   renderEmail,
+  highlight,
   className = '',
 }: {
   text: string;
   renderEmail?: (email: string) => ReactNode;
+  /** 検索語（複数）。本文中の一致を <mark> でハイライトする。 */
+  highlight?: string[];
   className?: string;
 }) {
   const nodes: ReactNode[] = [];
+  const re = buildHighlightRe(highlight);
   let last = 0;
   let key = 0;
+  const pushText = (s: string) => {
+    if (!s) return;
+    nodes.push(<Fragment key={key++}>{highlightText(s, re, `t${key}`)}</Fragment>);
+  };
   for (const m of text.matchAll(AUTOLINK_RE)) {
     const match = m[0];
     const offset = m.index ?? 0;
-    if (offset > last) nodes.push(text.slice(last, offset));
+    if (offset > last) pushText(text.slice(last, offset));
     last = offset + match.length;
 
     const isUrl = /^(https?:\/\/|www\.)/i.test(match);
     if (!isUrl && match.includes('@')) {
       // メールアドレス。導線があればそれで、無ければ素のテキスト（メールアプリなので mailto は張らない）。
-      nodes.push(
-        renderEmail ? <Fragment key={key++}>{renderEmail(match)}</Fragment> : match,
-      );
+      if (renderEmail) nodes.push(<Fragment key={key++}>{renderEmail(match)}</Fragment>);
+      else pushText(match);
       continue;
     }
     const [core, trail] = stripTrailingPunct(match);
@@ -279,9 +323,9 @@ export function AutoLinkText({
         {core}
       </a>,
     );
-    if (trail) nodes.push(trail);
+    if (trail) pushText(trail);
   }
-  if (last < text.length) nodes.push(text.slice(last));
+  if (last < text.length) pushText(text.slice(last));
   return <pre className={`whitespace-pre-wrap break-words font-sans ${className}`}>{nodes}</pre>;
 }
 
@@ -299,6 +343,7 @@ export function HtmlText({
   remoteImages = {},
   remoteDefaultExpanded = false,
   renderEmail,
+  highlight,
 }: {
   html: string;
   inlineImages?: InlineImages;
@@ -307,6 +352,8 @@ export function HtmlText({
   remoteDefaultExpanded?: boolean;
   /** 本文テキスト/ mailto 中のメールアドレスの描画（クリックで新規作成・＋登録）。 */
   renderEmail?: (email: string) => ReactNode;
+  /** 検索語（複数）。本文中の一致を <mark> でハイライトする。 */
+  highlight?: string[];
 }) {
   let doc: Document;
   try {
@@ -314,9 +361,10 @@ export function HtmlText({
   } catch {
     return <>{html}</>;
   }
+  const re = buildHighlightRe(highlight);
   const nodes: ReactNode[] = [];
   doc.body.childNodes.forEach((c, i) =>
-    nodes.push(renderNode(c, i, inlineImages, remoteImages, remoteDefaultExpanded, renderEmail)),
+    nodes.push(renderNode(c, i, inlineImages, remoteImages, remoteDefaultExpanded, renderEmail, re)),
   );
   return (
     <div className="break-words text-sm leading-relaxed text-white/90 [&_a]:break-all">{nodes}</div>

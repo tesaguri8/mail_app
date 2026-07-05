@@ -1080,7 +1080,12 @@ export function MailboxView({
   };
 
   const bodyPane = opened ? (
-    <Conversation openedId={opened.id} folder={folder} handlers={conversationHandlers} />
+    <Conversation
+      openedId={opened.id}
+      folder={folder}
+      handlers={conversationHandlers}
+      query={query.trim() ? query : undefined}
+    />
   ) : (
     <div className="flex h-full items-center justify-center text-sm text-white/40">
       {t('mailbox.selectMail')}

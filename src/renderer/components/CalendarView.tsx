@@ -745,8 +745,8 @@ function TimeGrid({
                     ev.stopPropagation();
                     onOpenEvent(e);
                   }}
-                  className="block w-full truncate rounded px-1 py-0.5 text-left text-[11px] text-white backdrop-blur-sm"
-                  style={{ backgroundColor: `${e.color ?? DEFAULT_COLOR}b3` }}
+                  className="block w-full truncate rounded px-1 py-0.5 text-left text-[11px] text-white"
+                  style={{ backgroundColor: `${e.color ?? DEFAULT_COLOR}66`, textShadow: '0 1px 3px rgba(0,0,0,0.7)' }}
                 >
                   {e.title}
                 </button>
@@ -824,13 +824,14 @@ function TimeGrid({
                         ev.stopPropagation();
                         onOpenEvent(s.e);
                       }}
-                      className="absolute cursor-grab overflow-hidden rounded px-1 py-0.5 text-left text-white ring-1 ring-white/20 backdrop-blur-sm active:cursor-grabbing"
+                      className="absolute cursor-grab overflow-hidden rounded px-1 py-0.5 text-left text-white ring-1 ring-white/25 active:cursor-grabbing"
                       style={{
                         top,
                         height,
                         left: `calc(${(l.col / l.cols) * 100}% + 1px)`,
                         width: `calc(${100 / l.cols}% - 2px)`,
-                        backgroundColor: `${s.e.color ?? DEFAULT_COLOR}b3`,
+                        backgroundColor: `${s.e.color ?? DEFAULT_COLOR}66`,
+                        textShadow: '0 1px 3px rgba(0,0,0,0.7)',
                       }}
                     >
                       <span className="block truncate text-[11px] font-medium leading-tight">{s.e.title}</span>

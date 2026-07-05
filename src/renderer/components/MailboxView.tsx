@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Columns2,
+  FlipHorizontal2,
   Gem,
   LeafyGreen,
   Mail,
@@ -63,9 +64,11 @@ const iconBtn =
   'flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80 disabled:opacity-40';
 
 // サイドバー（メール一覧）の幅。ドラッグで可変。ここを変えれば最小幅/初期幅を一括変更できる。
-export const MIN_SIDEBAR_WIDTH = 340;
+// 最小幅は絞り込みツールバーのアイコン（32px × 10 個 ＋ gap ＋ px-2 ≒ 372px）が
+// 1 行に収まるサイズにする（折り返して見切れないように）。
+export const MIN_SIDEBAR_WIDTH = 380;
 export const MAX_SIDEBAR_WIDTH = 640;
-export const DEFAULT_SIDEBAR_WIDTH = 340;
+export const DEFAULT_SIDEBAR_WIDTH = 380;
 
 function formatDate(d: string | null): string {
   if (!d) return '';
@@ -130,15 +133,37 @@ export function MailboxView({
 }) {
   const { t } = useTranslation();
   // 'all' = 全アカウント横断表示 / number = 特定アカウント / null = 未選択。
-  const [selected, setSelected] = useState<number | 'all' | null>(
-    initialAccountId ?? accounts[0]?.id ?? null
-  );
+  const [selected, setSelected] = useState<number | 'all' | null>(() => {
+    // ホームからの遷移（特定アカウント指定）が最優先。
+    if (initialAccountId != null) return initialAccountId;
+    // 前回選択したアカウントを復元。'all' は複数アカウント時のみ有効。
+    const saved = localStorage.getItem('rondine.mailAccount');
+    if (saved === 'all' && accounts.length > 1) return 'all';
+    const savedId = Number(saved);
+    if (Number.isFinite(savedId) && savedId > 0 && accounts.some((a) => a.id === savedId))
+      return savedId;
+    // 既定は「全て」（複数アカウント時）。1 つだけならそのアカウント。
+    return accounts.length > 1 ? 'all' : (accounts[0]?.id ?? null);
+  });
   // クエリに渡すアカウント（number のみ。'all'/null は null=全アカウント）。
   const queryAccount = typeof selected === 'number' ? selected : null;
   // 表示中アカウントを親へ通知（フッターのメール総数表示）。
   useEffect(() => {
     onAccountChange?.(selected);
   }, [selected, onAccountChange]);
+  // 選択アカウントを保存（次回起動時に復元）。未選択(null)は保存しない。
+  useEffect(() => {
+    if (selected == null) return;
+    localStorage.setItem('rondine.mailAccount', String(selected));
+  }, [selected]);
+  // アカウント一覧の読込後/変更後、選択が無効（未選択・削除済み・単一で 'all'）なら既定へ寄せる。
+  useEffect(() => {
+    if (accounts.length === 0) return;
+    const isValid =
+      (selected === 'all' && accounts.length > 1) ||
+      (typeof selected === 'number' && accounts.some((a) => a.id === selected));
+    if (!isValid) setSelected(accounts.length > 1 ? 'all' : accounts[0].id);
+  }, [accounts, selected]);
   // 遷移直後に開くべきメッセージ（ホームの新着クリック）
   const pendingOpen = useRef<number | null>(initialMailId);
   // 一覧はスレッド単位（代表＋件数）。検索結果も同じ形へ写像して扱いを揃える。
@@ -202,6 +227,8 @@ export function MailboxView({
   const [folder, setFolder] = useState('inbox');
   // リスト絞り込みトグル
   const [filters, setFilters] = useState<Set<string>>(new Set());
+  // トグル絞り込みの反転（選択条件に「一致しない」ものを表示）。不要メールの一括選択に使う。
+  const [filterInvert, setFilterInvert] = useState(false);
   // 期間フィルタ（以降/以前/期間）
   const [dateFilter, setDateFilter] = useState<DateRange | null>(null);
   // タグ（一覧データ・絞り込み条件・付与ポップオーバー位置）
@@ -843,12 +870,14 @@ export function MailboxView({
 
   // 検索モードでは FTS 結果を、通常は読み込み済み一覧を対象に、
   // 既存の絞り込み（トグル/期間/タグ）を重ねて表示する。
-  const visibleMails = (searchMode ? searchResults : mails).filter(
-    (m) =>
-      matchesFilters(m, filters) &&
-      matchesDate(m.date, dateFilter) &&
-      matchesTags(m.tag_ids, tagFilter)
-  );
+  const visibleMails = (searchMode ? searchResults : mails).filter((m) => {
+    // トグル絞り込み。反転（invert）時は「一致しない」ものを通す（条件が無ければ反転は無効）。
+    const toggleBase = matchesFilters(m, filters);
+    const togglePass = filterInvert && filters.size > 0 ? !toggleBase : toggleBase;
+    return (
+      togglePass && matchesDate(m.date, dateFilter) && matchesTags(m.tag_ids, tagFilter)
+    );
+  });
 
   // 選択モード中はチェックボックスを表示して選択を簡単にする。
   const allVisibleSelected =
@@ -924,7 +953,7 @@ export function MailboxView({
           value={selected ?? ''}
           onChange={(e) => setSelected(e.target.value === 'all' ? 'all' : Number(e.target.value))}
         >
-          {/* 全アカウント横断表示。既定は特定アカウントだが、複数ある時のみ「全て」を出す。 */}
+          {/* 全アカウント横断表示。既定は「全て」。複数アカウントがある時のみ選べる。 */}
           {accounts.length > 1 && (
             <option value="all" className="text-black">
               {t('mailbox.allAccounts')}
@@ -966,6 +995,22 @@ export function MailboxView({
         })}
         <DateFilter value={dateFilter} onChange={setDateFilter} />
         <TagFilter tags={tags} value={tagFilter} onChange={setTagFilter} />
+        {/* 反転（除外）: 選択中トグルに「一致しない」ものを表示。ツールバー右端に置く。
+            不要メール（既読・知り合い以外 等）を一気に絞って一括選択するのに使う。 */}
+        <button
+          onClick={() => setFilterInvert((v) => !v)}
+          disabled={filters.size === 0}
+          title={t('filter.invert')}
+          aria-label={t('filter.invert')}
+          aria-pressed={filterInvert}
+          className={`flex h-8 w-8 items-center justify-center rounded-md disabled:opacity-40 ${
+            filterInvert && filters.size > 0
+              ? 'bg-amber-500/30 text-amber-200 ring-1 ring-amber-300/40'
+              : 'text-white/55 hover:text-white/80'
+          }`}
+        >
+          <FlipHorizontal2 size={15} />
+        </button>
       </div>
       {/* ゴミ箱/迷惑メール: フィルタ群の下に「空にする」（完全削除）ボタン */}
       {(folder === 'trash' || folder === 'spam') && (

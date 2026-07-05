@@ -621,7 +621,7 @@ export function MailBody({
           カード上部に据え置かれる（裏を本文が流れない＝カードと同じ透過のまま保てる）。 */}
       <div className="border-b border-white/10 px-5 py-3">
         <div className="flex items-start justify-between gap-3">
-          <h3 className="min-w-0 truncate text-base font-semibold">
+          <h3 className="min-w-0 truncate text-sm font-semibold">
             {d.subject ?? '(no subject)'}
           </h3>
           <div className="flex shrink-0 items-center gap-1">

@@ -31,7 +31,8 @@
     "known": "Known sender",
     "bookmark": "Bookmarked",
     "attachment": "Has attachment",
-    "flag": "Follow-up"
+    "flag": "Follow-up",
+    "invert": "Invert filters (show non-matching)"
   },
   "green": {
     "tab": "Green domains",

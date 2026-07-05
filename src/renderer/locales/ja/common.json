@@ -68,6 +68,7 @@
     "openMap": "Googleマップで開く",
     "toggleSidebar": "サイドバーを表示/隠す（Ctrl+S）",
     "calendars": "カレンダー",
+    "holidays": "日本の祝日",
     "newCalendar": "カレンダーを追加",
     "newCalendarPrompt": "新しいカレンダーの名前",
     "renameCalendarPrompt": "カレンダー名を変更",

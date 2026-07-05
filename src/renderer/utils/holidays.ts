@@ -2,7 +2,7 @@
 // 固定祝日＋ハッピーマンデー＋春分/秋分＋振替休日＋国民の休日を年ごとに算出しキャッシュ。
 // カレンダーの赤字表示に使う（isHoliday('YYYY-MM-DD')）。
 
-const cache = new Map<number, Set<string>>();
+const cache = new Map<number, Map<string, string>>();
 const pad = (n: number) => String(n).padStart(2, '0');
 const key = (y: number, m: number, d: number) => `${y}-${pad(m)}-${pad(d)}`;
 
@@ -17,26 +17,26 @@ const vernalEquinox = (y: number) => Math.floor(20.8431 + 0.242194 * (y - 1980) 
 /** 秋分の日（近似式）。 */
 const autumnEquinox = (y: number) => Math.floor(23.2488 + 0.242194 * (y - 1980) - Math.floor((y - 1980) / 4));
 
-function computeYear(year: number): Set<string> {
-  const base = new Set<string>();
-  const add = (m: number, d: number) => base.add(key(year, m, d));
+function computeYear(year: number): Map<string, string> {
+  const base = new Map<string, string>();
+  const add = (m: number, d: number, name: string) => base.set(key(year, m, d), name);
 
-  add(1, 1); // 元日
-  base.add(key(year, 1, nthMonday(year, 1, 2))); // 成人の日
-  add(2, 11); // 建国記念の日
-  if (year >= 2020) add(2, 23); // 天皇誕生日
-  add(3, vernalEquinox(year)); // 春分の日
-  add(4, 29); // 昭和の日
-  add(5, 3); // 憲法記念日
-  add(5, 4); // みどりの日
-  add(5, 5); // こどもの日
-  base.add(key(year, 7, nthMonday(year, 7, 3))); // 海の日
-  add(8, 11); // 山の日
-  base.add(key(year, 9, nthMonday(year, 9, 3))); // 敬老の日
-  add(9, autumnEquinox(year)); // 秋分の日
-  base.add(key(year, 10, nthMonday(year, 10, 2))); // スポーツの日
-  add(11, 3); // 文化の日
-  add(11, 23); // 勤労感謝の日
+  add(1, 1, '元日');
+  add(1, nthMonday(year, 1, 2), '成人の日');
+  add(2, 11, '建国記念の日');
+  if (year >= 2020) add(2, 23, '天皇誕生日');
+  add(3, vernalEquinox(year), '春分の日');
+  add(4, 29, '昭和の日');
+  add(5, 3, '憲法記念日');
+  add(5, 4, 'みどりの日');
+  add(5, 5, 'こどもの日');
+  add(7, nthMonday(year, 7, 3), '海の日');
+  add(8, 11, '山の日');
+  add(9, nthMonday(year, 9, 3), '敬老の日');
+  add(9, autumnEquinox(year), '秋分の日');
+  add(10, nthMonday(year, 10, 2), 'スポーツの日');
+  add(11, 3, '文化の日');
+  add(11, 23, '勤労感謝の日');
 
   const has = (dt: Date) => base.has(key(dt.getFullYear(), dt.getMonth() + 1, dt.getDate()));
 
@@ -52,11 +52,11 @@ function computeYear(year: number): Set<string> {
       }
     }
   }
-  nationals.forEach((k) => base.add(k));
+  nationals.forEach((k) => base.set(k, '国民の休日'));
 
   // 振替休日: 祝日が日曜のとき、その後の最初の非祝日を休日に。
   const subs: string[] = [];
-  for (const k of [...base]) {
+  for (const k of [...base.keys()]) {
     const [yy, mm, dd] = k.split('-').map(Number);
     const dt = new Date(yy, mm - 1, dd);
     if (dt.getDay() !== 0) continue;
@@ -66,19 +66,28 @@ function computeYear(year: number): Set<string> {
     } while (base.has(key(nx.getFullYear(), nx.getMonth() + 1, nx.getDate())));
     subs.push(key(nx.getFullYear(), nx.getMonth() + 1, nx.getDate()));
   }
-  subs.forEach((k) => base.add(k));
+  subs.forEach((k) => base.set(k, '振替休日'));
 
   return base;
 }
 
+function yearMap(ds: string): Map<string, string> {
+  const y = Number(ds.slice(0, 4));
+  if (!Number.isFinite(y)) return new Map();
+  let map = cache.get(y);
+  if (!map) {
+    map = computeYear(y);
+    cache.set(y, map);
+  }
+  return map;
+}
+
 /** 'YYYY-MM-DD' が日本の祝日か。 */
 export function isHoliday(ds: string): boolean {
-  const y = Number(ds.slice(0, 4));
-  if (!Number.isFinite(y)) return false;
-  let set = cache.get(y);
-  if (!set) {
-    set = computeYear(y);
-    cache.set(y, set);
-  }
-  return set.has(ds);
+  return yearMap(ds).has(ds);
+}
+
+/** 'YYYY-MM-DD' の祝日名（祝日でなければ null）。 */
+export function holidayName(ds: string): string | null {
+  return yearMap(ds).get(ds) ?? null;
 }

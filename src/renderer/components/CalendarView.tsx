@@ -39,7 +39,7 @@ import {
   icsExport,
 } from '../services/calendar';
 import { expandEvents, presetToRule, ruleToPreset, RECUR_PRESETS, type RecurPreset } from '../utils/recurrence';
-import { isHoliday } from '../utils/holidays';
+import { isHoliday, holidayName } from '../utils/holidays';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -248,6 +248,11 @@ export function CalendarView() {
   useEffect(() => {
     localStorage.setItem('rondine.cal.sidebar', sidebarOpen ? '1' : '0');
   }, [sidebarOpen]);
+  // 日本の祝日を「日本の祝日」カレンダーとして表示するか（サイドバーで切替）。
+  const [showHolidays, setShowHolidays] = useState<boolean>(() => localStorage.getItem('rondine.cal.holidays') !== '0');
+  useEffect(() => {
+    localStorage.setItem('rondine.cal.holidays', showHolidays ? '1' : '0');
+  }, [showHolidays]);
   // Ctrl+S（Mac は Cmd+S）でサイドバー表示を切替（メールモードと同じ）。ブラウザの保存は抑止。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -468,6 +473,8 @@ export function CalendarView() {
                 setMode('month');
               }}
               onChanged={onCalendarsChanged}
+              showHolidays={showHolidays}
+              onToggleHolidays={() => setShowHolidays((v) => !v)}
             />
           )}
           {/* メイン（中央）: 表示単位ごと */}
@@ -487,6 +494,7 @@ export function CalendarView() {
               onDropTime={dropOnTime}
               onDropDay={dropOnDay}
               ghost={ghost}
+              showHolidays={showHolidays}
             />
           ) : period.kind === 'year' ? (
             <div className="min-h-0 flex-1 overflow-y-auto rounded-xl bg-white/5 p-3 ring-1 ring-white/10">
@@ -535,6 +543,7 @@ export function CalendarView() {
                     onEventDragStart={onEventDragStart}
                     onDropDay={dropOnDay}
                     ghost={ghost?.day === ymd(day)}
+                    showHolidays={showHolidays}
                   />
                 ))}
               </div>
@@ -552,7 +561,14 @@ export function CalendarView() {
               onDeleted={onSaved}
             />
           ) : period.kind !== 'time' ? (
-            <AgendaPanel selected={selected} list={selectedList} locale={i18n.language} onOpen={openEvent} onNew={() => newAt(selected)} />
+            <AgendaPanel
+              selected={selected}
+              list={selectedList}
+              locale={i18n.language}
+              showHolidays={showHolidays}
+              onOpen={openEvent}
+              onNew={() => newAt(selected)}
+            />
           ) : null}
         </div>
       )}
@@ -601,6 +617,7 @@ function DayCell({
   onEventDragStart,
   onDropDay,
   ghost,
+  showHolidays,
 }: {
   date: Date;
   events: EventSummary[];
@@ -613,7 +630,9 @@ function DayCell({
   onEventDragStart: (e: EventSummary) => void;
   onDropDay: (ds: string) => void;
   ghost: boolean;
+  showHolidays: boolean;
 }) {
+  const holiday = showHolidays ? holidayName(ymd(date)) : null;
   const ds = ymd(date);
   const isToday = ds === todayStr;
   const isSel = ds === selected;
@@ -638,6 +657,9 @@ function DayCell({
         </span>
       </div>
       <div className="flex min-h-0 flex-col gap-0.5 overflow-hidden">
+        {holiday && (
+          <span className="truncate rounded bg-red-500/15 px-1 py-0.5 text-[11px] leading-tight text-red-200">{holiday}</span>
+        )}
         {ghost && (
           <span className="flex items-center justify-center rounded border border-dashed border-white/60 py-0.5 text-white/60">
             <Plus size={12} />
@@ -669,6 +691,7 @@ function TimeGrid({
   onDropTime,
   onDropDay,
   ghost,
+  showHolidays,
 }: {
   days: Date[];
   events: EventSummary[];
@@ -681,6 +704,7 @@ function TimeGrid({
   onDropTime: (day: string, minutes: number) => void;
   onDropDay: (ds: string) => void;
   ghost: { day: string; time?: string; allDay?: boolean } | null;
+  showHolidays: boolean;
 }) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -743,6 +767,9 @@ function TimeGrid({
               onDrop={() => onDropDay(ds)}
               className="min-h-[1.75rem] min-w-0 flex-1 space-y-0.5 border-l border-white/5 p-0.5"
             >
+              {showHolidays && holidayName(ds) && (
+                <div className="truncate rounded bg-red-500/15 px-1 py-0.5 text-[11px] text-red-200">{holidayName(ds)}</div>
+              )}
               {list.map((e) => (
                 <button
                   key={e.id}
@@ -997,20 +1024,24 @@ function AgendaPanel({
   selected,
   list,
   locale,
+  showHolidays,
   onOpen,
   onNew,
 }: {
   selected: string;
   list: EventSummary[];
   locale: string;
+  showHolidays: boolean;
   onOpen: (e: EventSummary) => void;
   onNew: () => void;
 }) {
   const { t } = useTranslation();
+  const holiday = showHolidays ? holidayName(selected) : null;
   return (
     <aside className="flex w-72 shrink-0 flex-col overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10">
-      <div className="border-b border-white/10 px-3 py-2 text-sm font-medium">
+      <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2 text-sm font-medium">
         {new Intl.DateTimeFormat(locale, { month: 'long', day: 'numeric', weekday: 'short' }).format(new Date(`${selected}T00:00`))}
+        {holiday && <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-xs font-normal text-red-200">{holiday}</span>}
       </div>
       <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-2">
         {list.length === 0 ? (
@@ -1103,6 +1134,8 @@ function CalendarSidebar({
   onNewAt,
   onGotoMonth,
   onChanged,
+  showHolidays,
+  onToggleHolidays,
 }: {
   calendars: CalendarSummary[];
   anchor: Date;
@@ -1115,6 +1148,8 @@ function CalendarSidebar({
   onNewAt: (ds: string) => void;
   onGotoMonth: (year: number, month: number) => void;
   onChanged: () => void;
+  showHolidays: boolean;
+  onToggleHolidays: () => void;
 }) {
   const { t } = useTranslation();
   // 色パレットを開いているカレンダーの id（null=閉じている）。
@@ -1216,6 +1251,18 @@ function CalendarSidebar({
               )}
             </li>
           ))}
+          {/* 日本の祝日（計算式・読み取り専用のカレンダー） */}
+          <li className="mt-1 flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-white/10">
+            <input
+              type="checkbox"
+              checked={showHolidays}
+              onChange={onToggleHolidays}
+              className="shrink-0"
+              style={{ accentColor: '#e57373' }}
+            />
+            <span className="h-3 w-3 shrink-0 rounded-full ring-1 ring-white/20" style={{ backgroundColor: '#e57373' }} />
+            <span className="min-w-0 flex-1 truncate text-sm">{t('cal.holidays')}</span>
+          </li>
         </ul>
       </div>
     </aside>

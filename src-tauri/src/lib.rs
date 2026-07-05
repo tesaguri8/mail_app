@@ -30,6 +30,8 @@ pub fn run() {
             app.manage(store);
             // 同期のキャンセル状態（中断ボタン用）。
             app.manage(commands::SyncControl::default());
+            // アカウントごとの IMAP 接続プール（接続＋ログインを使い回す）。
+            app.manage(commands::ImapPool::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

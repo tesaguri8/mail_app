@@ -61,6 +61,27 @@ pub fn mail_sync_cancel(control: State<SyncControl>, account_id: i64) -> bool {
     control.request_cancel(account_id)
 }
 
+/// アカウントごとに 1 本の IMAP セッションを保持して使い回す接続プール。
+/// 毎回の接続＋ログインを避けて体感を滑らかにする（Thunderbird 等と同じ持続接続方針）。
+#[derive(Default)]
+pub struct ImapPool(Mutex<HashMap<i64, Arc<Mutex<Option<imap_sync::ImapSession>>>>>);
+
+impl ImapPool {
+    /// アカウントの接続スロット（無ければ作る）を返す。
+    fn slot(&self, account_id: i64) -> Arc<Mutex<Option<imap_sync::ImapSession>>> {
+        self.0
+            .lock()
+            .unwrap()
+            .entry(account_id)
+            .or_default()
+            .clone()
+    }
+    /// アカウントの接続を破棄する（アカウント削除時など）。
+    fn evict(&self, account_id: i64) {
+        self.0.lock().unwrap().remove(&account_id);
+    }
+}
+
 /// アプリ識別情報を返す（identifier はハードコードせず Tauri 設定から取得）。
 #[tauri::command]
 pub fn app_info(app: AppHandle) -> AppInfo {
@@ -247,6 +268,7 @@ pub async fn mail_sync(
     app: AppHandle,
     store: State<'_, Store>,
     control: State<'_, SyncControl>,
+    pool: State<'_, ImapPool>,
     account_id: i64,
 ) -> Result<SyncResult, String> {
     let (email, login_user, host, port) = store
@@ -272,6 +294,8 @@ pub async fn mail_sync(
     // 進捗を "sync:progress" イベントで UI に通知する（フォルダ / 取得済み / 予定）。
     let app_ev = app.clone();
     let cancel_task = cancel.clone();
+    // アカウントの接続スロット（使い回し）。
+    let session_slot = pool.slot(account_id);
     let result = tauri::async_runtime::spawn_blocking(move || {
         let progress = |folder: &str, current: i32, total: i32| {
             let _ = app_ev.emit(
@@ -292,6 +316,7 @@ pub async fn mail_sync(
             &password,
             &progress,
             &cancel_task,
+            &session_slot,
         )
     })
     .await;
@@ -1641,6 +1666,7 @@ pub async fn mail_resync(
     app: AppHandle,
     store: State<'_, Store>,
     control: State<'_, SyncControl>,
+    pool: State<'_, ImapPool>,
     account_id: i64,
 ) -> Result<SyncResult, String> {
     // 資格情報の取得（失敗しうる）は同期枠の確保より前に済ませる（確保後に失敗すると
@@ -1680,6 +1706,7 @@ pub async fn mail_resync(
 
     let app_ev = app.clone();
     let cancel_task = cancel.clone();
+    let session_slot = pool.slot(account_id);
     let out = tauri::async_runtime::spawn_blocking(move || {
         let progress = |folder: &str, current: i32, total: i32| {
             let _ = app_ev.emit(
@@ -1700,6 +1727,7 @@ pub async fn mail_resync(
             &password,
             &progress,
             &cancel_task,
+            &session_slot,
         )
     })
     .await;
@@ -1842,7 +1870,12 @@ pub async fn account_ping(store: State<'_, Store>, account_id: i64) -> Result<()
 
 /// アカウントを削除（受信メールと keyring の資格情報も削除）。
 #[tauri::command]
-pub fn account_delete(app: AppHandle, store: State<Store>, account_id: i64) -> Result<(), String> {
+pub fn account_delete(
+    app: AppHandle,
+    store: State<Store>,
+    pool: State<ImapPool>,
+    account_id: i64,
+) -> Result<(), String> {
     if let Some((email, _login, _host, _port)) = store
         .get_account_imap(account_id)
         .map_err(|e| e.to_string())?
@@ -1852,6 +1885,8 @@ pub fn account_delete(app: AppHandle, store: State<Store>, account_id: i64) -> R
             let _ = entry.delete_credential();
         }
     }
+    // 保持していた IMAP 接続を破棄する。
+    pool.evict(account_id);
     store.delete_account(account_id).map_err(|e| e.to_string())
 }
 

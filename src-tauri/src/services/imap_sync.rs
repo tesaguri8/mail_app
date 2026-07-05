@@ -4,8 +4,10 @@ use crate::services::store::{insert_email, InsertOutcome, NewAttachment, NewEmai
 use chrono::{Duration, Utc};
 use mail_parser::MessageParser;
 use rusqlite::{params, Connection, OptionalExtension};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 /// キャンセル要求が立っているか。
 fn is_cancelled(cancel: &AtomicBool) -> bool {
@@ -61,7 +63,53 @@ fn since_date(days: i64) -> String {
         .to_string()
 }
 
-type ImapSession = imap::Session<native_tls::TlsStream<std::net::TcpStream>>;
+pub type ImapSession = imap::Session<native_tls::TlsStream<std::net::TcpStream>>;
+
+/// タイムアウト付きで IMAP に接続＋ログインし、Session を返す（接続の使い回し／プール用）。
+/// imap::connect と違い TCP connect/read/write にタイムアウトを設定し、死んだ接続で固まらないようにする。
+pub fn connect_login(
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+) -> Result<ImapSession, String> {
+    let tls = native_tls::TlsConnector::builder()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let addr = format!("{host}:{port}")
+        .to_socket_addrs()
+        .map_err(|e| format!("名前解決に失敗: {e}"))?
+        .next()
+        .ok_or_else(|| "アドレスを解決できませんでした".to_string())?;
+    let tcp = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(20))
+        .map_err(|e| format!("接続できませんでした: {e}"))?;
+    let _ = tcp.set_read_timeout(Some(std::time::Duration::from_secs(60)));
+    let _ = tcp.set_write_timeout(Some(std::time::Duration::from_secs(60)));
+    let ssl = tls
+        .connect(host, tcp)
+        .map_err(|e| format!("TLS ハンドシェイクに失敗: {e}"))?;
+    let mut client = imap::Client::new(ssl);
+    client.read_greeting().map_err(|e| e.to_string())?;
+    client.login(user, password).map_err(|(e, _)| e.to_string())
+}
+
+/// スロットのセッションが生きていれば再利用、なければ/死んでいれば張り直す（接続の使い回し）。
+fn ensure_live_session(
+    guard: &mut Option<ImapSession>,
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+) -> Result<(), String> {
+    if let Some(s) = guard.as_mut() {
+        if s.noop().is_ok() {
+            return Ok(()); // 生きている → 再利用
+        }
+        // 死んでいる（サーバーが idle 切断した等）→ 下で張り直す。
+    }
+    *guard = Some(connect_login(host, port, user, password)?);
+    Ok(())
+}
 
 /// 同期する標準フォルダの定義（ローカルタグ／特殊用途属性／よくある名前候補）。
 /// 受信箱(INBOX)は固定なのでここには含めない。
@@ -150,82 +198,32 @@ fn detect_mailbox<'a>(
     None
 }
 
-/// 実際に IMAP ログインを試す（認証の確認）。成功なら Ok。
+/// 実際に IMAP ログインを試す（認証の確認）。成功なら Ok。タイムアウトつき。
 pub fn test_login(host: &str, port: u16, user: &str, password: &str) -> Result<(), String> {
-    log::info!(
-        "IMAP login test: host={} port={} user={} (pw_len={})",
-        host,
-        port,
-        user,
-        password.len()
-    );
-    let tls = native_tls::TlsConnector::builder()
-        .build()
-        .map_err(|e| e.to_string())?;
-    let client = imap::connect((host, port), host, &tls).map_err(|e| {
-        log::warn!("IMAP connect failed: {}", e);
-        e.to_string()
+    log::info!("IMAP login test: host={host} port={port} user={user}");
+    let mut session = connect_login(host, port, user, password).inspect_err(|e| {
+        log::warn!("IMAP login test failed for user={user}: {e}");
     })?;
-    let mut session = client.login(user, password).map_err(|(e, _)| {
-        log::warn!("IMAP login failed for user={}: {}", user, e);
-        e.to_string()
-    })?;
-    log::info!("IMAP login OK: user={}", user);
+    log::info!("IMAP login OK: user={user}");
     let _ = session.logout();
     Ok(())
 }
 
-/// IMAP に接続し、受信箱＋標準フォルダ（送信済/下書き/ゴミ箱/迷惑）を同期する。
-/// 各フォルダは初回は sync_window の範囲、以降は新着 UID だけを取得して保存する。
+/// 既存セッション上で 受信箱＋標準フォルダ（送信済/下書き/ゴミ箱/迷惑）を同期する。
+/// 接続の張り直し・ログアウトはしない（呼び出し側＝プールが管理する）。
 #[allow(clippy::too_many_arguments)]
-pub fn sync_account(
-    db_path: &Path,
+fn run_sync(
+    session: &mut ImapSession,
+    conn: &Connection,
     account_id: i64,
-    host: &str,
-    port: u16,
-    user: &str,
-    password: &str,
+    window: &str,
+    result: &mut SyncResult,
     progress: &dyn Fn(&str, i32, i32),
     cancel: &AtomicBool,
-) -> Result<SyncResult, String> {
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
-    let _ = conn.execute_batch("PRAGMA foreign_keys=ON;");
-
-    let window: String = conn
-        .query_row(
-            "SELECT COALESCE(sync_window,'6m') FROM accounts WHERE id=?1",
-            params![account_id],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-
-    let tls = native_tls::TlsConnector::builder()
-        .build()
-        .map_err(|e| e.to_string())?;
-    log::info!("sync: connect host={} port={} user={}", host, port, user);
-    let client = imap::connect((host, port), host, &tls).map_err(|e| e.to_string())?;
-    let mut session = client.login(user, password).map_err(|(e, _)| {
-        log::warn!("sync: IMAP login failed for user={}: {}", user, e);
-        e.to_string()
-    })?;
-
-    let mut result = SyncResult {
-        fetched: 0,
-        stored: 0,
-        backfilled: 0,
-    };
-
+) -> Result<(), String> {
     // 受信箱（必須）。
     sync_folder(
-        &mut session,
-        &conn,
-        account_id,
-        "INBOX",
-        "inbox",
-        &window,
-        &mut result,
-        progress,
-        cancel,
+        session, conn, account_id, "INBOX", "inbox", window, result, progress, cancel,
     )?;
 
     // その他の標準フォルダ（存在すれば best-effort。無ければスキップ）。
@@ -243,15 +241,7 @@ pub fn sync_account(
                         break;
                     }
                     if let Err(e) = sync_folder(
-                        &mut session,
-                        &conn,
-                        account_id,
-                        &mbox,
-                        tag,
-                        &window,
-                        &mut result,
-                        progress,
-                        cancel,
+                        session, conn, account_id, &mbox, tag, window, result, progress, cancel,
                     ) {
                         log::warn!("フォルダ '{mbox}' ({tag}) の同期に失敗: {e}");
                     }
@@ -260,9 +250,62 @@ pub fn sync_account(
             Err(e) => log::warn!("フォルダ一覧の取得に失敗（受信箱のみ同期）: {e}"),
         }
     }
+    Ok(())
+}
 
-    let _ = session.logout();
-    Ok(result)
+/// IMAP に接続し、受信箱＋標準フォルダを同期する。接続は `slot` で使い回す（プール）。
+/// 生きたセッションがあれば NOOP で確認して再利用し、無ければ張り直す。成功時はログアウトせず
+/// セッションを slot に残す（次回の同期が接続＋ログインをやり直さない＝スムーズ）。失敗時は
+/// セッションを捨てて次回張り直す。
+#[allow(clippy::too_many_arguments)]
+pub fn sync_account(
+    db_path: &Path,
+    account_id: i64,
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    progress: &dyn Fn(&str, i32, i32),
+    cancel: &AtomicBool,
+    slot: &Mutex<Option<ImapSession>>,
+) -> Result<SyncResult, String> {
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let _ = conn.execute_batch("PRAGMA foreign_keys=ON;");
+
+    let window: String = conn
+        .query_row(
+            "SELECT COALESCE(sync_window,'6m') FROM accounts WHERE id=?1",
+            params![account_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let mut guard = slot.lock().unwrap();
+    // 生きたセッションを用意（再利用 or 張り直し）。
+    ensure_live_session(&mut guard, host, port, user, password)?;
+    let session = guard.as_mut().unwrap();
+
+    let mut result = SyncResult {
+        fetched: 0,
+        stored: 0,
+        backfilled: 0,
+    };
+    match run_sync(
+        session,
+        &conn,
+        account_id,
+        &window,
+        &mut result,
+        progress,
+        cancel,
+    ) {
+        Ok(()) => Ok(result), // セッションは slot に残して使い回す（ログアウトしない）。
+        Err(e) => {
+            // 壊れたセッションは捨てる（次回張り直す）。
+            *guard = None;
+            Err(e)
+        }
+    }
 }
 
 /// 1 フォルダを同期する（select → folder_sync 状態確認 → 取得 → 状態更新）。

@@ -603,16 +603,27 @@ impl Store {
         } else {
             ""
         };
+        // 検索も一覧と同じくスレッド単位（1 スレッド 1 行）にする。マッチしたメールを論理スレッド
+        // ごとに束ね、各スレッドで最新のマッチ 1 通を代表として返す（未割当の旧データは 1 通ずつ）。
+        // クリックすると会話全体が開くので、同一会話の重複行を出さない。
         let sql = format!(
-            "SELECT e.id, e.subject, e.from_address, e.date, e.is_read, e.has_attachments,
+            "WITH matched AS (
+                SELECT e.id AS id,
+                       ROW_NUMBER() OVER (
+                         PARTITION BY COALESCE(e.logical_thread_id, -e.id)
+                         ORDER BY e.date_ts DESC, e.id DESC) AS rn
+                FROM email_fts JOIN emails e ON e.id = email_fts.rowid
+                WHERE email_fts MATCH ?1 AND {acct}e.folder = ?2
+             )
+             SELECT e.id, e.subject, e.from_address, e.date, e.is_read, e.has_attachments,
                     substr(COALESCE(e.clean_body, e.body_plain, ''), 1, 140) AS preview,
                     e.is_flagged, e.is_bookmarked,
                     (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = e.id) AS tag_ids,
                     (e.has_attachments = 1
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = e.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real,
                     e.to_addresses, {known_vip}, e.from_name, e.to_name, e.account_id
-             FROM email_fts JOIN emails e ON e.id = email_fts.rowid
-             WHERE email_fts MATCH ?1 AND {acct}e.folder = ?2
+             FROM matched m JOIN emails e ON e.id = m.id
+             WHERE m.rn = 1
              ORDER BY e.date_ts DESC, e.id DESC LIMIT ?3",
             known_vip = known_vip_cols("e.from_address"),
         );
@@ -1602,6 +1613,23 @@ mod tests {
         assert_eq!(build_fts_query("   "), None);
         // 引用符を含む入力もエスケープして構文エラーにしない。
         assert_eq!(build_fts_query("a\"b"), Some("\"a\"\"b\"*".to_string()));
+    }
+
+    #[test]
+    fn search_groups_matches_by_thread() {
+        let store = test_store();
+        // 同一スレッドになる 2 通（同じ正規化件名＋相手先）。両方 "alpha" にマッチ。
+        seed(&store, "Project X", "isa@x.com", "shared token alpha", "inbox", "e1");
+        seed(&store, "Re: Project X", "isa@x.com", "another alpha here", "inbox", "e2");
+        store.rebuild_threads(1).unwrap();
+        let r = store.search_emails(Some(1), "inbox", "alpha", 50).unwrap();
+        assert_eq!(r.len(), 1, "同一スレッドの複数マッチは検索でも 1 行に束ねる");
+
+        // 別スレッド（別相手・別件名）も "alpha" にマッチ → スレッドが増えた分だけ行が増える。
+        seed(&store, "Different", "bob@x.com", "alpha too", "inbox", "e3");
+        store.rebuild_threads(1).unwrap();
+        let r2 = store.search_emails(Some(1), "inbox", "alpha", 50).unwrap();
+        assert_eq!(r2.len(), 2, "別スレッドは別行（1 スレッド 1 行）");
     }
 
     #[test]

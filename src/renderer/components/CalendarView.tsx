@@ -323,82 +323,90 @@ export function CalendarView() {
 
       {showTrash ? (
         <TrashList items={trashed} onRestore={(id) => eventRestore(id).then(reload)} i18nLang={i18n.language} />
-      ) : period.kind === 'time' ? (
-        <TimeGrid
-          days={period.days}
-          events={events}
-          todayStr={todayStr}
-          locale={i18n.language}
-          onOpenDay={(ds) => {
-            setAnchor(new Date(`${ds}T00:00`));
-            setMode('day');
-          }}
-          onNewAt={newAt}
-          onOpenEvent={openEvent}
-          onEventDragStart={onEventDragStart}
-          onDropTime={dropOnTime}
-          onDropDay={dropOnDay}
-        />
-      ) : period.kind === 'year' ? (
-        <div className="flex min-h-0 flex-1 gap-3">
-          <div className="min-h-0 flex-1 overflow-y-auto rounded-xl bg-white/5 p-3 ring-1 ring-white/10">
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-              {Array.from({ length: 12 }, (_, m) => (
-                <MiniMonth
-                  key={m}
-                  year={period.year}
-                  month={m}
-                  weekdayNarrow={weekdayNarrow}
-                  eventDays={eventDays}
-                  selected={selected}
-                  todayStr={todayStr}
-                  locale={i18n.language}
-                  onSelectDay={setSelected}
-                  onOpenDay={(ds) => newAt(ds)}
-                  onOpenMonth={(mm) => {
-                    setAnchor(new Date(period.year, mm, 1));
-                    setMode('month');
-                  }}
-                />
-              ))}
-            </div>
-          </div>
-          <AgendaPanel selected={selected} list={selectedList} locale={i18n.language} onOpen={openEvent} onNew={() => newAt(selected)} />
-        </div>
       ) : (
         <div className="flex min-h-0 flex-1 gap-3">
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10">
-            <div className="grid grid-cols-7 border-b border-white/10 text-center text-xs text-white/60">
-              {weekdayShort.map((w, i) => (
-                <div key={w} className={`py-1.5 ${i === 0 ? 'text-red-300/80' : ''} ${i === 6 ? 'text-blue-300/80' : ''}`}>
-                  {w}
-                </div>
-              ))}
+          {/* メイン（左）: 表示単位ごと */}
+          {period.kind === 'time' ? (
+            <TimeGrid
+              days={period.days}
+              events={events}
+              todayStr={todayStr}
+              locale={i18n.language}
+              onOpenDay={(ds) => {
+                setAnchor(new Date(`${ds}T00:00`));
+                setMode('day');
+              }}
+              onNewAt={newAt}
+              onOpenEvent={openEvent}
+              onEventDragStart={onEventDragStart}
+              onDropTime={dropOnTime}
+              onDropDay={dropOnDay}
+            />
+          ) : period.kind === 'year' ? (
+            <div className="min-h-0 flex-1 overflow-y-auto rounded-xl bg-white/5 p-3 ring-1 ring-white/10">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                {Array.from({ length: 12 }, (_, m) => (
+                  <MiniMonth
+                    key={m}
+                    year={period.year}
+                    month={m}
+                    weekdayNarrow={weekdayNarrow}
+                    eventDays={eventDays}
+                    selected={selected}
+                    todayStr={todayStr}
+                    locale={i18n.language}
+                    onSelectDay={setSelected}
+                    onOpenDay={(ds) => newAt(ds)}
+                    onOpenMonth={(mm) => {
+                      setAnchor(new Date(period.year, mm, 1));
+                      setMode('month');
+                    }}
+                  />
+                ))}
+              </div>
             </div>
-            <div className="grid min-h-0 flex-1 grid-cols-7" style={{ gridTemplateRows: `repeat(${period.rows}, minmax(0, 1fr))` }}>
-              {period.days.map((day) => (
-                <DayCell
-                  key={ymd(day)}
-                  date={day}
-                  events={events}
-                  selected={selected}
-                  todayStr={todayStr}
-                  dim={mode === 'month' && day.getMonth() !== anchor.getMonth()}
-                  maxVisible={maxVisible}
-                  onSelect={setSelected}
-                  onOpenNew={(ds) => newAt(ds)}
-                  onEventDragStart={onEventDragStart}
-                  onDropDay={dropOnDay}
-                />
-              ))}
+          ) : (
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10">
+              <div className="grid grid-cols-7 border-b border-white/10 text-center text-xs text-white/60">
+                {weekdayShort.map((w, i) => (
+                  <div key={w} className={`py-1.5 ${i === 0 ? 'text-red-300/80' : ''} ${i === 6 ? 'text-blue-300/80' : ''}`}>
+                    {w}
+                  </div>
+                ))}
+              </div>
+              <div className="grid min-h-0 flex-1 grid-cols-7" style={{ gridTemplateRows: `repeat(${period.rows}, minmax(0, 1fr))` }}>
+                {period.days.map((day) => (
+                  <DayCell
+                    key={ymd(day)}
+                    date={day}
+                    events={events}
+                    selected={selected}
+                    todayStr={todayStr}
+                    dim={mode === 'month' && day.getMonth() !== anchor.getMonth()}
+                    maxVisible={maxVisible}
+                    onSelect={setSelected}
+                    onOpenNew={(ds) => newAt(ds)}
+                    onEventDragStart={onEventDragStart}
+                    onDropDay={dropOnDay}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
-          <AgendaPanel selected={selected} list={selectedList} locale={i18n.language} onOpen={openEvent} onNew={() => newAt(selected)} />
-        </div>
-      )}
+          )}
 
-      {editing && (
-        <EventModal target={editing} onClose={() => setEditing(null)} onSaved={onSaved} onDeleted={onSaved} />
+          {/* 右カラム: 編集中はエディタ、それ以外は（年/月/2週で）アジェンダ */}
+          {editing ? (
+            <EventEditor
+              key={editing.mode === 'edit' ? `e${editing.event.id}` : `new-${editing.day}-${editing.time ?? ''}-${editing.allDay ? 'a' : ''}`}
+              target={editing}
+              onClose={() => setEditing(null)}
+              onSaved={onSaved}
+              onDeleted={onSaved}
+            />
+          ) : period.kind !== 'time' ? (
+            <AgendaPanel selected={selected} list={selectedList} locale={i18n.language} onOpen={openEvent} onNew={() => newAt(selected)} />
+          ) : null}
+        </div>
       )}
     </div>
   );
@@ -905,8 +913,8 @@ function TrashList({
   );
 }
 
-/** 予定の作成/編集モーダル。 */
-function EventModal({
+/** 予定の作成/編集パネル（右サイドに常設。2週表示の右サイドと同じ場所・見た目）。 */
+function EventEditor({
   target,
   onClose,
   onSaved,
@@ -939,23 +947,6 @@ function EventModal({
   const [until, setUntil] = useState<string>(initialRecur.until ?? '');
   const [reminder, setReminder] = useState<number | null>(event?.reminder_minutes ?? null);
   const [busy, setBusy] = useState(false);
-  // ダイアログのドラッグ移動（ヘッダをつまんで動かす）。
-  const [pos, setPos] = useState({ x: 0, y: 0 });
-  const dragRef = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null);
-  const startDrag = (e: React.PointerEvent) => {
-    dragRef.current = { px: e.clientX, py: e.clientY, ox: pos.x, oy: pos.y };
-    const onMove = (ev: PointerEvent) => {
-      const d = dragRef.current;
-      if (d) setPos({ x: d.ox + ev.clientX - d.px, y: d.oy + ev.clientY - d.py });
-    };
-    const onUp = () => {
-      dragRef.current = null;
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -1010,92 +1001,59 @@ function EventModal({
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
-      <div
-        className="w-full max-w-md rounded-2xl bg-neutral-900/50 p-5 text-white shadow-2xl ring-1 ring-white/15 backdrop-blur-2xl"
-        style={{ transform: `translate(${pos.x}px, ${pos.y}px)` }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div
-          onPointerDown={startDrag}
-          className="mb-3 flex cursor-move select-none items-center justify-between"
-        >
-          <h3 className="text-base font-semibold">{event ? t('cal.editEvent') : t('cal.addEvent')}</h3>
-          <button
-            onClick={onClose}
-            onPointerDown={(e) => e.stopPropagation()}
-            className="cursor-pointer rounded p-1 hover:bg-white/15"
-            title={t('cal.cancel')}
-          >
-            <X size={16} />
-          </button>
-        </div>
+  const field =
+    'w-full rounded-lg bg-white/10 px-3 py-2 text-sm outline-none ring-1 ring-white/10 placeholder:text-white/40 focus:ring-white/30';
+  const small =
+    'rounded-lg bg-white/10 px-2 py-1.5 text-sm outline-none ring-1 ring-white/10 [color-scheme:dark] focus:ring-white/30';
 
+  return (
+    <aside className="flex w-80 shrink-0 flex-col overflow-hidden rounded-xl bg-white/5 text-white ring-1 ring-white/10">
+      <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
+        <h3 className="text-sm font-semibold">{event ? t('cal.editEvent') : t('cal.addEvent')}</h3>
+        <button onClick={onClose} className="rounded p-1 hover:bg-white/15" title={t('cal.cancel')}>
+          <X size={16} />
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
         <input
           autoFocus
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder={t('cal.fTitle')}
-          className="mb-3 w-full rounded-lg bg-white/10 px-3 py-2 text-sm outline-none ring-1 ring-white/10 placeholder:text-white/40 focus:ring-white/30"
+          className={field}
         />
 
-        <label className="mb-3 flex items-center gap-2 text-sm">
+        <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} />
           {t('cal.allDay')}
         </label>
 
-        <div className="mb-3 space-y-2">
+        <div className="space-y-2">
           <div className="flex items-center gap-2">
-            <span className="w-10 text-xs text-white/55">{t('cal.fStart')}</span>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              className="flex-1 rounded-lg bg-white/10 px-2 py-1.5 text-sm outline-none ring-1 ring-white/10 [color-scheme:dark] focus:ring-white/30"
-            />
+            <span className="w-8 text-xs text-white/55">{t('cal.fStart')}</span>
+            <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={`flex-1 ${small}`} />
             {!allDay && (
-              <input
-                type="time"
-                value={startTime}
-                onChange={(e) => setStartTime(e.target.value)}
-                className="w-28 rounded-lg bg-white/10 px-2 py-1.5 text-sm outline-none ring-1 ring-white/10 [color-scheme:dark] focus:ring-white/30"
-              />
+              <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className={`w-24 ${small}`} />
             )}
           </div>
           <div className="flex items-center gap-2">
-            <span className="w-10 text-xs text-white/55">{t('cal.fEnd')}</span>
-            <input
-              type="date"
-              value={endDate}
-              min={startDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              className="flex-1 rounded-lg bg-white/10 px-2 py-1.5 text-sm outline-none ring-1 ring-white/10 [color-scheme:dark] focus:ring-white/30"
-            />
+            <span className="w-8 text-xs text-white/55">{t('cal.fEnd')}</span>
+            <input type="date" value={endDate} min={startDate} onChange={(e) => setEndDate(e.target.value)} className={`flex-1 ${small}`} />
             {!allDay && (
-              <input
-                type="time"
-                value={endTime}
-                onChange={(e) => setEndTime(e.target.value)}
-                className="w-28 rounded-lg bg-white/10 px-2 py-1.5 text-sm outline-none ring-1 ring-white/10 [color-scheme:dark] focus:ring-white/30"
-              />
+              <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className={`w-24 ${small}`} />
             )}
           </div>
         </div>
 
-        <div className="mb-3 flex items-center gap-2">
-          <input
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-            placeholder={t('cal.fLocation')}
-            className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm outline-none ring-1 ring-white/10 placeholder:text-white/40 focus:ring-white/30"
-          />
+        <div className="flex items-center gap-2">
+          <input value={location} onChange={(e) => setLocation(e.target.value)} placeholder={t('cal.fLocation')} className={`flex-1 ${field.replace('w-full ', '')}`} />
           {location.trim() && (
             <button
               type="button"
               onClick={() => openMaps(location)}
               title={t('cal.openMap')}
-              className="flex items-center gap-1 rounded-lg bg-white/10 px-2.5 py-2 text-xs hover:bg-white/20"
+              className="flex shrink-0 items-center gap-1 rounded-lg bg-white/10 px-2.5 py-2 text-xs hover:bg-white/20"
             >
               <MapPin size={14} />
               {t('cal.map')}
@@ -1108,45 +1066,40 @@ function EventModal({
           onChange={(e) => setDescription(e.target.value)}
           placeholder={t('cal.fDescription')}
           rows={2}
-          className="mb-3 w-full resize-none rounded-lg bg-white/10 px-3 py-2 text-sm outline-none ring-1 ring-white/10 placeholder:text-white/40 focus:ring-white/30"
+          className={`resize-none ${field}`}
         />
 
         {/* 繰り返し */}
-        <div className="mb-3 flex items-center gap-2">
-          <Repeat size={14} className="text-white/55" />
-          <select
-            value={recur}
-            onChange={(e) => setRecur(e.target.value as RecurPreset)}
-            className="flex-1 rounded-lg bg-white/10 px-2 py-1.5 text-sm outline-none ring-1 ring-white/10 [color-scheme:dark] focus:ring-white/30"
-          >
+        <div className="flex items-center gap-2">
+          <Repeat size={14} className="shrink-0 text-white/55" />
+          <select value={recur} onChange={(e) => setRecur(e.target.value as RecurPreset)} className={`flex-1 ${small}`}>
             {RECUR_PRESETS.map((p) => (
               <option key={p} value={p} className="bg-neutral-800">
                 {t(`cal.r_${p}`)}
               </option>
             ))}
           </select>
-          {recur !== 'none' && (
-            <input
-              type="date"
-              value={until}
-              min={startDate}
-              onChange={(e) => setUntil(e.target.value)}
-              title={t('cal.repeatUntil')}
-              className="w-40 rounded-lg bg-white/10 px-2 py-1.5 text-sm outline-none ring-1 ring-white/10 [color-scheme:dark] focus:ring-white/30"
-            />
-          )}
         </div>
-        {event && event.recurrence && (
-          <p className="mb-3 text-xs text-white/45">{t('cal.seriesNote')}</p>
+        {recur !== 'none' && (
+          <input
+            type="date"
+            value={until}
+            min={startDate}
+            onChange={(e) => setUntil(e.target.value)}
+            title={t('cal.repeatUntil')}
+            placeholder={t('cal.repeatUntil')}
+            className={`w-full ${small}`}
+          />
         )}
+        {event && event.recurrence && <p className="text-xs text-white/45">{t('cal.seriesNote')}</p>}
 
         {/* リマインダー（開始何分前に通知） */}
-        <div className="mb-3 flex items-center gap-2">
-          <Bell size={14} className="text-white/55" />
+        <div className="flex items-center gap-2">
+          <Bell size={14} className="shrink-0 text-white/55" />
           <select
             value={reminder === null ? '' : String(reminder)}
             onChange={(e) => setReminder(e.target.value === '' ? null : Number(e.target.value))}
-            className="flex-1 rounded-lg bg-white/10 px-2 py-1.5 text-sm outline-none ring-1 ring-white/10 [color-scheme:dark] focus:ring-white/30"
+            className={`flex-1 ${small}`}
           >
             {REMINDERS.map((m) => (
               <option key={String(m)} value={m === null ? '' : String(m)} className="bg-neutral-800">
@@ -1156,7 +1109,7 @@ function EventModal({
           </select>
         </div>
 
-        <div className="mb-4 flex items-center gap-2">
+        <div className="flex items-center gap-2">
           <span className="text-xs text-white/55">{t('cal.fColor')}</span>
           {COLORS.map((c) => (
             <button
@@ -1167,32 +1120,32 @@ function EventModal({
             />
           ))}
         </div>
-
-        <div className="flex items-center gap-2">
-          {event && (
-            <button
-              onClick={remove}
-              disabled={busy}
-              className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-red-300 hover:bg-red-500/20 disabled:opacity-50"
-            >
-              <Trash2 size={14} />
-              {t('cal.delete')}
-            </button>
-          )}
-          <div className="flex-1" />
-          <button onClick={onClose} className="rounded-lg px-3 py-2 text-sm hover:bg-white/10">
-            {t('cal.cancel')}
-          </button>
-          <button
-            onClick={save}
-            disabled={!canSave}
-            className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium hover:bg-blue-400 disabled:opacity-40"
-          >
-            {t('cal.save')}
-          </button>
-        </div>
       </div>
-    </div>
+
+      <div className="flex items-center gap-2 border-t border-white/10 p-3">
+        {event && (
+          <button
+            onClick={remove}
+            disabled={busy}
+            className="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm text-red-300 hover:bg-red-500/20 disabled:opacity-50"
+            title={t('cal.delete')}
+          >
+            <Trash2 size={14} />
+          </button>
+        )}
+        <div className="flex-1" />
+        <button onClick={onClose} className="rounded-lg px-3 py-2 text-sm hover:bg-white/10">
+          {t('cal.cancel')}
+        </button>
+        <button
+          onClick={save}
+          disabled={!canSave}
+          className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium hover:bg-blue-400 disabled:opacity-40"
+        >
+          {t('cal.save')}
+        </button>
+      </div>
+    </aside>
   );
 }
 

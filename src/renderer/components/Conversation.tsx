@@ -198,6 +198,7 @@ function Bubble({
   return (
     <div className={`flex ${out ? 'justify-end' : 'justify-start'}`}>
       <div
+        data-msg-content
         className={`min-w-0 ${expanded ? 'w-full' : 'max-w-[82%]'}`}
         onContextMenu={(e) => {
           // 文字選択中はコピー等のネイティブメニューを優先する。
@@ -606,7 +607,18 @@ export function Conversation({
             </button>
           </div>
         )}
-        <div ref={scrollRef} className="h-full space-y-3 overflow-y-auto px-4 py-4">
+        <div
+          ref={scrollRef}
+          className="h-full space-y-3 overflow-y-auto px-4 py-4"
+          onClick={(e) => {
+            // 全文展開中に「バブル/カードの外＝余白」をクリックしたら畳んでバブルに戻す。
+            // コンテンツ列（data-msg-content）の内側なら何もしない（展開・メール操作・閉じるボタンは従来どおり）。
+            if (expandedIds.size === 0) return;
+            if ((e.target as HTMLElement).closest('[data-msg-content]')) return;
+            if (window.getSelection()?.toString()) return; // 文字選択の終端が余白でも畳まない
+            setExpandedIds(new Set());
+          }}
+        >
           {visibleMessages.map((m) => (
             <div key={m.id} id={`bubble-${m.id}`}>
               <Bubble

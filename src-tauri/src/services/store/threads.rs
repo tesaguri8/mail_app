@@ -573,26 +573,61 @@ impl Store {
     /// 取り込み後のローカル加工パス: まだスレッド未割当（logical_thread_id IS NULL）の auto メールに
     /// スレッドを割り当て、代表フラグを立てる。ネットワーク不要。処理件数を返す。
     /// 同期ごとに（接続を閉じた後に）呼ぶ。
+    /// UI 用の接続（self.conn）を長時間ロックしないよう別接続で・小分けに実行する（WAL で並行読み取り可）。
     pub fn process_pending(&self, account_id: i64) -> rusqlite::Result<usize> {
-        let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction()?;
-        let n = process_pending_conn(&tx, account_id)?;
-        tx.commit()?;
-        Ok(n)
+        let mut conn = self.open_worker_conn()?;
+        let ids: Vec<i64> = {
+            let mut stmt = conn.prepare(
+                "SELECT id FROM emails
+                 WHERE account_id = ?1 AND logical_thread_id IS NULL
+                   AND COALESCE(thread_assignment,'auto') <> 'manual'
+                 ORDER BY date_ts ASC, id ASC",
+            )?;
+            let rows = stmt
+                .query_map(params![account_id], |r| r.get(0))?
+                .collect::<rusqlite::Result<Vec<i64>>>()?;
+            rows
+        };
+        let total = ids.len();
+        // 200 件ずつのトランザクションでロックを短く握る（UI の書き込みを妨げない）。
+        for chunk in ids.chunks(200) {
+            let tx = conn.transaction()?;
+            for id in chunk {
+                assign_thread(&tx, *id)?;
+                super::emails::maintain_folder_rep_on_insert(&tx, *id)?;
+            }
+            tx.commit()?;
+        }
+        Ok(total)
     }
 
     /// ローカル再加工（再ダウンロード不要）: 保存済み本文から clean_body・引用・fingerprint を作り直し、
     /// スレッド割当と代表フラグを全面的に貼り直す。パーサ改良を既存メールへ反映する用途。処理件数を返す。
+    /// 別接続で実行し UI をブロックしない。
     pub fn reprocess_all(&self, account_id: i64) -> rusqlite::Result<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.open_worker_conn()?;
+        reprocess_all_conn(&mut conn, account_id)
+    }
+
+    /// 加工用の作業接続を開く（UI 用の self.conn とは別。WAL で並行。busy_timeout つき）。
+    fn open_worker_conn(&self) -> rusqlite::Result<Connection> {
+        let conn = Connection::open(self.path())?;
+        conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
+        Ok(conn)
+    }
+}
+
+/// reprocess_all の本体（接続を受け取る版。テストからも使う）。
+pub fn reprocess_all_conn(conn: &mut Connection, account_id: i64) -> rusqlite::Result<usize> {
+    // (1) 保存済み body_plain から clean_body / body_fingerprint / FTS / message_quotes を再生成（200件ずつ）。
+    let rows: Vec<(i64, Option<String>)> = {
+        let mut stmt = conn.prepare("SELECT id, body_plain FROM emails WHERE account_id = ?1")?;
+        let mapped = stmt.query_map(params![account_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        mapped.collect::<rusqlite::Result<_>>()?
+    };
+    let count = rows.len();
+    for chunk in rows.chunks(200) {
         let tx = conn.transaction()?;
-        // (1) 保存済み body_plain から clean_body / body_fingerprint / FTS / message_quotes を再生成。
-        let rows: Vec<(i64, Option<String>)> = {
-            let mut stmt = tx.prepare("SELECT id, body_plain FROM emails WHERE account_id = ?1")?;
-            let mapped = stmt.query_map(params![account_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
-            mapped.collect::<rusqlite::Result<_>>()?
-        };
-        let count = rows.len();
         {
             let mut up =
                 tx.prepare("UPDATE emails SET clean_body = ?2, body_fingerprint = ?3 WHERE id = ?1")?;
@@ -602,7 +637,7 @@ impl Store {
                 "INSERT INTO message_quotes (email_id, block_order, quoted_from, quoted_at, fingerprint)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
             )?;
-            for (id, body) in &rows {
+            for (id, body) in chunk {
                 let Some(body) = body else { continue };
                 let split = crate::services::quotes::split_reply(body);
                 let fp = if split.clean.trim().is_empty() {
@@ -618,11 +653,13 @@ impl Store {
                 }
             }
         }
-        // (2) スレッド割当・代表フラグを作り直す。
-        rebuild_threads_conn(&tx, account_id)?;
         tx.commit()?;
-        Ok(count)
     }
+    // (2) スレッド割当・代表フラグを作り直す（1 トランザクション）。
+    let tx = conn.transaction()?;
+    rebuild_threads_conn(&tx, account_id)?;
+    tx.commit()?;
+    Ok(count)
 }
 
 /// rebuild_threads の本体（接続を受け取る版。reprocess_all からも使う）。

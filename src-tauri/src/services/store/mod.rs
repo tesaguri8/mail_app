@@ -38,7 +38,10 @@ impl Store {
             let _ = std::fs::create_dir_all(dir);
         }
         let conn = Connection::open(path)?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+        // busy_timeout: 別接続（同期・ローカル加工）が書き込み中でも即エラーにせず待つ。
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
+        )?;
         migrations::run(&conn)?;
         let store = Self {
             conn: Mutex::new(conn),

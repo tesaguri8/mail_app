@@ -1401,8 +1401,8 @@ mod tests {
             // 単独メール B（別 root）。既読。
             insert_email(&conn, &mk("b0@x", 3, true, None, None)).unwrap();
         }
-        // 取り込み後のローカル加工（スレッド割当・代表フラグ）。
-        store.process_pending(1).unwrap();
+        // 取り込み後のローカル加工（スレッド割当・代表フラグ）。テストは同一接続で実行。
+        super::super::threads::process_pending_conn(&store.conn.lock().unwrap(), 1).unwrap();
         let rows = store.list_threads(Some(1), "inbox", 50, 0).unwrap();
         // 2 行（スレッドA と 単独B）。新しい順なので先頭は B（ts=3）。
         assert_eq!(rows.len(), 2);
@@ -1477,13 +1477,16 @@ mod tests {
         assert!(before.iter().all(|r| r.message_count == 1));
 
         // ローカル加工: スレッドに束ねる。
-        store.process_pending(1).unwrap();
+        super::super::threads::process_pending_conn(&store.conn.lock().unwrap(), 1).unwrap();
         let after = store.list_threads(Some(1), "inbox", 50, 0).unwrap();
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].message_count, 2);
 
         // ローカル再加工: 保存済み本文から clean_body を作り直す（stale を修正）。
-        store.reprocess_all(1).unwrap();
+        {
+            let mut guard = store.conn.lock().unwrap();
+            super::super::threads::reprocess_all_conn(&mut guard, 1).unwrap();
+        }
         let clean: String = {
             let conn = store.conn.lock().unwrap();
             conn.query_row(
@@ -1541,7 +1544,7 @@ mod tests {
             (a0, a1)
         };
         // 取り込み後のローカル加工でスレッド割当・代表フラグを付ける。
-        store.process_pending(1).unwrap();
+        super::super::threads::process_pending_conn(&store.conn.lock().unwrap(), 1).unwrap();
         // 1 スレッドに畳まれ、代表は最新の a1。
         let rows = store.list_threads(Some(1), "inbox", 50, 0).unwrap();
         assert_eq!(rows.len(), 1);

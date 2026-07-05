@@ -15,6 +15,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // データルート配下に mail.db を開き、マイグレーションを適用（docs/DATA_STORAGE.md）。
             let base = app.path().app_data_dir().expect("app_data_dir");
@@ -135,6 +136,20 @@ pub fn run() {
             commands::contact_find_duplicates,
             commands::contact_find_matches,
             commands::contact_merge,
+            commands::event_list,
+            commands::event_list_trashed,
+            commands::event_get,
+            commands::event_upsert,
+            commands::event_delete,
+            commands::event_restore,
+            commands::calendar_list,
+            commands::calendar_upsert,
+            commands::calendar_set_visible,
+            commands::calendar_delete,
+            commands::event_attendee_list,
+            commands::event_attendee_set,
+            commands::ics_import,
+            commands::ics_export,
             commands::data_location,
             commands::data_relocate,
             commands::data_reset_location,

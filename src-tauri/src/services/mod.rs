@@ -4,6 +4,7 @@ pub mod datadir;
 pub mod dataver;
 pub mod dedupe;
 pub mod gcsv;
+pub mod ics;
 pub mod imap_sync;
 pub mod media;
 pub mod parser;

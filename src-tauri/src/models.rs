@@ -349,6 +349,142 @@ pub struct ImportReport {
     pub skipped: i32,
 }
 
+/// カレンダー予定（一覧・詳細共通）。docs/DATABASE_SCHEMA.md（events）。
+/// 日時は端末ローカルの素の ISO8601 文字列（終日='YYYY-MM-DD' / 時間指定='YYYY-MM-DDTHH:MM'）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct EventSummary {
+    pub id: i32,
+    pub title: String,
+    pub description: Option<String>,
+    pub location: Option<String>,
+    /// 開始。終日は日付のみ、時間指定は 'YYYY-MM-DDTHH:MM'。
+    pub start_at: String,
+    /// 終了（任意）。終日の複数日は最終日を含む。
+    pub end_at: Option<String>,
+    pub all_day: bool,
+    /// 色分け（任意。CSS 色 or パレットキー）。
+    pub color: Option<String>,
+    /// 繰り返し（RRULE。後続段階）。
+    pub recurrence: Option<String>,
+    /// 開始何分前に通知（後続段階）。
+    pub reminder_minutes: Option<i32>,
+    /// メールから作成した場合の紐付け（後続段階）。
+    pub related_email_id: Option<i32>,
+    /// 論理削除（ゴミ箱）の日時（UTC 文字列）。非 null＝削除済み。
+    pub deleted_at: Option<String>,
+    /// 所属カレンダー（複数カレンダー。null は既定扱い）。
+    pub calendar_id: Option<i32>,
+    /// 予定あり/なし（Google の Busy/Free）。'busy' | 'free'。
+    pub availability: String,
+    /// 公開設定。'default' | 'public' | 'private'。
+    pub visibility: String,
+}
+
+/// カレンダー（マイ/他）。docs/DATABASE_SCHEMA.md（calendars）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct CalendarSummary {
+    pub id: i32,
+    /// 表示名（空なら UI で既定名を表示）。
+    pub name: String,
+    pub color: Option<String>,
+    /// 'mine'（自分の）| 'other'（他の/購読）。
+    pub kind: String,
+    /// 表示オン/オフ。
+    pub visible: bool,
+    /// 既定カレンダー（新規予定の初期。削除不可）。
+    pub is_default: bool,
+    pub sort_order: i32,
+}
+
+/// カレンダーの作成・更新入力。`id` が None なら新規作成。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct CalendarInput {
+    pub id: Option<i32>,
+    pub name: String,
+    pub color: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+}
+
+/// 予定の参加者（ゲスト）。docs/DATABASE_SCHEMA.md（event_attendees）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct EventAttendee {
+    pub id: i32,
+    /// 住所録と紐付く場合（任意）。
+    pub contact_id: Option<i32>,
+    pub email: Option<String>,
+    pub name: Option<String>,
+    /// 'accepted' | 'declined' | 'tentative' | 'none'。
+    pub response: String,
+}
+
+/// ゲスト設定の入力（保存時に一括で置き換える）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct AttendeeInput {
+    #[serde(default)]
+    pub contact_id: Option<i32>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub response: Option<String>,
+}
+
+/// ICS 取り込みの結果（docs/IMPORT_EXPORT.md）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct IcsImportReport {
+    /// ファイル内の VEVENT 総数。
+    pub total: i32,
+    /// 追加した件数。
+    pub imported: i32,
+    /// 成立せず飛ばした件数（開始日時なし等）。
+    pub skipped: i32,
+}
+
+/// 予定の作成・更新入力（フロントから受け取る）。`id` が None なら新規作成。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct EventInput {
+    pub id: Option<i32>,
+    pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub location: Option<String>,
+    pub start_at: String,
+    #[serde(default)]
+    pub end_at: Option<String>,
+    #[serde(default)]
+    pub all_day: bool,
+    #[serde(default)]
+    pub color: Option<String>,
+    /// 繰り返し（RRULE。後続段階。UI は未接続だが前方互換で受ける）。
+    #[serde(default)]
+    pub recurrence: Option<String>,
+    /// 開始何分前に通知（後続段階）。
+    #[serde(default)]
+    pub reminder_minutes: Option<i32>,
+    /// メールから作成した場合の紐付け（後続段階）。
+    #[serde(default)]
+    pub related_email_id: Option<i32>,
+    /// 所属カレンダー（未指定なら既定カレンダーに割り当て）。
+    #[serde(default)]
+    pub calendar_id: Option<i32>,
+    /// 予定あり/なし。未指定は 'busy'。
+    #[serde(default)]
+    pub availability: Option<String>,
+    /// 公開設定。未指定は 'default'。
+    #[serde(default)]
+    pub visibility: Option<String>,
+}
+
 /// 明示許可して取得したリモート画像（サニタイズ済み）。docs/MAIL_SECURITY.md §1.1。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

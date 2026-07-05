@@ -1,6 +1,8 @@
 mod accounts;
+mod calendars;
 mod contacts;
 mod emails;
+mod events;
 mod greendomain;
 mod migrations;
 mod recipients;

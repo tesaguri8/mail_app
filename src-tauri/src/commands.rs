@@ -1,7 +1,8 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult,
-    ContactGroupSummary, ContactInput, ContactMatch, ContactSummary, DataLocation, DbInfo,
-    DraftContent, DraftInput, DuplicateGroup, GreenDomainEntry, ImportReport, MailDetail,
+    AttendeeInput, CalendarInput, CalendarSummary, ContactGroupSummary, ContactInput, ContactMatch,
+    ContactSummary, DataLocation, DbInfo, DraftContent, DraftInput, DuplicateGroup, EventAttendee,
+    EventInput, EventSummary, GreenDomainEntry, IcsImportReport, ImportReport, MailDetail,
     MailSummary, OrgDuplicateGroup, OrganizationDetail, OrganizationSummary, RebuildAction,
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict, StorageInfo, SyncProgress,
@@ -1322,6 +1323,122 @@ pub fn contact_merge(
     store
         .merge_contacts(keep_id, &drop_ids)
         .map_err(|e| e.to_string())
+}
+
+// ─────────────────────────── カレンダー（docs/DATABASE_SCHEMA.md events） ───────────────────────────
+
+/// 期間 [from, to)（'YYYY-MM-DD' 等の ISO 文字列）に重なる予定を開始順で返す。
+/// 月/週グリッドの表示範囲を渡す。`include_deleted` が true ならゴミ箱も含める。
+#[tauri::command]
+pub fn event_list(
+    store: State<Store>,
+    from: String,
+    to: String,
+    include_deleted: Option<bool>,
+) -> Result<Vec<EventSummary>, String> {
+    store
+        .list_events(&from, &to, include_deleted.unwrap_or(false))
+        .map_err(|e| e.to_string())
+}
+
+/// 論理削除済みの予定のみ（ゴミ箱一覧）。
+#[tauri::command]
+pub fn event_list_trashed(store: State<Store>) -> Result<Vec<EventSummary>, String> {
+    store.list_trashed_events().map_err(|e| e.to_string())
+}
+
+/// 単一の予定を取得。
+#[tauri::command]
+pub fn event_get(store: State<Store>, id: i64) -> Result<EventSummary, String> {
+    store.get_event(id).map_err(|e| e.to_string())
+}
+
+/// 予定を作成または更新（確定後の行を返す）。`input.id` が無ければ新規。
+#[tauri::command]
+pub fn event_upsert(store: State<Store>, input: EventInput) -> Result<EventSummary, String> {
+    if input.title.trim().is_empty() {
+        return Err("タイトルを入力してください".to_string());
+    }
+    if input.start_at.trim().is_empty() {
+        return Err("開始日時を入力してください".to_string());
+    }
+    store.upsert_event(&input).map_err(|e| e.to_string())
+}
+
+/// 予定を論理削除（ゴミ箱へ。保持期間後に完全削除）。
+#[tauri::command]
+pub fn event_delete(store: State<Store>, id: i64) -> Result<(), String> {
+    store.delete_event(id).map_err(|e| e.to_string())
+}
+
+/// 論理削除した予定を復元。
+#[tauri::command]
+pub fn event_restore(store: State<Store>, id: i64) -> Result<(), String> {
+    store.restore_event(id).map_err(|e| e.to_string())
+}
+
+/// カレンダー一覧（マイ→他）。
+#[tauri::command]
+pub fn calendar_list(store: State<Store>) -> Result<Vec<CalendarSummary>, String> {
+    store.list_calendars().map_err(|e| e.to_string())
+}
+
+/// カレンダーを作成または更新（確定後の行を返す）。
+#[tauri::command]
+pub fn calendar_upsert(
+    store: State<Store>,
+    input: CalendarInput,
+) -> Result<CalendarSummary, String> {
+    if input.name.trim().is_empty() {
+        return Err("カレンダー名を入力してください".to_string());
+    }
+    store.upsert_calendar(&input).map_err(|e| e.to_string())
+}
+
+/// カレンダーの表示オン/オフを切り替える。
+#[tauri::command]
+pub fn calendar_set_visible(store: State<Store>, id: i64, visible: bool) -> Result<(), String> {
+    store
+        .set_calendar_visible(id, visible)
+        .map_err(|e| e.to_string())
+}
+
+/// カレンダーを削除（既定は不可。所属予定は既定へ付け替え）。削除できたら true。
+#[tauri::command]
+pub fn calendar_delete(store: State<Store>, id: i64) -> Result<bool, String> {
+    store.delete_calendar(id).map_err(|e| e.to_string())
+}
+
+/// 予定の参加者（ゲスト）一覧。
+#[tauri::command]
+pub fn event_attendee_list(store: State<Store>, event_id: i64) -> Result<Vec<EventAttendee>, String> {
+    store.list_event_attendees(event_id).map_err(|e| e.to_string())
+}
+
+/// 予定の参加者を入力の集合に一致させる（全置き換え）。
+#[tauri::command]
+pub fn event_attendee_set(
+    store: State<Store>,
+    event_id: i64,
+    attendees: Vec<AttendeeInput>,
+) -> Result<(), String> {
+    store
+        .set_event_attendees(event_id, &attendees)
+        .map_err(|e| e.to_string())
+}
+
+/// .ics ファイルを取り込む（各 VEVENT を予定として追加）。
+#[tauri::command]
+pub fn ics_import(store: State<Store>, path: String) -> Result<IcsImportReport, String> {
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("ファイルを読めません: {e}"))?;
+    store.import_ics(&text).map_err(|e| e.to_string())
+}
+
+/// 全予定（非削除）を .ics ファイルへ書き出す。
+#[tauri::command]
+pub fn ics_export(store: State<Store>, path: String) -> Result<(), String> {
+    let text = store.export_ics().map_err(|e| e.to_string())?;
+    std::fs::write(&path, text).map_err(|e| format!("ファイルを書けません: {e}"))
 }
 
 /// グリーン／警告ドメインの一覧（管理タブ用。住所録由来の自動グリーンも含む）。

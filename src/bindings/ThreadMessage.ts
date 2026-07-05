@@ -33,6 +33,10 @@ body_html: string | null, has_attachments: boolean,
  */
 has_quotes: boolean, is_read: boolean, 
 /**
+ * スター付きか（折りたたみバブルの★バッジ用）。
+ */
+is_starred: boolean, 
+/**
  * 保存フォルダ（'inbox' | 'sent' | ...）。
  */
 folder: string | null, 

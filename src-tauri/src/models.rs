@@ -526,6 +526,8 @@ pub struct ThreadMessage {
     /// 引用が畳まれている（clean より全文が長い）＝「引用を表示」を出すか。
     pub has_quotes: bool,
     pub is_read: bool,
+    /// スター付きか（折りたたみバブルの★バッジ用）。
+    pub is_starred: bool,
     /// 保存フォルダ（'inbox' | 'sent' | ...）。
     pub folder: Option<String>,
     /// スレッド割当が手動か（'auto' | 'manual'）。

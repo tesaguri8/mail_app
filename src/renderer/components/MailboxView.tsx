@@ -1017,8 +1017,9 @@ export function MailboxView({
         .map((tid) => tagById.get(tid))
         .filter((tg): tg is TagSummary => tg != null),
     starredFor: (id) => findMail(id)?.is_starred ?? false,
-    onToggleStar: async (id) => {
-      const value = !(findMail(id)?.is_starred ?? false);
+    onToggleStar: async (id, next) => {
+      // 会話ビューはメッセージ単位の真値を渡してくる（一覧は代表行しか持たないため）。
+      const value = next ?? !(findMail(id)?.is_starred ?? false);
       patchMails(new Set([id]), { is_starred: value });
       try {
         await mailSetStarred([id], value);
@@ -1028,6 +1029,31 @@ export function MailboxView({
     },
     onTag: (id, x, y) => setTagPicker({ x, y, ids: [id] }),
     onRemoveTag: (id, tagId) => applyTagDelta([id], tagId, false),
+    // 単一メールの既読/未読。所属スレッド行の未読数もその場で増減する
+    // （行の email_ids は現フォルダ内の id 群＝未読数の母集合と一致）。
+    onSetRead: async (id, read) => {
+      updateLists((prev) =>
+        prev.map((row) => {
+          if (!row.email_ids.includes(id)) return row;
+          const unread = Math.max(0, row.unread_count + (read ? -1 : 1));
+          return { ...row, unread_count: unread, is_read: unread === 0 };
+        })
+      );
+      try {
+        await mailSetRead([id], read);
+      } catch {
+        /* noop */
+      }
+    },
+    // 単一メールをゴミ箱へ。一覧は再読込で正す（代表・件数が変わるため）。
+    onDelete: async (id) => {
+      try {
+        await mailDelete([id]);
+      } catch {
+        /* noop */
+      }
+      await loadMails();
+    },
     onMarkSpam: async (id) => {
       updateLists((prev) => prev.filter((m) => m.id !== id));
       if (opened?.id === id) setOpened(null);
@@ -1054,7 +1080,7 @@ export function MailboxView({
   };
 
   const bodyPane = opened ? (
-    <Conversation openedId={opened.id} handlers={conversationHandlers} />
+    <Conversation openedId={opened.id} folder={folder} handlers={conversationHandlers} />
   ) : (
     <div className="flex h-full items-center justify-center text-sm text-white/40">
       {t('mailbox.selectMail')}

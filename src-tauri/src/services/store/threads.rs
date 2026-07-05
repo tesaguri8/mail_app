@@ -306,7 +306,7 @@ pub fn assign_thread(conn: &Connection, email_id: i64) -> rusqlite::Result<Optio
 /// ThreadMessage をクエリ行から組み立てる。
 /// 列順: 0:id 1:account_id 2:message_id 3:from_address 4:from_name 5:to_addresses
 /// 6:subject 7:date 8:direction 9:clean_body 10:body_plain 11:body_html 12:body_html_z
-/// 13:has_attachments 14:has_quotes 15:is_read 16:folder 17:thread_assignment
+/// 13:has_attachments 14:has_quotes 15:is_read 16:folder 17:thread_assignment 18:is_flagged
 fn map_thread_message(r: &rusqlite::Row) -> rusqlite::Result<ThreadMessage> {
     let html_z: Option<Vec<u8>> = r.get(12)?;
     let body_html = match html_z {
@@ -329,6 +329,7 @@ fn map_thread_message(r: &rusqlite::Row) -> rusqlite::Result<ThreadMessage> {
         has_attachments: r.get::<_, i64>(13)? != 0,
         has_quotes: r.get::<_, i64>(14)? != 0,
         is_read: r.get::<_, i64>(15)? != 0,
+        is_starred: r.get::<_, i64>(18)? != 0,
         folder: r.get(16)?,
         thread_assignment: r.get(17)?,
     })
@@ -382,7 +383,7 @@ impl Store {
                           e.clean_body, e.body_plain, e.body_html, e.body_html_z,
                           e.has_attachments,
                           (length(COALESCE(e.body_plain,'')) > length(COALESCE(e.clean_body,''))) AS has_quotes,
-                          e.is_read, e.folder, COALESCE(e.thread_assignment,'auto')
+                          e.is_read, e.folder, COALESCE(e.thread_assignment,'auto'), e.is_flagged
                    FROM emails e
                    WHERE e.logical_thread_id = ?1
                    ORDER BY e.date_ts ASC, e.id ASC";

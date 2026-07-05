@@ -66,7 +66,7 @@
     "rem_1440": "1 day before",
     "map": "Map",
     "openMap": "Open in Google Maps",
-    "toggleSidebar": "Toggle sidebar",
+    "toggleSidebar": "Toggle sidebar (Ctrl+S)",
     "calendars": "Calendars",
     "newCalendar": "Add calendar",
     "newCalendarPrompt": "New calendar name",

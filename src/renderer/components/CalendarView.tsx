@@ -239,6 +239,17 @@ export function CalendarView() {
   useEffect(() => {
     localStorage.setItem('rondine.cal.sidebar', sidebarOpen ? '1' : '0');
   }, [sidebarOpen]);
+  // Ctrl+S（Mac は Cmd+S）でサイドバー表示を切替（メールモードと同じ）。ブラウザの保存は抑止。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        setSidebarOpen((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   const todayStr = ymd(new Date());
 
   const period = useMemo(() => computePeriod(mode, anchor, i18n.language), [mode, anchor, i18n.language]);

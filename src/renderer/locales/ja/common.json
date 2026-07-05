@@ -66,7 +66,7 @@
     "rem_1440": "1日前",
     "map": "地図",
     "openMap": "Googleマップで開く",
-    "toggleSidebar": "サイドバーを表示/隠す",
+    "toggleSidebar": "サイドバーを表示/隠す（Ctrl+S）",
     "calendars": "カレンダー",
     "newCalendar": "カレンダーを追加",
     "newCalendarPrompt": "新しいカレンダーの名前",

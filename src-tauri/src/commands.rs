@@ -2,12 +2,14 @@ use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult,
     ContactGroupSummary, ContactInput, ContactMatch, ContactSummary, DataLocation, DbInfo,
     DraftContent, DraftInput, DuplicateGroup, GreenDomainEntry, ImportReport, MailDetail,
-    MailSummary, OrgDuplicateGroup, OrganizationDetail, OrganizationSummary, RecipientSuggestion,
-    RemoteImage, RetentionReport, SendInput, ServerAccountSummary, SignatureSummary, SpamSettings,
-    SpamVerdict, StorageInfo, SyncProgress, SyncResult, TagSummary, ThreadListItem, ThreadView,
+    MailSummary, OrgDuplicateGroup, OrganizationDetail, OrganizationSummary, RebuildAction,
+    RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
+    ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict, StorageInfo, SyncProgress,
+    SyncResult, TagSummary, ThreadListItem, ThreadView,
 };
 use crate::services::autoconfig;
 use crate::services::datadir;
+use crate::services::dataver;
 use crate::services::gcsv;
 use crate::services::imap_sync;
 use crate::services::media;
@@ -1408,10 +1410,36 @@ pub fn thread_rebuild(store: State<Store>, account_id: i64) -> Result<(), String
 /// 作り直す。パーサ改良を既存メールへ反映する用途（docs/THREADING.md §5）。処理件数を返す。
 #[tauri::command]
 pub fn mail_reprocess(store: State<Store>, account_id: i64) -> Result<i64, String> {
+    let n = store.reprocess_all(account_id).map_err(|e| e.to_string())?;
+    // 現行パーサで全件を作り直せたので、解析バージョンを現行として記録する。
     store
-        .reprocess_all(account_id)
-        .map(|n| n as i64)
-        .map_err(|e| e.to_string())
+        .mark_reprocessed(account_id)
+        .map_err(|e| e.to_string())?;
+    Ok(n as i64)
+}
+
+/// 再構築の実行計画: アカウントに記録されたデータ形式バージョンを現行値と比べ、
+/// サーバーから全体再取り込みが必要か、ローカル再解析だけで足りるかを判定する。
+#[tauri::command]
+pub fn rebuild_plan(store: State<Store>, account_id: i64) -> Result<RebuildPlan, String> {
+    let (ingest, parse) = store
+        .data_versions(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "アカウントが見つかりません".to_string())?;
+    let action = if dataver::needs_resync(ingest) {
+        RebuildAction::Resync
+    } else {
+        // 取り込み形式が現行なら、解析が古くても最新でもローカル再解析で足りる
+        // （最新の場合も点検を兼ねて作り直す。冪等・通信なし）。
+        RebuildAction::Reprocess
+    };
+    Ok(RebuildPlan {
+        action,
+        ingest_stored: ingest as i32,
+        ingest_current: dataver::INGEST_VERSION as i32,
+        parse_stored: parse as i32,
+        parse_current: dataver::PARSE_VERSION as i32,
+    })
 }
 
 /// 1通の全文をサーバーから再取得して本文キャッシュを復元する（要約保存の解除）。
@@ -1712,7 +1740,9 @@ pub async fn mail_resync(
         }
     }
     let Some(cancel) = control.try_begin(account_id) else {
-        return Err("実行中の同期を中断できませんでした。少し待ってから再度お試しください。".to_string());
+        return Err(
+            "実行中の同期を中断できませんでした。少し待ってから再度お試しください。".to_string(),
+        );
     };
     // これ以降のエラーは同期枠を必ず解放してから返す。
     if let Err(e) = store.reset_sync_state(account_id) {
@@ -1753,8 +1783,17 @@ pub async fn mail_resync(
     if result.is_ok() {
         // フル再取得後は、保存済み本文からローカルで全面再加工（clean_body・スレッド・代表フラグ）。
         // 接続は閉じており、サーバーとは無関係。
-        if let Err(e) = store.reprocess_all(account_id) {
-            log::warn!("再取り込み後の再加工に失敗: {e}");
+        match store.reprocess_all(account_id) {
+            Ok(_) => {
+                // 中断されず完走したときだけ、データ形式を現行として記録する
+                // （中断時は古い形式のメールが残っている可能性があるため記録しない）。
+                if !cancel.load(Ordering::Relaxed) {
+                    if let Err(e) = store.mark_resynced(account_id) {
+                        log::warn!("再取り込みのバージョン記録に失敗: {e}");
+                    }
+                }
+            }
+            Err(e) => log::warn!("再取り込み後の再加工に失敗: {e}"),
         }
     }
     result

@@ -234,6 +234,7 @@ On Mon, 30 Jun 2026 10:00:00 +0900, 山田太郎 <yamada@example.com> wrote:
 | `thread_rename` | 論理スレッドにアプリ独自タイトルを付与（再件名） |
 | `message_reassign` | メールの所属スレッド変更 |
 | `thread_rebuild` | 再解析・再構築（manual は保持） |
+| `rebuild_plan` | 「再構築」の要否判定。アカウントに記録したデータ形式バージョン（`ingest_version`/`parse_version`、現行値は `services/dataver.rs`）と現行値を比べ、取り込み形式が古ければ全体再取り込み（`mail_resync`）、それ以外はローカル再解析（`mail_reprocess`）を選ぶ |
 
 ---
 

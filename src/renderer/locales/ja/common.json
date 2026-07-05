@@ -348,14 +348,12 @@
     "keepAll": "常に保持",
     "optimize": "ストレージ最適化",
     "optimized": "添付 {{count}} 件を整理・本文 {{compacted}} 件を要約（{{size}} 解放）",
-    "resync": "点検再取り込み",
-    "resyncHint": "取り込み範囲をサーバーから取り直し、古いメールにも添付情報（uid）を補完します。",
-    "resyncing": "再取り込み中…",
+    "rebuild": "再構築",
+    "rebuilding": "再構築中…",
+    "rebuildHint": "データの記録形式を点検し、必要な処理を自動で選びます。取り込み形式が古いときはサーバーから全体を取り込み直し（添付情報・uid の補完を含む）、それ以外は保存済みの本文だけで引用分離・スレッド束ねを作り直します（通信なし）。",
+    "rebuildResync": "取り込み形式が更新されているため、サーバーから全体を取り込み直します",
     "resynced": "取得 {{fetched}} / 新規 {{stored}} / 補完 {{backfilled}}",
-    "reprocess": "ローカル再解析",
-    "reprocessing": "再解析中…",
-    "reprocessed": "{{count}} 件を再解析しました",
-    "reprocessHint": "サーバーから取り直さず、保存済みの本文だけで引用分離・スレッド束ねを作り直します（パーサ改良の反映用・通信なし）。"
+    "reprocessed": "{{count}} 件を再解析しました"
   },
   "lang": {
     "switch": "EN"

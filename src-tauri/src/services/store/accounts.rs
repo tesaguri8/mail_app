@@ -31,9 +31,10 @@ pub struct SmtpAccount {
 impl Store {
     pub fn insert_account(&self, a: &NewAccount) -> rusqlite::Result<i64> {
         let conn = self.conn.lock().unwrap();
+        // 新規アカウントの初回同期は現行パイプラインで行われるので、データ形式は現行として記録。
         conn.execute(
-            "INSERT INTO accounts (email, display_name, username, imap_host, imap_port, smtp_host, smtp_port, server_account_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO accounts (email, display_name, username, imap_host, imap_port, smtp_host, smtp_port, server_account_id, ingest_version, parse_version)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 a.email,
                 a.display_name,
@@ -42,10 +43,48 @@ impl Store {
                 a.imap_port,
                 a.smtp_host,
                 a.smtp_port,
-                a.server_account_id
+                a.server_account_id,
+                crate::services::dataver::INGEST_VERSION,
+                crate::services::dataver::PARSE_VERSION
             ],
         )?;
         Ok(conn.last_insert_rowid())
+    }
+
+    /// データ形式バージョン（ingest, parse）の記録を取得。アカウントが無ければ None。
+    pub fn data_versions(&self, id: i64) -> rusqlite::Result<Option<(i64, i64)>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT ingest_version, parse_version FROM accounts WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+    }
+
+    /// 全体再取り込みの完了を記録（取り込み形式・解析とも現行バージョンに）。
+    /// 中断された再取り込みでは呼ばないこと（データが現行形式に揃っていないため）。
+    pub fn mark_resynced(&self, id: i64) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE accounts SET ingest_version = ?1, parse_version = ?2 WHERE id = ?3",
+            params![
+                crate::services::dataver::INGEST_VERSION,
+                crate::services::dataver::PARSE_VERSION,
+                id
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// ローカル再解析の完了を記録（解析バージョンのみ現行に）。
+    pub fn mark_reprocessed(&self, id: i64) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE accounts SET parse_version = ?1 WHERE id = ?2",
+            params![crate::services::dataver::PARSE_VERSION, id],
+        )?;
+        Ok(())
     }
 
     /// 同期に必要な IMAP 接続情報（email, login_user, host, port）を取得。
@@ -190,5 +229,79 @@ impl Store {
         // フォルダ別の同期状態も消し、新しい範囲で全フォルダを取り直す。
         conn.execute("DELETE FROM folder_sync WHERE account_id=?1", params![id])?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::dataver;
+    use crate::services::store::migrations;
+    use rusqlite::Connection;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    fn test_store() -> Store {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        migrations::run(&conn).unwrap();
+        Store {
+            conn: Mutex::new(conn),
+            path: Mutex::new(PathBuf::new()),
+        }
+    }
+
+    #[test]
+    fn data_versions_track_rebuild_lifecycle() {
+        let store = test_store();
+        // バージョン記録の導入前に作られたアカウント（列は既定 0 ＝形式不明）。
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1,'a@b','i','s')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(store.data_versions(1).unwrap(), Some((0, 0)));
+        assert!(dataver::needs_resync(0));
+
+        // ローカル再解析は解析バージョンだけを現行にする（取り込み形式は不明のまま）。
+        store.mark_reprocessed(1).unwrap();
+        assert_eq!(
+            store.data_versions(1).unwrap(),
+            Some((0, dataver::PARSE_VERSION))
+        );
+        assert!(dataver::needs_resync(0));
+
+        // 全体再取り込みの完走で両方とも現行になり、以後はローカル再解析で足りる。
+        store.mark_resynced(1).unwrap();
+        assert_eq!(
+            store.data_versions(1).unwrap(),
+            Some((dataver::INGEST_VERSION, dataver::PARSE_VERSION))
+        );
+        assert!(!dataver::needs_resync(dataver::INGEST_VERSION));
+    }
+
+    #[test]
+    fn new_accounts_start_at_current_versions() {
+        let store = test_store();
+        let id = store
+            .insert_account(&NewAccount {
+                email: "x@y".into(),
+                display_name: None,
+                username: None,
+                imap_host: "i".into(),
+                imap_port: 993,
+                smtp_host: "s".into(),
+                smtp_port: 587,
+                server_account_id: None,
+            })
+            .unwrap();
+        assert_eq!(
+            store.data_versions(id).unwrap(),
+            Some((dataver::INGEST_VERSION, dataver::PARSE_VERSION))
+        );
     }
 }

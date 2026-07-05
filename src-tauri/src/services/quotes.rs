@@ -58,6 +58,15 @@ fn parse_attribution(line: &str) -> Option<(Option<String>, Option<String>)> {
         return Some((none_if_empty(inner.trim()), None));
     }
 
+    // Apple Mail / iOS メール系の属性行: 行末が「名前 <addr>:」（日付＋差出人を 1 行に含む）。
+    // 例: "Dec 26, 2025, 17:25 +0900, 伊佐　日和 <isa@matsudamariko.com>:"
+    //     "Nov 17, 2025, 1:22 PM +0900, 名城楓 <nashiro@matsudamariko.com>:"
+    // "On … wrote:" でも西暦始まりでもないため既存規則では拾えない。山括弧内アドレス＋末尾コロンを
+    // 手がかりに属性行とみなす（本文行が "<addr>:" で終わることはまず無く、誤検知は小さい）。
+    if ends_with_angle_addr_colon(l) {
+        return Some((extract_angle_addr(l), None));
+    }
+
     // 日本語: "2026年6月30日(月) 10:00 佐藤 <sato@example.com>:" や "…さんは（次のように）書きました:"。
     // 誤検知抑制: 「〜書きました:」で終わる本文の一文（例: 会議録を彼は書きました:）で誤って
     // 切らないよう、属性行の裏付け（送信元アドレス @ か 4 桁の西暦）を要求する。
@@ -120,6 +129,23 @@ fn line_has_date_or_email(l: &str) -> bool {
         }
     }
     false
+}
+
+/// 行末が「… <addr@dom>:」（山括弧メールアドレス＋末尾コロン）か。
+/// Apple Mail 系の属性行（"…, 名前 <addr>:"）を、日付・"wrote:" に依存せず拾うための判定。
+fn ends_with_angle_addr_colon(l: &str) -> bool {
+    let Some(head) = l.trim_end().strip_suffix([':', '：']) else {
+        return false;
+    };
+    let head = head.trim_end();
+    if !head.ends_with('>') {
+        return false;
+    }
+    // 直近の "<...>" にメールアドレス（@）が入っているか。
+    match head.rfind('<') {
+        Some(open) => head[open..].contains('@'),
+        None => false,
+    }
 }
 
 /// "<addr>" を含む行から山括弧内のアドレスを返す。
@@ -261,6 +287,7 @@ pub fn looks_like_attribution(line: &str) -> bool {
     l.ends_with("書きました:")
         || l.ends_with("書きました：")
         || lower.ends_with("wrote:")
+        || ends_with_angle_addr_colon(l)
         || lower.contains("original message")
         || l.contains("元のメッセージ")
         || l.contains("転送メッセージ")
@@ -341,6 +368,43 @@ mod tests {
         assert_eq!(s.clean, "了解です。");
         assert_eq!(s.quotes.len(), 1);
         assert_eq!(s.quotes[0].quoted_from.as_deref(), Some("山田太郎"));
+    }
+
+    #[test]
+    fn strips_apple_mail_addr_colon_attribution() {
+        // Apple Mail / iOS メール系: "…, 名前 <addr>:" で終わる属性行（"On…wrote:" でも西暦始まりでもない）。
+        // 実データで 400 通超がこの形の属性行を clean_body に残していた回帰の防止。
+        let body = "松田様、伊佐様\n\n\
+本年も引き続き宜しくお願い致します。\n\n\
+末松\n\n\
+Dec 26, 2025, 17:25 +0900, 伊佐　日和 <isa@matsudamariko.com>:\n\n\
+> 末松 様\n> お世話になっております。";
+        let s = split_reply(body);
+        assert_eq!(
+            s.clean,
+            "松田様、伊佐様\n\n本年も引き続き宜しくお願い致します。\n\n末松"
+        );
+        assert_eq!(s.quotes.len(), 1);
+        assert_eq!(
+            s.quotes[0].quoted_from.as_deref(),
+            Some("isa@matsudamariko.com")
+        );
+    }
+
+    #[test]
+    fn addr_colon_attribution_without_gt_body() {
+        // 引用本文が `>` 無し（Apple Mail の text/plain がインデントのみ）でも属性行で切れる。
+        let body = "了解しました。\n\nNov 5, 2024, 3:15 PM +0900, shiradou <siradou@example.com>:\n本文の引用がそのまま続く";
+        assert_eq!(split_reply(body).clean, "了解しました。");
+    }
+
+    #[test]
+    fn colon_line_without_angle_email_is_not_attribution() {
+        // 末尾コロンでも山括弧アドレスが無ければ属性行扱いしない（本文の見出し等を守る）。
+        let body = "変更点は以下の通りです:\n- 1点目\n- 2点目";
+        let s = split_reply(body);
+        assert_eq!(s.clean, body.trim());
+        assert!(s.quotes.is_empty());
     }
 
     #[test]

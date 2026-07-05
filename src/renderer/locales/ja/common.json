@@ -56,7 +56,14 @@
     "r_weekly": "毎週",
     "r_biweekly": "隔週",
     "r_monthly": "毎月",
-    "r_yearly": "毎年"
+    "r_yearly": "毎年",
+    "rem_none": "通知しない",
+    "rem_0": "開始時刻",
+    "rem_5": "5分前",
+    "rem_10": "10分前",
+    "rem_30": "30分前",
+    "rem_60": "1時間前",
+    "rem_1440": "1日前"
   },
   "comingSoon": "準備中です",
   "filter": {

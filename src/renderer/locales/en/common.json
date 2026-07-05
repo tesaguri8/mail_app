@@ -56,7 +56,14 @@
     "r_weekly": "Weekly",
     "r_biweekly": "Every 2 weeks",
     "r_monthly": "Monthly",
-    "r_yearly": "Yearly"
+    "r_yearly": "Yearly",
+    "rem_none": "No reminder",
+    "rem_0": "At start time",
+    "rem_5": "5 min before",
+    "rem_10": "10 min before",
+    "rem_30": "30 min before",
+    "rem_60": "1 hour before",
+    "rem_1440": "1 day before"
   },
   "comingSoon": "Coming soon",
   "filter": {

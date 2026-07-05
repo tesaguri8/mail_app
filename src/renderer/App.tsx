@@ -9,6 +9,7 @@ import { CalendarView } from './components/CalendarView';
 import { Settings } from './components/Settings';
 import { accountList } from './services/accounts';
 import { useAutoSync, MAIL_SYNCED_EVENT } from './hooks/useAutoSync';
+import { useReminders } from './hooks/useReminders';
 import { SyncProvider } from './components/SyncProvider';
 import type { AccountSummary } from '@bindings/AccountSummary';
 // 背景写真プール（同梱サンプル）。docs/UI_UX_DESIGN.md 背景写真システム
@@ -79,6 +80,9 @@ export default function App() {
 
   // 自動同期: ホーム/メールに入った時＋滞在中は設定間隔（既定30秒）で全アカウント同期。
   const syncNow = useAutoSync(view === 'home' || view === 'mail', accounts);
+
+  // カレンダーのリマインダー通知（アプリ起動中、期限が来たら OS 通知）。
+  useReminders();
 
   // 同期が完了したらアカウント（未読数バッジ）を更新する。
   useEffect(() => {

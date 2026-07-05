@@ -17,6 +17,7 @@
     "fs:default",
     "shell:default",
     "opener:default",
-    "log:default"
+    "log:default",
+    "notification:default"
   ]
 }

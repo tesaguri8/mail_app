@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronLeft, ChevronRight, Plus, Trash2, X, Clock, MapPin, RotateCcw, Repeat } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Trash2, X, Clock, MapPin, RotateCcw, Repeat, Bell } from 'lucide-react';
 import type { EventSummary } from '@bindings/EventSummary';
 import type { EventInput } from '@bindings/EventInput';
 import { eventList, eventListTrashed, eventUpsert, eventDelete, eventRestore, eventGet } from '../services/calendar';
@@ -11,6 +11,10 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 /** 予定の色パレット（未選択＝既定の青）。CSS 色をそのまま color 列に保存する。 */
 const COLORS = ['#64b5f6', '#e57373', '#f6bf50', '#81c784', '#ba91e0', '#4db6ac', '#f06292'];
 const DEFAULT_COLOR = COLORS[0];
+
+/** リマインダーの選択肢（開始何分前。null=なし / 0=開始時刻）。 */
+const REMINDERS: (number | null)[] = [null, 0, 5, 10, 30, 60, 1440];
+const reminderKey = (m: number | null) => (m === null ? 'cal.rem_none' : `cal.rem_${m}`);
 
 /** 表示単位。年＝12ミニ月、月＝6週、2週＝14日（いずれも日セル）、週/日＝タイムグリッド。 */
 type ViewMode = 'year' | 'month' | 'fortnight' | 'week' | 'day';
@@ -733,6 +737,7 @@ function AgendaPanel({
                   <Clock size={11} />
                   {e.all_day ? t('cal.allDay') : timeRange(e)}
                   {e.recurrence && <Repeat size={11} className="text-white/45" />}
+                  {e.reminder_minutes != null && <Bell size={11} className="text-white/45" />}
                 </span>
                 {e.location && (
                   <span className="mt-0.5 flex items-center gap-1 truncate text-xs text-white/55">
@@ -829,6 +834,7 @@ function EventModal({
   const initialRecur = ruleToPreset(event?.recurrence ?? null);
   const [recur, setRecur] = useState<RecurPreset>(initialRecur.preset);
   const [until, setUntil] = useState<string>(initialRecur.until ?? '');
+  const [reminder, setReminder] = useState<number | null>(event?.reminder_minutes ?? null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -861,7 +867,7 @@ function EventModal({
       all_day: allDay,
       color,
       recurrence: presetToRule(recur, until || null),
-      reminder_minutes: null,
+      reminder_minutes: reminder,
       related_email_id: null,
     };
     try {
@@ -991,6 +997,22 @@ function EventModal({
         {event && event.recurrence && (
           <p className="mb-3 text-xs text-white/45">{t('cal.seriesNote')}</p>
         )}
+
+        {/* リマインダー（開始何分前に通知） */}
+        <div className="mb-3 flex items-center gap-2">
+          <Bell size={14} className="text-white/55" />
+          <select
+            value={reminder === null ? '' : String(reminder)}
+            onChange={(e) => setReminder(e.target.value === '' ? null : Number(e.target.value))}
+            className="flex-1 rounded-lg bg-white/10 px-2 py-1.5 text-sm outline-none ring-1 ring-white/10 [color-scheme:dark] focus:ring-white/30"
+          >
+            {REMINDERS.map((m) => (
+              <option key={String(m)} value={m === null ? '' : String(m)} className="bg-neutral-800">
+                {t(reminderKey(m))}
+              </option>
+            ))}
+          </select>
+        </div>
 
         <div className="mb-4 flex items-center gap-2">
           <span className="text-xs text-white/55">{t('cal.fColor')}</span>

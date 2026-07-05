@@ -329,6 +329,12 @@ export function CalendarView() {
       end_at = isoFromDate(new Date(newStart.getTime() + dur), e.all_day);
     }
     eventUpsert({ ...toInput(e), start_at, end_at }).then(reload).catch(() => undefined);
+    // 編集中の予定を動かしたら、右エディタの開始/終了も追従させる。
+    setEditing((cur) =>
+      cur && cur.mode === 'edit' && cur.event.id === e.id
+        ? { mode: 'edit', event: { ...cur.event, start_at, end_at } }
+        : cur,
+    );
   };
   const onEventDragStart = (e: EventSummary) => {
     dragEventRef.current = e;
@@ -729,8 +735,8 @@ function TimeGrid({
                     ev.stopPropagation();
                     onOpenEvent(e);
                   }}
-                  className="block w-full truncate rounded px-1 py-0.5 text-left text-[11px] text-white"
-                  style={{ backgroundColor: `${e.color ?? DEFAULT_COLOR}cc` }}
+                  className="block w-full truncate rounded px-1 py-0.5 text-left text-[11px] text-white backdrop-blur-sm"
+                  style={{ backgroundColor: `${e.color ?? DEFAULT_COLOR}b3` }}
                 >
                   {e.title}
                 </button>
@@ -808,13 +814,13 @@ function TimeGrid({
                         ev.stopPropagation();
                         onOpenEvent(s.e);
                       }}
-                      className="absolute cursor-grab overflow-hidden rounded px-1 py-0.5 text-left text-white ring-1 ring-black/10 active:cursor-grabbing"
+                      className="absolute cursor-grab overflow-hidden rounded px-1 py-0.5 text-left text-white ring-1 ring-white/20 backdrop-blur-sm active:cursor-grabbing"
                       style={{
                         top,
                         height,
                         left: `calc(${(l.col / l.cols) * 100}% + 1px)`,
                         width: `calc(${100 / l.cols}% - 2px)`,
-                        backgroundColor: `${s.e.color ?? DEFAULT_COLOR}e6`,
+                        backgroundColor: `${s.e.color ?? DEFAULT_COLOR}b3`,
                       }}
                     >
                       <span className="block truncate text-[11px] font-medium leading-tight">{s.e.title}</span>
@@ -1237,6 +1243,19 @@ function EventEditor({
       )
       .catch(() => undefined);
   }, [eventId]);
+
+  // 外部（D&D 等）で開始/終了/終日が変わったら、日時フィールドを追従させる。
+  const evStart = event?.start_at;
+  const evEnd = event?.end_at ?? null;
+  const evAllDay = event?.all_day ?? false;
+  useEffect(() => {
+    if (!evStart) return;
+    setAllDay(evAllDay);
+    setStartDate(dayOf(evStart));
+    setStartTime(timeOf(evStart) || '09:00');
+    setEndDate(evEnd ? dayOf(evEnd) : dayOf(evStart));
+    setEndTime(evEnd ? timeOf(evEnd) || '10:00' : addOneHour(timeOf(evStart) || '09:00'));
+  }, [evStart, evEnd, evAllDay]);
 
   const addGuest = () => {
     const v = guestInput.trim();

@@ -9,6 +9,7 @@ import type { SendInput } from '@bindings/SendInput';
 import type { DraftInput } from '@bindings/DraftInput';
 import type { DraftContent } from '@bindings/DraftContent';
 import type { RemoteImage } from '@bindings/RemoteImage';
+import type { RebuildPlan } from '@bindings/RebuildPlan';
 
 // Tauri v2 は camelCase の引数キーを snake_case の Rust 引数へ自動変換する。
 export const mailSync = (accountId: number) => invoke<SyncResult>('mail_sync', { accountId });
@@ -35,12 +36,8 @@ export const mailDraftDiscard = (id: number) => invoke<void>('mail_draft_discard
 
 // 指定フォルダ（'inbox' | 'sent' | 'drafts' | 'trash' | 'spam'）のメール一覧（新しい順）。
 // accountId が null なら全アカウント横断（「全て」表示）。offset でページング（無限スクロール用）。
-export const mailList = (
-  accountId: number | null,
-  folder: string,
-  limit: number,
-  offset = 0,
-) => invoke<MailSummary[]>('mail_list', { accountId: accountId ?? null, folder, limit, offset });
+export const mailList = (accountId: number | null, folder: string, limit: number, offset = 0) =>
+  invoke<MailSummary[]>('mail_list', { accountId: accountId ?? null, folder, limit, offset });
 
 // 件名・差出人・本文の全文検索（FTS5）。指定アカウント/フォルダ内を絞り込む。
 // accountId が null なら全アカウント横断で検索。
@@ -48,7 +45,7 @@ export const mailSearch = (
   accountId: number | null,
   folder: string,
   query: string,
-  limit: number,
+  limit: number
 ) => invoke<MailSummary[]>('mail_search', { accountId: accountId ?? null, folder, query, limit });
 
 export const mailGet = (id: number) => invoke<MailDetail>('mail_get', { id });
@@ -119,8 +116,12 @@ export const mailResync = (accountId: number) => invoke<SyncResult>('mail_resync
 
 // ローカル再加工（再ダウンロード不要）: 保存済み本文から clean_body・引用・スレッド・代表フラグを
 // 作り直す。パーサ改良を既存メールへ反映する用途。処理件数を返す。
-export const mailReprocess = (accountId: number) =>
-  invoke<number>('mail_reprocess', { accountId });
+export const mailReprocess = (accountId: number) => invoke<number>('mail_reprocess', { accountId });
+
+// 再構築の実行計画: データ形式バージョンから、全体再取り込み（resync）が必要か
+// ローカル再解析（reprocess）で足りるかを判定して返す。実行はしない。
+export const rebuildPlan = (accountId: number) =>
+  invoke<RebuildPlan>('rebuild_plan', { accountId });
 
 // アカウントのローカル保存容量（使用量・上限）。
 export const accountStorageInfo = (accountId: number) =>

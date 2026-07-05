@@ -142,7 +142,11 @@ const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 34,
-        sql: include_str!("migrations/0034_mail_trash.sql"),
+        sql: include_str!("migrations/0034_data_versions.sql"),
+    },
+    Migration {
+        version: 35,
+        sql: include_str!("migrations/0035_mail_trash.sql"),
     },
 ];
 

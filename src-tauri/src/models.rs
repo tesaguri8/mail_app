@@ -754,3 +754,27 @@ pub struct SyncResult {
     /// 既存メールに uid/添付メタを埋め戻した件数（点検つき再取り込み時に意味を持つ）。
     pub backfilled: i32,
 }
+
+/// 再構築で実行する処理。データ形式バージョンの比較で決まる（services/dataver.rs）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+#[serde(rename_all = "snake_case")]
+pub enum RebuildAction {
+    /// サーバーから全体再取り込み（取り込み形式が古い。完了後にローカル再解析も走る）。
+    Resync,
+    /// ローカル再解析のみ（保存済み本文から引用分離・スレッド束ねを作り直し。通信なし）。
+    Reprocess,
+}
+
+/// 再構築の実行計画。記録されているデータ形式バージョンと現行値の比較結果。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct RebuildPlan {
+    pub action: RebuildAction,
+    /// アカウントに記録された取り込み形式バージョン（0=形式不明）と現行値。
+    pub ingest_stored: i32,
+    pub ingest_current: i32,
+    /// アカウントに記録された解析バージョンと現行値。
+    pub parse_stored: i32,
+    pub parse_current: i32,
+}

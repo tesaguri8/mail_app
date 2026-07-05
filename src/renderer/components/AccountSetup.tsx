@@ -23,6 +23,7 @@ import {
   accountSetStorageLimit,
   accountStorageInfo,
   mailReprocess,
+  rebuildPlan,
   storageOptimize,
 } from '../services/mail';
 import type { StorageInfo } from '@bindings/StorageInfo';
@@ -204,21 +205,26 @@ export function AccountSetup({
     }
   };
 
-  // 点検再取り込みをバックグラウンドで開始（進捗・中断・完了トーストは共通インジケータ）。
-  const startResync = (id: number, email: string) => sync.start(id, email, 'resync');
-
-  // ローカル再解析（再ダウンロード不要）: 保存済み本文から引用分離・スレッド束ねを作り直す。
-  const [reprocessing, setReprocessing] = useState<number | null>(null);
-  const startReprocess = async (id: number) => {
-    setReprocessing(id);
+  // 再構築: データ形式バージョンで判定し、サーバーからの全体再取り込みが必要なときだけ
+  // 再取り込み（バックグラウンド・進捗/中断は共通インジケータ）、それ以外はローカル再解析
+  // （保存済み本文から引用分離・スレッド束ねを作り直し。通信なし）を実行する。
+  const [rebuilding, setRebuilding] = useState<number | null>(null);
+  const startRebuild = async (id: number, email: string) => {
+    setRebuilding(id);
     try {
-      const n = await mailReprocess(id);
-      sync.toast(t('storage.reprocessed', { count: n }));
-      onChanged();
+      const plan = await rebuildPlan(id);
+      if (plan.action === 'resync') {
+        sync.toast(t('storage.rebuildResync'));
+        sync.start(id, email, 'resync');
+      } else {
+        const n = await mailReprocess(id);
+        sync.toast(t('storage.reprocessed', { count: n }));
+        onChanged();
+      }
     } catch (e) {
       sync.toast(String(e), 'error');
     } finally {
-      setReprocessing(null);
+      setRebuilding(null);
     }
   };
 
@@ -511,7 +517,9 @@ export function AccountSetup({
                       <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-white/10">
                         <div
                           className={`h-full rounded-full ${
-                            storage.used_bytes > storage.limit_bytes * 1.05 ? 'bg-red-400' : 'bg-sky-400'
+                            storage.used_bytes > storage.limit_bytes * 1.05
+                              ? 'bg-red-400'
+                              : 'bg-sky-400'
                           }`}
                           style={{
                             width: `${Math.min(100, storage.limit_bytes > 0 ? (storage.used_bytes / storage.limit_bytes) * 100 : 0)}%`,
@@ -591,40 +599,28 @@ export function AccountSetup({
                     {editStatus && <span className="text-xs text-white/70">{editStatus}</span>}
                   </div>
 
-                  {/* 点検再取り込み: 保存とは別（バックグラウンド実行・進捗/中断は共通インジケータ） */}
+                  {/* 再構築: データ形式バージョンで全体再取り込み／ローカル再解析を自動選択 */}
                   <div className="mt-1 border-t border-white/10 pt-3">
                     {sync.active?.accountId === a.id ? (
                       <button
                         className={btnCls}
                         onClick={sync.cancel}
-                        title={t('storage.resyncHint')}
+                        title={t('storage.rebuildHint')}
                       >
                         {t('sync.cancel')}
                       </button>
                     ) : (
                       <button
                         className={btnCls}
-                        disabled={!!sync.active}
-                        onClick={() => startResync(a.id, a.email)}
-                        title={t('storage.resyncHint')}
+                        disabled={rebuilding === a.id || !!sync.active}
+                        onClick={() => startRebuild(a.id, a.email)}
+                        title={t('storage.rebuildHint')}
                       >
-                        {t('storage.resync')}
+                        {rebuilding === a.id ? t('storage.rebuilding') : t('storage.rebuild')}
                       </button>
                     )}
                     <span className="mt-1 block text-[11px] leading-snug text-white/40">
-                      {t('storage.resyncHint')}
-                    </span>
-                    {/* ローカル再解析: サーバーから取り直さず、保存済み本文で引用分離・スレッド束ねを作り直す */}
-                    <button
-                      className={`${btnCls} mt-2`}
-                      disabled={reprocessing === a.id || !!sync.active}
-                      onClick={() => startReprocess(a.id)}
-                      title={t('storage.reprocessHint')}
-                    >
-                      {reprocessing === a.id ? t('storage.reprocessing') : t('storage.reprocess')}
-                    </button>
-                    <span className="mt-1 block text-[11px] leading-snug text-white/40">
-                      {t('storage.reprocessHint')}
+                      {t('storage.rebuildHint')}
                     </span>
                   </div>
                 </div>
@@ -731,11 +727,7 @@ export function AccountSetup({
           {status && <p className="text-xs text-white/70">{status}</p>}
 
           <div className="flex gap-2 pt-1">
-            <button
-              className={btnCls}
-              onClick={onTest}
-              disabled={busy || !imapHost || !password}
-            >
+            <button className={btnCls} onClick={onTest} disabled={busy || !imapHost || !password}>
               {t('account.test')}
             </button>
             <button

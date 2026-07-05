@@ -71,6 +71,7 @@ pub fn run() {
             commands::message_reassign,
             commands::thread_rebuild,
             commands::mail_reprocess,
+            commands::rebuild_plan,
             commands::mail_refetch,
             commands::mail_attachments,
             commands::attachment_download,

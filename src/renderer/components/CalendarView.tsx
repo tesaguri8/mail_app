@@ -66,6 +66,25 @@ const minutesOf = (iso: string) => {
   const [h, m] = t.split(':').map(Number);
   return h * 60 + m;
 };
+/** ISO 文字列 → Date（終日は 0 時）。 */
+const isoToDate = (iso: string) => (iso.length > 10 ? new Date(iso) : new Date(`${iso}T00:00`));
+/** Date → ISO（終日は日付のみ、時間指定は分まで）。 */
+const isoFromDate = (d: Date, allDay: boolean) =>
+  allDay ? ymd(d) : `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+/** EventSummary を EventInput に写す（D&D 移動で開始/終了だけ差し替える土台）。 */
+const toInput = (e: EventSummary): EventInput => ({
+  id: e.id,
+  title: e.title,
+  description: e.description,
+  location: e.location,
+  start_at: e.start_at,
+  end_at: e.end_at,
+  all_day: e.all_day,
+  color: e.color,
+  recurrence: e.recurrence,
+  reminder_minutes: e.reminder_minutes,
+  related_email_id: e.related_email_id,
+});
 
 /** 予定が日付 d（'YYYY-MM-DD'）に掛かるか。開始日〜終了日（終日は最終日を含む）で判定。 */
 function coversDay(e: EventSummary, d: string): boolean {
@@ -154,7 +173,8 @@ function stepAnchor(mode: ViewMode, a: Date, dir: number): Date {
   if (mode === 'year') x.setFullYear(x.getFullYear() + dir);
   else if (mode === 'month') x.setMonth(x.getMonth() + dir);
   else if (mode === 'day') x.setDate(x.getDate() + dir);
-  else x.setDate(x.getDate() + (mode === 'fortnight' ? 14 : 7) * dir);
+  // 週・2週はどちらも1週ずつ移動（2週は窓が1週ずつ転がる）。
+  else x.setDate(x.getDate() + 7 * dir);
   return x;
 }
 
@@ -215,6 +235,39 @@ export function CalendarView() {
       setEditing({ mode: 'edit', event });
     }
   };
+  // D&D 移動: 掴んだ予定を ref に保持し、ドロップ先の日/時刻で開始（＋所要時間）を差し替える。
+  // 繰り返しは曖昧さを避けるためドラッグ不可（チップ側で draggable を切る）。
+  const dragEventRef = useRef<EventSummary | null>(null);
+  const moveTo = (e: EventSummary, newStart: Date) => {
+    const start_at = isoFromDate(newStart, e.all_day);
+    let end_at: string | null = null;
+    if (e.end_at) {
+      const dur = isoToDate(e.end_at).getTime() - isoToDate(e.start_at).getTime();
+      end_at = isoFromDate(new Date(newStart.getTime() + dur), e.all_day);
+    }
+    eventUpsert({ ...toInput(e), start_at, end_at }).then(reload).catch(() => undefined);
+  };
+  const onEventDragStart = (e: EventSummary) => {
+    dragEventRef.current = e;
+  };
+  const dropOnDay = (day: string) => {
+    const e = dragEventRef.current;
+    dragEventRef.current = null;
+    if (!e) return;
+    const t = isoToDate(e.start_at);
+    const target = new Date(`${day}T00:00`);
+    target.setHours(t.getHours(), t.getMinutes(), 0, 0);
+    moveTo(e, target);
+  };
+  const dropOnTime = (day: string, minutes: number) => {
+    const e = dragEventRef.current;
+    dragEventRef.current = null;
+    if (!e) return;
+    const target = new Date(`${day}T00:00`);
+    target.setMinutes(minutes);
+    moveTo(e, target);
+  };
+
   const selectedList = eventsOn(events, selected);
   const maxVisible = mode === 'fortnight' ? 5 : 3;
 
@@ -282,6 +335,9 @@ export function CalendarView() {
           }}
           onNewAt={newAt}
           onOpenEvent={openEvent}
+          onEventDragStart={onEventDragStart}
+          onDropTime={dropOnTime}
+          onDropDay={dropOnDay}
         />
       ) : period.kind === 'year' ? (
         <div className="flex min-h-0 flex-1 gap-3">
@@ -331,6 +387,8 @@ export function CalendarView() {
                   maxVisible={maxVisible}
                   onSelect={setSelected}
                   onOpenNew={(ds) => newAt(ds)}
+                  onEventDragStart={onEventDragStart}
+                  onDropDay={dropOnDay}
                 />
               ))}
             </div>
@@ -352,11 +410,17 @@ function weekdayLabels(locale: string, width: 'short' | 'narrow'): string[] {
   return Array.from({ length: 7 }, (_, i) => fmt.format(new Date(2024, 0, 7 + i)));
 }
 
-/** 予定チップ（色ドット＋時刻＋タイトル）。 */
-function EventChip({ e }: { e: EventSummary }) {
+/** 予定チップ（色ドット＋時刻＋タイトル）。繰り返しでなければドラッグで移動できる。 */
+function EventChip({ e, onDragStart }: { e: EventSummary; onDragStart?: (e: EventSummary) => void }) {
+  const draggable = !e.recurrence && !!onDragStart;
   return (
     <span
-      className="flex items-center gap-1 truncate rounded px-1 py-0.5 text-[11px] leading-tight"
+      draggable={draggable}
+      onDragStart={(ev) => {
+        ev.stopPropagation();
+        onDragStart?.(e);
+      }}
+      className={`flex items-center gap-1 truncate rounded px-1 py-0.5 text-[11px] leading-tight ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
       style={{ backgroundColor: `${e.color ?? DEFAULT_COLOR}33` }}
     >
       <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: e.color ?? DEFAULT_COLOR }} />
@@ -378,6 +442,8 @@ function DayCell({
   maxVisible,
   onSelect,
   onOpenNew,
+  onEventDragStart,
+  onDropDay,
 }: {
   date: Date;
   events: EventSummary[];
@@ -387,6 +453,8 @@ function DayCell({
   maxVisible: number;
   onSelect: (ds: string) => void;
   onOpenNew: (ds: string) => void;
+  onEventDragStart: (e: EventSummary) => void;
+  onDropDay: (ds: string) => void;
 }) {
   const ds = ymd(date);
   const isToday = ds === todayStr;
@@ -396,6 +464,8 @@ function DayCell({
     <button
       onClick={() => onSelect(ds)}
       onDoubleClick={() => onOpenNew(ds)}
+      onDragOver={(ev) => ev.preventDefault()}
+      onDrop={() => onDropDay(ds)}
       className={`flex min-h-0 flex-col items-stretch gap-0.5 border-b border-r border-white/5 p-1 text-left transition-colors hover:bg-white/10 ${
         isSel ? 'bg-white/15' : ''
       } ${dim ? 'opacity-40' : ''}`}
@@ -411,7 +481,7 @@ function DayCell({
       </div>
       <div className="flex min-h-0 flex-col gap-0.5 overflow-hidden">
         {dayEvents.slice(0, maxVisible).map((e) => (
-          <EventChip key={e.id} e={e} />
+          <EventChip key={e.id} e={e} onDragStart={onEventDragStart} />
         ))}
         {dayEvents.length > maxVisible && (
           <span className="px-1 text-[10px] text-white/50">＋{dayEvents.length - maxVisible}</span>
@@ -432,6 +502,9 @@ function TimeGrid({
   onOpenDay,
   onNewAt,
   onOpenEvent,
+  onEventDragStart,
+  onDropTime,
+  onDropDay,
 }: {
   days: Date[];
   events: EventSummary[];
@@ -440,6 +513,9 @@ function TimeGrid({
   onOpenDay: (ds: string) => void;
   onNewAt: (day: string, time?: string, allDay?: boolean) => void;
   onOpenEvent: (e: EventSummary) => void;
+  onEventDragStart: (e: EventSummary) => void;
+  onDropTime: (day: string, minutes: number) => void;
+  onDropDay: (ds: string) => void;
 }) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -497,11 +573,18 @@ function TimeGrid({
             <div
               key={ds}
               onClick={() => onNewAt(ds, undefined, true)}
+              onDragOver={(ev) => ev.preventDefault()}
+              onDrop={() => onDropDay(ds)}
               className="min-h-[1.75rem] min-w-0 flex-1 space-y-0.5 border-l border-white/5 p-0.5"
             >
               {list.map((e) => (
                 <button
                   key={e.id}
+                  draggable={!e.recurrence}
+                  onDragStart={(ev) => {
+                    ev.stopPropagation();
+                    onEventDragStart(e);
+                  }}
                   onClick={(ev) => {
                     ev.stopPropagation();
                     onOpenEvent(e);
@@ -542,6 +625,14 @@ function TimeGrid({
                   const hour = Math.max(0, Math.min(23, Math.floor((ev.clientY - rect.top) / ROW_H)));
                   onNewAt(ds, `${pad(hour)}:00`);
                 }}
+                onDragOver={(ev) => ev.preventDefault()}
+                onDrop={(ev) => {
+                  const rect = ev.currentTarget.getBoundingClientRect();
+                  // ドロップ位置を15分刻みにスナップ。
+                  const raw = ((ev.clientY - rect.top) / ROW_H) * 60;
+                  const minutes = Math.max(0, Math.min(1410, Math.round(raw / 15) * 15));
+                  onDropTime(ds, minutes);
+                }}
               >
                 {hours.map((h) => (
                   <div key={h} style={{ height: ROW_H }} className="border-b border-white/5" />
@@ -559,11 +650,16 @@ function TimeGrid({
                   return (
                     <button
                       key={s.e.id}
+                      draggable={!s.e.recurrence}
+                      onDragStart={(ev) => {
+                        ev.stopPropagation();
+                        onEventDragStart(s.e);
+                      }}
                       onClick={(ev) => {
                         ev.stopPropagation();
                         onOpenEvent(s.e);
                       }}
-                      className="absolute overflow-hidden rounded px-1 py-0.5 text-left text-white ring-1 ring-black/10"
+                      className="absolute cursor-grab overflow-hidden rounded px-1 py-0.5 text-left text-white ring-1 ring-black/10 active:cursor-grabbing"
                       style={{
                         top,
                         height,

@@ -55,6 +55,7 @@ pub fn run() {
             commands::sender_set_remote_policy,
             commands::mail_list,
             commands::thread_list,
+            commands::thread_count,
             commands::mail_search,
             commands::mail_get,
             commands::thread_view,

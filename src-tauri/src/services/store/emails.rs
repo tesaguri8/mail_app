@@ -721,6 +721,24 @@ impl Store {
         Ok(rows)
     }
 
+    /// フォルダ内のスレッド総数（代表フラグ is_folder_rep=1 の件数）。一覧の「表示/全件」表示用。
+    /// `account_id` が None なら全アカウント横断。部分索引で高速。
+    pub fn thread_count(&self, account_id: Option<i64>, folder: &str) -> rusqlite::Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        match account_id {
+            Some(a) => conn.query_row(
+                "SELECT count(*) FROM emails WHERE folder = ?1 AND account_id = ?2 AND is_folder_rep = 1",
+                params![folder, a],
+                |r| r.get(0),
+            ),
+            None => conn.query_row(
+                "SELECT count(*) FROM emails WHERE folder = ?1 AND is_folder_rep = 1",
+                params![folder],
+                |r| r.get(0),
+            ),
+        }
+    }
+
     /// 指定 ID 群に対し、フラグ列（is_read / is_starred / is_bookmarked）を一括更新する。
     fn set_flag(&self, column: &str, ids: &[i64], value: bool) -> rusqlite::Result<()> {
         if ids.is_empty() {

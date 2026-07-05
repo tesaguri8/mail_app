@@ -17,6 +17,10 @@ export const threadList = (
     offset,
   });
 
+// フォルダ内のスレッド総数（一覧の「表示 X / 全 Y」表示用）。accountId が null なら全アカウント。
+export const threadCount = (accountId: number | null, folder: string) =>
+  invoke<number>('thread_count', { accountId: accountId ?? null, folder });
+
 // 指定メールが属する論理スレッドの会話（時系列・古い順）を取得する。
 // 未割当の旧データはバックエンドが遅延割当する（docs/THREADING.md §5）。
 export const threadView = (emailId: number) => invoke<ThreadView>('thread_view', { emailId });

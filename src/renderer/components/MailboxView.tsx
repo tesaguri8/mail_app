@@ -46,7 +46,7 @@ import { pickTagColor, DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import { parseAddress } from '../utils/address';
 import { MailBody } from './MailBody';
 import { Conversation, type ConversationHandlers } from './Conversation';
-import { threadList } from '../services/threads';
+import { threadList, threadCount } from '../services/threads';
 import { Compose, type ComposeTarget } from './Compose';
 import { FolderIcons } from './FolderIcons';
 import { MAIL_FILTERS, matchesFilters } from './mailFilters';
@@ -304,6 +304,8 @@ export function MailboxView({
   const pageKeyRef = useRef('');
   const loadingMoreRef = useRef(false);
   const [hasMore, setHasMore] = useState(false);
+  // フォルダ内のスレッド総数（一覧の「表示 X / 全 Y」表示用）。
+  const [threadTotal, setThreadTotal] = useState<number | null>(null);
   // スクロール位置インジケータ（右端に、先頭付近のメールの年月を表示）。
   const [scrollHint, setScrollHint] = useState<{ ratio: number; label: string } | null>(null);
   const scrollHintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -312,6 +314,12 @@ export function MailboxView({
     const token = ++loadTokenRef.current;
     pageKeyRef.current = `${selected}:${folder}`;
     loadingMoreRef.current = false;
+    // 総数（スレッド件数）も取得して「表示 X / 全 Y」に使う。
+    threadCount(queryAccount, folder)
+      .then((n) => {
+        if (loadTokenRef.current === token) setThreadTotal(n);
+      })
+      .catch(() => setThreadTotal(null));
     return threadList(queryAccount, folder, PAGE_SIZE, 0)
       .then((rows) => {
         if (loadTokenRef.current !== token) return;
@@ -985,10 +993,12 @@ export function MailboxView({
               </li>
             ))
           )}
-          {/* 続きあり: スクロールで自動読み込み（末尾のヒント） */}
+          {/* 続きあり: スクロールで追加読み込み。表示中/全スレッド数を出す（あとどれくらいか分かる）。 */}
           {!searchMode && hasMore && visibleMails.length > 0 && (
             <li className="px-2 py-3 text-center text-xs text-white/35">
-              {t('mailbox.loadingMore')}
+              {threadTotal != null
+                ? t('mailbox.loadedOf', { shown: mails.length, total: threadTotal })
+                : t('mailbox.loadingMore')}
             </li>
           )}
         </ul>

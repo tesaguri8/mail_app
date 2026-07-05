@@ -645,6 +645,18 @@ pub fn mail_list(
         .map_err(|e| e.to_string())
 }
 
+/// フォルダ内のスレッド総数（一覧の「表示 X / 全 Y」表示用）。`account_id` が None なら全アカウント。
+#[tauri::command]
+pub fn thread_count(
+    store: State<Store>,
+    account_id: Option<i64>,
+    folder: String,
+) -> Result<i64, String> {
+    store
+        .thread_count(account_id, &folder)
+        .map_err(|e| e.to_string())
+}
+
 /// スレッド単位のメール一覧（代表＝フォルダ内最新＋件数バッジ）。docs/THREADING.md §5。
 #[tauri::command]
 pub fn thread_list(

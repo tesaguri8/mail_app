@@ -416,6 +416,7 @@
     "accountTotal": "{{total}} messages",
     "allAccounts": "All accounts",
     "loadingMore": "Loading more…",
+    "loadedOf": "Showing {{shown}} / {{total}} (scroll for more)",
     "resize": "Drag to resize",
     "empty": "No mail yet. Press \"Sync\".",
     "account": "Account",

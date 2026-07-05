@@ -416,6 +416,7 @@
     "accountTotal": "メール {{total}} 件",
     "allAccounts": "全て",
     "loadingMore": "さらに読み込み中…",
+    "loadedOf": "表示 {{shown}} / 全 {{total}} 件（スクロールで続き）",
     "resize": "ドラッグで幅を変更",
     "empty": "メールがありません。「同期」を押してください。",
     "account": "アカウント",

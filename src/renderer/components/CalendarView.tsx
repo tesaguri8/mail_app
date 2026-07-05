@@ -39,6 +39,7 @@ import {
   icsExport,
 } from '../services/calendar';
 import { expandEvents, presetToRule, ruleToPreset, RECUR_PRESETS, type RecurPreset } from '../utils/recurrence';
+import { isHoliday } from '../utils/holidays';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -108,6 +109,14 @@ const isoToDate = (iso: string) => (iso.length > 10 ? new Date(iso) : new Date(`
 /** Date → ISO（終日は日付のみ、時間指定は分まで）。 */
 const isoFromDate = (d: Date, allDay: boolean) =>
   allDay ? ymd(d) : `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+/** 日付の文字色クラス（日曜/祝日=赤・土曜=青・平日=空＝既定）。 */
+const dayTone = (ds: string): string => {
+  const dow = new Date(`${ds}T00:00`).getDay();
+  if (dow === 0 || isHoliday(ds)) return 'text-red-300';
+  if (dow === 6) return 'text-blue-300';
+  return '';
+};
+
 /** EventSummary を EventInput に写す（D&D 移動で開始/終了だけ差し替える土台）。 */
 const toInput = (e: EventSummary): EventInput => ({
   id: e.id,
@@ -622,7 +631,7 @@ function DayCell({
       <div className="flex justify-end">
         <span
           className={`flex h-5 w-5 items-center justify-center rounded-full text-xs ${
-            isToday ? 'bg-blue-500 font-semibold text-white' : 'text-white/80'
+            isToday ? 'bg-blue-500 font-semibold text-white' : dayTone(ds) || 'text-white/80'
           }`}
         >
           {date.getDate()}
@@ -699,6 +708,7 @@ function TimeGrid({
         {days.map((d) => {
           const ds = ymd(d);
           const isToday = ds === todayStr;
+          const tone = dayTone(ds);
           return (
             <button
               key={ds}
@@ -706,10 +716,10 @@ function TimeGrid({
               className="flex flex-1 flex-col items-center gap-0.5 border-l border-white/5 py-1.5 hover:bg-white/10"
               title={t('cal.vDay')}
             >
-              <span className="text-[11px] text-white/55">{dowFmt.format(d)}</span>
+              <span className={`text-[11px] ${tone || 'text-white/55'}`}>{dowFmt.format(d)}</span>
               <span
                 className={`flex h-6 w-6 items-center justify-center rounded-full text-sm ${
-                  isToday ? 'bg-blue-500 font-semibold text-white' : 'text-white/85'
+                  isToday ? 'bg-blue-500 font-semibold text-white' : tone || 'text-white/85'
                 }`}
               >
                 {d.getDate()}
@@ -949,7 +959,9 @@ function MiniMonth({
       </button>
       <div className="grid grid-cols-7 gap-0.5 text-center text-[9px] text-white/35">
         {weekdayNarrow.map((w, i) => (
-          <span key={i}>{w}</span>
+          <span key={i} className={i === 0 ? 'text-red-300/80' : i === 6 ? 'text-blue-300/80' : ''}>
+            {w}
+          </span>
         ))}
       </div>
       <div className="mt-0.5 grid grid-cols-7 gap-0.5">
@@ -968,7 +980,7 @@ function MiniMonth({
                 inM ? '' : 'opacity-25'
               } ${isSel && !isToday ? 'ring-1 ring-white/70' : ''}`}
             >
-              <span className={`flex h-4 w-4 items-center justify-center rounded-full ${isToday ? 'bg-blue-500 text-white' : ''}`}>
+              <span className={`flex h-4 w-4 items-center justify-center rounded-full ${isToday ? 'bg-blue-500 text-white' : dayTone(ds)}`}>
                 {d.getDate()}
               </span>
               {has && !isToday && <span className="absolute bottom-0 h-1 w-1 rounded-full bg-white/70" />}

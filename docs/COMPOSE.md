@@ -1,6 +1,6 @@
 # 作成・送信の実務機能
 
-**ステータス:** 計画（実装未着手）
+**ステータス:** 実装中（アルファ・0.1.0-alpha.1）。送信（`mail_send`）・下書き（`mail_save_draft` 等）・署名（`signature_*`）は実装済み。送信取消／予約／テンプレート／スヌーズ・添付サニタイズ配線は未実装（§1・§4 参照）。
 **目的:** 安心して気持ちよく書いて送れる「現代のメール」の作法を揃える。
 
 関連: [FEATURE_SPEC.md](FEATURE_SPEC.md)（作成モード）/ [PROTECTED_REGIONS.md](PROTECTED_REGIONS.md)（保護領域）/ [FILTERING.md](FILTERING.md)/ [FLY_SEND.md](FLY_SEND.md)（Fly 送信演出）
@@ -9,12 +9,12 @@
 
 ## 1. 機能
 
-- **下書き自動保存**: 入力中つねに保存。下書き一覧から再開。クラッシュ耐性。
-- **送信取消（Undo Send）**: 送信後すぐの**待機時間（既定 5–30 秒・設定可）**内なら取消。ローカルで保留してから実送信。
-- **送信予約（スケジュール送信）**: 指定時刻に送信。ローカルファースト前提のため**アプリ起動時に送出**（未起動だと遅延する旨を明示）。
-- **署名**: アカウント別の署名（プレーン/リッチ）。返信時の位置も設定。
-- **テンプレート（定型文）**: 再利用スニペット。変数差し込み（宛名等）。**宿泊施設の問い合わせ定型返信**に有効。
-- **スヌーズ**: メール/スレッドを指定時刻まで隠し、再浮上（受信箱の整理。[FILTERING.md](FILTERING.md) の要再確認と別軸）。
+- **下書き自動保存**（**実装済み**）: 入力中つねに保存。下書きから再開。ローカル保存＋リモート同期。コマンドは §4 参照。
+- **署名**（**実装済み・一部**）: アカウント別の署名（`signatures` テーブル＋`signature_*` コマンド。アカウントへは `accounts.signature_id` で紐付け）。※**返信時の挿入位置の設定は未実装**。
+- **送信取消（Undo Send）**（**未実装**）: 送信後すぐの待機時間内なら取消（ローカル保留→実送信）。`mail_undo_send` は未実装。
+- **送信予約（スケジュール送信）**（**未実装**）: 指定時刻に送信。`mail_schedule_send` は未実装。
+- **テンプレート（定型文）**（**未実装**）: 再利用スニペット。`templates` テーブル・`template_*` コマンドとも未実装。**宿泊施設の問い合わせ定型返信**に有効なので後続で。
+- **スヌーズ**（**未実装**）: メール/スレッドを指定時刻まで隠し再浮上。`mail_snooze`・`emails.snooze_until` とも未実装。
 - **不在応答（バケーション）**: 任意・後続。
 
 ---
@@ -46,15 +46,18 @@
 
 ## 4. データモデル（要約） / コマンド
 
-- `signatures`・`templates` テーブル、`emails.snooze_until`、下書きは `emails`（folder=draft）で管理（[DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)）。
-- 添付メタデータ削除ポリシーは設定ストア（`strip_attachment_metadata`: `all` | `gps` | `off`）で保持。
+- `signatures` テーブル（**実装済み**）、下書きは `emails`（folder=draft）で管理（[DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)）。※`templates` テーブル・`emails.snooze_until` は**未実装**。
+- 添付メタデータ削除ポリシーは設定ストア（`strip_attachment_metadata`: `all` | `gps` | `off`）で保持（配線は §3 のとおり保留）。
 
-| コマンド | 用途 |
-|---|---|
-| `draft_save` / `draft_list` | 下書き保存・一覧 |
-| `mail_send`（遅延付き）/ `mail_undo_send` | 送信・取消 |
-| `mail_schedule_send` | 予約送信 |
-| `attachment_sanitize` | 添付/インライン画像の EXIF/メタデータ削除（送信前） |
-| `attachment_inspect_metadata` | 添付のメタデータ（GPS 有無等）を検査して作成画面に提示 |
-| `signature_*` / `template_*` | 署名・定型文管理 |
-| `mail_snooze` | スヌーズ設定 |
+| コマンド | 用途 | 状態 |
+|---|---|---|
+| `mail_save_draft` / `mail_get_draft` | 下書きの保存・取得 | **実装済み** |
+| `mail_draft_sync_remote` / `mail_draft_discard` | 下書きのリモート同期・破棄 | **実装済み** |
+| `mail_send` | 送信 | **実装済み** |
+| `signature_list` / `signature_create` / `signature_update` / `signature_delete` | 署名管理 | **実装済み** |
+| `mail_undo_send` | 送信取消（遅延送出） | 未実装 |
+| `mail_schedule_send` | 予約送信 | 未実装 |
+| `attachment_sanitize` | 添付/インライン画像の EXIF/メタデータ削除（送信前） | 未実装（§3・Compose 添付対応後） |
+| `attachment_inspect_metadata` | 添付のメタデータ（GPS 有無等）を検査して作成画面に提示 | 未実装（§3） |
+| `template_*` | 定型文管理 | 未実装 |
+| `mail_snooze` | スヌーズ設定 | 未実装 |

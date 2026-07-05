@@ -35,6 +35,7 @@
 - **中立に戻す** `green_domain_clear`: green・warning の両方から外す（住所録由来なら自動グリーンに戻る）。
 
 `MailSummary.is_green` / `MailDetail.is_green` は取得時に算出（グリーン集合を 1 回だけ引いて全行に付与）。
+個別アドレスの判定は `green_address_check(address)`（`bool` を返す）。一覧・詳細の付与とは別に、任意アドレスを単発で照会するのに使う。
 
 ## UI
 

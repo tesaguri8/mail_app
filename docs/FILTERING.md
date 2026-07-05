@@ -89,10 +89,17 @@
 
 ## 8. Tauri コマンド（抜粋）
 
+実装済み（`src-tauri/src/commands.rs`）。状態フラグは一括操作（`Vec<i64>`）で受ける。
+
 | コマンド | 用途 |
 |---|---|
-| `inbox_filter` | ファセット条件で一覧取得（横断・FTS5 連携） |
-| `message_set_flag` | ブックマーク/要再確認/フラグの付与・解除 |
-| `filter_save` / `filter_list` / `filter_delete` | 保存フィルタ（スマートフォルダ）管理 |
-| `contact_set_business` | 連絡先の「取引先」フラグ |
-| `category_list` / `category_assign` | カテゴリ管理・付与 |
+| `mail_set_bookmarked(ids, value)` | ブックマークの付与・解除 |
+| `mail_set_starred(ids, value)` | スター（フラグ相当）の付与・解除 |
+| `mail_set_read(ids, read)` | 既読/未読の切替 |
+| `tag_list` / `tag_create` / `tag_update` / `tag_delete` / `tag_set_parent` | タグ・カテゴリ（`tags.kind` で区別）の管理・階層化 |
+| `mail_add_tag(ids, tag_id)` / `mail_remove_tag(ids, tag_id)` | メールへのタグ付与・解除 |
+
+> **未実装（計画）**: ファセット横断取得（`inbox_filter` 相当）、保存フィルタ（スマートフォルダ）の
+> 読み書きコマンド（`saved_filters` テーブルは 0001 で存在するが**コマンド未配線**）、連絡先の
+> 「取引先」専用トグルコマンドは未提供。現状の一覧取得は `mail_list` / `thread_list` /
+> `mail_search`、連絡先の更新は `contact_upsert`（`is_business` を含む）で行う。

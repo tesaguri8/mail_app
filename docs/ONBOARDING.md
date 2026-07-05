@@ -20,13 +20,14 @@
 
 ## 2. プロバイダ自動設定（autoconfig）
 
-メールアドレスのドメインから接続設定を自動判定する。優先順:
+メールアドレスのドメインから接続設定を自動判定する。**現状の実装順**（`services/autoconfig.rs`）:
 
-1. **Mozilla ISPDB / autoconfig**（`autoconfig.<domain>` / `autoconfig.thunderbird.net`）
-2. **Microsoft Autodiscover**（Exchange/Outlook 系）
-3. **主要プロバイダの内蔵テーブル**（Gmail/Outlook/iCloud/主要日本プロバイダ等）
-4. **MX/SRV からの推定**（`_imaps._tcp` SRV、MX ホスト名から推測）
-5. **手動入力**（上記で決まらない場合。ホスト/ポート/暗号化方式）
+1. **主要プロバイダの内蔵テーブル**（Gmail/Outlook/iCloud/主要日本プロバイダ等。`source: "builtin"`）
+2. **ドメインからの推定**（`imap.<domain>` / `smtp.<domain>` 等の慣習的ホスト名を推測）
+3. **MX ルックアップ**（`hickory-resolver` で MX レコードの最優先ホストを取得。独自ドメイン向け）
+4. **手動入力**（上記で決まらない場合。ホスト/ポート/暗号化方式）
+
+> **後続（未実装）**: Mozilla ISPDB / autoconfig（`autoconfig.thunderbird.net` 等）・Microsoft Autodiscover（Exchange/Outlook 系）・SRV レコード（`_imaps._tcp`）はネットワーク経由の追加判定として**後日実装**（`autoconfig.rs` のコメントに同旨）。
 
 - 認証は基本 **手動設定（OAuth 不要）**（[POSITIONING.md](POSITIONING.md) §5）。
 - **Gmail/Outlook はアプリパスワードが必要な場合**があるため、**取得手順への分かりやすい誘導**（2FA→アプリパスワード）を用意。失敗時のエラーは原因と次の一手を明示。→ 手順は [APP_PASSWORD_SETUP.md](APP_PASSWORD_SETUP.md)。

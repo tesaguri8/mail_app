@@ -46,19 +46,22 @@
 
 ---
 
-## 2. 多層シグナルによる連結判定
+## 2. 連結判定（現状: ヘッダ union-find）
 
-単一の手がかりに依存せず、複数シグナルをスコアで統合する（上から優先）。
+**現状の実装は「標準ヘッダによる確定的な束ね（union-find）」**（`services/store/threads.rs`）。
+`Message-ID` / `In-Reply-To` / `References` からルートキーを決め、同じルートを持つメールを同じ論理スレッドに束ねる。
+引用シグナル（優先2・3）は**抽出・保存はしているが、まだスレッド連結には使っていない**（下表の「状態」を参照）。
 
-| 優先 | シグナル | 役割 |
-|---|---|---|
-| 1 | `Message-ID` / `In-Reply-To` / `References` | 各メールの確定ID。正常時の連結 |
-| 1' | `Thread-Index` / `Thread-Topic`（Outlook/Exchange） | 会話ツリーをエンコードした独自ヘッダ。`References` 欠落時の補完 |
-| 2 | **引用属性行の (from + 送信時刻)** | ヘッダが当てにならない時の連結／**分割の決め手** |
-| 3 | **引用本文のフィンガープリント**（正規化ハッシュ） | 同じ履歴を引いているかを照合 |
-| 4 | 件名の正規化（`Re:` `Fwd:` `RE：` `転送` 除去） | **弱い補助のみ**（過信しない） |
+| 優先 | シグナル | 役割 | 状態 |
+|---|---|---|---|
+| 1 | `Message-ID` / `In-Reply-To` / `References` | 各メールの確定ID。ルートキーで束ねる（union-find） | **実装済み** |
+| 1' | `Thread-Index` / `Thread-Topic`（Outlook/Exchange） | 会話ツリーをエンコードした独自ヘッダ。`References` 欠落時の補完候補 | 抽出・保存のみ（束ねには未使用。§7.5 D／§8） |
+| 2 | **引用属性行の (from + 送信時刻)** | ヘッダが当てにならない時の連結／分割の手がかり（構想） | `quoted_from`/`quoted_at` として抽出・保存のみ（連結には未使用） |
+| 3 | **引用本文のフィンガープリント**（正規化ハッシュ） | 同じ履歴を引いているかを照合（構想） | `fingerprint` として抽出・保存のみ（連結には未使用） |
+| 4 | 件名の正規化（`Re:` `Fwd:` `RE：` `転送` 除去）＋相手（counterparty） | **ID ヘッダが全く無い場合のみ**のフォールバック | **実装済み**（`derive_root_key`） |
 
-> 注: `Thread-Index` / `References` などヘッダ系シグナルは「返信で別件を送る」場合は**古い会話を指したまま**になる（同じ破綻をする）。よって**分割の最終判断は content 由来（優先2・3）が上書きできる**ように扱う。
+> 注: 現状は ID ヘッダが揃っていればそれで束ね、揃わない時だけ「正規化件名＋相手」でフォールバックする。
+> 引用属性・fingerprint を使った「返信で別件」の自動分割は**将来拡張**（構想）で、現状は content 由来の自動連結・分割は行わない。
 
 ### 引用属性行に (from + 時刻) が埋まっている
 
@@ -82,28 +85,28 @@ On Mon, 30 Jun 2026 10:00:00 +0900, 山田太郎 <yamada@example.com> wrote:
 
 ```
 各メール        = ノード（Message-ID ＋ from/to/sent/subject）
-引用ブロック     = 「どの過去メッセージを引いているか」のエッジ（content由来）
-ヘッダ参照       = In-Reply-To / References のエッジ（header由来）
+ヘッダ参照       = In-Reply-To / References のエッジ（header由来）※現状の連結はこれのみ
+引用ブロック     = 「どの過去メッセージを引いているか」のエッジ（content由来）※抽出のみ・連結には未使用
    ↓
-エッジで繋がる連結成分／分岐 ＝ アプリ独自の「論理スレッド」
+エッジで繋がる連結成分（union-find）＝ アプリ独自の「論理スレッド」
 ```
 
-- **論理スレッドはヘッダのスレッドと独立**に構築する。だから:
-  - 件名が同じでも、**引用チェーンが切れ・新本文が無関係** → **別スレッドに分割**
-  - 件名がバラバラでも、**引用が同じ履歴を指す** → **同じスレッドに結合**
+- **論理スレッドはヘッダ由来のルートキーで union-find 束ね**する（`References` 先頭 → `In-Reply-To` → 自分の `Message-ID`）。
+  - ID ヘッダが**全く無い場合のみ**、「正規化件名＋相手（counterparty）」でフォールバックして束ねる。
+  - 引用チェーン由来の分割・結合（件名同じでも引用が無関係なら分ける等）は**将来拡張**（構想）。現状は content 由来の自動連結・分割は行わない。
 - 各メールは 1 つの論理スレッドに所属（`emails.logical_thread_id`）。割り当ては `auto` / `manual` を区別。
 
 ---
 
-## 4. 分割・結合ポリシー（自動分割＋手動上書き）
+## 4. 分割・結合ポリシー（自動束ね＋手動分割/結合）
 
-- **既定は自動**: ヒューリスティックのスコアで論理スレッドを自動構築。
-  - 「件名同じ・参加者同じ」でも、**新本文の類似度が低く** かつ **引用が既存履歴を指さない** → 新スレッドへ**自動分割**。
-- **ユーザーが上書き可能**:
-  - 「このメールを別スレッドに分ける」「このスレッドと結合する」を手動操作。
+- **自動はヘッダによる束ねのみ**: ルートキー（Message-ID/In-Reply-To/References）による union-find で論理スレッドを構築する（§2・§3）。
+  - **content 由来の自動分割（件名同じでも引用が無関係なら分ける等）は行わない**（＝「控えめ＋手動主体」）。引用シグナルは保存済みだが連結・分割には未使用。
+- **分割・結合はユーザーの手動操作**:
+  - 「このメールを別スレッドに分ける」（`thread_split`）／「このスレッドと結合する」（`thread_merge`）を手動で行う。
   - `thread_assignment = 'manual'` のメールは再計算で動かさない（ユーザー意思を尊重）。
   - 手動操作は将来の判定改善のための材料にもする。
-- **確信度の提示**: 自動分割は確信度を持たせ、UI で「別件かも」を控えめに示す。
+- **将来拡張**: 引用属性・fingerprint を使った自動分割候補の提示（確信度つきで「別件かも」を控えめに示す）は構想段階。
 
 ---
 
@@ -112,7 +115,7 @@ On Mon, 30 Jun 2026 10:00:00 +0900, 山田太郎 <yamada@example.com> wrote:
 受信したメールの**元の件名はそのまま保持**しつつ、論理スレッドに**アプリ独自のタイトル**を付け直せる。
 
 - **再件名（リネーム）**: 「`Re: 例の件` を `A社／6月見積もり` に」のように、スレッドへ分かりやすい題名を付与（`logical_threads.title`）。元の `Subject` は `auto_title` として残す。
-- **同件名・別内容の整理**: 自動分割した各論理スレッドに別々のタイトルを付ければ、「件名は同じでも別案件」を**一覧上で明確に区別**できる。
+- **同件名・別内容の整理**: 手動分割した各論理スレッドに別々のタイトルを付ければ、「件名は同じでも別案件」を**一覧上で明確に区別**できる。
 - **ラベル/タグ**: 既存のタグ機能（[FEATURE_SPEC.md](FEATURE_SPEC.md) §2.3）と連携し、論理スレッド単位で分類。
 - **手動の分割/結合**（§4）と合わせ、受信トレイを「自分が分かる単位」に組み替えられる。
 - リネーム・分割・結合は `manual` 扱いとして保持し、再解析で勝手に戻さない。
@@ -132,7 +135,7 @@ On Mon, 30 Jun 2026 10:00:00 +0900, 山田太郎 <yamada@example.com> wrote:
 │  相手 ▏ 来週の打ち合わせ可能ですか？
 │  自分 ▕ 火曜の午後はいかがでしょう
 └
-┌ 見積もりの件（論理スレ B＝同じ件名・別内容）   ← 引用が別履歴なので自動分割
+┌ 見積もりの件（論理スレ B＝同じ件名・別内容）   ← 引用が別履歴なので手動で分割
 │  相手 ▏ 別件ですが請求書の宛名を…
 └
 ```
@@ -147,13 +150,13 @@ On Mon, 30 Jun 2026 10:00:00 +0900, 山田太郎 <yamada@example.com> wrote:
 受信(IMAP) → MIME解析(mail-parser)
    → 本文正規化（HTML→テキスト, 改行・空白正規化）
    → 引用/署名の分離（clean_body と quotes[] を抽出）
-   → 各 quote から (quoted_from, quoted_at, fingerprint) を抽出
-   → 連結判定（ヘッダ → 引用属性突合 → 引用fingerprint → 件名正規化）
+   → 各 quote から (quoted_from, quoted_at, fingerprint) を抽出（保存のみ・連結には未使用）
+   → 連結判定（現状: ヘッダのルートキーで union-find。ID ヘッダが無い時のみ 件名正規化＋相手 でフォールバック）
    → 論理スレッド割当（auto。manual は固定）
    → DB 保存 ＋ FTS5(clean_body) インデックス
 ```
 
-すべて**ローカルの Rust 側**（`src-tauri/src/services/parser/` ＋ `services/threading/`）で完結。SNS 中継のようなクラウド依存は不要。
+すべて**ローカルの Rust 側**（`src-tauri/src/services/parser.rs`＝MIME解析／`services/quotes.rs`＝引用・署名分離／`services/store/threads.rs`＝論理スレッド束ね。専用の `threading/` ディレクトリは無く、フラットなファイル構成）で完結。SNS 中継のようなクラウド依存は不要。
 
 ---
 
@@ -179,8 +182,8 @@ On Mon, 30 Jun 2026 10:00:00 +0900, 山田太郎 <yamada@example.com> wrote:
 ### A. スレッド化に直接効く
 | ヘッダ | 用途 |
 |---|---|
-| `Message-ID` / `In-Reply-To` / `References` | 返信連鎖の確定的な連結 |
-| `Thread-Index` / `Thread-Topic`（Microsoft） | Outlook/Exchange が会話ツリーをエンコード。`References` 欠落時の補完 |
+| `Message-ID` / `In-Reply-To` / `References` | 返信連鎖の確定的な連結（**実装済み**・現状の束ねの中核） |
+| `Thread-Index` / `Thread-Topic`（Microsoft） | Outlook/Exchange が会話ツリーをエンコード。`References` 欠落時の補完候補。**現状は解析・保存のみ（`parser.rs` で `thread_index` を抽出）で、束ねには未使用** |
 
 ### B. 仕分け（自動分類）に効く
 | ヘッダ | 用途 |
@@ -216,7 +219,7 @@ On Mon, 30 Jun 2026 10:00:00 +0900, 山田太郎 <yamada@example.com> wrote:
 
 詳細は [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)。
 
-- `emails` に追加: `clean_body`（引用除去後の本文）, `body_fingerprint`, `logical_thread_id`, `thread_assignment`（auto/manual）, および活用ヘッダ（`thread_index` / `list_id` / `delivered_to` / `auth_result` / `precedence` / `x_mailer` 等）
+- `emails` に追加: `clean_body`（引用除去後の本文）, `body_fingerprint`, `logical_thread_id`, `thread_assignment`（auto/manual）, および活用ヘッダ（実際に保存済みの列は `thread_index` / `list_id` / `delivered_to` / `auth_result`。`precedence` / `x_mailer` は**現状は列を持たない＝将来追加予定**）
 - `logical_threads`: アプリが再構築する会話単位（ヘッダスレッドとは独立）。`title`（アプリ独自・リネーム可）／`auto_title`（元件名）
 - `message_quotes`: 1メール内の引用ブロック（`quoted_from` / `quoted_at` / `fingerprint` / `matched_email_id`）
 - `email_fts`: 索引対象を `clean_body` に
@@ -228,7 +231,7 @@ On Mon, 30 Jun 2026 10:00:00 +0900, 山田太郎 <yamada@example.com> wrote:
 | コマンド | 用途 |
 |---|---|
 | `thread_list` | 論理スレッド一覧 |
-| `thread_messages` | スレッド内メッセージ（clean_body＋引用折りたたみ） |
+| `thread_view` | スレッド内メッセージ（clean_body＋引用折りたたみ） |
 | `thread_split` | 指定メールを別スレッドへ分割（手動上書き） |
 | `thread_merge` | 2つの論理スレッドを結合（手動上書き） |
 | `thread_rename` | 論理スレッドにアプリ独自タイトルを付与（再件名） |
@@ -244,4 +247,4 @@ On Mon, 30 Jun 2026 10:00:00 +0900, 山田太郎 <yamada@example.com> wrote:
 
 - **Phase 4（メール同期・受信）**: 引用/署名分離・(from+時刻)抽出・fingerprint 生成までの解析基盤。
 - **Phase 5（UI）**: clean_body のチャット表示・引用折りたたみ・論理スレッド表示。
-- **Phase 7（検索・タグ）**: 自動分割の精緻化、手動分割/結合 UI、FTS5(clean_body) 連携。
+- **Phase 7（検索・タグ）**: 引用シグナルを使った自動分割候補の提示（将来拡張）、手動分割/結合 UI、FTS5(clean_body) 連携。

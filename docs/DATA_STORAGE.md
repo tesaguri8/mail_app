@@ -1,6 +1,6 @@
 # データ保存場所設計
 
-**ステータス:** 計画（実装未着手）
+**ステータス:** 実装中（アルファ・0.1.0-alpha.1）
 **出典:** 旧 `README_plan.md` §13。パス取得の実装例は Electron から **Tauri（Rust）** に置き換え。
 
 ---
@@ -9,7 +9,7 @@
 
 | データ | 置き場所 | 理由 |
 |---|---|---|
-| メールDB(SQLCipher)・添付・索引・`media`（背景）・アプリ設定 | **アプリ専用** `…\tesaguri.rondine.dev\` | 大容量・機密・アプリ固有。隔離＆暗号化、移行/アンインストール容易 |
+| メールDB(SQLite)・添付・索引・`media`（背景）・アプリ設定 | **アプリ専用** `…\tesaguri.rondine.dev\` | 大容量・機密・アプリ固有。隔離、移行/アンインストール容易（SQLCipher 暗号化は後続・未導入。現状は `bundled` プレーン SQLite） |
 | AI 注釈（要約・分類など、メール内容由来） | **アプリ専用**（メールDB側 `ai_annotations`） | メールに紐づく機密。共有領域に出さない |
 | TSG One アカウント／サインイン・**AIトークン残量・使用量**・共有AI設定 | **TSG One 共有** `…\tesaguri.tsg-one\` | 全TSGアプリで同一アカウント・同一トークン残量を共有 |
 | 機密（TSG One トークン・資格情報） | **OS keyring**（サービス名 `tesaguri.tsg-one`） | keyring は OS 全体共有 → 全TSGアプリが同じ資格情報を参照。平文フォルダ不要 |
@@ -53,7 +53,7 @@
 ```
 C:\Users\{username}\AppData\Roaming\tesaguri.rondine.dev\
 ├── data\
-│   ├── mail.db                # SQLite（SQLCipher 暗号化）
+│   ├── mail.db                # SQLite（`bundled` プレーン。SQLCipher 暗号化は後続・未導入）
 │   ├── emails\                # メール本文ファイル（年月別: 2024\01\ ...）
 │   ├── attachments\           # 添付（{email_id}\ 別）
 │   └── search\                # 検索インデックス
@@ -155,7 +155,7 @@ impl StoragePaths {
 
 ## 4. セキュリティ考慮事項
 
-- **暗号化**: アカウント情報 = `keyring`（OS 金庫）/ DB = SQLCipher / 添付 = AES-256（`aes-gcm`）
+- **暗号化**: アカウント情報 = `keyring`（OS 金庫。実装済み）/ DB = SQLCipher（後続・未導入。現状は `bundled` プレーン SQLite）/ 添付 = AES-256（`aes-gcm`）（後続・未導入・計画）
 - **アクセス制御**: ファイルパーミッションは所有者のみ（600/700 相当）。データアクセスは Rust バックエンドに限定。
 - **一時ファイル**: 自動削除とセキュアクリア。
 

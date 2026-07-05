@@ -10,7 +10,7 @@
 
 ## 技術スタック
 
-> **Primadoc 同等スタック（Tauri 2 + Rust）を採用。** 構成・段階計画は [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) を参照。本プロジェクトは実装未着手の計画段階。
+> **Primadoc 同等スタック（Tauri 2 + Rust）を採用。** 構成・段階計画は [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) を参照。ステータス: 実装中（アルファ・0.1.0-alpha.1）。
 
 ### アプリ基盤
 - **Tauri 2** - デスクトップアプリケーション基盤（Rust + WebView）
@@ -29,16 +29,16 @@
 - **Rust** - Tauri バックエンドに統合（別プロセス Python/FastAPI は不採用）
 - **`#[tauri::command]` + invoke** - フロント/バック間通信（FastAPI 不要）
 - **ts-rs** - Rust→TS 境界型の自動生成（`src/bindings/`）
-- **async-imap + tokio** - IMAP 受信・同期
+- **imap（ブロッキング）+ native-tls** - IMAP 受信・同期（`spawn_blocking` で実行。async-imap/tokio-imap は不採用）
 - **lettre** - SMTP 送信
 - **mail-parser** - MIME 解析
 - **keyring** - 資格情報を OS 金庫に保存（Electron safeStorage の代替）
 
 ### データベース
-- **SQLite**（Rust `rusqlite`）- メタデータ管理・索引
-- **SQLCipher** - データベース暗号化（`bundled-sqlcipher`）
+- **SQLite**（Rust `rusqlite`・`bundled`）- メタデータ管理・索引
 - **FTS5** - 全文検索（メール大量件数向けにインデックス検索）
-- マイグレーションは Rust 側で自前 SQL 管理（Alembic 不採用）
+- **SQLCipher** - データベース暗号化は後続（未導入。現状は `bundled` プレーン SQLite）
+- マイグレーションは Rust 側で自前 SQL 管理（Alembic 不採用。現在 0001〜0037、0035 は意図的に欠番）
 
 ## 主な機能
 
@@ -64,18 +64,21 @@
 ```
 mail_app/
 ├── src/                # フロントエンド（React レンダラー）
-│   ├── bindings/       # ts-rs 生成の Rust→TS 型（手書き禁止）
+│   ├── bindings/       # ts-rs 生成の Rust→TS 型（手書き禁止・約45型）
 │   ├── renderer/       # components/ hooks/ stores/ services/ locales/ config/ ...
-│   └── shared/         # フロント/バック共有ロジック
+│   └── shared/         # フロント/バック共有ロジック（未作成）
 ├── src-tauri/          # Rust バックエンド
 │   ├── src/
-│   │   ├── commands/   # #[tauri::command]（account, mail, search, tag, sync ...）
-│   │   ├── services/   # imap/ smtp/ parser/ store/ search/ crypto.rs ...
-│   │   ├── lib.rs / main.rs / error.rs
+│   │   ├── commands.rs # #[tauri::command]（単一ファイル・105 ハンドラ）
+│   │   ├── models.rs   # 境界型・データモデル
+│   │   ├── services/   # フラット構成: imap_sync.rs smtp.rs parser.rs quotes.rs（引用解析）
+│   │   │                #   autoconfig.rs vcard.rs gcsv.rs dedupe.rs compress.rs datadir.rs
+│   │   │                #   dataver.rs media.rs + spam/ store/（threads.rs=スレッド再構築 等）
+│   │   ├── lib.rs / main.rs
 │   ├── capabilities/   # 権限定義（宣言的）
 │   └── tauri.conf.json
-├── mobile/             # モバイル版（Expo / React Native）
-├── packages/           # 共有 TS（mail-core: 引用解析/スレッド再構築, types, i18n, utils）
+├── mobile/             # モバイル版（Expo / React Native）（未作成・計画）
+├── packages/           # 共有 TS（mail-core/types/i18n/utils）（未作成・計画。引用解析/スレッド再構築は Rust services 側で実装済み）
 ├── config/             # 定数の単一ソース（app-identity.json 等。ハードコード排除）
 ├── scripts/            # 開発ツール（sync-app-identity.mjs 等）
 ├── spec/               # 公開仕様（保護領域の相互運用。コードは非公開、仕様のみ公開）
@@ -170,8 +173,8 @@ src/renderer/locales/
 
 ## データベース管理
 
-SQLite（`rusqlite` + SQLCipher + FTS5）を Rust バックエンドで管理。マイグレーションは
-Alembic ではなく、`src-tauri/src/services/store/` 内で自前のバージョン管理 SQL として実装する。
+SQLite（`rusqlite` `bundled` + FTS5。SQLCipher 暗号化は後続・未導入）を Rust バックエンドで管理。マイグレーションは
+Alembic ではなく、`src-tauri/src/services/store/migrations/` 内で自前のバージョン管理 SQL として実装する（現在 0001〜0037、0035 は意図的に欠番）。
 
 - スキーマ例: accounts / mailboxes / messages / threads / attachments / tags / messages_fts
 - 起動時に現在のスキーマバージョンを確認し、未適用のマイグレーションを順次適用
@@ -196,7 +199,7 @@ MAX_ATTACHMENT_SIZE=25MB  # 添付上限
 
 - アカウント認証情報: `keyring`（OS 金庫: Win=Credential Manager / mac=Keychain / Linux=Secret Service）
 - 認証方式: 基本メールは普通のクライアント同様の手動 IMAP/SMTP 設定（OAuth 不要）。OAuth は AI・TSG One 連携時のみ（[docs/POSITIONING.md](docs/POSITIONING.md) §5）
-- データベース: SQLCipher 暗号化
+- データベース: SQLCipher 暗号化（後続・未導入。現状は `bundled` プレーン SQLite）
 - 通信: TLS/SSL 必須（IMAP/SMTP）
 - 権限: Tauri `capabilities/` で宣言的に最小権限を付与
 - ファイルアクセス: 適切なパーミッション設定
@@ -230,8 +233,8 @@ MAX_ATTACHMENT_SIZE=25MB  # 添付上限
    cd src-tauri && cargo clean && cargo build
    ```
 
-3. **SQLCipher のビルドで詰まる場合**
-   - `rusqlite` の `bundled-sqlcipher` フィーチャと、Windows ビルドツール（MSVC）の導入を確認
+3. **SQLCipher のビルドで詰まる場合**（※現状は `bundled` プレーン SQLite を使用。SQLCipher は後続で導入予定）
+   - 導入時は `rusqlite` の `bundled-sqlcipher` フィーチャと、Windows ビルドツール（MSVC）の導入を確認
 
 ## 貢献方法
 
@@ -251,4 +254,4 @@ MAX_ATTACHMENT_SIZE=25MB  # 添付上限
 
 ---
 
-最終更新日: 2026年6月（Tauri 2 + Rust スタックで計画策定）
+最終更新日: 2026年7月（Tauri 2 + Rust スタック）

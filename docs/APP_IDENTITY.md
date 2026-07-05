@@ -1,6 +1,6 @@
 # アプリ識別情報の単一ソース化（ハードコード排除）
 
-**ステータス:** 計画（実装未着手）
+**ステータス:** 実装中（アルファ・0.1.0-alpha.1）。**単一ソース化は実装済み**（`config/app-identity.json` ＋ `scripts/sync-app-identity.mjs` → 生成物 `src/renderer/config/appIdentity.ts`）。共有パッケージ `packages/app-identity` は未作成（計画）。
 **目的:** 製品名・identifier などの**アプリ識別情報を 1 箇所に集約**し、いつでも差し替え可能にする。ハードコードを排除する（[CODING_GUIDELINES 準拠](DEVELOPMENT_PLAN.md)）。
 
 ---
@@ -44,9 +44,9 @@
 |---|---|
 | `tauri.conf.json` | 生成スクリプトが `productName` / `identifier` を書き込む（静的ファイルのため生成） |
 | **Rust** | **実行時に Tauri から取得**（`app.config().identifier` / `app.package_info()`）。データパスは `app_data_dir()`（identifier ベース）。**定数を持たない** |
-| フロント（React/TS） | 生成した `src/config/appIdentity.ts` を参照、または `@tauri-apps/api/app` の `getName()` / `getIdentifier()` / `getVersion()` を実行時に使用 |
-| モバイル（Expo） | **`app.config.ts` が `config/app-identity.json` を import** し `name` / `ios.bundleIdentifier` / `android.package` / `scheme` を導出（Expo 動的コンフィグ＝真の単一ソース） |
-| 共有 | `packages/app-identity`（JSON を re-export）で web/mobile の TS から共通利用 |
+| フロント（React/TS） | **生成物 `src/renderer/config/appIdentity.ts`（実在）** を参照、または `@tauri-apps/api/app` の `getName()` / `getIdentifier()` / `getVersion()` を実行時に使用 |
+| モバイル（Expo） | **`app.config.ts` が `config/app-identity.json` を import** し `name` / `ios.bundleIdentifier` / `android.package` / `scheme` を導出（Expo 動的コンフィグ＝真の単一ソース）※モバイル未着手 |
+| 共有 | `packages/app-identity`（JSON を re-export）で web/mobile の TS から共通利用 ※**未作成（計画）** |
 
 ### 生成スクリプト（例）
 
@@ -54,7 +54,7 @@
 scripts/sync-app-identity.mjs
   1. config/app-identity.json を読む
   2. src-tauri/tauri.conf.json（および *.dev/*.staging）へ productName / identifier を書き込む
-  3. src/config/appIdentity.ts を生成（"// AUTO-GENERATED — do not edit" バナー付き）
+  3. src/renderer/config/appIdentity.ts を生成（"// AUTO-GENERATED — do not edit" バナー付き）
   4. （任意）Cargo メタデータ／Expo は app.config.ts が直接 import するため不要
 ```
 
@@ -65,7 +65,7 @@ scripts/sync-app-identity.mjs
 ## 4. フロントでの使い方（イメージ）
 
 ```ts
-// src/config/appIdentity.ts は生成物。利用側はここを import する（ハードコードしない）
+// src/renderer/config/appIdentity.ts は生成物。利用側はここを import する（ハードコードしない）
 import { APP } from '@/config/appIdentity';
 // APP.productName / APP.identifier / APP.scheme ...
 

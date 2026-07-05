@@ -4,23 +4,16 @@
 **名前・メールアドレスのどちらからでも**相手を選べるようにする。候補ソースは
 **住所録（連絡先）＋ 過去のやり取り相手（送受信履歴）**の2つ。
 
-> ステータス: **設計確定・実装待ち**。実装は下記「前提（マージ依存）」の解消後に着手する。
+> ステータス: **バックエンド実装済み**（`recipient_suggest` コマンド＋`services/store/recipients.rs`、単体テスト有）。
+> 残りは**フロント配線**（`RecipientInput.tsx` の実装と Compose の To/Cc/Bcc 差し替え・i18n）。
 
-## 背景・前提（マージ依存）
+## 背景・経緯
 
-宛先オートコンプリートは 2 つの機能に同時に依存するが、現時点でこの両方を含む
-ブランチが存在しない。
-
-| ブランチ | Compose（送信UI） | 住所録（contacts） |
-|---|---|---|
-| `dev` | ✅ あり | ❌ なし |
-| `feature/contacts` | ❌ なし | ✅ あり |
-| `feature/mail-search` | ✅ あり | ❌ なし |
-
-→ **実装には Compose と contacts の両方が同一ワークツリーに揃っている必要がある。**
-ユーザーが両者をマージ（例: `feature/contacts` を `dev` に統合、または統合ブランチを用意）
-した後に、そのブランチ上で本設計に沿って実装する。本ドキュメントはマージ完了までの
-「実装の設計図」。
+宛先オートコンプリートは Compose（送信UI）と 住所録（contacts）の両方に依存する。両者が
+同一ワークツリーに揃った時点でバックエンドを実装済み：`RecipientSuggestion` モデル・
+`services/store/recipients.rs`（`suggest_recipients` ＋ `parse_addr` / `split_header_addrs` ＋
+`#[cfg(test)]` 単体テスト）・`recipient_suggest` コマンド（`commands.rs`、`lib.rs` 登録済み）。
+以降の残作業はフロント側（下記「実装順」の 3〜6）。
 
 ## データソースと既存インターフェイス
 
@@ -145,13 +138,13 @@ Props:
 ```
 （英: "Favorite" / "Contacts" / "History" / "No matches"）
 
-## 実装順（マージ後）
-1. Backend: `RecipientSuggestion` モデル → `recipients.rs`（`suggest_recipients` + パーサ + テスト）。
-2. Backend: `recipient_suggest` コマンド追加 → `lib.rs` 登録。
-3. `npm run gen:bindings` で `RecipientSuggestion.ts` 生成。
-4. Front: `recipients.ts` → `RecipientInput.tsx`。
-5. Compose の To/Cc/Bcc を差し替え。
-6. i18n 追記。
+## 実装順（進捗）
+1. ✅ Backend: `RecipientSuggestion` モデル → `recipients.rs`（`suggest_recipients` + パーサ + テスト）。
+2. ✅ Backend: `recipient_suggest` コマンド追加 → `lib.rs` 登録。
+3. `npm run gen:bindings` で `RecipientSuggestion.ts` 生成（未確認なら実施）。
+4. ⬜ Front: `recipients.ts` → `RecipientInput.tsx`。
+5. ⬜ Compose の To/Cc/Bcc を差し替え。
+6. ⬜ i18n 追記。
 7. 検証: `npm run typecheck && npm run lint`、`cd src-tauri && cargo test --lib && cargo clippy`。
 
 ## 将来拡張（今回のスコープ外）

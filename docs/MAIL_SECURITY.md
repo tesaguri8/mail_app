@@ -1,6 +1,6 @@
 # メールの安全表示（リモート画像ブロック・なりすまし/危険警告）
 
-**ステータス:** 計画（実装未着手）／プライバシー看板に直結
+**ステータス:** 実装中（アルファ・0.1.0-alpha.1）／プライバシー看板に直結。リモート画像の既定ブロック＋明示ロード（`mail_load_remote`／`sender_set_remote_policy`）は実装済み。サニタイズ・プロキシ（§1.1）・なりすまし/危険警告（§2）は未実装。
 **目的:** 受信メールを**安全に・追跡されずに**読む。リモート画像（追跡ピクセル）の既定ブロックと、なりすまし/フィッシングの警告表示。
 
 関連: [POSITIONING.md](POSITIONING.md)（プライバシー看板）/ [THREADING.md](THREADING.md)（ヘッダ活用）/ [SPAM.md](SPAM.md) / [FILTERING.md](FILTERING.md)
@@ -65,31 +65,31 @@ HTMLメールの外部画像は**開封トラッキング（追跡ピクセル�
 
 ## 4. Tauri コマンド（抜粋）
 
-| コマンド | 用途 |
-|---|---|
-| `mail_render_safe` | リモート画像を抑止して本文をレンダリング |
-| `mail_load_remote` | 明示的に外部画像を読み込む（この1通/この差出人） |
-| `sender_set_remote_policy` | 差出人ごとの画像許可を設定 |
-| `mail_security_report` | 認証結果・なりすまし/危険サインの一覧を返す |
+| コマンド | 用途 | 状態 |
+|---|---|---|
+| `mail_load_remote` | 明示的に外部画像を読み込む（reqwest でサイズ/タイムアウト上限・media.rs で再エンコード） | **実装済み** |
+| `sender_set_remote_policy` | 差出人ごとの画像許可を設定（`sender_remote_allowed` で参照） | **実装済み** |
+| ~~`mail_render_safe`~~ | （不採用）リモート画像の抑止はフロント（`HtmlText.tsx` の `remoteImages` prop）で行うためコマンド不要 | 未実装・不要 |
+| ~~`mail_security_report`~~ | 認証結果・なりすまし/危険サインの一覧を返す | 未実装（§2 のなりすまし警告とともに将来） |
 
 ---
 
 ## 5. 実装フェーズ（ロードマップ）
 
-画像安全まわりの実装順。**受信側（本書）＋送信側（[COMPOSE.md](COMPOSE.md) §3）＋サーバ側（TSG Core）**を通した計画。現状：`contacts.allow_remote_images` は**DBカラム・モデルとも実装済み**（`migrations/0016_contacts.sql`）だが、リモート取得の実装・コマンドは**未着手**（`reqwest` 無し）。今は常時ブロックでプレースホルダ 🖼 のみ。画像 decode/re-encode 基盤は `services/media.rs` に既存（再エンコード時点で EXIF も落ちる）。
+画像安全まわりの実装順。**受信側（本書）＋送信側（[COMPOSE.md](COMPOSE.md) §3）＋サーバ側（TSG Core）**を通した計画。現状：`contacts.allow_remote_images` は**DBカラム・モデルとも実装済み**（`migrations/0016_contacts.sql`）。**Phase 0・Phase 1 は実装済み**（下記）。画像 decode/re-encode 基盤は `services/media.rs` に既存（再エンコード時点で EXIF も落ちる）。
 
-### Phase 0 — プレースホルダ誤ナビ修正（最優先・極小）
-`<a>` の子である 🖼 `<span>` のクリックが親アンカーへバブリングし、リモート画像プレースホルダを押すとリンク先へ飛んでしまう。`renderer/components/HtmlText.tsx` のプレースホルダ span に `onClick` で `preventDefault()`＋`stopPropagation()` を付けて伝播を止める。規模: **S**（数行）。フィッシング誤タップを即座に潰せる。
+### Phase 0 — プレースホルダ誤ナビ修正（**実装済み**・極小）
+`<a>` の子である 🖼 `<span>` のクリックが親アンカーへバブリングし、リモート画像プレースホルダを押すとリンク先へ飛んでしまう問題を修正済み。`renderer/components/HtmlText.tsx` のプレースホルダ span に `onClick` で `preventDefault()`＋`stopPropagation()` を付けて伝播を止めた。
 
-### Phase 1 — 受信側「画像を表示」UX ＋ リモート画像取得
-既定ブロックは維持しつつ明示許可で表示可能に。看板機能。
-- Cargo に `reqwest`（既存 `native-tls` を再利用）を追加。
-- `mail_load_remote(urls)`：http(s) のみ・サイズ/タイムアウト上限。取得後 `media.rs` で再エンコード（＝デコーダ攻撃・EXIF も無害化。§1.1）→ data URL 化。
-- `sender_set_remote_policy`：`contacts.allow_remote_images` を更新（基盤は既存）。
-- `HtmlText.tsx`：`inlineImages` と同型の `remoteImages` を受け取り実 `<img>` を描画＋remote 画像件数を集計。
-- `MailBody.tsx`：本文上部にバナー「外部画像 N 個 ［画像を表示］［この差出人を常に許可］」。許可済み差出人は自動ロード。
-- （任意）追跡ピクセル検出（1x1・既知トラッカー）を可視化。
-- 規模: **L**。`mail_render_safe` / `mail_security_report`（§4）もこのフェーズに置く。
+### Phase 1 — 受信側「画像を表示」UX ＋ リモート画像取得（**実装済み**）
+既定ブロックを維持しつつ明示許可で表示可能に。看板機能。
+- Cargo に `reqwest`（既存 `native-tls` を再利用）を追加**済み**。
+- `mail_load_remote(urls)`：http(s) のみ・サイズ/タイムアウト上限・**差出人ごとのキャッシュ**付き。取得後 `media.rs` で再エンコード（＝デコーダ攻撃・EXIF も無害化。§1.1）→ data URL 化。**実装済み**。
+- `sender_set_remote_policy` / `sender_remote_allowed`：`contacts.allow_remote_images` を更新・参照。**実装済み**。
+- `HtmlText.tsx`：`inlineImages` と同型の `remoteImages` prop を受け取り実 `<img>` を描画。**実装済み**。
+- `MailBody.tsx`：本文上部のバナー「外部画像 N 個 ［画像を表示］［この差出人を常に許可］」。許可済み差出人は自動ロード。
+- （任意・未実装）追跡ピクセル検出（1x1・既知トラッカー）の可視化。
+- 補足: `mail_render_safe` / `mail_security_report`（§4）はコマンドとしては**不採用/未実装**。リモート画像の抑止はフロント側で完結する。
 
 ### Phase 2 — 送信側 EXIF/メタデータ削除
 → 詳細は [COMPOSE.md](COMPOSE.md) §3。受信側と独立で **Phase 1 と並行可**。規模: **M**。
@@ -97,4 +97,4 @@ HTMLメールの外部画像は**開封トラッキング（追跡ピクセル�
 ### Phase 3 — TSG Core サニタイズ・プロキシ（任意・将来／サーバ側）
 §1.1 のプロキシを実装。HMAC 署名 URL・SSRF ガード・再エンコード。Rondine 側は `mail_load_remote` に `via_proxy` を足すだけ（Phase 1 の拡張）。設計は TSG Core `docs/IMAGE_PROXY_PLAN.md`。コア安定後で良い。規模: **L（別リポ）**。
 
-> **推奨順序: Phase 0 → 1 → 2**（0 は即修正、1 が看板、2 は独立で並行）。3 はサーバ都合で後回し。
+> **進捗: Phase 0・1 は実装済み。** 残りは Phase 2（送信側 EXIF 削除・配線）＋ Phase 3（TSG Core プロキシ、サーバ都合で後回し）。

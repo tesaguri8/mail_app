@@ -1,6 +1,6 @@
 # 開発計画 — Rondine
 
-**ステータス:** 計画策定中（実装未着手 / コード 0 行）
+**ステータス:** 実装中（アルファ・0.1.0-alpha.1）
 **作成日:** 2026-06-30
 **対象:** Rondine（リポジトリ: mail_app）
 
@@ -10,8 +10,7 @@
 
 ## 0. この計画の位置づけ
 
-mail_app はまだ**実装コードが 1 行も存在しない**、純粋な計画段階のプロジェクトである。
-本ドキュメントは、実装を始める前に **採用する技術スタック・構成・段階計画** を定義するものである。
+本ドキュメントは当初、実装を始める前に **採用する技術スタック・構成・段階計画** を定義するものだった。現在はその計画に沿って**実装が進行中（アルファ・0.1.0-alpha.1）**であり、本節以降は当初計画に実装状況の注記を加えた振り返り記述として読む。スタックは確立済みで、**Phase 1〜8 相当まで概ね実装済み**（アカウント・同期・受信・スレッド解析・UI・送信・作成支援・検索/タグ/フィルタ・住所録）。**カレンダー（Phase 9）・AI・SNS 統合は未着手**。
 
 スタックは **Primadoc と同等（Tauri 2 + Rust）** を採用する。Primadoc / Doculator で確立済みのパターンをそのまま土台にできるため、構成・規約・ツールチェーンを流用する。
 
@@ -39,7 +38,7 @@ mail_app はまだ**実装コードが 1 行も存在しない**、純粋な計�
 | データ取得 | invoke ラッパー + Zustand（React Query は不採用） |
 | 多言語 | i18next / react-i18next（ja / en） |
 | 型共有 | ts-rs（Rust→TS 型を `src/bindings/` に自動生成） |
-| DB | SQLite + SQLCipher + FTS5（Rust `rusqlite`） |
+| DB | SQLite（`rusqlite` `bundled`）+ FTS5。SQLCipher 暗号化は後続（未導入） |
 | 資格情報 | keyring（OS 金庫） |
 | テスト | Vitest（フロント）/ `cargo test`（Rust） |
 | Lint/Format | ESLint + Prettier + Husky + lint-staged + markdownlint-cli2 |
@@ -75,16 +74,16 @@ mail_app はまだ**実装コードが 1 行も存在しない**、純粋な計�
 Primadoc はドキュメントエディタであり、**IMAP/SMTP・大量メールの全文検索・MIME 解析** といった
 メール固有の要件は持たない。この部分は本プロジェクトで新規に選定する。すべて Rust クレートで完結させる。
 
-| 要件 | 採用候補クレート | 備考 |
+| 要件 | 採用クレート | 備考 |
 |------|----------------|------|
-| IMAP 受信・同期 | `async-imap` + `tokio` | 非同期。IDLE による push 同期も視野 |
+| IMAP 受信・同期 | `imap`（ブロッキング）+ `native-tls` | `spawn_blocking` で実行。async-imap/tokio-imap は不採用 |
 | SMTP 送信 | `lettre` | 添付・TLS・認証対応 |
 | MIME 解析 | `mail-parser`（stalwartlabs） | 本文/添付/ヘッダ抽出 |
-| メール組み立て | `mail-builder` / `lettre` ビルダ | 送信メール生成 |
-| メタデータ/索引 DB | `rusqlite`（`bundled-sqlcipher` + FTS5） | 暗号化 + 全文検索を一体で |
-| 資格情報保存 | `keyring` | OAuth トークン/パスワード |
-| OAuth2（Gmail等） | `oauth2` + `reqwest` | 後続フェーズ。まずアプリパスワード対応 |
-| 本文/添付の暗号化 | `aes-gcm` / `ring` | Primadoc と共通パターン |
+| メール組み立て | `lettre` ビルダ | 送信メール生成（`mail-builder` は未導入） |
+| メタデータ/索引 DB | `rusqlite`（`bundled` + FTS5） | プレーン SQLite + 全文検索。SQLCipher は後続 |
+| 資格情報保存 | `keyring` | パスワード（将来 OAuth トークン） |
+| OAuth2（Gmail等） | （未導入。`oauth2` は後続） | 後続フェーズ。まずアプリパスワード対応 |
+| 本文/添付の暗号化 | （未導入。`aes-gcm` / `ring` は後続） | 添付暗号化・保護領域は後続フェーズ |
 
 ### 確定した方針
 
@@ -111,17 +110,19 @@ Primadoc はドキュメントエディタであり、**IMAP/SMTP・大量メー
 
 ## 3. ディレクトリ構造（Primadoc 準拠）
 
+> 実装が進行し、当初想定の入れ子構成（`commands/` `services/imap/` `threading/` 等のサブディレクトリ）ではなく、**単一ファイル `commands.rs` ＋ `services/` フラット構成**に落ち着いた。以下は実際のレイアウト（`src/shared`・`mobile/`・`packages/*` は未作成）。
+
 ```
 mail_app/
 ├── src/                        # フロントエンド（React レンダラー）
-│   ├── bindings/               # ts-rs が生成する Rust→TS 型（手書き禁止）
+│   ├── bindings/               # ts-rs が生成する Rust→TS 型（手書き禁止・約45型）
 │   ├── renderer/
 │   │   ├── components/         # UI コンポーネント
 │   │   ├── hooks/
 │   │   ├── stores/             # Zustand ストア
 │   │   ├── services/           # invoke() ラッパー（コマンド呼び出し）
 │   │   ├── locales/ja, en/     # i18next 翻訳リソース
-│   │   ├── config/             # 定数（ハードコード排除）
+│   │   ├── config/             # 定数（ハードコード排除。appIdentity.ts 生成物を含む）
 │   │   ├── contexts/
 │   │   ├── styles/
 │   │   ├── types/
@@ -129,31 +130,26 @@ mail_app/
 │   │   ├── i18n.ts
 │   │   ├── App.tsx
 │   │   └── index.tsx
-│   └── shared/                 # フロント/バック共有のロジック
+│   └── shared/                 # フロント/バック共有のロジック（未作成）
 ├── src-tauri/                  # Rust バックエンド
 │   ├── src/
-│   │   ├── commands/           # #[tauri::command]: account, mail, thread, search,
-│   │   │                       #   tag, attachment, sync, contact, event, settings, window
-│   │   ├── services/           # imap/, smtp/, parser/（引用・署名分離）, threading/（論理スレッド再構築）,
-│   │   │                       #   store/, search/, contacts/, calendar/（ics 含む）, ai/（cloud+ollama）,
-│   │   │                       #   security/（リモート画像/認証）, spam/, import/, crypto.rs, account.rs, sync/
-│   │   ├── error.rs
-│   │   ├── ids.rs
+│   │   ├── commands.rs         # #[tauri::command]（単一ファイル・105 ハンドラ）
+│   │   ├── models.rs           # 境界型・データモデル
+│   │   ├── services/           # フラット構成（サブディレクトリは spam/ store/ のみ）:
+│   │   │                       #   imap_sync.rs, smtp.rs, parser.rs, quotes.rs（引用解析）,
+│   │   │                       #   autoconfig.rs, vcard.rs, gcsv.rs, dedupe.rs, compress.rs,
+│   │   │                       #   datadir.rs, dataver.rs, media.rs,
+│   │   │                       #   spam/, store/（threads.rs=スレッド再構築, emails.rs, accounts.rs,
+│   │   │                       #     contacts.rs, tags.rs, settings.rs, migrations/ 等）
 │   │   ├── lib.rs
 │   │   └── main.rs
 │   ├── capabilities/           # 権限定義（宣言的）
 │   ├── icons/
 │   ├── Cargo.toml
 │   └── tauri.conf.json
-├── mobile/                     # モバイル版（Expo / React Native）。詳細: docs/CROSS_PLATFORM.md
-│   ├── app/ or src/            # 画面・コンポーネント（React Native）
-│   ├── app.json / eas.json     # Expo / EAS 設定
-│   └── package.json
-├── packages/                   # npm workspaces で共有（プラットフォーム非依存 TS）
-│   ├── mail-core/              # 引用解析・スレッド再構築アルゴリズム・共通スキーマ
-│   ├── types/                  # 境界型（ts-rs 生成と整合）
-│   ├── i18n/                   # 翻訳リソース
-│   └── utils/                  # 共通関数
+├── mobile/                     # モバイル版（Expo / React Native）。（未作成・計画。詳細: docs/CROSS_PLATFORM.md）
+├── packages/                   # npm workspaces 共有 TS（mail-core/types/i18n/utils）。（未作成・計画。
+│                               #   引用解析・スレッド再構築は現状 Rust services 側で実装済み）
 ├── spec/                       # 公開仕様（ベンダー中立。コードは非公開、仕様のみ公開）
 │   └── protected-regions-v1.md
 ├── config/
@@ -184,10 +180,12 @@ mail_app/
 
 ## 5. フェーズ計画
 
+> 実装状況（2026-07 時点）: **Phase 0〜8 は概ね実装済み**（アルファ）。**Phase 9（カレンダー）・AI 活用・SNS 統合・モバイルは未着手**。各フェーズ見出しの ✅/⏳ 印は現況の目安。
+
 ### Phase 0 — 計画策定（本ドキュメント）✅
 - 採用スタック・構成・段階計画の定義。`CLAUDE.md` への反映。
 
-### Phase 1 — プロジェクト基盤
+### Phase 1 — プロジェクト基盤 ✅
 - Tauri 2 + React + TS + Vite 雛形を作成。
 - TailwindCSS 4 / PostCSS、ESLint / Prettier / Husky / lint-staged / markdownlint-cli2 を Primadoc から流用。
 - i18next + react-i18next（ja/en）セットアップ。
@@ -197,24 +195,24 @@ mail_app/
 - **フレームレスウィンドウ**（`decorations: false`）+ 自作タイトルバー（`data-tauri-drag-region`）。全面ビジュアル/ウィジェット化の土台（[UI_UX_DESIGN.md](UI_UX_DESIGN.md) §1.5）。
 - ローカル画像表示のため **asset プロトコル**有効化＋**CSP `img-src`** 許可（背景画像用）。
 
-### Phase 2 — データ層
-- `services/store/`：`rusqlite`（SQLCipher + FTS5）で DB 初期化・自前マイグレーション。
+### Phase 2 — データ層 ✅
+- `services/store/`：`rusqlite`（`bundled` プレーン SQLite + FTS5）で DB 初期化・自前マイグレーション（現在 0001〜0037、0035 は意図的に欠番）。SQLCipher 暗号化は後続（未導入）。
 - スキーマ設計：accounts / emails / threads / tags / email_tags / attachments / email_fts（詳細は [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)）。
 - 境界型（Message, Thread, Account 等）を ts-rs で生成。
 
-### Phase 3 — アカウント・認証・オンボーディング・移行
-- `services/account.rs` + `keyring`：資格情報を OS 金庫に保存。
+### Phase 3 — アカウント・認証・オンボーディング・移行 ✅
+- `services/store/accounts.rs`・`server_accounts.rs` + `keyring`：資格情報を OS 金庫に保存。
 - **普通のメールクライアントと同じ手動設定**（IMAP/SMTP のホスト/ポート/ユーザー/パスワード・アプリパスワード）。**OAuth は不要**（基本メール）。OAuth は AI・TSG One 連携のみ。
 - **オンボーディング＋プロバイダ自動設定**（autoconfig/autodiscover、[ONBOARDING.md](ONBOARDING.md)）。
 - **インポート/エクスポート**（.eml/.mbox/Thunderbird/Outlook、[IMPORT_EXPORT.md](IMPORT_EXPORT.md)）。
 
-### Phase 4 — メール同期・受信＋スレッド解析基盤
-- `services/imap/`（`async-imap`）＋ `services/parser/`（`mail-parser`）。
+### Phase 4 — メール同期・受信＋スレッド解析基盤 ✅
+- `services/imap_sync.rs`（`imap` ブロッキング + `native-tls`、`spawn_blocking` で実行）＋ `services/parser.rs`（`mail-parser`）。
 - **同期範囲はユーザー選択**（[SYNC.md](SYNC.md)）: アカウント単位の同期ウィンドウ（既定 6ヶ月、全期間も可）。メタデータ→本文→添付の段階取得、保持ポリシー、差分同期（UIDVALIDITY / UIDNEXT 管理）、添付の遅延取得。
-- **スレッド再構築の解析基盤**（[THREADING.md](THREADING.md)）: 引用・署名分離 → `clean_body` 生成、引用属性の (from+時刻) 抽出・fingerprint、活用ヘッダ（`Thread-Index`/`List-Id`/`Delivered-To`/`Authentication-Results` 等）抽出、論理スレッド割当。**アルゴリズムは `packages/mail-core`(TS) への切り出しを意識**（モバイル再利用のため。[CROSS_PLATFORM.md](CROSS_PLATFORM.md)）。
+- **スレッド再構築の解析基盤**（[THREADING.md](THREADING.md)）: 引用・署名分離 → `clean_body` 生成、引用属性の (from+時刻) 抽出・fingerprint、活用ヘッダ（`Thread-Index`/`List-Id`/`Delivered-To`/`Authentication-Results` 等）抽出、論理スレッド割当。**実装は Rust の `services/quotes.rs`（引用解析）・`services/store/threads.rs`（スレッド再構築）で成立**（当初想定の `packages/mail-core`(TS) 切り出しは保留。モバイル再利用時に再検討。[CROSS_PLATFORM.md](CROSS_PLATFORM.md)）。
 - FTS5（`clean_body`）への索引投入。IDLE による準リアルタイム更新は任意。
 
-### Phase 5 — UI（ホーム・表示）
+### Phase 5 — UI（ホーム・表示）✅
 - **ホーム（ダッシュボード）**: 全面背景画像 + 概要パネル + ナビゲーション。時計・日付表示。
 - **背景画像管理**: アプリ同梱＋ユーザー取り込み（インポート・サムネ生成・`media/backgrounds/` 保存）、自動ローテーション（時間帯／日替わり）。
 - **ウィジェット（コンパクト）モード**: リサイズ連動で時計・日付ウィジェット化。always-on-top トグル。
@@ -222,31 +220,31 @@ mail_app/
 - **リモート画像/トラッキングの既定ブロック＋なりすまし/危険警告UI**（[MAIL_SECURITY.md](MAIL_SECURITY.md)）。
 - Zustand ストア + `services/` invoke ラッパー。
 
-### Phase 6 — 送信＋作成支援
-- `services/smtp/`（`lettre`）＋作成画面（宛先/件名/本文/添付、下書き、返信引用）。
+### Phase 6 — 送信＋作成支援 ✅（AI 作成支援・保護領域を除く）
+- `services/smtp.rs`（`lettre`）＋作成画面（宛先/件名/本文/添付、下書き、返信引用）。
 - **作成実務**（[COMPOSE.md](COMPOSE.md)）: 下書き自動保存・送信取消・予約送信・署名・テンプレート・スヌーズ・Markdown→HTML 送信。
 - **作成モード**: 返信 / **このアドレスへ新規メール**（参照ヘッダなし・新論理スレッド）。
-- **AI 作成支援（オプトイン）**: `services/ai/`（cloud + Ollama）。件名生成・本文ドラフト/リライト。要約・返信提案・分類は Phase 7 で拡張（[AI_FEATURES.md](AI_FEATURES.md)）。
-- **保護領域（プライバシー伏字）**: まず **Lv1 MVP**（ヘッダ方式＋アプリ共有鍵＋`aes-gcm`、鍵交換・PDF 不要）で参照実装を成立 → Lv2（本人鍵・自動鍵交換）で強化、PDF フォールバックは後続。作成時の伏字化、受信時の復号インライン表示、AI 連携前の伏字置換（[PROTECTED_REGIONS.md](PROTECTED_REGIONS.md) §3.5）。
+- **AI 作成支援（オプトイン）**（未着手）: `services/ai/`（cloud + Ollama）。件名生成・本文ドラフト/リライト。要約・返信提案・分類は Phase 7 で拡張（[AI_FEATURES.md](AI_FEATURES.md)）。
+- **保護領域（プライバシー伏字）**（未着手）: まず **Lv1 MVP**（ヘッダ方式＋アプリ共有鍵＋`aes-gcm`、鍵交換・PDF 不要）で参照実装を成立 → Lv2（本人鍵・自動鍵交換）で強化、PDF フォールバックは後続。作成時の伏字化、受信時の復号インライン表示、AI 連携前の伏字置換（[PROTECTED_REGIONS.md](PROTECTED_REGIONS.md) §3.5）。
 
-### Phase 7 — 検索・タグ・フィルタ・スレッド整理
+### Phase 7 — 検索・タグ・フィルタ・スレッド整理 ✅（AI 拡張を除く）
 - FTS5 検索 UI（件名/`clean_body`/差出人/添付名）、ファセット、検索履歴。
 - **フィルタリング**（[FILTERING.md](FILTERING.md)）: 状態フラグ（ブックマーク/要再確認）、相手（知り合い/取引実績/グループ）、カテゴリ、保存フィルタ（スマートフォルダ）。
 - 手動/自動タグ、振り分けルールエンジン（`List-Id` 等のヘッダ活用）。
 - **迷惑メール**（[SPAM.md](SPAM.md)）: ローカル学習＋（オプトイン）TSG One 共有シグナル。隔離・誤検知復帰。
 - **スレッド整理 UI**: 自動分割の精緻化、手動の分割/結合/**再件名**、論理スレッドのラベル付け（[THREADING.md](THREADING.md)）。
-- **AI 拡張**: スレッド要約・返信候補提案・自動分類/タグ提案（[AI_FEATURES.md](AI_FEATURES.md)）。`ai_annotations` への保存。
+- **AI 拡張**（未着手）: スレッド要約・返信候補提案・自動分類/タグ提案（[AI_FEATURES.md](AI_FEATURES.md)）。`ai_annotations` への保存。
 
-### Phase 8 — 住所録（アドレス帳）
-- `services/contacts/` + `contact_*` コマンド。ローカル連絡先 CRUD・グループ・お気に入り・誕生日。
+### Phase 8 — 住所録（アドレス帳）✅
+- `services/store/contacts.rs`（+ `vcard.rs`/`gcsv.rs` 取り込み）+ `contact_*` コマンド。ローカル連絡先 CRUD・グループ・お気に入り・誕生日。
 - メール作成への連絡先補完、差出人の連絡先登録。Google/iCloud 連携は後続。
 
-### Phase 9 — カレンダー
+### Phase 9 — カレンダー ⏳（未着手）
 - `services/calendar/`（ローカル予定 + `.ics` 取り込み）+ `event_*` コマンド。
 - 月/週/日ビュー、リマインダー通知、ホーム/ウィジェットへの「次の予定」表示。
 - メール招待（iCal）連携、参加者を連絡先と紐付け。Google Calendar/CalDAV 同期は後続。
 
-### Phase 10 — ビルド・配布
+### Phase 10 — ビルド・配布 ⏳（未完了）
 - `tauri build`（Windows nsis を最優先、将来 dmg/deb/appimage）。
 - 署名、`tauri-plugin-updater` 配信。
 
@@ -260,7 +258,7 @@ mail_app/
 - **S5 運用強化**: 対応状態・キーワード強調・複数施設管理。（将来）Booking.com / X を検討。
 
 ### モバイル版トラック（後続）— Expo / React Native
-**前提: デスクトップのコア機能が安定してから着手**（詳細: [CROSS_PLATFORM.md](CROSS_PLATFORM.md)）。Phase 4 でスレッド解析アルゴリズムを `packages/mail-core`(TS) に切り出しておくと再利用がスムーズ。
+**前提: デスクトップのコア機能が安定してから着手**（詳細: [CROSS_PLATFORM.md](CROSS_PLATFORM.md)）。当初はスレッド解析を `packages/mail-core`(TS) に切り出す想定だったが、実際は Rust（`services/quotes.rs`・`store/threads.rs`）で実装済み。モバイル着手時に TS 版の切り出し要否を再検討する（保留）。
 
 - **M1 基盤**: Expo セットアップ、React Navigation、`expo-secure-store`、`expo-sqlite`、共有 `packages/` 結合。
 - **M2 メール**: JS の IMAP/MIME ＋ `mail-core` で同期・解析・スレッド表示（chat 表示・`clean_body`）。
@@ -273,9 +271,9 @@ mail_app/
 
 | 項目 | 内容 | 対応 |
 |------|------|------|
-| Rust メールエコシステムの成熟度 | `async-imap` 等は Python `imaplib` ほど枯れていない | 早期に同期 PoC を実施（Phase 4 前倒し検証） |
-| SQLCipher ビルド | `rusqlite` の SQLCipher 同梱はクロスビルドで詰まりやすい | Phase 2 で Windows ビルド確立を最優先 |
-| OAuth2 対応 | Gmail/Outlook は最終的に OAuth 必須 | Phase 3 はアプリパスワード、OAuth は別フェーズ |
+| Rust メールエコシステムの成熟度 | メール系クレートは Python `imaplib` ほど枯れていない | ブロッキング `imap` + `native-tls` を `spawn_blocking` で採用し実装済み（async-imap は不採用） |
+| SQLCipher ビルド | `rusqlite` の SQLCipher 同梱はクロスビルドで詰まりやすい | 現状は `bundled` プレーン SQLite で先行。SQLCipher 暗号化は後続（未導入） |
+| OAuth2 対応 | Gmail/Outlook は最終的に OAuth 必須 | Phase 3 はアプリパスワード（実装済み）、OAuth（`oauth2`）は別フェーズ・未導入 |
 
 ---
 
@@ -305,9 +303,10 @@ mail_app/
 
 ## 8. 次アクション
 
-1. 本計画・各設計ドキュメントのレビュー・確定。
-2. Phase 1 着手（Tauri 雛形作成）。
+1. カレンダー（Phase 9）の実装着手。
+2. AI 活用・保護領域の実装着手（オプトイン）。
+3. ビルド・配布（Phase 10）の整備。
 
 ---
 
-最終更新日: 2026-06-30
+最終更新日: 2026年7月

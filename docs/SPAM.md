@@ -113,7 +113,7 @@
 - 学習総数カウンタ: 学習済み spam/ham メール総数（`n_spam` / `n_ham`）は §7.2 のスコア計算に必須
 - 共有購読（**後続フェーズ B**）: ブロックリスト/指紋/レピュテーションのローカルキャッシュ（定期更新）
 
-### 4.2 DDL（フェーズA・SQLite/SQLCipher）
+### 4.2 DDL（フェーズA・SQLite。DB 暗号化＝SQLCipher は計画・未導入。[DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)）
 
 ```sql
 -- トークン別の spam/ham 出現メール数（同一メール内の重複は1カウント＝dedup後に加算）
@@ -143,12 +143,22 @@ CREATE TABLE IF NOT EXISTS spam_meta (
 
 ## 5. Tauri コマンド（抜粋）
 
+実装済み（`src-tauri/src/commands.rs`）:
+
 | コマンド | 用途 |
 |---|---|
-| `mail_mark_spam` / `mail_mark_not_spam` | 迷惑/非迷惑のマーク（学習に反映） |
-| `spam_score` | メールの判定スコア取得 |
-| `spam_share_settings` | TSG One 共有のオプトイン/オフ・送信範囲設定（**後続フェーズ**） |
-| `spam_intel_sync` | 共有インテリジェンスの取得・更新（**後続フェーズ**） |
+| `mail_mark_spam(ids)` / `mail_mark_not_spam(ids)` | 迷惑/非迷惑のマーク（学習に反映） |
+| `spam_score(id)` | メールの判定スコア取得（`SpamVerdict`） |
+| `spam_settings_get` / `spam_settings_set` | ローカルのしきい値・挙動設定（`SpamSettings`。§9） |
+
+計画（未実装・**フェーズ B**。コマンドは存在しない）:
+
+| コマンド（案） | 用途 |
+|---|---|
+| `spam_share_settings` | TSG One 共有のオプトイン/オフ・送信範囲設定 |
+| `spam_intel_sync` | 共有インテリジェンスの取得・更新 |
+
+> TSG One 共有（§2 / §2.1）は phase B の計画。現状はローカル学習と `spam_settings_*` のみが動く。
 
 ## 6. 実装順序
 
@@ -173,12 +183,12 @@ CREATE TABLE IF NOT EXISTS spam_meta (
 | `services/spam/tokenize.rs` | §7.1 トークン化（純ロジック・DB 非依存） |
 | `services/spam/classifier.rs` | §7.2 スコア計算（純関数・DB 非依存でテスト容易） |
 | `services/store/spam.rs` | §7.4 `impl Store`：`spam_tokens`/`spam_meta` の読み書きと学習トランザクション。[store/mod.rs](../src-tauri/src/services/store/mod.rs) に `mod spam;` |
-| `services/store/migrations/0011_spam.sql` | §7.6 スキーマ追加。[migrations.rs](../src-tauri/src/services/store/migrations.rs) の `MIGRATIONS` に version 11 を登録 |
+| `services/store/migrations/0013_spam.sql` | §7.6 スキーマ追加。[migrations.rs](../src-tauri/src/services/store/migrations.rs) の `MIGRATIONS` に version 13 を登録 |
 | `models.rs` | §7.5 `SpamVerdict`（ts-rs 境界型） |
 | `commands.rs` | §7.5 `mail_mark_spam` / `mail_mark_not_spam` / `spam_score` |
 | `lib.rs` | §7.5 `invoke_handler!` に 3 コマンド追記 |
 
-> **既存スキーマとの差分**: `emails.spam_score` / `emails.is_junk` は既に [0001_init.sql](../src-tauri/src/services/store/migrations/0001_init.sql) にある。0011 で足すのは `emails.spam_learned` 列と `spam_tokens` / `spam_meta` の 2 テーブルだけ（[DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) の迷惑メール列と整合）。
+> **既存スキーマとの差分**: `emails.spam_score` / `emails.is_junk` は既に [0001_init.sql](../src-tauri/src/services/store/migrations/0001_init.sql) にある。0013 で足すのは `emails.spam_learned` 列と `spam_tokens` / `spam_meta` の 2 テーブルだけ（[DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) の迷惑メール列と整合）。
 
 > **入力データ（重要）**: `tokenize` は「同期時に保存済みの `emails` 行」を入力にする（`from_address` / `auth_result` / `list_id` / `clean_body`・`body_plain` / `raw_headers`）。ただし現行 [parser.rs](../src-tauri/src/services/parser.rs) は `auth_result` / `list_id` を**まだ抽出していない**。段階1の URL/from/N-gram 素性は既存データだけで動くが、ヘッダ素性（`hdr:spf_fail` 等）を効かせるには §7.7 のパーサ拡張が前提。
 
@@ -296,7 +306,7 @@ pub fn spam_score(store: State<Store>, id: i64) -> Result<SpamVerdict, String> {
 
 [lib.rs](../src-tauri/src/lib.rs) の `invoke_handler![...]` に `commands::mail_mark_spam` / `mail_mark_not_spam` / `spam_score` を追記。境界型は `npm run gen:bindings` で `src/bindings/SpamVerdict.ts` に出力される。
 
-### 7.6 マイグレーション `0011_spam.sql`
+### 7.6 マイグレーション `0013_spam.sql`
 
 実列名に整合させる（`emails.spam_score` / `is_junk` は 0001 で既存のため触らない）。
 
@@ -320,7 +330,7 @@ INSERT OR IGNORE INTO spam_meta(key, value) VALUES ('n_spam', 0), ('n_ham', 0);
 CREATE INDEX idx_emails_junk ON emails(is_junk) WHERE is_junk = 1; -- 迷惑フォルダ一覧
 ```
 
-[migrations.rs](../src-tauri/src/services/store/migrations.rs) の `MIGRATIONS` に `Migration { version: 11, sql: include_str!("migrations/0011_spam.sql") }` を追加し、同ファイルの `migrations_apply_and_fts_works` テストの想定バージョンを 11 に更新する。
+[migrations.rs](../src-tauri/src/services/store/migrations.rs) の `MIGRATIONS` に `Migration { version: 13, sql: include_str!("migrations/0013_spam.sql") }` を追加する（`migrations_apply_and_fts_works` テストは `MIGRATIONS.last()` の版へ自動追従するため、想定バージョンの直書き更新は不要）。
 
 ### 7.7 パーサ拡張の前提（ヘッダ素性）
 
@@ -366,7 +376,7 @@ spam 検出率 76–81%（τ_high=0.9 / τ_low=0.5）。誤検知ゼロを優先
 | **uncertain** | `τ_low 〜 τ_high` | 受信トレイに残すが「迷惑かも」マーク（控えめ）。隔離はしない |
 | **junk** | `≥ τ_high`（例 0.9） | 迷惑フォルダへ隔離（`is_junk=1`）。削除はしない |
 
-- 既定は **`τ_high` を高め**（誤検知優先で安全側）。設定で調整可（`spam_share_settings` とは別のローカル設定）。
+- 既定は **`τ_high` を高め**（誤検知優先で安全側）。設定で調整可（`spam_settings_set` のローカル設定。共有系 phase B とは別）。
 - **ホワイトリスト最優先**: 連絡先・過去にやり取りのある送信元・ユーザーが「非迷惑」にした送信元は、スコアに関わらず clean に固定（[FILTERING.md](FILTERING.md) の「知り合い/取引実績」と連携）。
 
 > **実装状況（重要な順序）**: 受信時の自動採点・隔離は [services/spam/apply.rs](../src-tauri/src/services/spam/apply.rs) に実装済み（`score_incoming`）。ただし **ホワイトリスト（住所録連携）を先に実装するため、まだ同期（imap_sync）や UI には配線していない**。知り合いのメールを誤って隔離しないよう、`apply.rs` を発火させる前に「連絡先・返信実績・手動 not-spam は score に関わらず clean 固定」を通す。手動の「迷惑メールに設定」（学習＋隔離）は先行して有効。

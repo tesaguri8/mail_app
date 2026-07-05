@@ -86,6 +86,8 @@ CREATE INDEX idx_ai_annotations_target ON ai_annotations(target_type, target_id,
 
 ## 5. Tauri コマンド（抜粋）
 
+> ※以下はすべて未実装の予定（現状コードなし）。AI 機能は実装未着手であり、下表は設計上の想定コマンドを示す。
+
 | コマンド | 用途 |
 |---|---|
 | `ai_generate_subject` | 本文から件名案 |

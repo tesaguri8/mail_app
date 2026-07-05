@@ -1,9 +1,10 @@
 # クロスプラットフォーム / モバイル版 設計
 
-**ステータス:** 計画（実装未着手）
+**ステータス:** デスクトップ = 実装中（アルファ・0.1.0-alpha.1）／モバイル（Expo）・共有パッケージ（`packages/*`）= 未着手（計画・0 ファイル）
 **方針（確定）:**
 - **デスクトップ = Tauri 2（Rust コア）**／**モバイル = Expo / React Native**（Primadoc 流）
 - **メール同期は各端末が IMAP で独立同期**（IMAP サーバーを真実の源とするローカルファースト。共有バックエンドは持たない）
+- **注記（現況）**: 引用解析・スレッド再構築は当初想定の共有 TS `packages/mail-core` ではなく、**デスクトップの Rust（`services/quotes.rs`・`services/store/threads.rs`）で実装済み**。`packages/mail-core` は未作成（下記 §3・§6 参照）。
 
 関連: [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) / [THREADING.md](THREADING.md) / [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) / [I18N.md](I18N.md)
 
@@ -54,9 +55,9 @@
 
 ## 3. コード共有（packages/ ワークスペース）
 
-Primadoc 同様、npm workspaces の `packages/` で**プラットフォーム非依存の TS** を共有する。
+Primadoc 同様、npm workspaces の `packages/` で**プラットフォーム非依存の TS** を共有する構想。**現状これらは未作成（0 ファイル）**で、下表は将来案。
 
-| 共有パッケージ（案） | 内容 |
+| 共有パッケージ（案・未作成） | 内容 |
 |---|---|
 | `packages/mail-core` | **引用解析・スレッド再構築アルゴリズム**（[THREADING.md](THREADING.md)）、共通スキーマ、正規化ロジック |
 | `packages/types` | 境界型（デスクトップは ts-rs 生成と整合） |
@@ -65,11 +66,10 @@ Primadoc 同様、npm workspaces の `packages/` で**プラットフォーム�
 
 ### Rust コアの扱い（最重要の論点）
 
-モバイルは Expo のため **Rust コアを直接実行できない**。スレッド再構築という“目玉”を二重実装しないために、**引用解析・スレッド判定アルゴリズムは TypeScript の `packages/mail-core` に置いて両プラットフォームで共有**する方針とする。
+モバイルは Expo のため **Rust コアを直接実行できない**。当初は、スレッド再構築という“目玉”を二重実装しないために **引用解析・スレッド判定アルゴリズムを TypeScript の `packages/mail-core` に置いて両プラットフォームで共有**する方針としていた。
 
-- **モバイル**: `mail-core`（TS）＋ JS の IMAP/MIME ライブラリ＋ `expo-sqlite` で完結。
-- **デスクトップ**: I/O・暗号化・大量処理は引き続き **Rust**（IMAP/SMTP・SQLCipher・FTS5）。スレッド再構築アルゴリズムは、(a) `mail-core`(TS) をレンダラーで使う／(b) Rust に実装する、のどちらか。**重複と挙動差を避けるため (a) を推奨**（Rust 側は I/O と暗号・索引に専念）。
-- ※ この (a)/(b) は実装時の確定事項。本書では「アルゴリズムは共有 TS が望ましい」を方針とする。
+- **デスクトップ（現況・確定）**: 上記 (a)/(b) の選択は **(b) Rust 実装**に落ち着いた。引用解析は `services/quotes.rs`、スレッド再構築は `services/store/threads.rs` で実装済み。I/O・大量処理も Rust（IMAP/SMTP・FTS5。SQLCipher 暗号化は後続・未導入）。
+- **モバイル（未着手）**: 着手時は `mail-core`（TS）＋ JS の IMAP/MIME ライブラリ＋ `expo-sqlite` で完結させる想定。ただし共有 TS 化は未実施のため、Rust 実装を TS へ移植/切り出すか、モバイル側で別実装するかは**モバイル着手時に確定**する（保留）。
 
 ---
 
@@ -98,9 +98,9 @@ Primadoc 同様、npm workspaces の `packages/` で**プラットフォーム�
 
 ## 6. フェーズ上の位置づけ
 
-- **デスクトップ（Tauri）のコアを先行**（[DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) Phase 1〜）。
-- アルゴリズムを `packages/mail-core`(TS) に切り出す設計を、Phase 4（解析基盤）で意識する（モバイル再利用のため）。
-- **モバイル版はコア安定後の別トラック**（Expo セットアップ → `mail-core` 結合 → IMAP 同期 → UI）。SNS 同様、基本機能の安定を優先。
+- **デスクトップ（Tauri）のコアを先行**（[DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) Phase 1〜）。実装済み（アルファ）。
+- アルゴリズムを `packages/mail-core`(TS) に切り出す設計は、**現時点では保留（先送り）**。デスクトップでは Rust に実装済みで、TS 切り出しはモバイル着手時に要否を判断する。
+- **モバイル版はコア安定後の別トラック**（未着手。Expo セットアップ → `mail-core` 結合 → IMAP 同期 → UI）。SNS 同様、基本機能の安定を優先。
 
 ---
 

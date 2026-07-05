@@ -1,6 +1,6 @@
 # 機能仕様
 
-**ステータス:** 計画（実装未着手）
+**ステータス:** 実装中（アルファ・0.1.0-alpha.1）
 **出典:** 旧 `README_plan.md` §1, §3, §5〜§10 を整理。スタック依存部分（REST API / Pydantic / safeStorage 等）は新スタック（Tauri + Rust）に合わせて反映。
 
 関連: [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)（スタック・フェーズ）/ [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) / [UI_UX_DESIGN.md](UI_UX_DESIGN.md) / [DATA_STORAGE.md](DATA_STORAGE.md) / [I18N.md](I18N.md)
@@ -209,8 +209,8 @@ pub struct MailSummary {
 - IMAP/SMTP は TLS/SSL 必須
 
 ### データ保護
-- SQLite 暗号化（SQLCipher）
-- 添付ファイルの暗号化保存（AES-256 / `aes-gcm`）
+- SQLite 暗号化（SQLCipher）※後続（未導入。現状は `bundled` プレーン SQLite）
+- 添付ファイルの暗号化保存（AES-256 / `aes-gcm`）※後続（未導入・計画）
 - 安全な一時ファイル処理、定期的なデータクリーンアップ
 
 ---

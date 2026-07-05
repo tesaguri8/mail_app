@@ -317,6 +317,8 @@ export function CalendarView() {
 
   const selectedList = eventsOn(events, selected);
   const maxVisible = mode === 'fortnight' ? 5 : 3;
+  // 新規作成中は、クリックした位置にゴースト（仮の枠）を出して場所を示す。
+  const ghost = editing && editing.mode === 'new' ? editing : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col px-4 pb-3 pt-1 text-white">
@@ -417,6 +419,7 @@ export function CalendarView() {
               onEventDragStart={onEventDragStart}
               onDropTime={dropOnTime}
               onDropDay={dropOnDay}
+              ghost={ghost}
             />
           ) : period.kind === 'year' ? (
             <div className="min-h-0 flex-1 overflow-y-auto rounded-xl bg-white/5 p-3 ring-1 ring-white/10">
@@ -464,6 +467,7 @@ export function CalendarView() {
                     onOpenNew={(ds) => newAt(ds)}
                     onEventDragStart={onEventDragStart}
                     onDropDay={dropOnDay}
+                    ghost={ghost?.day === ymd(day)}
                   />
                 ))}
               </div>
@@ -529,6 +533,7 @@ function DayCell({
   onOpenNew,
   onEventDragStart,
   onDropDay,
+  ghost,
 }: {
   date: Date;
   events: EventSummary[];
@@ -540,6 +545,7 @@ function DayCell({
   onOpenNew: (ds: string) => void;
   onEventDragStart: (e: EventSummary) => void;
   onDropDay: (ds: string) => void;
+  ghost: boolean;
 }) {
   const ds = ymd(date);
   const isToday = ds === todayStr;
@@ -565,6 +571,11 @@ function DayCell({
         </span>
       </div>
       <div className="flex min-h-0 flex-col gap-0.5 overflow-hidden">
+        {ghost && (
+          <span className="flex items-center justify-center rounded border border-dashed border-white/60 py-0.5 text-white/60">
+            <Plus size={12} />
+          </span>
+        )}
         {dayEvents.slice(0, maxVisible).map((e) => (
           <EventChip key={e.id} e={e} onDragStart={onEventDragStart} />
         ))}
@@ -590,6 +601,7 @@ function TimeGrid({
   onEventDragStart,
   onDropTime,
   onDropDay,
+  ghost,
 }: {
   days: Date[];
   events: EventSummary[];
@@ -601,6 +613,7 @@ function TimeGrid({
   onEventDragStart: (e: EventSummary) => void;
   onDropTime: (day: string, minutes: number) => void;
   onDropDay: (ds: string) => void;
+  ghost: { day: string; time?: string; allDay?: boolean } | null;
 }) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -680,6 +693,9 @@ function TimeGrid({
                   {e.title}
                 </button>
               ))}
+              {ghost && ghost.day === ds && ghost.allDay && (
+                <div className="rounded border border-dashed border-white/60 px-1 py-0.5 text-center text-[11px] text-white/60">＋</div>
+              )}
             </div>
           );
         })}
@@ -727,6 +743,12 @@ function TimeGrid({
                     <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
                     <span className="h-px flex-1 bg-red-500" />
                   </div>
+                )}
+                {ghost && ghost.day === ds && !ghost.allDay && (
+                  <div
+                    className="pointer-events-none absolute inset-x-0.5 z-10 rounded border border-dashed border-white/70 bg-white/10"
+                    style={{ top: (ghostMinutes(ghost.time) / 60) * ROW_H, height: ROW_H }}
+                  />
                 )}
                 {segs.map((s) => {
                   const l = layout.get(s.e.id) ?? { col: 0, cols: 1 };
@@ -821,6 +843,13 @@ function packDay(items: { id: number; start: number; end: number }[]): Map<numbe
   }
   if (cluster.length) finalize();
   return out;
+}
+
+/** ゴースト枠の開始分（'HH:MM' → その日の分。未指定は 9:00＝540）。 */
+function ghostMinutes(time?: string): number {
+  if (!time) return 540;
+  const [h, m] = time.split(':').map(Number);
+  return h * 60 + m;
 }
 
 /** 年表示のミニ月（予定のある日にドット、月名クリックでその月へ）。 */

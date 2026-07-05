@@ -216,6 +216,75 @@ export function remoteImageUrls(html: string): string[] {
   return [...urls];
 }
 
+/** リンク（HTML 本文とプレーン本文で共通の見た目）。下線なしの水色・折返し可。 */
+const LINK_CLASS = 'cursor-pointer text-sky-400 no-underline hover:text-sky-300 break-all';
+
+/** プレーン本文中の URL（http(s)/ www. 始まり）とメールアドレスを 1 パスで検出する。 */
+const AUTOLINK_RE =
+  /((?:https?:\/\/|www\.)[^\s<>]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/g;
+
+/** URL 末尾に紛れがちな句読点・閉じ括弧をリンクから外す（表示テキストには残す）。 */
+function stripTrailingPunct(url: string): [string, string] {
+  const m = url.match(/[)\]}>.,;:!?'"、。）」』】]+$/);
+  return m ? [url.slice(0, -m[0].length), m[0]] : [url, ''];
+}
+
+/**
+ * プレーン本文を、URL・メールアドレスをリンク化して描画する。
+ * 会話バブルと全文表示（プレーン経路）で共有し、リンクの見た目とクリック挙動
+ *（外部ブラウザで開く）を HTML 本文（HtmlText）と揃えるためのコンポーネント。
+ * - URL: 水色リンク。クリックで外部ブラウザ（親要素へは伝播させない＝バブルを開かない）。
+ * - メール: renderEmail があればそれで描画（＋登録／新規作成の導線）、無ければ素のテキスト。
+ */
+export function AutoLinkText({
+  text,
+  renderEmail,
+  className = '',
+}: {
+  text: string;
+  renderEmail?: (email: string) => ReactNode;
+  className?: string;
+}) {
+  const nodes: ReactNode[] = [];
+  let last = 0;
+  let key = 0;
+  for (const m of text.matchAll(AUTOLINK_RE)) {
+    const match = m[0];
+    const offset = m.index ?? 0;
+    if (offset > last) nodes.push(text.slice(last, offset));
+    last = offset + match.length;
+
+    const isUrl = /^(https?:\/\/|www\.)/i.test(match);
+    if (!isUrl && match.includes('@')) {
+      // メールアドレス。導線があればそれで、無ければ素のテキスト（メールアプリなので mailto は張らない）。
+      nodes.push(
+        renderEmail ? <Fragment key={key++}>{renderEmail(match)}</Fragment> : match,
+      );
+      continue;
+    }
+    const [core, trail] = stripTrailingPunct(match);
+    const href = core.startsWith('www.') ? `https://${core}` : core;
+    nodes.push(
+      <a
+        key={key++}
+        href={href}
+        onClick={(e) => {
+          e.preventDefault();
+          // バブル内のクリックで全文展開が誘発されないよう伝播を止める。
+          e.stopPropagation();
+          openExternal(href);
+        }}
+        className={LINK_CLASS}
+      >
+        {core}
+      </a>,
+    );
+    if (trail) nodes.push(trail);
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return <pre className={`whitespace-pre-wrap break-words font-sans ${className}`}>{nodes}</pre>;
+}
+
 /**
  * メールの HTML 本文を「テキスト＋リンク＋埋め込み画像」で安全に描画する。
  * - innerHTML は使わず DOM を走査して React 要素に変換（スクリプト実行なし）

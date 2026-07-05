@@ -38,7 +38,7 @@ import { getInlineImages, getRemoteImageMode, PREFS_EVENT } from '../config/pref
 import { greenDomainAdd, greenDomainWarn } from '../services/green';
 import { contactLookupEmail } from '../services/contacts';
 import { mailLoadRemote, senderRemoteAllowed, senderSetRemotePolicy } from '../services/mail';
-import { HtmlText, remoteImageUrls } from './HtmlText';
+import { AutoLinkText, HtmlText, remoteImageUrls } from './HtmlText';
 import { ContextMenu } from './ContextMenu';
 
 function formatDate(d: string | null): string {
@@ -834,14 +834,22 @@ export function MailBody({
             }
           />
         ) : body.trim() ? (
-          <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-white/90">
-            <LinkifyEmails
-              text={body}
-              onAdd={onAddContact}
-              onEdit={onEditContact}
-              onCompose={onComposeTo}
-            />
-          </pre>
+          <AutoLinkText
+            text={body}
+            className="text-sm leading-relaxed text-white/90"
+            renderEmail={
+              onAddContact
+                ? (email) => (
+                    <EmailAdd
+                      email={email}
+                      onAdd={onAddContact}
+                      onEdit={onEditContact}
+                      onCompose={onComposeTo}
+                    />
+                  )
+                : undefined
+            }
+          />
         ) : (
           <p className="text-sm text-white/40">{t('mailbox.noBody')}</p>
         )}

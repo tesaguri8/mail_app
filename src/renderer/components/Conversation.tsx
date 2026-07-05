@@ -27,6 +27,7 @@ import { mailGet } from '../services/mail';
 import { threadRename, threadSplit, threadView } from '../services/threads';
 import { parseAddress } from '../utils/address';
 import { MailBody } from './MailBody';
+import { AutoLinkText } from './HtmlText';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 
 /** 会話ビューが親（MailboxView）に要求する、メール1通単位の操作・状態。 */
@@ -275,7 +276,7 @@ function Bubble({
               </div>
             )}
             {body ? (
-              <pre className="whitespace-pre-wrap break-words font-sans">{body}</pre>
+              <AutoLinkText text={body} />
             ) : (
               <span className="text-white/40">{t('mailbox.noBody')}</span>
             )}

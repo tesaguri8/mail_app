@@ -29,7 +29,9 @@ export default defineConfig({
     },
   },
   server: {
-    port: 1420,
+    // Rondine の枝番 N=12（main-proxy のポート台帳）→ フロント dev 枠 3100+N=3112。
+    // Tauri devUrl（src-tauri/tauri.conf.json）と一致させる。他アプリ（Primadoc=1420 等）と衝突しない。
+    port: 3112,
     strictPort: true,
   },
   envPrefix: ['VITE_', 'TAURI_'],

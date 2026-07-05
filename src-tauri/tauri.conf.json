@@ -5,7 +5,7 @@
   "identifier": "tesaguri.rondine.dev",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:3112",
     "beforeDevCommand": "npm run dev:renderer",
     "beforeBuildCommand": "npm run build:renderer"
   },

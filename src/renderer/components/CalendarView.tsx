@@ -294,6 +294,16 @@ export function CalendarView() {
   };
 
   const eventDays = useMemo(() => new Set(events.flatMap(coveredDays)), [events]);
+  // 表示色はカレンダーの色で解決する（予定ごとの色は持たない＝iCloud 風）。
+  const calColor = useMemo(() => new Map(calendars.map((c) => [c.id, c.color])), [calendars]);
+  const coloredEvents = useMemo(
+    () =>
+      events.map((e) => ({
+        ...e,
+        color: (e.calendar_id != null ? calColor.get(e.calendar_id) ?? null : null) ?? e.color ?? null,
+      })),
+    [events, calColor],
+  );
   const weekdayShort = useMemo(() => weekdayLabels(i18n.language, 'short'), [i18n.language]);
   const weekdayNarrow = useMemo(() => weekdayLabels(i18n.language, 'narrow'), [i18n.language]);
 
@@ -357,7 +367,7 @@ export function CalendarView() {
     moveTo(e, target);
   };
 
-  const selectedList = eventsOn(events, selected);
+  const selectedList = eventsOn(coloredEvents, selected);
   const maxVisible = mode === 'fortnight' ? 5 : 3;
   // 新規作成中は、クリックした位置にゴースト（仮の枠）を出して場所を示す。
   const ghost = editing && editing.mode === 'new' ? editing : null;
@@ -455,7 +465,7 @@ export function CalendarView() {
           {period.kind === 'time' ? (
             <TimeGrid
               days={period.days}
-              events={events}
+              events={coloredEvents}
               todayStr={todayStr}
               locale={i18n.language}
               onOpenDay={(ds) => {
@@ -506,7 +516,7 @@ export function CalendarView() {
                   <DayCell
                     key={ymd(day)}
                     date={day}
-                    events={events}
+                    events={coloredEvents}
                     selected={selected}
                     todayStr={todayStr}
                     dim={mode === 'month' && day.getMonth() !== anchor.getMonth()}
@@ -1094,6 +1104,8 @@ function CalendarSidebar({
   onChanged: () => void;
 }) {
   const { t } = useTranslation();
+  // 色パレットを開いているカレンダーの id（null=閉じている）。
+  const [colorFor, setColorFor] = useState<number | null>(null);
   const addCalendar = async () => {
     const name = window.prompt(t('cal.newCalendarPrompt'));
     if (!name || !name.trim()) return;
@@ -1107,10 +1119,9 @@ function CalendarSidebar({
     await calendarUpsert({ id: c.id, name: name.trim(), color: c.color, kind: c.kind }).catch(() => undefined);
     onChanged();
   };
-  const cycleColor = async (c: CalendarSummary) => {
-    const idx = COLORS.indexOf(c.color ?? '');
-    const color = COLORS[(idx + 1) % COLORS.length];
+  const setCalColor = async (c: CalendarSummary, color: string) => {
     await calendarUpsert({ id: c.id, name: c.name, color, kind: c.kind }).catch(() => undefined);
+    setColorFor(null);
     onChanged();
   };
   const remove = async (c: CalendarSummary) => {
@@ -1150,31 +1161,45 @@ function CalendarSidebar({
         </div>
         <ul className="space-y-0.5">
           {calendars.map((c) => (
-            <li key={c.id} className="group flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-white/10">
-              <input
-                type="checkbox"
-                checked={c.visible}
-                onChange={() => toggle(c)}
-                className="shrink-0"
-                style={{ accentColor: c.color ?? DEFAULT_COLOR }}
-              />
-              <button
-                onClick={() => cycleColor(c)}
-                title={t('cal.fColor')}
-                className="h-3 w-3 shrink-0 rounded-full ring-1 ring-white/20"
-                style={{ backgroundColor: c.color ?? DEFAULT_COLOR }}
-              />
-              <button onClick={() => rename(c)} className="min-w-0 flex-1 truncate text-left text-sm">
-                {c.name || t('cal.defaultCalendar')}
-              </button>
-              {!c.is_default && (
+            <li key={c.id} className="rounded-lg">
+              <div className="group flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-white/10">
+                <input
+                  type="checkbox"
+                  checked={c.visible}
+                  onChange={() => toggle(c)}
+                  className="shrink-0"
+                  style={{ accentColor: c.color ?? DEFAULT_COLOR }}
+                />
                 <button
-                  onClick={() => remove(c)}
-                  title={t('cal.delete')}
-                  className="hidden shrink-0 rounded p-0.5 text-white/50 hover:bg-white/15 hover:text-white group-hover:block"
-                >
-                  <Trash2 size={12} />
+                  onClick={() => setColorFor((v) => (v === c.id ? null : c.id))}
+                  title={t('cal.fColor')}
+                  className="h-3 w-3 shrink-0 rounded-full ring-1 ring-white/20"
+                  style={{ backgroundColor: c.color ?? DEFAULT_COLOR }}
+                />
+                <button onClick={() => rename(c)} className="min-w-0 flex-1 truncate text-left text-sm">
+                  {c.name || t('cal.defaultCalendar')}
                 </button>
+                {!c.is_default && (
+                  <button
+                    onClick={() => remove(c)}
+                    title={t('cal.delete')}
+                    className="hidden shrink-0 rounded p-0.5 text-white/50 hover:bg-white/15 hover:text-white group-hover:block"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                )}
+              </div>
+              {colorFor === c.id && (
+                <div className="flex flex-wrap items-center gap-1.5 px-2 pb-1.5 pt-0.5">
+                  {COLORS.map((col) => (
+                    <button
+                      key={col}
+                      onClick={() => setCalColor(c, col)}
+                      className={`h-4 w-4 rounded-full ${c.color === col ? 'ring-2 ring-white' : 'ring-1 ring-white/20'}`}
+                      style={{ backgroundColor: col }}
+                    />
+                  ))}
+                </div>
               )}
             </li>
           ))}
@@ -1215,7 +1240,6 @@ function EventEditor({
   );
   const [location, setLocation] = useState(event?.location ?? '');
   const [description, setDescription] = useState(event?.description ?? '');
-  const [color, setColor] = useState(event?.color ?? defaultCal?.color ?? DEFAULT_COLOR);
   const initialRecur = ruleToPreset(event?.recurrence ?? null);
   const [recur, setRecur] = useState<RecurPreset>(initialRecur.preset);
   const [until, setUntil] = useState<string>(initialRecur.until ?? '');
@@ -1287,7 +1311,7 @@ function EventEditor({
       start_at,
       end_at,
       all_day: allDay,
-      color,
+      color: null, // 色はカレンダーの属性（サイドバーで設定）。予定ごとには持たせない
       recurrence: presetToRule(recur, until || null),
       reminder_minutes: reminder,
       related_email_id: event?.related_email_id ?? null,
@@ -1424,19 +1448,7 @@ function EventEditor({
           </select>
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-white/55">{t('cal.fColor')}</span>
-          {COLORS.map((c) => (
-            <button
-              key={c}
-              onClick={() => setColor(c)}
-              className={`h-5 w-5 rounded-full transition-transform ${color === c ? 'scale-110 ring-2 ring-white' : ''}`}
-              style={{ backgroundColor: c }}
-            />
-          ))}
-        </div>
-
-        {/* カレンダー */}
+        {/* カレンダー（色はカレンダーの属性。サイドバーで設定） */}
         {calendars.length > 0 && (
           <div className="flex items-center gap-2">
             <span

@@ -39,6 +39,9 @@ pub struct ParsedEmail {
     pub to_addresses: Option<String>,
     /// 宛先（先頭）の表示名（ヘッダ To の名前部。無ければ None）。
     pub to_name: Option<String>,
+    /// Reply-To（差出人が指定する返信先。"名前 <addr>, ..." の表示用文字列。無ければ None）。
+    /// 設定されていれば返信の宛先を From ではなくこちらにする（ML・no-reply＋実返信先 等）。
+    pub reply_to: Option<String>,
     /// Cc の全アドレス（"名前 <addr>, ..." の表示用文字列。無ければ None）。
     pub cc_addresses: Option<String>,
     pub date: Option<String>,
@@ -150,6 +153,159 @@ pub fn part_filename(part: &mail_parser::MessagePart, index: usize) -> String {
         .unwrap_or_else(|| format!("attachment-{}", index + 1))
 }
 
+/// ブロック要素（この境界で改行を入れる）。フロントの HtmlText の BLOCK と同方針。
+const BLOCK_TAGS: &[&str] = &[
+    "p", "div", "br", "tr", "li", "ul", "ol", "table", "thead", "tbody", "h1", "h2", "h3", "h4",
+    "h5", "h6", "blockquote", "hr", "section", "article", "header", "footer", "pre", "dd", "dt",
+    "figure", "address", "form",
+];
+
+/// HTML 実体参照を復元する（よく出るものと数値参照 &#nn; / &#xHH;）。
+fn decode_entities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < s.len() {
+        let rest = &s[i..];
+        if rest.starts_with('&') {
+            if let Some(semi) = rest.find(';') {
+                if semi <= 12 {
+                    let ent = &rest[1..semi];
+                    let rep = match ent {
+                        "nbsp" => Some(' '),
+                        "amp" => Some('&'),
+                        "lt" => Some('<'),
+                        "gt" => Some('>'),
+                        "quot" => Some('"'),
+                        "apos" => Some('\''),
+                        _ => ent.strip_prefix('#').and_then(|num| {
+                            let cp = match num.strip_prefix(['x', 'X']) {
+                                Some(hex) => u32::from_str_radix(hex, 16).ok(),
+                                None => num.parse::<u32>().ok(),
+                            };
+                            cp.and_then(char::from_u32)
+                        }),
+                    };
+                    if let Some(c) = rep {
+                        out.push(c);
+                        i += semi + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        let ch = rest.chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// 各行の ASCII 空白（半角スペース/タブ/CR）の連続を 1 つに畳み、行端を整え、空行を除く。
+/// 全角空白 U+3000 等の Unicode 空白は日本語本文で意味を持つため畳まず保持する。
+fn normalize_ws(s: &str) -> String {
+    fn is_ascii_sp(c: char) -> bool {
+        c == ' ' || c == '\t' || c == '\r'
+    }
+    s.lines()
+        .map(|l| {
+            let mut r = String::with_capacity(l.len());
+            let mut prev_sp = false;
+            for c in l.chars() {
+                if is_ascii_sp(c) {
+                    if !prev_sp {
+                        r.push(' ');
+                    }
+                    prev_sp = true;
+                } else {
+                    r.push(c);
+                    prev_sp = false;
+                }
+            }
+            r.trim_matches(is_ascii_sp).to_string()
+        })
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// HTML をブロック要素で改行しながらプレーンテキスト化する（mail_parser の平坦化対策の自前変換）。
+/// text/plain の実パートが無い HTML 専用メール（multipart/related 等）向け。
+/// - ブロック要素／`<br>` の境界で改行（連続改行は 1 つに畳む）
+/// - `<script>`/`<style>`/`<head>` 等は中身ごと破棄、コメントも除去
+/// - 実体参照を復元し、行内の余分な空白は畳む
+pub fn html_to_text(html: &str) -> String {
+    fn push_break(out: &mut String) {
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    let lower = html.to_ascii_lowercase();
+    let mut out = String::with_capacity(html.len());
+    let mut i = 0usize;
+    while i < html.len() {
+        let rest = &html[i..];
+        if rest.starts_with("<!--") {
+            i += rest.find("-->").map(|p| p + 3).unwrap_or(rest.len());
+            continue;
+        }
+        if rest.starts_with('<') {
+            let Some(gt) = rest.find('>') else { break };
+            let inner = &rest[1..gt];
+            let is_close = inner.starts_with('/');
+            let nm = inner.trim_start_matches('/');
+            let end = nm
+                .find(|c: char| !c.is_ascii_alphanumeric())
+                .unwrap_or(nm.len());
+            let tag = nm[..end].to_ascii_lowercase();
+            if !is_close && matches!(tag.as_str(), "script" | "style" | "head" | "title" | "noscript")
+            {
+                let close = format!("</{tag}>");
+                i += match lower[i + gt..].find(&close) {
+                    Some(pos) => gt + pos + close.len(),
+                    None => gt + 1,
+                };
+                continue;
+            }
+            if tag == "br" || BLOCK_TAGS.contains(&tag.as_str()) {
+                push_break(&mut out);
+            }
+            i += gt + 1;
+            continue;
+        }
+        let ch = rest.chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    normalize_ws(&decode_entities(&out))
+}
+
+/// メッセージが「本物の text/plain パート」を持つか。持たない（HTML 専用）なら false。
+/// mail_parser は text/plain が無いと HTML を本文テキストとして扱う（＝平坦化）ため、その判別に使う。
+fn has_real_plain_part(msg: &mail_parser::Message) -> bool {
+    msg.text_body
+        .first()
+        .and_then(|&idx| msg.parts.get(idx))
+        .map(|p| matches!(p.body, mail_parser::PartType::Text(_)))
+        .unwrap_or(false)
+}
+
+/// mail_parser の HTML→text 生成でよくある「本文が 1 行に潰れた」プレーンテキストか。
+/// text/plain の実パートが無い HTML 専用メールで起きる。長さの割に改行が極端に少ないと真。
+/// （再構築の後付け判定に使う。取り込み時は has_real_plain_part で直接判別する。）
+pub fn is_flattened_plaintext(t: &str) -> bool {
+    let chars = t.chars().count();
+    chars > 400 && t.matches('\n').count().saturating_mul(200) < chars
+}
+
+/// 保存済みヘッダ生テキスト（raw_headers）から Reply-To を取り出す（"名前 <addr>, ..."）。
+/// 既存メールへの後付け（再構築）用。本文の無いヘッダ塊でもパースできるよう空行を補って解析する。
+pub fn reply_to_from_headers(raw_headers: &str) -> Option<String> {
+    let mut buf = raw_headers.trim_end().to_string();
+    buf.push_str("\r\n\r\n");
+    let msg = MessageParser::default().parse(buf.as_bytes())?;
+    format_address_list(msg.reply_to())
+}
+
 /// 生の RFC822 メッセージを解析する。
 pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
     let msg = MessageParser::default().parse(raw)?;
@@ -174,12 +330,23 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
         .filter(|s| !s.is_empty());
     // Cc は全件を表示用文字列に（受信メールのヘッダに Cc を出すため）。
     let cc_addresses = format_address_list(msg.cc());
+    // Reply-To（返信先指定）。From と別なら返信の宛先をこちらにする。全件を表示用文字列に。
+    let reply_to = format_address_list(msg.reply_to());
     let message_id = msg.message_id().map(|s| s.to_string());
     let date = msg.date().map(|d| d.to_rfc3339());
     // 並び替え用の epoch 秒（UTC）。無効な日付は None。
     let date_ts = msg.date().map(|d| d.to_timestamp());
-    let body_plain = msg.body_text(0).map(|c| c.to_string());
     let body_html = msg.body_html(0).map(|c| c.to_string());
+    // text/plain の実パートが無い HTML 専用メール（multipart/related 等）は、mail_parser の
+    // HTML→text がブロック改行を落として本文が 1 行に潰れる。実 plain パートが無く HTML があるときは
+    // 自前のブロック対応変換で改行を復元する。これで表示だけでなく、返信で引用する本文も崩れない。
+    let body_plain = if has_real_plain_part(&msg) {
+        msg.body_text(0).map(|c| c.to_string())
+    } else if let Some(h) = body_html.as_deref() {
+        Some(html_to_text(h))
+    } else {
+        msg.body_text(0).map(|c| c.to_string())
+    };
     // ヘッダ素性（§7.7）: 認証結果・メール種別。トークン化と認証バッジで共有する。
     let auth_result = header_text(&msg, "Authentication-Results");
     let list_id = header_text(&msg, "List-Id");
@@ -246,6 +413,7 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
         from_name,
         to_addresses,
         to_name,
+        reply_to,
         cc_addresses,
         date,
         date_ts,
@@ -285,6 +453,76 @@ This is the new part.\r\n\
         assert_eq!(p.message_id.as_deref(), Some("abc123@example.com"));
         assert!(p.clean_body.as_deref().unwrap().contains("new part"));
         assert!(!p.clean_body.as_deref().unwrap().contains("quoted old line"));
+    }
+
+    #[test]
+    fn html_to_text_breaks_on_block_elements() {
+        // Apple Mail 系の <div> 1 行構造を改行付きで復元する。
+        let html = "<div>末松　さま</div><div>お世話になっております。伊佐です。</div>\
+<div>江島邸につきまして、ご連絡いたしました。</div>";
+        assert_eq!(
+            html_to_text(html),
+            "末松　さま\nお世話になっております。伊佐です。\n江島邸につきまして、ご連絡いたしました。"
+        );
+    }
+
+    #[test]
+    fn html_to_text_handles_br_entities_and_drops_style() {
+        let html = "<style>.x{color:red}</style>A&nbsp;B<br>C&amp;D<!-- comment -->";
+        assert_eq!(html_to_text(html), "A B\nC&D");
+    }
+
+    #[test]
+    fn html_to_text_preserves_fullwidth_space() {
+        // 全角空白 U+3000 は日本語本文で意味を持つので畳まない。
+        assert_eq!(html_to_text("<div>末松　さま</div>"), "末松　さま");
+    }
+
+    #[test]
+    fn html_only_message_recovers_line_breaks() {
+        // text/plain が無く HTML のみ（multipart/related）のメールでも body_plain が 1 行に潰れない。
+        let raw = "From: A <a@example.com>\r\n\
+To: B <b@example.com>\r\n\
+Subject: x\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+<div>1行目</div><div>2行目</div><div>3行目</div>\r\n";
+        let p = parse_message(raw.as_bytes()).expect("should parse");
+        let body = p.body_plain.expect("has body");
+        assert!(body.contains("1行目\n2行目"), "body was: {body:?}");
+    }
+
+    #[test]
+    fn is_flattened_detects_collapsed_and_spares_normal() {
+        let collapsed = "あ".repeat(500); // 500 文字・改行なし
+        assert!(is_flattened_plaintext(&collapsed));
+        let normal = "一行目\n".repeat(60); // 60 行
+        assert!(!is_flattened_plaintext(&normal));
+        assert!(!is_flattened_plaintext("短い本文")); // 400 字以下は対象外
+    }
+
+    #[test]
+    fn extracts_reply_to() {
+        let raw = b"From: No Reply <no-reply@service.example>\r\n\
+To: Me <me@example.com>\r\n\
+Reply-To: Support <support@service.example>\r\n\
+Subject: Ticket\r\n\
+\r\n\
+body\r\n";
+        let p = parse_message(raw).expect("should parse");
+        assert_eq!(p.reply_to.as_deref(), Some("Support <support@service.example>"));
+        // ヘッダ塊だけからの後付け抽出も同じ結果になる。
+        let hdr = "From: No Reply <no-reply@service.example>\r\nReply-To: Support <support@service.example>\r\n";
+        assert_eq!(
+            reply_to_from_headers(hdr).as_deref(),
+            Some("Support <support@service.example>")
+        );
+    }
+
+    #[test]
+    fn no_reply_to_is_none() {
+        let raw = b"From: A <a@example.com>\r\nTo: B <b@example.com>\r\nSubject: x\r\n\r\nbody\r\n";
+        assert_eq!(parse_message(raw).unwrap().reply_to, None);
     }
 
     #[test]

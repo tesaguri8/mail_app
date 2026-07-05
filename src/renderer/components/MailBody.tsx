@@ -38,7 +38,7 @@ import { getInlineImages, getRemoteImageMode, PREFS_EVENT } from '../config/pref
 import { greenDomainAdd, greenDomainWarn } from '../services/green';
 import { contactLookupEmail } from '../services/contacts';
 import { mailLoadRemote, senderRemoteAllowed, senderSetRemotePolicy } from '../services/mail';
-import { HtmlText, remoteImageUrls } from './HtmlText';
+import { AutoLinkText, HtmlText, remoteImageUrls } from './HtmlText';
 import { ContextMenu } from './ContextMenu';
 
 function formatDate(d: string | null): string {
@@ -225,6 +225,7 @@ export function MailBody({
   onEditContact,
   onComposeTo,
   onGreenChange,
+  highlight,
 }: {
   detail: MailDetail;
   /** このメールに付いているタグ（ヘッダの宛先の下に表示）。 */
@@ -248,6 +249,8 @@ export function MailBody({
   onComposeTo?: (email: string) => void;
   /** グリーン認定/解除で一覧のバッジを更新するための通知。 */
   onGreenChange?: () => void;
+  /** 検索語（複数）。本文中の一致を <mark> でハイライトする。 */
+  highlight?: string[];
 }) {
   const { t } = useTranslation();
   const [showQuotes, setShowQuotes] = useState(false);
@@ -263,6 +266,12 @@ export function MailBody({
   const senderDomain = (d.from_address ?? '').includes('@')
     ? (d.from_address ?? '').split('@').pop()?.trim().toLowerCase() || ''
     : '';
+  // Reply-To（返信先指定）が From と別のときだけヘッダに出す（返信がこちらへ飛ぶことを明示）。
+  const replyToAddr = ((d.reply_to ?? '').match(/<([^>]+)>/)?.[1] ?? d.reply_to ?? '')
+    .trim()
+    .toLowerCase();
+  const showReplyTo =
+    !!d.reply_to?.trim() && replyToAddr !== (d.from_address ?? '').trim().toLowerCase();
   const [attachments, setAttachments] = useState<AttachmentSummary[]>([]);
   const [busyId, setBusyId] = useState<number | null>(null);
   // 本文埋め込み画像（content_id → data URL）
@@ -746,6 +755,17 @@ export function MailBody({
             </span>
             <span className="shrink-0">{formatDate(d.date)}</span>
           </div>
+          {showReplyTo && (
+            <div className="break-words text-sky-300/80">
+              {t('mailbox.replyTo')}:{' '}
+              <LinkifyEmails
+                text={d.reply_to ?? ''}
+                onAdd={onAddContact}
+                onEdit={onEditContact}
+                onCompose={onComposeTo}
+              />
+            </div>
+          )}
           {d.to_addresses && (
             <div className="truncate">
               {t('mailbox.to')}:{' '}
@@ -820,6 +840,7 @@ export function MailBody({
             inlineImages={inlineImages}
             remoteImages={remoteShown ? remoteImages : {}}
             remoteDefaultExpanded={remoteExpandDefault}
+            highlight={highlight}
             renderEmail={
               onAddContact
                 ? (email) => (
@@ -834,14 +855,23 @@ export function MailBody({
             }
           />
         ) : body.trim() ? (
-          <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-white/90">
-            <LinkifyEmails
-              text={body}
-              onAdd={onAddContact}
-              onEdit={onEditContact}
-              onCompose={onComposeTo}
-            />
-          </pre>
+          <AutoLinkText
+            text={body}
+            className="text-sm leading-relaxed text-white/90"
+            highlight={highlight}
+            renderEmail={
+              onAddContact
+                ? (email) => (
+                    <EmailAdd
+                      email={email}
+                      onAdd={onAddContact}
+                      onEdit={onEditContact}
+                      onCompose={onComposeTo}
+                    />
+                  )
+                : undefined
+            }
+          />
         ) : (
           <p className="text-sm text-white/40">{t('mailbox.noBody')}</p>
         )}

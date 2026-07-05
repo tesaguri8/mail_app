@@ -61,3 +61,16 @@ input[type='range'].thin-range::-moz-range-track {
   background: rgba(255, 255, 255, 0.25);
 }
 
+
+/* 検索語ハイライト（会話ビュー）。<> ボタンでの現在マッチは -active を強調する。 */
+mark.search-hl {
+  background-color: rgba(250, 204, 21, 0.35); /* amber-400/35 */
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+mark.search-hl-active {
+  background-color: rgba(251, 146, 60, 0.9); /* orange-400 */
+  color: #1a1a1a;
+  box-shadow: 0 0 0 2px rgba(251, 146, 60, 0.5);
+}

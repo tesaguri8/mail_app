@@ -101,7 +101,7 @@ function searchRowToThread(m: MailSummary): ThreadListItem {
     is_known: m.is_known,
     is_vip: m.is_vip,
     is_green: m.is_green,
-    message_count: 1,
+    message_count: m.message_count,
     unread_count: m.is_read ? 0 : 1,
     email_ids: [m.id],
   };
@@ -1241,7 +1241,12 @@ export function MailboxView({
   };
 
   const bodyPane = opened ? (
-    <Conversation openedId={opened.id} folder={folder} handlers={conversationHandlers} />
+    <Conversation
+      openedId={opened.id}
+      folder={folder}
+      handlers={conversationHandlers}
+      query={query.trim() ? query : undefined}
+    />
   ) : (
     <div className="flex h-full items-center justify-center text-sm text-white/40">
       {t('mailbox.selectMail')}

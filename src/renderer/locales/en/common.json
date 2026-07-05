@@ -58,7 +58,9 @@
     "placeholder": "Search mail",
     "clear": "Clear search",
     "searching": "Searching…",
-    "noResults": "No matching mail"
+    "noResults": "No matching mail",
+    "prevMatch": "Previous match",
+    "nextMatch": "Next match"
   },
   "date": {
     "filter": "Filter by date",
@@ -429,6 +431,7 @@
     "result": "Fetched {{fetched}} / New {{stored}}",
     "from": "From",
     "to": "To",
+    "replyTo": "Reply-To",
     "hideSidebar": "Hide sidebar (Ctrl+S)",
     "showSidebar": "Show sidebar (Ctrl+S)",
     "addContact": "Add to contacts",

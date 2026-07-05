@@ -58,6 +58,15 @@ fn parse_attribution(line: &str) -> Option<(Option<String>, Option<String>)> {
         return Some((none_if_empty(inner.trim()), None));
     }
 
+    // Apple Mail / iOS メール系の属性行: 行末が「名前 <addr>:」（日付＋差出人を 1 行に含む）。
+    // 例: "Dec 26, 2025, 17:25 +0900, 伊佐　日和 <isa@matsudamariko.com>:"
+    //     "Nov 17, 2025, 1:22 PM +0900, 名城楓 <nashiro@matsudamariko.com>:"
+    // "On … wrote:" でも西暦始まりでもないため既存規則では拾えない。山括弧内アドレス＋末尾コロンを
+    // 手がかりに属性行とみなす（本文行が "<addr>:" で終わることはまず無く、誤検知は小さい）。
+    if ends_with_angle_addr_colon(l) {
+        return Some((extract_angle_addr(l), None));
+    }
+
     // 日本語: "2026年6月30日(月) 10:00 佐藤 <sato@example.com>:" や "…さんは（次のように）書きました:"。
     // 誤検知抑制: 「〜書きました:」で終わる本文の一文（例: 会議録を彼は書きました:）で誤って
     // 切らないよう、属性行の裏付け（送信元アドレス @ か 4 桁の西暦）を要求する。
@@ -122,6 +131,23 @@ fn line_has_date_or_email(l: &str) -> bool {
     false
 }
 
+/// 行末が「… <addr@dom>:」（山括弧メールアドレス＋末尾コロン）か。
+/// Apple Mail 系の属性行（"…, 名前 <addr>:"）を、日付・"wrote:" に依存せず拾うための判定。
+fn ends_with_angle_addr_colon(l: &str) -> bool {
+    let Some(head) = l.trim_end().strip_suffix([':', '：']) else {
+        return false;
+    };
+    let head = head.trim_end();
+    if !head.ends_with('>') {
+        return false;
+    }
+    // 直近の "<...>" にメールアドレス（@）が入っているか。
+    match head.rfind('<') {
+        Some(open) => head[open..].contains('@'),
+        None => false,
+    }
+}
+
 /// "<addr>" を含む行から山括弧内のアドレスを返す。
 fn extract_angle_addr(s: &str) -> Option<String> {
     let start = s.find('<')?;
@@ -138,18 +164,81 @@ fn none_if_empty(s: &str) -> Option<String> {
     }
 }
 
-/// 署名開始行か（`--` 単独、または携帯署名）。
-fn is_signature_start(line: &str) -> bool {
-    let t = line.trim_end();
-    // RFC の署名区切りは "-- "（末尾スペース）。実運用では "--" 単独も多い。
-    if t == "-- " || t == "--" || t.trim() == "--" {
+/// 「強い」署名区切り行か（曖昧さの少ないものだけ）。誤爆（本文の一部を署名と誤認）を避ける。
+/// - RFC の署名区切り "-- "（末尾スペース）／実運用の "--" 単独
+/// - "□□□" だけの見出し行（純粋な □ の連なり）
+/// - 携帯/クライアント定型（"Sent from my …" / "iPhoneから送信" 等）
+/// ※ 記号区切り "=====…" は newsletter の本文区切りと紛れるため、ここには含めず
+///   strip_signature 側で「以降が短い＝署名/フッタ」ときだけ落とす。
+fn is_signature_delimiter_line(line: &str) -> bool {
+    let bare = line.trim();
+    if bare == "--" || line.trim_end() == "-- " {
         return true;
     }
-    let l = line.trim().to_lowercase();
+    if bare.chars().count() >= 3 && bare.chars().all(|c| c == '□') {
+        return true;
+    }
+    let l = bare.to_lowercase();
     l.starts_with("sent from my ")
         || l.starts_with("get outlook for")
-        || line.trim().starts_with("iPhoneから送信")
-        || line.trim().starts_with("Androidから送信")
+        || bare.starts_with("iPhoneから送信")
+        || bare.starts_with("Androidから送信")
+}
+
+/// 記号だけの区切り線か（"=====…" / "_____…"）。10 文字以上に限定（"──" 等の box 文字は対象外）。
+fn is_symbol_rule_line(bare: &str) -> bool {
+    bare.chars().count() >= 10
+        && (bare.chars().all(|c| c == '=') || bare.chars().all(|c| c == '_'))
+}
+
+/// clean_body（引用除去後の新規本文）から署名以降を落とす。原文 body_plain は温存し、
+/// 全文表示（body_plain）ではこれまで通り署名も見られる。表示・保存の派生テキスト専用。
+/// 保守的方針:
+/// - 明確なマーカー（"--" / "□□□" / 携帯定型）はその行以降を落とす。
+/// - 記号区切り "===" は、以降の実質行が MAX_SIG_LINES 以下（＝末尾の署名/フッタらしい）ときだけ落とす。
+///   newsletter の途中に入る本文区切り（以降に本文が続く）は落とさない。
+/// - 本文が空になる切り方は採用しない（署名の無いメール・誤爆時は元のまま返す）。
+pub fn strip_signature(clean: &str) -> String {
+    // 署名本体とみなす最大の実質行数。これを超えて本文が続く記号区切りは「本文の区切り」とみなす。
+    const MAX_SIG_LINES: usize = 10;
+    let lines: Vec<&str> = clean.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        let bare = line.trim();
+        // (a) 明確な署名区切り。その行以降を落とす。
+        let cut = if is_signature_delimiter_line(line) {
+            Some(lines[..i].join("\n"))
+        } else if is_symbol_rule_line(bare) {
+            // (b) 記号区切り: 以降が短いとき（末尾の署名/フッタ）だけ落とす。長ければ本文の区切り。
+            let tail = lines[i + 1..].iter().filter(|l| !l.trim().is_empty()).count();
+            if tail <= MAX_SIG_LINES {
+                Some(lines[..i].join("\n"))
+            } else {
+                continue;
+            }
+        } else if let Some(pos) = line.find("□□□") {
+            // (c) 行内の "□□□"（改行が失われた Apple Mail 系対策）。手前の本文までを残す。
+            let head = line[..pos].trim_end();
+            let mut s = lines[..i].join("\n");
+            if !head.is_empty() {
+                if !s.is_empty() {
+                    s.push('\n');
+                }
+                s.push_str(head);
+            }
+            Some(s)
+        } else {
+            None
+        };
+        if let Some(result) = cut {
+            let trimmed = result.trim_end().to_string();
+            // 本文が全部消えるならこの切り方は不採用（誤爆保険）。
+            if trimmed.trim().is_empty() && !clean.trim().is_empty() {
+                return clean.trim_end().to_string();
+            }
+            return trimmed;
+        }
+    }
+    clean.trim_end().to_string()
 }
 
 /// 本文（プレーン）を新規部分と引用に分離する。
@@ -172,25 +261,10 @@ pub fn split_reply(plain: &str) -> Split {
         }
     }
 
-    // 2) 署名開始行を探す（引用より手前にあれば本文はそこまで）。
-    let mut sig_start: Option<usize> = None;
-    let scan_end = quote_start.unwrap_or(lines.len());
-    for (i, line) in lines.iter().enumerate().take(scan_end) {
-        if is_signature_start(line) {
-            sig_start = Some(i);
-            break;
-        }
-    }
-
-    // 本文の終端 = 引用開始 と 署名開始 の早い方。
-    let body_end = match (quote_start, sig_start) {
-        (Some(q), Some(s)) => q.min(s),
-        (Some(q), None) => q,
-        (None, Some(s)) => s,
-        (None, None) => lines.len(),
-    };
-
-    let clean = lines[..body_end].join("\n").trim().to_string();
+    // 2) 本文の終端＝引用開始。署名は後段の strip_signature で落とす（原文 body_plain は温存）。
+    // ※ メール末尾（引用より後ろ）に付く署名は、引用ごと落ちるのでここで扱う必要はない。
+    let body_end = quote_start.unwrap_or(lines.len());
+    let clean = strip_signature(&lines[..body_end].join("\n").trim().to_string());
 
     // 3) 引用ブロック（引用開始〜末尾）をまとめて 1 ブロックにする。
     let mut quotes = Vec::new();
@@ -261,6 +335,7 @@ pub fn looks_like_attribution(line: &str) -> bool {
     l.ends_with("書きました:")
         || l.ends_with("書きました：")
         || lower.ends_with("wrote:")
+        || ends_with_angle_addr_colon(l)
         || lower.contains("original message")
         || l.contains("元のメッセージ")
         || l.contains("転送メッセージ")
@@ -341,6 +416,91 @@ mod tests {
         assert_eq!(s.clean, "了解です。");
         assert_eq!(s.quotes.len(), 1);
         assert_eq!(s.quotes[0].quoted_from.as_deref(), Some("山田太郎"));
+    }
+
+    #[test]
+    fn strips_apple_mail_addr_colon_attribution() {
+        // Apple Mail / iOS メール系: "…, 名前 <addr>:" で終わる属性行（"On…wrote:" でも西暦始まりでもない）。
+        // 実データで 400 通超がこの形の属性行を clean_body に残していた回帰の防止。
+        let body = "松田様、伊佐様\n\n\
+本年も引き続き宜しくお願い致します。\n\n\
+末松\n\n\
+Dec 26, 2025, 17:25 +0900, 伊佐　日和 <isa@matsudamariko.com>:\n\n\
+> 末松 様\n> お世話になっております。";
+        let s = split_reply(body);
+        assert_eq!(
+            s.clean,
+            "松田様、伊佐様\n\n本年も引き続き宜しくお願い致します。\n\n末松"
+        );
+        assert_eq!(s.quotes.len(), 1);
+        assert_eq!(
+            s.quotes[0].quoted_from.as_deref(),
+            Some("isa@matsudamariko.com")
+        );
+    }
+
+    #[test]
+    fn addr_colon_attribution_without_gt_body() {
+        // 引用本文が `>` 無し（Apple Mail の text/plain がインデントのみ）でも属性行で切れる。
+        let body = "了解しました。\n\nNov 5, 2024, 3:15 PM +0900, shiradou <siradou@example.com>:\n本文の引用がそのまま続く";
+        assert_eq!(split_reply(body).clean, "了解しました。");
+    }
+
+    #[test]
+    fn colon_line_without_angle_email_is_not_attribution() {
+        // 末尾コロンでも山括弧アドレスが無ければ属性行扱いしない（本文の見出し等を守る）。
+        let body = "変更点は以下の通りです:\n- 1点目\n- 2点目";
+        let s = split_reply(body);
+        assert_eq!(s.clean, body.trim());
+        assert!(s.quotes.is_empty());
+    }
+
+    #[test]
+    fn strips_equals_delimiter_signature() {
+        // "=====" 区切りの署名（Thunderbird 等の手書き署名）を落とす。
+        let body = "松田様、伊佐様\n\n江島邸の件、承知しました。\n\n末松\n\n\
+=========================\n\
+Shingo Suematsu CEO\n\
+sngDESIGN Inc.\n\
+=========================\n\n\
+Dec 26, 2025, 17:25 +0900, 伊佐　日和 <isa@matsudamariko.com>:\n\n\
+> よろしくお願いします";
+        let s = split_reply(body);
+        assert_eq!(s.clean, "松田様、伊佐様\n\n江島邸の件、承知しました。\n\n末松");
+    }
+
+    #[test]
+    fn strips_inline_box_marker_signature() {
+        // 改行が失われた Apple Mail 系: 本文と "□□□" 署名が 1 行に潰れていても手前で切る。
+        let body =
+            "末松　さまお世話になっております。伊佐です。よろしくお願いいたします。□□□伊佐日和090-3794-8055合同会社松田まり子建築設計事務所";
+        assert_eq!(
+            strip_signature(body),
+            "末松　さまお世話になっております。伊佐です。よろしくお願いいたします。"
+        );
+    }
+
+    #[test]
+    fn no_signature_body_is_unchanged() {
+        // 署名の無いメールは 1 文字も削らない（区切りマーカーが無ければ素通り）。
+        let body = "承知しました。\n明日までにお送りします。\n引き続きよろしくお願いします。";
+        assert_eq!(strip_signature(body), body);
+        assert_eq!(split_reply(body).clean, body);
+    }
+
+    #[test]
+    fn signature_only_body_is_not_nuked() {
+        // 万一「署名だけ」に見える切り方になっても、本文が空になるなら採用しない（誤爆保険）。
+        let body = "□□□\n伊佐日和\n090-3794-8055";
+        // 先頭が □□□ 単独行 → 手前が空。空にはせず元のまま返す。
+        assert_eq!(strip_signature(body), body);
+    }
+
+    #[test]
+    fn short_equals_run_is_not_a_signature() {
+        // 短い "===" は誤爆回避のため署名扱いしない（本文中の区切りを守る）。
+        let body = "見出し\n===\n本文の続き";
+        assert_eq!(strip_signature(body), body);
     }
 
     #[test]

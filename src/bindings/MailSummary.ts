@@ -43,4 +43,9 @@ is_vip: boolean,
 /**
  * 差出人がグリーン（本人 or 認定ドメイン）か。フィルタ・バッジ用。docs/GREEN_DOMAINS.md。
  */
-is_green: boolean, };
+is_green: boolean, 
+/**
+ * このメールが属する論理スレッドの総件数（全フォルダ横断）。「N通」バッジ用。
+ * スレッド未割当（旧データ）は 1。検索結果でもスレッドの通数を出すために持つ。
+ */
+message_count: number, };

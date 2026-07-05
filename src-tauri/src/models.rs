@@ -123,6 +123,9 @@ pub struct MailSummary {
     pub is_vip: bool,
     /// 差出人がグリーン（本人 or 認定ドメイン）か。フィルタ・バッジ用。docs/GREEN_DOMAINS.md。
     pub is_green: bool,
+    /// このメールが属する論理スレッドの総件数（全フォルダ横断）。「N通」バッジ用。
+    /// スレッド未割当（旧データ）は 1。検索結果でもスレッドの通数を出すために持つ。
+    pub message_count: i32,
 }
 
 /// グリーン／警告ドメインの 1 件（管理タブ用）。docs/GREEN_DOMAINS.md。
@@ -467,6 +470,8 @@ pub struct MailDetail {
     pub to_name: Option<String>,
     /// Cc の全アドレス（"名前 <addr>, ..." の表示用文字列。無ければ None）。
     pub cc_addresses: Option<String>,
+    /// Reply-To（差出人が指定する返信先。"名前 <addr>, ..."）。返信の宛先に優先的に使う。無ければ None。
+    pub reply_to: Option<String>,
     pub date: Option<String>,
     pub clean_body: Option<String>,
     pub body_plain: Option<String>,
@@ -665,8 +670,17 @@ pub struct SendInput {
     pub cc: Vec<String>,
     pub bcc: Vec<String>,
     pub subject: String,
-    /// プレーン本文（作成はプレーン。HTML は送信時に自動生成）。
+    /// 新規に書いた本文（プレーン。署名込み・引用は含まない）。HTML は送信時に自動生成する。
     pub body: String,
+    /// 返信/転送で本文末に足す「プレーン引用」（属性行＋`>` 引用）。新規なら None。
+    /// プレーン本文はこれを body の後ろに連結して送る。
+    #[serde(default)]
+    pub quoted_plain: Option<String>,
+    /// 返信/転送で HTML 本文末に足す「HTML 引用」（属性行＋オリジナル HTML を blockquote で
+    /// そのまま引用。フロントでサニタイズ済み）。指定時は HTML 本文にこれを使う（オリジナルを
+    /// 再構築せず丸ごと引用＝崩れない）。元メールが HTML を持たない/新規なら None。
+    #[serde(default)]
+    pub quoted_html: Option<String>,
     /// 返信元の Message-ID（スレッド化用。新規なら None）。
     pub in_reply_to: Option<String>,
     /// References チェーン（祖先 Message-ID を空白区切り・古い順。相手メーラーで正しく

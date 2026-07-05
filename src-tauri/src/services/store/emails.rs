@@ -14,6 +14,8 @@ pub struct NewEmail {
     pub to_addresses: Option<String>,
     /// 宛先（先頭）の表示名（ヘッダ To の名前部。無ければ None）。
     pub to_name: Option<String>,
+    /// Reply-To（差出人が指定する返信先。"名前 <addr>, ..." の表示用文字列。無ければ None）。
+    pub reply_to: Option<String>,
     /// Cc の全アドレス（"名前 <addr>, ..." の表示用文字列。無ければ None）。
     pub cc_addresses: Option<String>,
     pub date: Option<String>,
@@ -145,8 +147,8 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
         .map(crate::services::quotes::fingerprint);
     let changed = conn.execute(
         "INSERT OR IGNORE INTO emails
-           (account_id, message_id, canonical_key, subject, from_address, from_name, to_addresses, to_name, cc_addresses, date, date_ts, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read, in_reply_to, references_ids, thread_index, raw_headers, body_fingerprint)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+           (account_id, message_id, canonical_key, subject, from_address, from_name, to_addresses, to_name, cc_addresses, date, date_ts, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read, in_reply_to, references_ids, thread_index, raw_headers, body_fingerprint, reply_to)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
         params![
             e.account_id,
             e.message_id,
@@ -173,6 +175,7 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
             e.thread_index,
             e.raw_headers,
             body_fingerprint,
+            e.reply_to,
         ],
     )?;
     if changed == 0 {
@@ -364,6 +367,7 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
         ("references_ids", &e.references_ids),
         ("thread_index", &e.thread_index),
         ("raw_headers", &e.raw_headers),
+        ("reply_to", &e.reply_to),
     ] {
         if val.is_some() {
             let sql = format!("UPDATE emails SET {col} = ?1 WHERE id = ?2 AND {col} IS NULL");
@@ -456,7 +460,7 @@ fn build_fts_query(input: &str) -> Option<String> {
 /// MailSummary を組み立てる共通行マッパ（list_emails / search_emails で共有）。
 /// SELECT の列順は 0:id 1:subject 2:from_address 3:date 4:is_read 5:has_attachments
 /// 6:preview 7:is_flagged 8:is_bookmarked 9:tag_ids 10:has_real 11:to_addresses
-/// 12:is_known 13:is_vip 14:from_name 15:to_name 16:account_id。
+/// 12:is_known 13:is_vip 14:from_name 15:to_name 16:account_id 17:message_count。
 fn map_mail_summary(r: &rusqlite::Row) -> rusqlite::Result<MailSummary> {
     // group_concat はカンマ区切り文字列。空（タグ無し）は None。
     let tag_ids = r
@@ -483,6 +487,7 @@ fn map_mail_summary(r: &rusqlite::Row) -> rusqlite::Result<MailSummary> {
         is_vip: r.get::<_, i64>(13)? != 0,
         // グリーンは行取得後にまとめて算出する（グリーン集合を 1 回だけ引くため）。
         is_green: false,
+        message_count: r.get::<_, i64>(17)? as i32,
     })
 }
 
@@ -562,7 +567,10 @@ impl Store {
                     (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = emails.id) AS tag_ids,
                     (emails.has_attachments = 1
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = emails.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real,
-                    to_addresses, {known_vip}, from_name, to_name, account_id
+                    to_addresses, {known_vip}, from_name, to_name, account_id,
+                    CASE WHEN emails.logical_thread_id IS NULL THEN 1
+                         ELSE (SELECT count(*) FROM emails t WHERE t.logical_thread_id = emails.logical_thread_id)
+                    END AS message_count
              FROM emails WHERE {acct}folder = ?1
              ORDER BY date_ts DESC, id DESC LIMIT ?2 OFFSET ?3",
             known_vip = known_vip_cols("emails.from_address"),
@@ -599,16 +607,30 @@ impl Store {
         } else {
             ""
         };
+        // 検索も一覧と同じくスレッド単位（1 スレッド 1 行）にする。マッチしたメールを論理スレッド
+        // ごとに束ね、各スレッドで最新のマッチ 1 通を代表として返す（未割当の旧データは 1 通ずつ）。
+        // クリックすると会話全体が開くので、同一会話の重複行を出さない。
         let sql = format!(
-            "SELECT e.id, e.subject, e.from_address, e.date, e.is_read, e.has_attachments,
+            "WITH matched AS (
+                SELECT e.id AS id,
+                       ROW_NUMBER() OVER (
+                         PARTITION BY COALESCE(e.logical_thread_id, -e.id)
+                         ORDER BY e.date_ts DESC, e.id DESC) AS rn
+                FROM email_fts JOIN emails e ON e.id = email_fts.rowid
+                WHERE email_fts MATCH ?1 AND {acct}e.folder = ?2
+             )
+             SELECT e.id, e.subject, e.from_address, e.date, e.is_read, e.has_attachments,
                     substr(COALESCE(e.clean_body, e.body_plain, ''), 1, 140) AS preview,
                     e.is_flagged, e.is_bookmarked,
                     (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = e.id) AS tag_ids,
                     (e.has_attachments = 1
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = e.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real,
-                    e.to_addresses, {known_vip}, e.from_name, e.to_name, e.account_id
-             FROM email_fts JOIN emails e ON e.id = email_fts.rowid
-             WHERE email_fts MATCH ?1 AND {acct}e.folder = ?2
+                    e.to_addresses, {known_vip}, e.from_name, e.to_name, e.account_id,
+                    CASE WHEN e.logical_thread_id IS NULL THEN 1
+                         ELSE (SELECT count(*) FROM emails t WHERE t.logical_thread_id = e.logical_thread_id)
+                    END AS message_count
+             FROM matched m JOIN emails e ON e.id = m.id
+             WHERE m.rn = 1
              ORDER BY e.date_ts DESC, e.id DESC LIMIT ?3",
             known_vip = known_vip_cols("e.from_address"),
         );
@@ -1041,7 +1063,7 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let detail = conn
             .query_row(
-                "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id, from_name, to_name, account_id, cc_addresses
+                "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id, from_name, to_name, account_id, cc_addresses, reply_to
                  FROM emails WHERE id = ?1",
                 params![id],
                 |r| {
@@ -1061,6 +1083,7 @@ impl Store {
                         to_addresses: r.get(3)?,
                         to_name: r.get(13)?,
                         cc_addresses: r.get(15)?,
+                        reply_to: r.get(16)?,
                         date: r.get(4)?,
                         clean_body: r.get(5)?,
                         body_plain: r.get(6)?,
@@ -1329,6 +1352,7 @@ mod tests {
             from_name: None,
             to_addresses: None,
             to_name: None,
+            reply_to: None,
             cc_addresses: None,
             date: Some("2026-01-01 00:00:00".to_string()),
             date_ts: Some(1_767_225_600),
@@ -1366,6 +1390,7 @@ mod tests {
             from_name: None,
             to_addresses: None,
             to_name: None,
+            reply_to: None,
             cc_addresses: None,
             date: None,
             date_ts: None,
@@ -1498,6 +1523,7 @@ mod tests {
             from_name: None,
             to_addresses: None,
             to_name: None,
+            reply_to: None,
             cc_addresses: None,
             date: Some("2026-01-01T00:00:00Z".into()),
             date_ts: Some(1_767_225_600),
@@ -1561,6 +1587,7 @@ mod tests {
             from_name: None,
             to_addresses: None,
             to_name: None,
+            reply_to: None,
             cc_addresses: None,
             date: Some(format!("2026-06-{:02}T10:00:00Z", ts)),
             date_ts: Some(1_767_000_000 + ts * 86400),
@@ -1625,6 +1652,7 @@ mod tests {
             from_name: None,
             to_addresses: None,
             to_name: None,
+            reply_to: None,
             cc_addresses: None,
             date: Some(format!("2026-06-{:02}T10:00:00Z", ts)),
             date_ts: Some(1_767_000_000 + ts * 86400),
@@ -1701,6 +1729,7 @@ mod tests {
             from_name: None,
             to_addresses: None,
             to_name: None,
+            reply_to: None,
             cc_addresses: None,
             date: Some(format!("2026-06-{:02}T10:00:00Z", ts)),
             date_ts: Some(1_767_000_000 + ts * 86400),
@@ -1756,6 +1785,23 @@ mod tests {
         assert_eq!(build_fts_query("   "), None);
         // 引用符を含む入力もエスケープして構文エラーにしない。
         assert_eq!(build_fts_query("a\"b"), Some("\"a\"\"b\"*".to_string()));
+    }
+
+    #[test]
+    fn search_groups_matches_by_thread() {
+        let store = test_store();
+        // 同一スレッドになる 2 通（同じ正規化件名＋相手先）。両方 "alpha" にマッチ。
+        seed(&store, "Project X", "isa@x.com", "shared token alpha", "inbox", "e1");
+        seed(&store, "Re: Project X", "isa@x.com", "another alpha here", "inbox", "e2");
+        store.rebuild_threads(1).unwrap();
+        let r = store.search_emails(Some(1), "inbox", "alpha", 50).unwrap();
+        assert_eq!(r.len(), 1, "同一スレッドの複数マッチは検索でも 1 行に束ねる");
+
+        // 別スレッド（別相手・別件名）も "alpha" にマッチ → スレッドが増えた分だけ行が増える。
+        seed(&store, "Different", "bob@x.com", "alpha too", "inbox", "e3");
+        store.rebuild_threads(1).unwrap();
+        let r2 = store.search_emails(Some(1), "inbox", "alpha", 50).unwrap();
+        assert_eq!(r2.len(), 2, "別スレッドは別行（1 スレッド 1 行）");
     }
 
     #[test]

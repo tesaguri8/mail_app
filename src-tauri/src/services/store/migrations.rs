@@ -144,21 +144,49 @@ const MIGRATIONS: &[Migration] = &[
         version: 34,
         sql: include_str!("migrations/0034_data_versions.sql"),
     },
+    // 35 は「ゴミ箱(dev)」と「Reply-To(feature)」が別々の枝で衝突したため欠番。
+    // 両 DB が user_version=35 で別々の 35 を適用済みだったので、双方を 35 超へ振り直し、
+    // 各 DB が「自分に無い方」だけ適用できるようにする（すでにある列は下の run() で許容する）。
     Migration {
-        version: 35,
-        sql: include_str!("migrations/0035_mail_trash.sql"),
+        version: 36,
+        sql: include_str!("migrations/0036_mail_trash.sql"),
+    },
+    Migration {
+        version: 37,
+        sql: include_str!("migrations/0037_reply_to.sql"),
     },
 ];
+
+/// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
+/// この場合はスキーマ変更をスキップしてバージョンだけ進めてよい（冪等化）。
+fn is_already_applied(e: &rusqlite::Error) -> bool {
+    let s = e.to_string().to_lowercase();
+    s.contains("duplicate column name") || s.contains("already exists")
+}
 
 pub fn run(conn: &Connection) -> rusqlite::Result<()> {
     let current: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     for m in MIGRATIONS {
-        if m.version > current {
-            let tx = conn.unchecked_transaction()?;
-            tx.execute_batch(m.sql)?;
-            tx.execute_batch(&format!("PRAGMA user_version = {};", m.version))?;
-            tx.commit()?;
+        if m.version <= current {
+            continue;
         }
+        let tx = conn.unchecked_transaction()?;
+        match tx.execute_batch(m.sql) {
+            Ok(()) => {}
+            // 別枝で同じスキーマを適用済み（列/表が既存）なら、その変更は不要。ロールバックして
+            // バージョンだけ進める（マイグレーションはトランザクション＝全適用か未適用のどちらか
+            // なので、先頭の重複エラーで止まっても残りも既存＝スキップして問題ない）。
+            Err(e) if is_already_applied(&e) => {
+                drop(tx);
+                let bump = conn.unchecked_transaction()?;
+                bump.execute_batch(&format!("PRAGMA user_version = {};", m.version))?;
+                bump.commit()?;
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
+        tx.execute_batch(&format!("PRAGMA user_version = {};", m.version))?;
+        tx.commit()?;
     }
     Ok(())
 }
@@ -210,6 +238,34 @@ mod tests {
         run(&conn).unwrap();
         // 2回目の run は no-op（再作成でエラーにならない）
         run(&conn).unwrap();
+    }
+
+    /// 別枝で先に列を追加済みの DB（user_version=35 で reply_to だけ既存＝旧 fix 枝の DB を模す）でも、
+    /// run() が「既存の列は許容し、無い列だけ追加」して最新版へ到達する（ゴミ箱/Reply-To 衝突対策）。
+    #[test]
+    fn run_tolerates_columns_added_by_other_branch() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE emails (id INTEGER PRIMARY KEY, folder TEXT);
+             ALTER TABLE emails ADD COLUMN reply_to TEXT;
+             PRAGMA user_version = 35;",
+        )
+        .unwrap();
+        run(&conn).unwrap();
+        let cols: Vec<String> = {
+            let mut s = conn.prepare("PRAGMA table_info(emails)").unwrap();
+            s.query_map([], |r| r.get::<_, String>(1))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        for c in ["reply_to", "trashed_at", "prev_folder"] {
+            assert!(cols.contains(&c.to_string()), "column {c} missing");
+        }
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, MIGRATIONS.last().unwrap().version);
     }
 
     #[test]

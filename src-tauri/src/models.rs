@@ -123,6 +123,9 @@ pub struct MailSummary {
     pub is_vip: bool,
     /// 差出人がグリーン（本人 or 認定ドメイン）か。フィルタ・バッジ用。docs/GREEN_DOMAINS.md。
     pub is_green: bool,
+    /// このメールが属する論理スレッドの総件数（全フォルダ横断）。「N通」バッジ用。
+    /// スレッド未割当（旧データ）は 1。検索結果でもスレッドの通数を出すために持つ。
+    pub message_count: i32,
 }
 
 /// グリーン／警告ドメインの 1 件（管理タブ用）。docs/GREEN_DOMAINS.md。

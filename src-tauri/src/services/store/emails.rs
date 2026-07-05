@@ -460,7 +460,7 @@ fn build_fts_query(input: &str) -> Option<String> {
 /// MailSummary を組み立てる共通行マッパ（list_emails / search_emails で共有）。
 /// SELECT の列順は 0:id 1:subject 2:from_address 3:date 4:is_read 5:has_attachments
 /// 6:preview 7:is_flagged 8:is_bookmarked 9:tag_ids 10:has_real 11:to_addresses
-/// 12:is_known 13:is_vip 14:from_name 15:to_name 16:account_id。
+/// 12:is_known 13:is_vip 14:from_name 15:to_name 16:account_id 17:message_count。
 fn map_mail_summary(r: &rusqlite::Row) -> rusqlite::Result<MailSummary> {
     // group_concat はカンマ区切り文字列。空（タグ無し）は None。
     let tag_ids = r
@@ -487,6 +487,7 @@ fn map_mail_summary(r: &rusqlite::Row) -> rusqlite::Result<MailSummary> {
         is_vip: r.get::<_, i64>(13)? != 0,
         // グリーンは行取得後にまとめて算出する（グリーン集合を 1 回だけ引くため）。
         is_green: false,
+        message_count: r.get::<_, i64>(17)? as i32,
     })
 }
 
@@ -566,7 +567,10 @@ impl Store {
                     (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = emails.id) AS tag_ids,
                     (emails.has_attachments = 1
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = emails.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real,
-                    to_addresses, {known_vip}, from_name, to_name, account_id
+                    to_addresses, {known_vip}, from_name, to_name, account_id,
+                    CASE WHEN emails.logical_thread_id IS NULL THEN 1
+                         ELSE (SELECT count(*) FROM emails t WHERE t.logical_thread_id = emails.logical_thread_id)
+                    END AS message_count
              FROM emails WHERE {acct}folder = ?1
              ORDER BY date_ts DESC, id DESC LIMIT ?2 OFFSET ?3",
             known_vip = known_vip_cols("emails.from_address"),
@@ -621,7 +625,10 @@ impl Store {
                     (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = e.id) AS tag_ids,
                     (e.has_attachments = 1
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = e.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real,
-                    e.to_addresses, {known_vip}, e.from_name, e.to_name, e.account_id
+                    e.to_addresses, {known_vip}, e.from_name, e.to_name, e.account_id,
+                    CASE WHEN e.logical_thread_id IS NULL THEN 1
+                         ELSE (SELECT count(*) FROM emails t WHERE t.logical_thread_id = e.logical_thread_id)
+                    END AS message_count
              FROM matched m JOIN emails e ON e.id = m.id
              WHERE m.rn = 1
              ORDER BY e.date_ts DESC, e.id DESC LIMIT ?3",

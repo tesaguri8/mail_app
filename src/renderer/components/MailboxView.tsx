@@ -97,7 +97,7 @@ function searchRowToThread(m: MailSummary): ThreadListItem {
     is_known: m.is_known,
     is_vip: m.is_vip,
     is_green: m.is_green,
-    message_count: 1,
+    message_count: m.message_count,
     unread_count: m.is_read ? 0 : 1,
     email_ids: [m.id],
   };

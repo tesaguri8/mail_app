@@ -263,6 +263,12 @@ export function MailBody({
   const senderDomain = (d.from_address ?? '').includes('@')
     ? (d.from_address ?? '').split('@').pop()?.trim().toLowerCase() || ''
     : '';
+  // Reply-To（返信先指定）が From と別のときだけヘッダに出す（返信がこちらへ飛ぶことを明示）。
+  const replyToAddr = ((d.reply_to ?? '').match(/<([^>]+)>/)?.[1] ?? d.reply_to ?? '')
+    .trim()
+    .toLowerCase();
+  const showReplyTo =
+    !!d.reply_to?.trim() && replyToAddr !== (d.from_address ?? '').trim().toLowerCase();
   const [attachments, setAttachments] = useState<AttachmentSummary[]>([]);
   const [busyId, setBusyId] = useState<number | null>(null);
   // 本文埋め込み画像（content_id → data URL）
@@ -746,6 +752,17 @@ export function MailBody({
             </span>
             <span className="shrink-0">{formatDate(d.date)}</span>
           </div>
+          {showReplyTo && (
+            <div className="break-words text-sky-300/80">
+              {t('mailbox.replyTo')}:{' '}
+              <LinkifyEmails
+                text={d.reply_to ?? ''}
+                onAdd={onAddContact}
+                onEdit={onEditContact}
+                onCompose={onComposeTo}
+              />
+            </div>
+          )}
           {d.to_addresses && (
             <div className="truncate">
               {t('mailbox.to')}:{' '}

@@ -14,6 +14,8 @@ pub struct NewEmail {
     pub to_addresses: Option<String>,
     /// 宛先（先頭）の表示名（ヘッダ To の名前部。無ければ None）。
     pub to_name: Option<String>,
+    /// Reply-To（差出人が指定する返信先。"名前 <addr>, ..." の表示用文字列。無ければ None）。
+    pub reply_to: Option<String>,
     /// Cc の全アドレス（"名前 <addr>, ..." の表示用文字列。無ければ None）。
     pub cc_addresses: Option<String>,
     pub date: Option<String>,
@@ -145,8 +147,8 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
         .map(crate::services::quotes::fingerprint);
     let changed = conn.execute(
         "INSERT OR IGNORE INTO emails
-           (account_id, message_id, canonical_key, subject, from_address, from_name, to_addresses, to_name, cc_addresses, date, date_ts, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read, in_reply_to, references_ids, thread_index, raw_headers, body_fingerprint)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+           (account_id, message_id, canonical_key, subject, from_address, from_name, to_addresses, to_name, cc_addresses, date, date_ts, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read, in_reply_to, references_ids, thread_index, raw_headers, body_fingerprint, reply_to)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
         params![
             e.account_id,
             e.message_id,
@@ -173,6 +175,7 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
             e.thread_index,
             e.raw_headers,
             body_fingerprint,
+            e.reply_to,
         ],
     )?;
     if changed == 0 {
@@ -364,6 +367,7 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
         ("references_ids", &e.references_ids),
         ("thread_index", &e.thread_index),
         ("raw_headers", &e.raw_headers),
+        ("reply_to", &e.reply_to),
     ] {
         if val.is_some() {
             let sql = format!("UPDATE emails SET {col} = ?1 WHERE id = ?2 AND {col} IS NULL");
@@ -953,7 +957,7 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let detail = conn
             .query_row(
-                "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id, from_name, to_name, account_id, cc_addresses
+                "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id, from_name, to_name, account_id, cc_addresses, reply_to
                  FROM emails WHERE id = ?1",
                 params![id],
                 |r| {
@@ -973,6 +977,7 @@ impl Store {
                         to_addresses: r.get(3)?,
                         to_name: r.get(13)?,
                         cc_addresses: r.get(15)?,
+                        reply_to: r.get(16)?,
                         date: r.get(4)?,
                         clean_body: r.get(5)?,
                         body_plain: r.get(6)?,
@@ -1241,6 +1246,7 @@ mod tests {
             from_name: None,
             to_addresses: None,
             to_name: None,
+            reply_to: None,
             cc_addresses: None,
             date: Some("2026-01-01 00:00:00".to_string()),
             date_ts: Some(1_767_225_600),
@@ -1278,6 +1284,7 @@ mod tests {
             from_name: None,
             to_addresses: None,
             to_name: None,
+            reply_to: None,
             cc_addresses: None,
             date: None,
             date_ts: None,
@@ -1335,6 +1342,7 @@ mod tests {
             from_name: None,
             to_addresses: None,
             to_name: None,
+            reply_to: None,
             cc_addresses: None,
             date: Some("2026-01-01T00:00:00Z".into()),
             date_ts: Some(1_767_225_600),
@@ -1398,6 +1406,7 @@ mod tests {
             from_name: None,
             to_addresses: None,
             to_name: None,
+            reply_to: None,
             cc_addresses: None,
             date: Some(format!("2026-06-{:02}T10:00:00Z", ts)),
             date_ts: Some(1_767_000_000 + ts * 86400),
@@ -1460,6 +1469,7 @@ mod tests {
             from_name: None,
             to_addresses: None,
             to_name: None,
+            reply_to: None,
             cc_addresses: None,
             date: Some(format!("2026-06-{:02}T10:00:00Z", ts)),
             date_ts: Some(1_767_000_000 + ts * 86400),
@@ -1536,6 +1546,7 @@ mod tests {
             from_name: None,
             to_addresses: None,
             to_name: None,
+            reply_to: None,
             cc_addresses: None,
             date: Some(format!("2026-06-{:02}T10:00:00Z", ts)),
             date_ts: Some(1_767_000_000 + ts * 86400),

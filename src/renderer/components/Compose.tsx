@@ -143,18 +143,21 @@ export function Compose({
         inReplyTo: null,
       };
     }
+    // 返信先: 差出人が Reply-To を指定していればそちらへ返信する（ML・no-reply＋実返信先 等）。
+    // 無ければ従来どおり From。
+    const replyTarget = s.reply_to?.trim() ? s.reply_to.trim() : (s.from_address ?? '');
     // reply / replyAll。全員返信の Cc には「元の宛先(To)＋元の Cc」を入れる。
-    // 自分（受信アカウント）と差出人（To に入る）は Cc から除外し、重複も除く。
+    // 自分（受信アカウント）と返信先（To に入る）・差出人は Cc から除外し、重複も除く。
     const selfEmail = accounts.find((a) => a.id === s.account_id)?.email ?? '';
     const cc =
       target.mode === 'replyAll'
         ? mergeAddressList(
             [s.to_addresses ?? '', s.cc_addresses ?? ''],
-            [selfEmail, s.from_address ?? '']
+            [selfEmail, s.from_address ?? '', replyTarget]
           )
         : '';
     return {
-      to: s.from_address ?? '',
+      to: replyTarget,
       cc,
       bcc: '',
       subject: withPrefix(s.subject, 'Re'),

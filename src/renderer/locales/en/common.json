@@ -421,6 +421,7 @@
     "result": "Fetched {{fetched}} / New {{stored}}",
     "from": "From",
     "to": "To",
+    "replyTo": "Reply-To",
     "hideSidebar": "Hide sidebar (Ctrl+S)",
     "showSidebar": "Show sidebar (Ctrl+S)",
     "addContact": "Add to contacts",

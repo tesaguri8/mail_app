@@ -629,9 +629,12 @@ pub fn process_pending_at(
 /// reprocess_all の本体（接続を受け取る版。テストからも使う）。
 pub fn reprocess_all_conn(conn: &mut Connection, account_id: i64) -> rusqlite::Result<usize> {
     // (1) 保存済み body_plain から clean_body / body_fingerprint / FTS / message_quotes を再生成（200件ずつ）。
-    let rows: Vec<(i64, Option<String>)> = {
-        let mut stmt = conn.prepare("SELECT id, body_plain FROM emails WHERE account_id = ?1")?;
-        let mapped = stmt.query_map(params![account_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    //     併せて保存済み raw_headers から reply_to を後付けする（機能追加前の既存メール向け）。
+    let rows: Vec<(i64, Option<String>, Option<String>)> = {
+        let mut stmt =
+            conn.prepare("SELECT id, body_plain, raw_headers FROM emails WHERE account_id = ?1")?;
+        let mapped =
+            stmt.query_map(params![account_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         mapped.collect::<rusqlite::Result<_>>()?
     };
     let count = rows.len();
@@ -646,7 +649,14 @@ pub fn reprocess_all_conn(conn: &mut Connection, account_id: i64) -> rusqlite::R
                 "INSERT INTO message_quotes (email_id, block_order, quoted_from, quoted_at, fingerprint)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
             )?;
-            for (id, body) in chunk {
+            // 抽出できたときだけ上書き（raw_headers 無し＝抽出 None のとき既存値を消さない）。
+            let mut uprt =
+                tx.prepare("UPDATE emails SET reply_to = COALESCE(?2, reply_to) WHERE id = ?1")?;
+            for (id, body, headers) in chunk {
+                if let Some(h) = headers {
+                    let rt = crate::services::parser::reply_to_from_headers(h);
+                    uprt.execute(params![id, rt])?;
+                }
                 let Some(body) = body else { continue };
                 let split = crate::services::quotes::split_reply(body);
                 let fp = if split.clean.trim().is_empty() {
@@ -803,6 +813,7 @@ mod tests {
             from_name: None,
             to_addresses: None,
             to_name: None,
+            reply_to: None,
             cc_addresses: None,
             date: Some(format!("2026-06-{:02}T10:00:00+09:00", ts)),
             date_ts: Some(1_767_000_000 + ts * 86400),

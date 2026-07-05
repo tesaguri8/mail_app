@@ -144,6 +144,10 @@ const MIGRATIONS: &[Migration] = &[
         version: 34,
         sql: include_str!("migrations/0034_data_versions.sql"),
     },
+    Migration {
+        version: 35,
+        sql: include_str!("migrations/0035_reply_to.sql"),
+    },
 ];
 
 pub fn run(conn: &Connection) -> rusqlite::Result<()> {

@@ -23,7 +23,11 @@ to_name: string | null,
 /**
  * Cc の全アドレス（"名前 <addr>, ..." の表示用文字列。無ければ None）。
  */
-cc_addresses: string | null, date: string | null, clean_body: string | null, body_plain: string | null, 
+cc_addresses: string | null, 
+/**
+ * Reply-To（差出人が指定する返信先。"名前 <addr>, ..."）。返信の宛先に優先的に使う。無ければ None。
+ */
+reply_to: string | null, date: string | null, clean_body: string | null, body_plain: string | null, 
 /**
  * HTML 本文（あれば）。レンダラ側でテキスト＋リンクのみ安全描画する。
  */

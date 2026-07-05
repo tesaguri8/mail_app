@@ -467,6 +467,8 @@ pub struct MailDetail {
     pub to_name: Option<String>,
     /// Cc の全アドレス（"名前 <addr>, ..." の表示用文字列。無ければ None）。
     pub cc_addresses: Option<String>,
+    /// Reply-To（差出人が指定する返信先。"名前 <addr>, ..."）。返信の宛先に優先的に使う。無ければ None。
+    pub reply_to: Option<String>,
     pub date: Option<String>,
     pub clean_body: Option<String>,
     pub body_plain: Option<String>,

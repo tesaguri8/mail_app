@@ -39,6 +39,9 @@ pub struct ParsedEmail {
     pub to_addresses: Option<String>,
     /// 宛先（先頭）の表示名（ヘッダ To の名前部。無ければ None）。
     pub to_name: Option<String>,
+    /// Reply-To（差出人が指定する返信先。"名前 <addr>, ..." の表示用文字列。無ければ None）。
+    /// 設定されていれば返信の宛先を From ではなくこちらにする（ML・no-reply＋実返信先 等）。
+    pub reply_to: Option<String>,
     /// Cc の全アドレス（"名前 <addr>, ..." の表示用文字列。無ければ None）。
     pub cc_addresses: Option<String>,
     pub date: Option<String>,
@@ -150,6 +153,15 @@ pub fn part_filename(part: &mail_parser::MessagePart, index: usize) -> String {
         .unwrap_or_else(|| format!("attachment-{}", index + 1))
 }
 
+/// 保存済みヘッダ生テキスト（raw_headers）から Reply-To を取り出す（"名前 <addr>, ..."）。
+/// 既存メールへの後付け（再構築）用。本文の無いヘッダ塊でもパースできるよう空行を補って解析する。
+pub fn reply_to_from_headers(raw_headers: &str) -> Option<String> {
+    let mut buf = raw_headers.trim_end().to_string();
+    buf.push_str("\r\n\r\n");
+    let msg = MessageParser::default().parse(buf.as_bytes())?;
+    format_address_list(msg.reply_to())
+}
+
 /// 生の RFC822 メッセージを解析する。
 pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
     let msg = MessageParser::default().parse(raw)?;
@@ -174,6 +186,8 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
         .filter(|s| !s.is_empty());
     // Cc は全件を表示用文字列に（受信メールのヘッダに Cc を出すため）。
     let cc_addresses = format_address_list(msg.cc());
+    // Reply-To（返信先指定）。From と別なら返信の宛先をこちらにする。全件を表示用文字列に。
+    let reply_to = format_address_list(msg.reply_to());
     let message_id = msg.message_id().map(|s| s.to_string());
     let date = msg.date().map(|d| d.to_rfc3339());
     // 並び替え用の epoch 秒（UTC）。無効な日付は None。
@@ -246,6 +260,7 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
         from_name,
         to_addresses,
         to_name,
+        reply_to,
         cc_addresses,
         date,
         date_ts,
@@ -285,6 +300,30 @@ This is the new part.\r\n\
         assert_eq!(p.message_id.as_deref(), Some("abc123@example.com"));
         assert!(p.clean_body.as_deref().unwrap().contains("new part"));
         assert!(!p.clean_body.as_deref().unwrap().contains("quoted old line"));
+    }
+
+    #[test]
+    fn extracts_reply_to() {
+        let raw = b"From: No Reply <no-reply@service.example>\r\n\
+To: Me <me@example.com>\r\n\
+Reply-To: Support <support@service.example>\r\n\
+Subject: Ticket\r\n\
+\r\n\
+body\r\n";
+        let p = parse_message(raw).expect("should parse");
+        assert_eq!(p.reply_to.as_deref(), Some("Support <support@service.example>"));
+        // ヘッダ塊だけからの後付け抽出も同じ結果になる。
+        let hdr = "From: No Reply <no-reply@service.example>\r\nReply-To: Support <support@service.example>\r\n";
+        assert_eq!(
+            reply_to_from_headers(hdr).as_deref(),
+            Some("Support <support@service.example>")
+        );
+    }
+
+    #[test]
+    fn no_reply_to_is_none() {
+        let raw = b"From: A <a@example.com>\r\nTo: B <b@example.com>\r\nSubject: x\r\n\r\nbody\r\n";
+        assert_eq!(parse_message(raw).unwrap().reply_to, None);
     }
 
     #[test]

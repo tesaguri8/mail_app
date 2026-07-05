@@ -63,7 +63,9 @@
     "rem_10": "10 min before",
     "rem_30": "30 min before",
     "rem_60": "1 hour before",
-    "rem_1440": "1 day before"
+    "rem_1440": "1 day before",
+    "map": "Map",
+    "openMap": "Open in Google Maps"
   },
   "comingSoon": "Coming soon",
   "filter": {

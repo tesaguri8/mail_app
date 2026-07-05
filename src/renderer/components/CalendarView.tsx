@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { ChevronLeft, ChevronRight, Plus, Trash2, X, Clock, MapPin, RotateCcw, Repeat, Bell } from 'lucide-react';
 import type { EventSummary } from '@bindings/EventSummary';
 import type { EventInput } from '@bindings/EventInput';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { eventList, eventListTrashed, eventUpsert, eventDelete, eventRestore, eventGet } from '../services/calendar';
 import { expandEvents, presetToRule, ruleToPreset, RECUR_PRESETS, type RecurPreset } from '../utils/recurrence';
 
@@ -15,6 +16,13 @@ const DEFAULT_COLOR = COLORS[0];
 /** リマインダーの選択肢（開始何分前。null=なし / 0=開始時刻）。 */
 const REMINDERS: (number | null)[] = [null, 0, 5, 10, 30, 60, 1440];
 const reminderKey = (m: number | null) => (m === null ? 'cal.rem_none' : `cal.rem_${m}`);
+
+/** 場所を Google マップ検索で外部ブラウザに開く。 */
+function openMaps(location: string) {
+  const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(location.trim())}`;
+  if (isTauri) openUrl(url).catch(() => undefined);
+  else window.open(url, '_blank');
+}
 
 /** 表示単位。年＝12ミニ月、月＝6週、2週＝14日（いずれも日セル）、週/日＝タイムグリッド。 */
 type ViewMode = 'year' | 'month' | 'fortnight' | 'week' | 'day';
@@ -244,19 +252,18 @@ export function CalendarView() {
         <div className="flex-1" />
         <button
           onClick={() => setShowTrash((v) => !v)}
-          className={`flex items-center gap-1.5 rounded px-2.5 py-1 text-xs hover:bg-white/20 ${showTrash ? 'bg-white/25' : ''}`}
+          className={`flex items-center rounded p-1.5 hover:bg-white/20 ${showTrash ? 'bg-white/25' : ''}`}
           title={t('cal.trash')}
         >
-          <Trash2 size={14} />
-          {t('cal.trash')}
+          <Trash2 size={16} />
         </button>
         {!showTrash && (
           <button
             onClick={() => newAt(selected)}
-            className="flex items-center gap-1.5 rounded bg-white/20 px-3 py-1.5 text-sm font-medium hover:bg-white/30"
+            title={t('cal.newEvent')}
+            className="flex items-center rounded bg-white/20 p-1.5 hover:bg-white/30"
           >
-            <Plus size={15} />
-            {t('cal.newEvent')}
+            <Plus size={16} />
           </button>
         )}
       </div>
@@ -836,6 +843,23 @@ function EventModal({
   const [until, setUntil] = useState<string>(initialRecur.until ?? '');
   const [reminder, setReminder] = useState<number | null>(event?.reminder_minutes ?? null);
   const [busy, setBusy] = useState(false);
+  // ダイアログのドラッグ移動（ヘッダをつまんで動かす）。
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const dragRef = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null);
+  const startDrag = (e: React.PointerEvent) => {
+    dragRef.current = { px: e.clientX, py: e.clientY, ox: pos.x, oy: pos.y };
+    const onMove = (ev: PointerEvent) => {
+      const d = dragRef.current;
+      if (d) setPos({ x: d.ox + ev.clientX - d.px, y: d.oy + ev.clientY - d.py });
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -891,14 +915,23 @@ function EventModal({
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
       <div
-        className="w-full max-w-md rounded-2xl bg-neutral-900/95 p-5 text-white shadow-2xl ring-1 ring-white/15"
+        className="w-full max-w-md rounded-2xl bg-neutral-900/50 p-5 text-white shadow-2xl ring-1 ring-white/15 backdrop-blur-2xl"
+        style={{ transform: `translate(${pos.x}px, ${pos.y}px)` }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-3 flex items-center justify-between">
+        <div
+          onPointerDown={startDrag}
+          className="mb-3 flex cursor-move select-none items-center justify-between"
+        >
           <h3 className="text-base font-semibold">{event ? t('cal.editEvent') : t('cal.addEvent')}</h3>
-          <button onClick={onClose} className="rounded p-1 hover:bg-white/15" title={t('cal.cancel')}>
+          <button
+            onClick={onClose}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="cursor-pointer rounded p-1 hover:bg-white/15"
+            title={t('cal.cancel')}
+          >
             <X size={16} />
           </button>
         </div>
@@ -954,12 +987,25 @@ function EventModal({
           </div>
         </div>
 
-        <input
-          value={location}
-          onChange={(e) => setLocation(e.target.value)}
-          placeholder={t('cal.fLocation')}
-          className="mb-3 w-full rounded-lg bg-white/10 px-3 py-2 text-sm outline-none ring-1 ring-white/10 placeholder:text-white/40 focus:ring-white/30"
-        />
+        <div className="mb-3 flex items-center gap-2">
+          <input
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            placeholder={t('cal.fLocation')}
+            className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-sm outline-none ring-1 ring-white/10 placeholder:text-white/40 focus:ring-white/30"
+          />
+          {location.trim() && (
+            <button
+              type="button"
+              onClick={() => openMaps(location)}
+              title={t('cal.openMap')}
+              className="flex items-center gap-1 rounded-lg bg-white/10 px-2.5 py-2 text-xs hover:bg-white/20"
+            >
+              <MapPin size={14} />
+              {t('cal.map')}
+            </button>
+          )}
+        </div>
 
         <textarea
           value={description}

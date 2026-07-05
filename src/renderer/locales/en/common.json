@@ -348,14 +348,12 @@
     "keepAll": "Always keep",
     "optimize": "Optimize storage",
     "optimized": "Cleaned {{count}} attachments, compacted {{compacted}} bodies ({{size}} freed)",
-    "resync": "Repair re-import",
-    "resyncHint": "Re-fetch the import range from the server and backfill attachment info (uid) for older mail too.",
-    "resyncing": "Re-importing…",
+    "rebuild": "Rebuild",
+    "rebuilding": "Rebuilding…",
+    "rebuildHint": "Checks the recorded data-format version and picks what is needed automatically: re-imports everything from the server when the import format is outdated (including uid/attachment backfill); otherwise rebuilds quote separation and threading from the stored bodies only (no network).",
+    "rebuildResync": "The import format has been updated — re-importing everything from the server",
     "resynced": "Fetched {{fetched}} / New {{stored}} / Backfilled {{backfilled}}",
-    "reprocess": "Local re-analyze",
-    "reprocessing": "Re-analyzing…",
-    "reprocessed": "Re-analyzed {{count}} messages",
-    "reprocessHint": "Rebuild quote separation and threading from the stored bodies only, without re-fetching from the server (applies parser improvements, no network)."
+    "reprocessed": "Re-analyzed {{count}} messages"
   },
   "lang": {
     "switch": "JP"

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronLeft, ChevronRight, Plus, Trash2, X, Clock, MapPin, RotateCcw } from 'lucide-react';
 import type { EventSummary } from '@bindings/EventSummary';
@@ -11,15 +11,21 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 const COLORS = ['#64b5f6', '#e57373', '#f6bf50', '#81c784', '#ba91e0', '#4db6ac', '#f06292'];
 const DEFAULT_COLOR = COLORS[0];
 
-/** 表示単位。年＝12ミニ月、月＝6週グリッド、2週＝14日、週＝7日。 */
-type ViewMode = 'year' | 'month' | 'fortnight' | 'week';
+/** 表示単位。年＝12ミニ月、月＝6週、2週＝14日（いずれも日セル）、週/日＝タイムグリッド。 */
+type ViewMode = 'year' | 'month' | 'fortnight' | 'week' | 'day';
 const MODE_KEY = 'rondine.cal.mode';
 const MODES: { m: ViewMode; key: string }[] = [
   { m: 'year', key: 'cal.vYear' },
   { m: 'month', key: 'cal.vMonth' },
   { m: 'fortnight', key: 'cal.vFortnight' },
   { m: 'week', key: 'cal.vWeek' },
+  { m: 'day', key: 'cal.vDay' },
 ];
+
+/** 編集対象。新規はプレフィル（日・時刻・終日）を運ぶ。 */
+type EditTarget =
+  | { mode: 'edit'; event: EventSummary }
+  | { mode: 'new'; day: string; time?: string; allDay?: boolean };
 
 // ── 日付ヘルパー（保存は端末ローカルの素の ISO 文字列。UTC 変換はしない） ──
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -40,6 +46,13 @@ const startOfWeek = (d: Date) => {
 const dayOf = (iso: string) => iso.slice(0, 10);
 /** 時刻部分（HH:MM）を取り出す。日付のみなら空。 */
 const timeOf = (iso: string) => (iso.length > 10 ? iso.slice(11, 16) : '');
+/** ISO の時刻を「その日の 0 時からの分」に。日付のみは 0。 */
+const minutesOf = (iso: string) => {
+  const t = timeOf(iso);
+  if (!t) return 0;
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + m;
+};
 
 /** 予定が日付 d（'YYYY-MM-DD'）に掛かるか。開始日〜終了日（終日は最終日を含む）で判定。 */
 function coversDay(e: EventSummary, d: string): boolean {
@@ -73,10 +86,11 @@ function coveredDays(e: EventSummary): string[] {
   return out;
 }
 
-/** 月/週/2週グリッド、または年（12ミニ月）の表示範囲・見出しをまとめた導出値。 */
+/** 月/週/2週グリッド、年（12ミニ月）、タイムグリッド（週/日）の導出値。 */
 type Period =
   | { kind: 'year'; year: number; from: string; to: string; label: string }
-  | { kind: 'grid'; rows: number; days: Date[]; from: string; to: string; label: string };
+  | { kind: 'grid'; rows: number; days: Date[]; from: string; to: string; label: string }
+  | { kind: 'time'; days: Date[]; from: string; to: string; label: string };
 
 function computePeriod(mode: ViewMode, anchor: Date, locale: string): Period {
   const y = anchor.getFullYear();
@@ -102,26 +116,31 @@ function computePeriod(mode: ViewMode, anchor: Date, locale: string): Period {
       label: new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'long' }).format(anchor),
     };
   }
-  // 週 / 2週（日曜始まり）
+  if (mode === 'day') {
+    const day = new Date(y, anchor.getMonth(), anchor.getDate());
+    return {
+      kind: 'time',
+      days: [day],
+      from: ymd(day),
+      to: ymd(addDays(day, 1)),
+      label: new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' }).format(day),
+    };
+  }
+  // 週（タイムグリッド） / 2週（日セル）。いずれも日曜始まり。
   const start = startOfWeek(anchor);
   const len = mode === 'fortnight' ? 14 : 7;
   const days = Array.from({ length: len }, (_, i) => addDays(start, i));
   const f = new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' });
-  return {
-    kind: 'grid',
-    rows: len / 7,
-    days,
-    from: ymd(days[0]),
-    to: ymd(addDays(days[len - 1], 1)),
-    label: `${f.format(days[0])} – ${f.format(days[len - 1])}`,
-  };
+  const common = { from: ymd(days[0]), to: ymd(addDays(days[len - 1], 1)), label: `${f.format(days[0])} – ${f.format(days[len - 1])}` };
+  return mode === 'week' ? { kind: 'time', days, ...common } : { kind: 'grid', rows: 2, days, ...common };
 }
 
-/** 前/次ボタンで anchor をモードの単位（年/月/2週/週）だけ動かす。 */
+/** 前/次ボタンで anchor をモードの単位（年/月/2週/週/日）だけ動かす。 */
 function stepAnchor(mode: ViewMode, a: Date, dir: number): Date {
   const x = new Date(a);
   if (mode === 'year') x.setFullYear(x.getFullYear() + dir);
   else if (mode === 'month') x.setMonth(x.getMonth() + dir);
+  else if (mode === 'day') x.setDate(x.getDate() + dir);
   else x.setDate(x.getDate() + (mode === 'fortnight' ? 14 : 7) * dir);
   return x;
 }
@@ -130,19 +149,18 @@ export function CalendarView() {
   const { t, i18n } = useTranslation();
   const [mode, setMode] = useState<ViewMode>(() => {
     const s = localStorage.getItem(MODE_KEY);
-    return s === 'year' || s === 'fortnight' || s === 'week' ? s : 'month';
+    return s === 'year' || s === 'fortnight' || s === 'week' || s === 'day' ? s : 'month';
   });
   useEffect(() => {
     localStorage.setItem(MODE_KEY, mode);
   }, [mode]);
-  // 表示中の基準日（この日を含む年/月/週を表示する）。
+  // 表示中の基準日（この日を含む年/月/週/日を表示する）。
   const [anchor, setAnchor] = useState<Date>(() => new Date());
   const [selected, setSelected] = useState<string>(() => ymd(new Date()));
   const [events, setEvents] = useState<EventSummary[]>([]);
   const [trashed, setTrashed] = useState<EventSummary[]>([]);
   const [showTrash, setShowTrash] = useState(false);
-  // 編集/新規モーダル。null=閉じている。'new' は新規、それ以外は編集対象の予定。
-  const [editing, setEditing] = useState<EventSummary | 'new' | null>(null);
+  const [editing, setEditing] = useState<EditTarget | null>(null);
   const todayStr = ymd(new Date());
 
   const period = useMemo(() => computePeriod(mode, anchor, i18n.language), [mode, anchor, i18n.language]);
@@ -157,18 +175,9 @@ export function CalendarView() {
   }, [period.from, period.to, showTrash]);
   useEffect(reload, [reload]);
 
-  // 予定が掛かる日の集合（年表示のドット。存在判定を O(1) に）。
   const eventDays = useMemo(() => new Set(events.flatMap(coveredDays)), [events]);
-
-  // 曜日見出し（既知の日曜=2024-01-07 を起点に Intl で生成）。short=大グリッド, narrow=ミニ月。
-  const weekdayShort = useMemo(
-    () => weekdayLabels(i18n.language, 'short'),
-    [i18n.language],
-  );
-  const weekdayNarrow = useMemo(
-    () => weekdayLabels(i18n.language, 'narrow'),
-    [i18n.language],
-  );
+  const weekdayShort = useMemo(() => weekdayLabels(i18n.language, 'short'), [i18n.language]);
+  const weekdayNarrow = useMemo(() => weekdayLabels(i18n.language, 'narrow'), [i18n.language]);
 
   const gotoToday = () => {
     const now = new Date();
@@ -179,8 +188,10 @@ export function CalendarView() {
     setEditing(null);
     reload();
   };
+  const newAt = (day: string, time?: string, allDay?: boolean) => setEditing({ mode: 'new', day, time, allDay });
+  const openEvent = (event: EventSummary) => setEditing({ mode: 'edit', event });
   const selectedList = eventsOn(events, selected);
-  const maxVisible = mode === 'month' ? 3 : mode === 'fortnight' ? 5 : 12;
+  const maxVisible = mode === 'fortnight' ? 5 : 3;
 
   return (
     <div className="flex h-full min-h-0 flex-col px-4 pb-3 pt-1 text-white">
@@ -200,7 +211,6 @@ export function CalendarView() {
                 <ChevronRight size={16} />
               </button>
             </div>
-            {/* 表示単位の切替（年/月/2週/週） */}
             <div className="flex items-center gap-0.5 rounded-lg bg-white/10 p-0.5 text-xs">
               {MODES.map(({ m, key }) => (
                 <button
@@ -225,7 +235,7 @@ export function CalendarView() {
         </button>
         {!showTrash && (
           <button
-            onClick={() => setEditing('new')}
+            onClick={() => newAt(selected)}
             className="flex items-center gap-1.5 rounded bg-white/20 px-3 py-1.5 text-sm font-medium hover:bg-white/30"
           >
             <Plus size={15} />
@@ -235,10 +245,19 @@ export function CalendarView() {
       </div>
 
       {showTrash ? (
-        <TrashList
-          items={trashed}
-          onRestore={(id) => eventRestore(id).then(reload)}
-          i18nLang={i18n.language}
+        <TrashList items={trashed} onRestore={(id) => eventRestore(id).then(reload)} i18nLang={i18n.language} />
+      ) : period.kind === 'time' ? (
+        <TimeGrid
+          days={period.days}
+          events={events}
+          todayStr={todayStr}
+          locale={i18n.language}
+          onOpenDay={(ds) => {
+            setAnchor(new Date(`${ds}T00:00`));
+            setMode('day');
+          }}
+          onNewAt={newAt}
+          onOpenEvent={openEvent}
         />
       ) : period.kind === 'year' ? (
         <div className="flex min-h-0 flex-1 gap-3">
@@ -255,10 +274,7 @@ export function CalendarView() {
                   todayStr={todayStr}
                   locale={i18n.language}
                   onSelectDay={setSelected}
-                  onOpenDay={(ds) => {
-                    setSelected(ds);
-                    setEditing('new');
-                  }}
+                  onOpenDay={(ds) => newAt(ds)}
                   onOpenMonth={(mm) => {
                     setAnchor(new Date(period.year, mm, 1));
                     setMode('month');
@@ -267,13 +283,7 @@ export function CalendarView() {
               ))}
             </div>
           </div>
-          <AgendaPanel
-            selected={selected}
-            list={selectedList}
-            locale={i18n.language}
-            onOpen={setEditing}
-            onNew={() => setEditing('new')}
-          />
+          <AgendaPanel selected={selected} list={selectedList} locale={i18n.language} onOpen={openEvent} onNew={() => newAt(selected)} />
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 gap-3">
@@ -285,10 +295,7 @@ export function CalendarView() {
                 </div>
               ))}
             </div>
-            <div
-              className="grid min-h-0 flex-1 grid-cols-7"
-              style={{ gridTemplateRows: `repeat(${period.rows}, minmax(0, 1fr))` }}
-            >
+            <div className="grid min-h-0 flex-1 grid-cols-7" style={{ gridTemplateRows: `repeat(${period.rows}, minmax(0, 1fr))` }}>
               {period.days.map((day) => (
                 <DayCell
                   key={ymd(day)}
@@ -299,32 +306,17 @@ export function CalendarView() {
                   dim={mode === 'month' && day.getMonth() !== anchor.getMonth()}
                   maxVisible={maxVisible}
                   onSelect={setSelected}
-                  onOpenNew={(ds) => {
-                    setSelected(ds);
-                    setEditing('new');
-                  }}
+                  onOpenNew={(ds) => newAt(ds)}
                 />
               ))}
             </div>
           </div>
-          <AgendaPanel
-            selected={selected}
-            list={selectedList}
-            locale={i18n.language}
-            onOpen={setEditing}
-            onNew={() => setEditing('new')}
-          />
+          <AgendaPanel selected={selected} list={selectedList} locale={i18n.language} onOpen={openEvent} onNew={() => newAt(selected)} />
         </div>
       )}
 
       {editing && (
-        <EventModal
-          event={editing === 'new' ? null : editing}
-          defaultDay={selected}
-          onClose={() => setEditing(null)}
-          onSaved={onSaved}
-          onDeleted={onSaved}
-        />
+        <EventModal target={editing} onClose={() => setEditing(null)} onSaved={onSaved} onDeleted={onSaved} />
       )}
     </div>
   );
@@ -405,6 +397,227 @@ function DayCell({
   );
 }
 
+const ROW_H = 44; // タイムグリッド1時間の高さ(px)
+
+/** 週/日のタイムグリッド（時刻の行 × 日の列。終日バンド＋時間指定を重なり配置）。 */
+function TimeGrid({
+  days,
+  events,
+  todayStr,
+  locale,
+  onOpenDay,
+  onNewAt,
+  onOpenEvent,
+}: {
+  days: Date[];
+  events: EventSummary[];
+  todayStr: string;
+  locale: string;
+  onOpenDay: (ds: string) => void;
+  onNewAt: (day: string, time?: string, allDay?: boolean) => void;
+  onOpenEvent: (e: EventSummary) => void;
+}) {
+  const { t } = useTranslation();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // 起動時は 7:00 あたりへスクロール。
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 7 * ROW_H;
+  }, []);
+  // 現在時刻ラインを1分ごとに更新（今日を含むときだけ意味を持つ）。
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const hours = Array.from({ length: 24 }, (_, h) => h);
+  const dowFmt = new Intl.DateTimeFormat(locale, { weekday: 'short' });
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10">
+      {/* 日ヘッダ */}
+      <div className="flex border-b border-white/10">
+        <div className="w-12 shrink-0" />
+        {days.map((d) => {
+          const ds = ymd(d);
+          const isToday = ds === todayStr;
+          return (
+            <button
+              key={ds}
+              onClick={() => onOpenDay(ds)}
+              className="flex flex-1 flex-col items-center gap-0.5 border-l border-white/5 py-1.5 hover:bg-white/10"
+              title={t('cal.vDay')}
+            >
+              <span className="text-[11px] text-white/55">{dowFmt.format(d)}</span>
+              <span
+                className={`flex h-6 w-6 items-center justify-center rounded-full text-sm ${
+                  isToday ? 'bg-blue-500 font-semibold text-white' : 'text-white/85'
+                }`}
+              >
+                {d.getDate()}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* 終日バンド */}
+      <div className="flex border-b border-white/10">
+        <div className="flex w-12 shrink-0 items-center justify-end pr-1 text-[10px] text-white/40">{t('cal.allDay')}</div>
+        {days.map((d) => {
+          const ds = ymd(d);
+          const list = eventsOn(events, ds).filter((e) => e.all_day);
+          return (
+            <div
+              key={ds}
+              onClick={() => onNewAt(ds, undefined, true)}
+              className="min-h-[1.75rem] min-w-0 flex-1 space-y-0.5 border-l border-white/5 p-0.5"
+            >
+              {list.map((e) => (
+                <button
+                  key={e.id}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    onOpenEvent(e);
+                  }}
+                  className="block w-full truncate rounded px-1 py-0.5 text-left text-[11px] text-white"
+                  style={{ backgroundColor: `${e.color ?? DEFAULT_COLOR}cc` }}
+                >
+                  {e.title}
+                </button>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* 時間帯（スクロール） */}
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+        <div className="flex" style={{ height: 24 * ROW_H }}>
+          {/* 時刻の目盛り */}
+          <div className="w-12 shrink-0">
+            {hours.map((h) => (
+              <div key={h} style={{ height: ROW_H }} className="relative">
+                {h > 0 && <span className="absolute -top-2 right-1 text-[10px] text-white/40">{h}:00</span>}
+              </div>
+            ))}
+          </div>
+          {/* 日ごとの列 */}
+          {days.map((d) => {
+            const ds = ymd(d);
+            const segs = timedSegments(events, d);
+            const layout = packDay(segs.map((s) => ({ id: s.e.id, start: s.startMin, end: s.endMin })));
+            return (
+              <div
+                key={ds}
+                className="relative min-w-0 flex-1 border-l border-white/5"
+                onClick={(ev) => {
+                  const rect = ev.currentTarget.getBoundingClientRect();
+                  const hour = Math.max(0, Math.min(23, Math.floor((ev.clientY - rect.top) / ROW_H)));
+                  onNewAt(ds, `${pad(hour)}:00`);
+                }}
+              >
+                {hours.map((h) => (
+                  <div key={h} style={{ height: ROW_H }} className="border-b border-white/5" />
+                ))}
+                {ds === todayStr && (
+                  <div className="pointer-events-none absolute left-0 right-0 z-10 flex items-center" style={{ top: (nowMin / 60) * ROW_H }}>
+                    <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                    <span className="h-px flex-1 bg-red-500" />
+                  </div>
+                )}
+                {segs.map((s) => {
+                  const l = layout.get(s.e.id) ?? { col: 0, cols: 1 };
+                  const top = (s.startMin / 60) * ROW_H;
+                  const height = Math.max(18, ((s.endMin - s.startMin) / 60) * ROW_H);
+                  return (
+                    <button
+                      key={s.e.id}
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        onOpenEvent(s.e);
+                      }}
+                      className="absolute overflow-hidden rounded px-1 py-0.5 text-left text-white ring-1 ring-black/10"
+                      style={{
+                        top,
+                        height,
+                        left: `calc(${(l.col / l.cols) * 100}% + 1px)`,
+                        width: `calc(${100 / l.cols}% - 2px)`,
+                        backgroundColor: `${s.e.color ?? DEFAULT_COLOR}e6`,
+                      }}
+                    >
+                      <span className="block truncate text-[11px] font-medium leading-tight">{s.e.title}</span>
+                      {height > 30 && <span className="block truncate text-[10px] leading-tight opacity-90">{timeOf(s.e.start_at)}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 指定日に掛かる時間指定予定を、その日の [開始分, 終了分]（0..1440 にクランプ）で返す。 */
+function timedSegments(events: EventSummary[], dayDate: Date): { e: EventSummary; startMin: number; endMin: number }[] {
+  const ds = ymd(dayDate);
+  const out: { e: EventSummary; startMin: number; endMin: number }[] = [];
+  for (const e of events) {
+    if (e.all_day) continue;
+    const sDay = dayOf(e.start_at);
+    const endIso = e.end_at ?? e.start_at;
+    const eDay = dayOf(endIso);
+    if (ds < sDay || ds > eDay) continue;
+    const startMin = ds === sDay ? minutesOf(e.start_at) : 0;
+    let endMin = ds === eDay ? minutesOf(endIso) : 1440;
+    if (!e.end_at) endMin = Math.min(1440, startMin + 60); // 終了なしは1時間として表示
+    if (endMin <= startMin) endMin = Math.min(1440, startMin + 30);
+    out.push({ e, startMin, endMin });
+  }
+  return out;
+}
+
+/** 重なり配置。開始順に貪欲にレーンを割り当て、重なり集団ごとに列数で幅を分ける。 */
+function packDay(items: { id: number; start: number; end: number }[]): Map<number, { col: number; cols: number }> {
+  const out = new Map<number, { col: number; cols: number }>();
+  const sorted = [...items].sort((a, b) => a.start - b.start || a.end - b.end);
+  let cluster: { id: number; start: number; end: number; col: number }[] = [];
+  let clusterEnd = -1;
+  const finalize = () => {
+    const laneEnds: number[] = []; // 各レーンの最終終了
+    for (const it of cluster) {
+      let placed = false;
+      for (let c = 0; c < laneEnds.length; c++) {
+        if (laneEnds[c] <= it.start) {
+          it.col = c;
+          laneEnds[c] = it.end;
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) {
+        it.col = laneEnds.length;
+        laneEnds.push(it.end);
+      }
+    }
+    const cols = laneEnds.length;
+    for (const it of cluster) out.set(it.id, { col: it.col, cols });
+    cluster = [];
+    clusterEnd = -1;
+  };
+  for (const it of sorted) {
+    if (cluster.length && it.start >= clusterEnd) finalize();
+    cluster.push({ ...it, col: 0 });
+    clusterEnd = Math.max(clusterEnd, it.end);
+  }
+  if (cluster.length) finalize();
+  return out;
+}
+
 /** 年表示のミニ月（予定のある日にドット、月名クリックでその月へ）。 */
 function MiniMonth({
   year,
@@ -474,7 +687,7 @@ function MiniMonth({
   );
 }
 
-/** 選択日のアジェンダ（右側パネル。全モード共通）。 */
+/** 選択日のアジェンダ（右側パネル。年/月/2週で表示）。 */
 function AgendaPanel({
   selected,
   list,
@@ -492,20 +705,14 @@ function AgendaPanel({
   return (
     <aside className="flex w-72 shrink-0 flex-col overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10">
       <div className="border-b border-white/10 px-3 py-2 text-sm font-medium">
-        {new Intl.DateTimeFormat(locale, { month: 'long', day: 'numeric', weekday: 'short' }).format(
-          new Date(`${selected}T00:00`),
-        )}
+        {new Intl.DateTimeFormat(locale, { month: 'long', day: 'numeric', weekday: 'short' }).format(new Date(`${selected}T00:00`))}
       </div>
       <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-2">
         {list.length === 0 ? (
           <p className="px-1 py-6 text-center text-sm text-white/45">{t('cal.noEvents')}</p>
         ) : (
           list.map((e) => (
-            <button
-              key={e.id}
-              onClick={() => onOpen(e)}
-              className="flex w-full items-start gap-2 rounded-lg p-2 text-left hover:bg-white/10"
-            >
+            <button key={e.id} onClick={() => onOpen(e)} className="flex w-full items-start gap-2 rounded-lg p-2 text-left hover:bg-white/10">
               <span className="mt-1 h-3 w-1 shrink-0 rounded-full" style={{ backgroundColor: e.color ?? DEFAULT_COLOR }} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium">{e.title}</span>
@@ -554,11 +761,7 @@ function TrashList({
 }) {
   const { t } = useTranslation();
   if (items.length === 0) {
-    return (
-      <div className="flex flex-1 items-center justify-center text-sm text-white/45">
-        {t('cal.trashEmpty')}
-      </div>
-    );
+    return <div className="flex flex-1 items-center justify-center text-sm text-white/45">{t('cal.trashEmpty')}</div>;
   }
   const fmt = new Intl.DateTimeFormat(i18nLang, { year: 'numeric', month: 'short', day: 'numeric' });
   return (
@@ -570,10 +773,7 @@ function TrashList({
             <span className="block truncate text-sm font-medium">{e.title}</span>
             <span className="text-xs text-white/50">{fmt.format(new Date(`${dayOf(e.start_at)}T00:00`))}</span>
           </span>
-          <button
-            onClick={() => onRestore(e.id)}
-            className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/20"
-          >
+          <button onClick={() => onRestore(e.id)} className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-white/20">
             <RotateCcw size={13} />
             {t('cal.restore')}
           </button>
@@ -585,31 +785,35 @@ function TrashList({
 
 /** 予定の作成/編集モーダル。 */
 function EventModal({
-  event,
-  defaultDay,
+  target,
   onClose,
   onSaved,
   onDeleted,
 }: {
-  event: EventSummary | null;
-  defaultDay: string;
+  target: EditTarget;
   onClose: () => void;
   onSaved: () => void;
   onDeleted: () => void;
 }) {
   const { t } = useTranslation();
+  const event = target.mode === 'edit' ? target.event : null;
+  const prefDay = target.mode === 'new' ? target.day : dayOf(target.event.start_at);
+  const prefTime = target.mode === 'new' ? target.time : undefined;
+  const prefAllDay = target.mode === 'new' ? target.allDay ?? false : target.event.all_day;
+
   const [title, setTitle] = useState(event?.title ?? '');
-  const [allDay, setAllDay] = useState(event?.all_day ?? false);
-  const [startDate, setStartDate] = useState(event ? dayOf(event.start_at) : defaultDay);
-  const [startTime, setStartTime] = useState(event ? timeOf(event.start_at) || '09:00' : '09:00');
-  const [endDate, setEndDate] = useState(event?.end_at ? dayOf(event.end_at) : event ? dayOf(event.start_at) : defaultDay);
-  const [endTime, setEndTime] = useState(event?.end_at ? timeOf(event.end_at) || '10:00' : '10:00');
+  const [allDay, setAllDay] = useState(prefAllDay);
+  const [startDate, setStartDate] = useState(event ? dayOf(event.start_at) : prefDay);
+  const [startTime, setStartTime] = useState(event ? timeOf(event.start_at) || '09:00' : prefTime || '09:00');
+  const [endDate, setEndDate] = useState(event?.end_at ? dayOf(event.end_at) : prefDay);
+  const [endTime, setEndTime] = useState(
+    event?.end_at ? timeOf(event.end_at) || '10:00' : addOneHour(prefTime || '09:00'),
+  );
   const [location, setLocation] = useState(event?.location ?? '');
   const [description, setDescription] = useState(event?.description ?? '');
   const [color, setColor] = useState(event?.color ?? DEFAULT_COLOR);
   const [busy, setBusy] = useState(false);
 
-  // Esc で閉じる。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -780,4 +984,11 @@ function EventModal({
       </div>
     </div>
   );
+}
+
+/** 'HH:MM' の1時間後（23時台は 23:59 で頭打ち）。新規作成時の既定終了時刻に使う。 */
+function addOneHour(hm: string): string {
+  const [h, m] = hm.split(':').map(Number);
+  if (h >= 23) return '23:59';
+  return `${pad(h + 1)}:${pad(m)}`;
 }

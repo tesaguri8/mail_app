@@ -90,26 +90,36 @@ fn compute_root_key(
     to_addresses: Option<&str>,
     folder: Option<&str>,
 ) -> rusqlite::Result<String> {
-    // References 先頭（真のルート）。
+    // 既知の祖先（In-Reply-To または References のいずれか）が手元にあれば、そのスレッドを継承する。
+    // References 先頭が真の root でないクライアント（Spark/titan.email 等、参照順が非標準）でも、
+    // 参照している祖先の 1 つが手元にあれば同じスレッドに束ねられる（古い順処理で親は割当済み）。
+    let mut ancestors: Vec<&str> = Vec::new();
+    if let Some(irt) = in_reply_to.map(str::trim).filter(|s| !s.is_empty()) {
+        ancestors.push(irt);
+    }
+    if let Some(refs) = references_ids {
+        ancestors.extend(refs.split_whitespace());
+    }
+    let mut stmt = conn.prepare_cached(
+        "SELECT thread_id FROM emails
+         WHERE account_id = ?1 AND message_id = ?2 AND thread_id IS NOT NULL LIMIT 1",
+    )?;
+    for cand in &ancestors {
+        let key: Option<String> = stmt
+            .query_row(params![account_id, cand], |r| r.get(0))
+            .optional()?;
+        if let Some(k) = key {
+            return Ok(k);
+        }
+    }
+    // 祖先が手元に無い: root をキーにする。References 先頭 → In-Reply-To → 自分の Message-ID。
     if let Some(root) = references_ids
         .and_then(|r| r.split_whitespace().next())
         .filter(|s| !s.is_empty())
     {
         return Ok(format!("mid:{root}"));
     }
-    // In-Reply-To のみ: 親が手元にあれば親のルートキーを継承する（連鎖の断片化を抑える）。
     if let Some(irt) = in_reply_to.filter(|s| !s.is_empty()) {
-        let parent_key: Option<String> = conn
-            .query_row(
-                "SELECT thread_id FROM emails
-                 WHERE account_id = ?1 AND message_id = ?2 AND thread_id IS NOT NULL LIMIT 1",
-                params![account_id, irt],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if let Some(k) = parent_key {
-            return Ok(k);
-        }
         return Ok(format!("mid:{irt}"));
     }
     // ルートメール（返信ではない）は自分の Message-ID をキーにする。
@@ -701,6 +711,48 @@ pub fn reprocess_all_conn(conn: &mut Connection, account_id: i64) -> rusqlite::R
     Ok(count)
 }
 
+/// 文字列キー（Message-ID）の Union-Find。参照（In-Reply-To/References）で繋がる
+/// Message-ID 群を 1 コンポーネントに束ねる（jwz 式スレッド化）。
+#[derive(Default)]
+struct UnionFind {
+    parent: std::collections::HashMap<String, String>,
+}
+
+impl UnionFind {
+    /// x の根を返す（未登録なら x 自身を根として登録）。経路圧縮つき。
+    fn find(&mut self, x: &str) -> String {
+        let mut root = x.to_string();
+        loop {
+            match self.parent.get(&root) {
+                None => {
+                    self.parent.insert(root.clone(), root.clone());
+                    break;
+                }
+                Some(p) if *p == root => break,
+                Some(p) => root = p.clone(),
+            }
+        }
+        // 経路圧縮
+        let mut cur = x.to_string();
+        while cur != root {
+            let next = self
+                .parent
+                .insert(cur, root.clone())
+                .unwrap_or_else(|| root.clone());
+            cur = next;
+        }
+        root
+    }
+
+    fn union(&mut self, a: &str, b: &str) {
+        let ra = self.find(a);
+        let rb = self.find(b);
+        if ra != rb {
+            self.parent.insert(ra, rb);
+        }
+    }
+}
+
 /// rebuild_threads の本体（接続を受け取る版。reprocess_all からも使う）。
 fn rebuild_threads_conn(conn: &Connection, account_id: i64) -> rusqlite::Result<()> {
     // auto メールの割当を一旦外す。
@@ -716,20 +768,123 @@ fn rebuild_threads_conn(conn: &Connection, account_id: i64) -> rusqlite::Result<
            AND id NOT IN (SELECT logical_thread_id FROM emails WHERE logical_thread_id IS NOT NULL)",
         params![account_id],
     )?;
-    // 古い順に再割当（親→子の順で継承が効く）。
-    let ids: Vec<i64> = {
+    // 参照（In-Reply-To / References）で繋がるメールを Union-Find で 1 スレッドに束ねる。
+    // References の並びが非標準なクライアント（Spark/titan.email 等）でも、共有する Message-ID が
+    // 1 つでもあれば同じスレッドにまとまる（同一件名内の断片化を解消。件名が変われば別スレッド）。
+    struct Row {
+        id: i64,
+        message_id: Option<String>,
+        in_reply_to: Option<String>,
+        references_ids: Option<String>,
+        subject: Option<String>,
+        from_address: Option<String>,
+        to_addresses: Option<String>,
+        folder: Option<String>,
+    }
+    let rows: Vec<Row> = {
         let mut stmt = conn.prepare(
-            "SELECT id FROM emails
+            "SELECT id, message_id, in_reply_to, references_ids, subject, from_address, to_addresses, folder
+             FROM emails
              WHERE account_id = ?1 AND COALESCE(thread_assignment,'auto') <> 'manual'
              ORDER BY date_ts ASC, id ASC",
         )?;
-        let rows = stmt
-            .query_map(params![account_id], |r| r.get(0))?
+        let out: Vec<Row> = stmt
+            .query_map(params![account_id], |r| {
+                Ok(Row {
+                    id: r.get(0)?,
+                    message_id: r.get(1)?,
+                    in_reply_to: r.get(2)?,
+                    references_ids: r.get(3)?,
+                    subject: r.get(4)?,
+                    from_address: r.get(5)?,
+                    to_addresses: r.get(6)?,
+                    folder: r.get(7)?,
+                })
+            })?
             .collect::<rusqlite::Result<_>>()?;
-        rows
+        out
     };
-    for id in ids {
-        assign_thread(conn, id)?;
+
+    // self_key: Message-ID があればそれ、無ければ "id:{id}"。
+    let self_key = |row: &Row| -> String {
+        row.message_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("id:{}", row.id))
+    };
+
+    let mut uf = UnionFind::default();
+    for row in &rows {
+        let sk = self_key(row);
+        uf.find(&sk); // ノード登録
+        if let Some(irt) = row
+            .in_reply_to
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            uf.union(&sk, irt);
+        }
+        if let Some(refs) = row.references_ids.as_deref() {
+            for t in refs.split_whitespace() {
+                uf.union(&sk, t);
+            }
+        }
+    }
+
+    // コンポーネントごとの正準キー＝メンバー self_key の最小（決定的・安定）。
+    let mut canon: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for row in &rows {
+        let sk = self_key(row);
+        let root = uf.find(&sk);
+        canon
+            .entry(root)
+            .and_modify(|c| {
+                if sk < *c {
+                    *c = sk.clone();
+                }
+            })
+            .or_insert(sk);
+    }
+
+    // 割当。ヘッダ（Message-ID/In-Reply-To/References）が全く無いメールだけ、従来どおり
+    // 件名正規化＋相手アドレスでフォールバックする（控えめ）。
+    for row in &rows {
+        let has_headers = row
+            .message_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|s| !s.is_empty())
+            || row
+                .in_reply_to
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|s| !s.is_empty())
+            || row
+                .references_ids
+                .as_deref()
+                .is_some_and(|s| s.split_whitespace().next().is_some());
+        let root_key = if has_headers {
+            let sk = self_key(row);
+            let root = uf.find(&sk);
+            format!("uf:{}", canon.get(&root).cloned().unwrap_or(sk))
+        } else {
+            let counterparty = if matches!(row.folder.as_deref(), Some("sent") | Some("drafts")) {
+                bare_addr(row.to_addresses.as_deref())
+            } else {
+                bare_addr(row.from_address.as_deref())
+            }
+            .unwrap_or_default();
+            format!("subj:{}#{}", normalize_subject(row.subject.as_deref()), counterparty)
+        };
+        let tid = find_or_create_thread(conn, account_id, &root_key, row.subject.as_deref())?;
+        conn.execute(
+            "UPDATE emails SET logical_thread_id = ?2, thread_id = ?3, thread_assignment = 'auto'
+             WHERE id = ?1",
+            params![row.id, tid, root_key],
+        )?;
     }
     // 代表フラグをアカウント全体で貼り直す（各 (スレッド/単独, フォルダ) の最新のみ 1）。
     conn.execute(
@@ -912,6 +1067,58 @@ mod tests {
         assert_eq!(view.messages[1].message_id.as_deref(), Some("m1@x"));
         assert_eq!(view.messages[1].direction, "out"); // 自分の送信＝右
         assert_eq!(view.messages[2].direction, "in");
+    }
+
+    /// References の並びが非標準（先頭が root でない・親のみ）でも、共有する Message-ID で
+    /// 1 スレッドに束ねる（Spark/titan.email 等の断片化対策・union-find）。
+    #[test]
+    fn rebuild_union_find_groups_nonstandard_references() {
+        let store = test_store();
+        let ids: Vec<i64> = {
+            let conn = store.conn.lock().unwrap();
+            let msgs = [
+                mk("m0", "件名", "you@corp.com", "inbox", 1, None, None),
+                mk("m1", "Re: 件名", "me@example.com", "sent", 2, Some("m0"), Some("m0")),
+                // refs 先頭が root(m0) でなく親(m1)のみ。旧ロジックは mid:m1 で別スレッドに割れる。
+                mk("m2", "Re: 件名", "you@corp.com", "inbox", 3, Some("m1"), Some("m1")),
+                // さらに孫。refs="m2" のみ（root も親の親も含まない）。
+                mk("m3", "Re: 件名", "me@example.com", "sent", 4, Some("m2"), Some("m2")),
+            ];
+            msgs.iter()
+                .map(|e| match insert_email(&conn, e).unwrap() {
+                    crate::services::store::InsertOutcome::Inserted(id) => id,
+                    _ => panic!("insert"),
+                })
+                .collect()
+        };
+        store.rebuild_threads(1).unwrap();
+        let view = store.thread_view(ids[0]).unwrap().unwrap();
+        assert_eq!(
+            view.thread.message_count, 4,
+            "非標準 References でも 4 通が 1 スレッドに束ねる"
+        );
+    }
+
+    /// 参照を共有しない別件名は同じスレッドにしない（過剰結合しない）。
+    #[test]
+    fn rebuild_does_not_merge_unrelated_messages() {
+        let store = test_store();
+        let ids: Vec<i64> = {
+            let conn = store.conn.lock().unwrap();
+            let msgs = [
+                mk("a0", "見積もりA", "you@corp.com", "inbox", 1, None, None),
+                mk("b0", "見積もりB", "you@corp.com", "inbox", 2, None, None),
+            ];
+            msgs.iter()
+                .map(|e| match insert_email(&conn, e).unwrap() {
+                    crate::services::store::InsertOutcome::Inserted(id) => id,
+                    _ => panic!("insert"),
+                })
+                .collect()
+        };
+        store.rebuild_threads(1).unwrap();
+        assert_eq!(store.thread_view(ids[0]).unwrap().unwrap().thread.message_count, 1);
+        assert_eq!(store.thread_view(ids[1]).unwrap().unwrap().thread.message_count, 1);
     }
 
     #[test]

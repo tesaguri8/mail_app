@@ -5,7 +5,7 @@ import { Home } from './components/Home';
 import { MailboxView } from './components/MailboxView';
 import { AddressBook } from './components/AddressBook';
 import type { ContactPrefill } from './components/ContactsView';
-import { StubView } from './components/StubView';
+import { CalendarView } from './components/CalendarView';
 import { Settings } from './components/Settings';
 import { accountList } from './services/accounts';
 import { useAutoSync, MAIL_SYNCED_EVENT } from './hooks/useAutoSync';
@@ -156,7 +156,7 @@ export default function App() {
               onOpenIdConsumed={() => setContactOpenId(null)}
             />
           )}
-          {view === 'calendar' && <StubView titleKey="nav.calendar" />}
+          {view === 'calendar' && <CalendarView />}
           {view === 'settings' && <Settings accounts={accounts} onChanged={refreshAccounts} />}
         </main>
 

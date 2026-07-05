@@ -349,6 +349,60 @@ pub struct ImportReport {
     pub skipped: i32,
 }
 
+/// カレンダー予定（一覧・詳細共通）。docs/DATABASE_SCHEMA.md（events）。
+/// 日時は端末ローカルの素の ISO8601 文字列（終日='YYYY-MM-DD' / 時間指定='YYYY-MM-DDTHH:MM'）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct EventSummary {
+    pub id: i32,
+    pub title: String,
+    pub description: Option<String>,
+    pub location: Option<String>,
+    /// 開始。終日は日付のみ、時間指定は 'YYYY-MM-DDTHH:MM'。
+    pub start_at: String,
+    /// 終了（任意）。終日の複数日は最終日を含む。
+    pub end_at: Option<String>,
+    pub all_day: bool,
+    /// 色分け（任意。CSS 色 or パレットキー）。
+    pub color: Option<String>,
+    /// 繰り返し（RRULE。後続段階）。
+    pub recurrence: Option<String>,
+    /// 開始何分前に通知（後続段階）。
+    pub reminder_minutes: Option<i32>,
+    /// メールから作成した場合の紐付け（後続段階）。
+    pub related_email_id: Option<i32>,
+    /// 論理削除（ゴミ箱）の日時（UTC 文字列）。非 null＝削除済み。
+    pub deleted_at: Option<String>,
+}
+
+/// 予定の作成・更新入力（フロントから受け取る）。`id` が None なら新規作成。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct EventInput {
+    pub id: Option<i32>,
+    pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub location: Option<String>,
+    pub start_at: String,
+    #[serde(default)]
+    pub end_at: Option<String>,
+    #[serde(default)]
+    pub all_day: bool,
+    #[serde(default)]
+    pub color: Option<String>,
+    /// 繰り返し（RRULE。後続段階。UI は未接続だが前方互換で受ける）。
+    #[serde(default)]
+    pub recurrence: Option<String>,
+    /// 開始何分前に通知（後続段階）。
+    #[serde(default)]
+    pub reminder_minutes: Option<i32>,
+    /// メールから作成した場合の紐付け（後続段階）。
+    #[serde(default)]
+    pub related_email_id: Option<i32>,
+}
+
 /// 明示許可して取得したリモート画像（サニタイズ済み）。docs/MAIL_SECURITY.md §1.1。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

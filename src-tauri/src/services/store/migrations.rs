@@ -155,6 +155,10 @@ const MIGRATIONS: &[Migration] = &[
         version: 37,
         sql: include_str!("migrations/0037_reply_to.sql"),
     },
+    Migration {
+        version: 38,
+        sql: include_str!("migrations/0038_calendar.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
@@ -351,6 +355,47 @@ mod tests {
             .query_row("SELECT count(*) FROM contact_group_members", [], |r| {
                 r.get(0)
             })
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn events_tables_exist_and_attendees_cascade() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        run(&conn).unwrap();
+
+        // events / event_attendees が作成されている
+        for name in ["events", "event_attendees"] {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    [name],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "table {name} missing");
+        }
+
+        // 予定に参加者を紐づけ、予定削除で参加者が CASCADE で外れる
+        conn.execute(
+            "INSERT INTO contacts (id, display_name) VALUES (1, '山田太郎')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO events (id, title, start_at) VALUES (7, '打ち合わせ', '2026-07-06T10:00')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO event_attendees (event_id, contact_id) VALUES (7, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM events WHERE id = 7", []).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM event_attendees", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0);
     }

@@ -1,7 +1,8 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult,
     ContactGroupSummary, ContactInput, ContactMatch, ContactSummary, DataLocation, DbInfo,
-    DraftContent, DraftInput, DuplicateGroup, GreenDomainEntry, ImportReport, MailDetail,
+    DraftContent, DraftInput, DuplicateGroup, EventInput, EventSummary, GreenDomainEntry,
+    ImportReport, MailDetail,
     MailSummary, OrgDuplicateGroup, OrganizationDetail, OrganizationSummary, RebuildAction,
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict, StorageInfo, SyncProgress,
@@ -1322,6 +1323,58 @@ pub fn contact_merge(
     store
         .merge_contacts(keep_id, &drop_ids)
         .map_err(|e| e.to_string())
+}
+
+// ─────────────────────────── カレンダー（docs/DATABASE_SCHEMA.md events） ───────────────────────────
+
+/// 期間 [from, to)（'YYYY-MM-DD' 等の ISO 文字列）に重なる予定を開始順で返す。
+/// 月/週グリッドの表示範囲を渡す。`include_deleted` が true ならゴミ箱も含める。
+#[tauri::command]
+pub fn event_list(
+    store: State<Store>,
+    from: String,
+    to: String,
+    include_deleted: Option<bool>,
+) -> Result<Vec<EventSummary>, String> {
+    store
+        .list_events(&from, &to, include_deleted.unwrap_or(false))
+        .map_err(|e| e.to_string())
+}
+
+/// 論理削除済みの予定のみ（ゴミ箱一覧）。
+#[tauri::command]
+pub fn event_list_trashed(store: State<Store>) -> Result<Vec<EventSummary>, String> {
+    store.list_trashed_events().map_err(|e| e.to_string())
+}
+
+/// 単一の予定を取得。
+#[tauri::command]
+pub fn event_get(store: State<Store>, id: i64) -> Result<EventSummary, String> {
+    store.get_event(id).map_err(|e| e.to_string())
+}
+
+/// 予定を作成または更新（確定後の行を返す）。`input.id` が無ければ新規。
+#[tauri::command]
+pub fn event_upsert(store: State<Store>, input: EventInput) -> Result<EventSummary, String> {
+    if input.title.trim().is_empty() {
+        return Err("タイトルを入力してください".to_string());
+    }
+    if input.start_at.trim().is_empty() {
+        return Err("開始日時を入力してください".to_string());
+    }
+    store.upsert_event(&input).map_err(|e| e.to_string())
+}
+
+/// 予定を論理削除（ゴミ箱へ。保持期間後に完全削除）。
+#[tauri::command]
+pub fn event_delete(store: State<Store>, id: i64) -> Result<(), String> {
+    store.delete_event(id).map_err(|e| e.to_string())
+}
+
+/// 論理削除した予定を復元。
+#[tauri::command]
+pub fn event_restore(store: State<Store>, id: i64) -> Result<(), String> {
+    store.restore_event(id).map_err(|e| e.to_string())
 }
 
 /// グリーン／警告ドメインの一覧（管理タブ用。住所録由来の自動グリーンも含む）。

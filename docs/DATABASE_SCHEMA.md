@@ -187,34 +187,37 @@ CREATE TABLE contact_group_members (
     FOREIGN KEY (group_id) REFERENCES contact_groups(id)
 );
 
--- カレンダー予定
+-- カレンダー予定（実装: migrations/0038_calendar.sql）
+-- 日時は端末ローカルの素の ISO8601 文字列で保持（終日='YYYY-MM-DD' / 時間指定='YYYY-MM-DDTHH:MM'）。
+-- ゼロ詰め ISO なら辞書順比較＝時刻順になり、範囲抽出を単純な文字列比較で行える。
 CREATE TABLE events (
     id INTEGER PRIMARY KEY,
     title TEXT NOT NULL,
     description TEXT,
     location TEXT,
-    start_at TIMESTAMP NOT NULL,
-    end_at TIMESTAMP,
+    start_at TEXT NOT NULL,         -- 開始（終日は日付のみ）
+    end_at TEXT,                    -- 終了（任意。終日の複数日は最終日を含む）
     all_day BOOLEAN DEFAULT FALSE,
-    recurrence TEXT,                -- RRULE（iCal 形式）
-    reminder_minutes INTEGER,       -- 開始何分前に通知
+    recurrence TEXT,                -- RRULE（iCal 形式。後続段階）
+    reminder_minutes INTEGER,       -- 開始何分前に通知（後続段階）
     color TEXT,
     source TEXT DEFAULT 'local',    -- 'local' | 'ics' | 'google' | 'caldav'
     external_id TEXT,               -- 連携元のID（同期用）
-    related_email_id INTEGER,       -- メールから作成した場合の紐付け
+    related_email_id INTEGER,       -- メールから作成した場合の紐付け（後続段階）
+    deleted_at TIMESTAMP,           -- 論理削除（ゴミ箱）。非 null＝削除済み（保持期間後に完全削除）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (related_email_id) REFERENCES emails(id)
+    FOREIGN KEY (related_email_id) REFERENCES emails(id) ON DELETE SET NULL
 );
 
--- 予定の参加者（連絡先と紐付け）
+-- 予定の参加者（連絡先と紐付け。UI は後続段階。テーブルのみ前方互換で用意）
 CREATE TABLE event_attendees (
     event_id INTEGER,
     contact_id INTEGER,
     response TEXT DEFAULT 'none',   -- 'accepted' | 'declined' | 'tentative' | 'none'
     PRIMARY KEY (event_id, contact_id),
-    FOREIGN KEY (event_id) REFERENCES events(id),
-    FOREIGN KEY (contact_id) REFERENCES contacts(id)
+    FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
 );
 
 -- ───────────────────────────────────────────────

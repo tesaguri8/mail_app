@@ -637,14 +637,22 @@ impl Store {
     ) -> rusqlite::Result<Vec<ThreadListItem>> {
         let conn = self.conn.lock().unwrap();
         let acct = if account_id.is_some() {
-            "AND r.account_id = ?4"
+            "AND account_id = ?4"
         } else {
             ""
         };
-        // 代表フラグ（is_folder_rep=1）を部分索引で先頭 N 件だけ引く（全走査しない）。
-        // 重い集計サブクエリはその N 件に対してだけ評価される（docs/THREADING.md §5）。
+        // まず page CTE で「表示する 100 件の代表 id」だけを部分索引で引く（副問い合わせ無し）。
+        // そのうえで重い列（件数・連絡先照合・ID収集）を「その 100 件だけ」に対して評価する。
+        // ※ 副問い合わせを本体 SELECT に直書きすると、ORDER BY+LIMIT より前に該当全行
+        //   （代表フラグ全件＝数千件）へ評価され得るため、必ず先に件数を絞る。
         let sql = format!(
-            "SELECT r.id, COALESCE(r.logical_thread_id, -r.id) AS gkey, r.account_id,
+            "WITH page AS (
+                SELECT id, date_ts FROM emails
+                WHERE folder = ?1 {acct} AND is_folder_rep = 1
+                ORDER BY date_ts DESC, id DESC
+                LIMIT ?2 OFFSET ?3
+             )
+             SELECT r.id, COALESCE(r.logical_thread_id, -r.id) AS gkey, r.account_id,
                     COALESCE(lt.title, r.subject) AS subject,
                     r.from_address, r.from_name, r.to_addresses, r.to_name, r.date,
                     substr(COALESCE(r.clean_body, r.body_plain, ''), 1, 140) AS preview,
@@ -660,11 +668,9 @@ impl Store {
                     CASE WHEN r.logical_thread_id IS NULL THEN CAST(r.id AS TEXT)
                          ELSE (SELECT group_concat(t.id) FROM emails t
                                WHERE t.logical_thread_id = r.logical_thread_id AND t.folder = ?1) END AS folder_ids
-             FROM emails r
+             FROM page JOIN emails r ON r.id = page.id
              LEFT JOIN logical_threads lt ON lt.id = r.logical_thread_id
-             WHERE r.folder = ?1 {acct} AND r.is_folder_rep = 1
-             ORDER BY r.date_ts DESC, r.id DESC
-             LIMIT ?2 OFFSET ?3",
+             ORDER BY page.date_ts DESC, page.id DESC",
             known_vip = known_vip_cols("r.from_address"),
         );
         let mut stmt = conn.prepare(&sql)?;

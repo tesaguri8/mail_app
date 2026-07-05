@@ -11,15 +11,30 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 const COLORS = ['#64b5f6', '#e57373', '#f6bf50', '#81c784', '#ba91e0', '#4db6ac', '#f06292'];
 const DEFAULT_COLOR = COLORS[0];
 
+/** 表示単位。年＝12ミニ月、月＝6週グリッド、2週＝14日、週＝7日。 */
+type ViewMode = 'year' | 'month' | 'fortnight' | 'week';
+const MODE_KEY = 'rondine.cal.mode';
+const MODES: { m: ViewMode; key: string }[] = [
+  { m: 'year', key: 'cal.vYear' },
+  { m: 'month', key: 'cal.vMonth' },
+  { m: 'fortnight', key: 'cal.vFortnight' },
+  { m: 'week', key: 'cal.vWeek' },
+];
+
 // ── 日付ヘルパー（保存は端末ローカルの素の ISO 文字列。UTC 変換はしない） ──
 const pad = (n: number) => String(n).padStart(2, '0');
 /** Date → 'YYYY-MM-DD'（ローカル）。 */
 const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-/** 'YYYY-MM-DD' の n 日後（ローカル）。 */
+/** date の n 日後（ローカル）。 */
 const addDays = (date: Date, n: number) => {
   const d = new Date(date);
   d.setDate(d.getDate() + n);
   return d;
+};
+/** その週の日曜0時。週/2週グリッドの起点。 */
+const startOfWeek = (d: Date) => {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  return addDays(x, -x.getDay());
 };
 /** 日付部分（先頭10文字）を取り出す。'2026-07-06T10:00' → '2026-07-06'。 */
 const dayOf = (iso: string) => iso.slice(0, 10);
@@ -43,13 +58,85 @@ function eventsOn(events: EventSummary[], d: string): EventSummary[] {
     });
 }
 
+/** 予定が掛かる全日付（'YYYY-MM-DD'）。年表示のドット表示・存在判定に使う。 */
+function coveredDays(e: EventSummary): string[] {
+  const start = dayOf(e.start_at);
+  const end = e.end_at ? dayOf(e.end_at) : start;
+  const out: string[] = [];
+  let d = new Date(`${start}T00:00`);
+  let guard = 0;
+  while (ymd(d) <= end && guard < 400) {
+    out.push(ymd(d));
+    d = addDays(d, 1);
+    guard++;
+  }
+  return out;
+}
+
+/** 月/週/2週グリッド、または年（12ミニ月）の表示範囲・見出しをまとめた導出値。 */
+type Period =
+  | { kind: 'year'; year: number; from: string; to: string; label: string }
+  | { kind: 'grid'; rows: number; days: Date[]; from: string; to: string; label: string };
+
+function computePeriod(mode: ViewMode, anchor: Date, locale: string): Period {
+  const y = anchor.getFullYear();
+  if (mode === 'year') {
+    return {
+      kind: 'year',
+      year: y,
+      from: `${y}-01-01`,
+      to: `${y + 1}-01-01`,
+      label: new Intl.DateTimeFormat(locale, { year: 'numeric' }).format(anchor),
+    };
+  }
+  if (mode === 'month') {
+    const first = new Date(y, anchor.getMonth(), 1);
+    const gridStart = addDays(first, -first.getDay());
+    const days = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
+    return {
+      kind: 'grid',
+      rows: 6,
+      days,
+      from: ymd(days[0]),
+      to: ymd(addDays(days[41], 1)),
+      label: new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'long' }).format(anchor),
+    };
+  }
+  // 週 / 2週（日曜始まり）
+  const start = startOfWeek(anchor);
+  const len = mode === 'fortnight' ? 14 : 7;
+  const days = Array.from({ length: len }, (_, i) => addDays(start, i));
+  const f = new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' });
+  return {
+    kind: 'grid',
+    rows: len / 7,
+    days,
+    from: ymd(days[0]),
+    to: ymd(addDays(days[len - 1], 1)),
+    label: `${f.format(days[0])} – ${f.format(days[len - 1])}`,
+  };
+}
+
+/** 前/次ボタンで anchor をモードの単位（年/月/2週/週）だけ動かす。 */
+function stepAnchor(mode: ViewMode, a: Date, dir: number): Date {
+  const x = new Date(a);
+  if (mode === 'year') x.setFullYear(x.getFullYear() + dir);
+  else if (mode === 'month') x.setMonth(x.getMonth() + dir);
+  else x.setDate(x.getDate() + (mode === 'fortnight' ? 14 : 7) * dir);
+  return x;
+}
+
 export function CalendarView() {
   const { t, i18n } = useTranslation();
-  // 表示中の月（その月の1日を基準に保持）。
-  const [cursor, setCursor] = useState<Date>(() => {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), 1);
+  const [mode, setMode] = useState<ViewMode>(() => {
+    const s = localStorage.getItem(MODE_KEY);
+    return s === 'year' || s === 'fortnight' || s === 'week' ? s : 'month';
   });
+  useEffect(() => {
+    localStorage.setItem(MODE_KEY, mode);
+  }, [mode]);
+  // 表示中の基準日（この日を含む年/月/週を表示する）。
+  const [anchor, setAnchor] = useState<Date>(() => new Date());
   const [selected, setSelected] = useState<string>(() => ymd(new Date()));
   const [events, setEvents] = useState<EventSummary[]>([]);
   const [trashed, setTrashed] = useState<EventSummary[]>([]);
@@ -58,12 +145,7 @@ export function CalendarView() {
   const [editing, setEditing] = useState<EventSummary | 'new' | null>(null);
   const todayStr = ymd(new Date());
 
-  // 月グリッドは日曜始まりの6週(42日)。範囲 [gridStart, gridEnd) を DB から引く。
-  const grid = useMemo(() => {
-    const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
-    const gridStart = addDays(first, -first.getDay()); // その週の日曜まで戻す
-    return Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
-  }, [cursor]);
+  const period = useMemo(() => computePeriod(mode, anchor, i18n.language), [mode, anchor, i18n.language]);
 
   const reload = useCallback(() => {
     if (!isTauri) return;
@@ -71,66 +153,66 @@ export function CalendarView() {
       eventListTrashed().then(setTrashed).catch(() => setTrashed([]));
       return;
     }
-    const from = ymd(grid[0]);
-    const to = ymd(addDays(grid[41], 1)); // 末尾セルの翌日（[from,to) の to は排他）
-    eventList(from, to).then(setEvents).catch(() => setEvents([]));
-  }, [grid, showTrash]);
+    eventList(period.from, period.to).then(setEvents).catch(() => setEvents([]));
+  }, [period.from, period.to, showTrash]);
   useEffect(reload, [reload]);
 
-  const monthLabel = new Intl.DateTimeFormat(i18n.language, {
-    year: 'numeric',
-    month: 'long',
-  }).format(cursor);
+  // 予定が掛かる日の集合（年表示のドット。存在判定を O(1) に）。
+  const eventDays = useMemo(() => new Set(events.flatMap(coveredDays)), [events]);
 
-  // 曜日見出しは Intl から動的生成（既知の日曜=2024-01-07 を起点に7日）。
-  const weekdayLabels = useMemo(() => {
-    const fmt = new Intl.DateTimeFormat(i18n.language, { weekday: 'short' });
-    return Array.from({ length: 7 }, (_, i) => fmt.format(new Date(2024, 0, 7 + i)));
-  }, [i18n.language]);
+  // 曜日見出し（既知の日曜=2024-01-07 を起点に Intl で生成）。short=大グリッド, narrow=ミニ月。
+  const weekdayShort = useMemo(
+    () => weekdayLabels(i18n.language, 'short'),
+    [i18n.language],
+  );
+  const weekdayNarrow = useMemo(
+    () => weekdayLabels(i18n.language, 'narrow'),
+    [i18n.language],
+  );
 
-  const gotoMonth = (delta: number) =>
-    setCursor((c) => new Date(c.getFullYear(), c.getMonth() + delta, 1));
   const gotoToday = () => {
     const now = new Date();
-    setCursor(new Date(now.getFullYear(), now.getMonth(), 1));
+    setAnchor(now);
     setSelected(ymd(now));
   };
-
   const onSaved = () => {
     setEditing(null);
     reload();
   };
-
   const selectedList = eventsOn(events, selected);
+  const maxVisible = mode === 'month' ? 3 : mode === 'fortnight' ? 5 : 12;
 
   return (
     <div className="flex h-full min-h-0 flex-col px-4 pb-3 pt-1 text-white">
       {/* ツールバー */}
-      <div className="flex items-center gap-2 py-2">
-        <h2 className="min-w-[9rem] text-lg font-semibold">{monthLabel}</h2>
+      <div className="flex flex-wrap items-center gap-2 py-2">
+        <h2 className="min-w-[9rem] text-lg font-semibold">{period.label}</h2>
         {!showTrash && (
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => gotoMonth(-1)}
-              title={t('cal.prev')}
-              className="rounded p-1.5 hover:bg-white/20"
-            >
-              <ChevronLeft size={16} />
-            </button>
-            <button
-              onClick={gotoToday}
-              className="rounded px-2.5 py-1 text-xs hover:bg-white/20"
-            >
-              {t('cal.today')}
-            </button>
-            <button
-              onClick={() => gotoMonth(1)}
-              title={t('cal.next')}
-              className="rounded p-1.5 hover:bg-white/20"
-            >
-              <ChevronRight size={16} />
-            </button>
-          </div>
+          <>
+            <div className="flex items-center gap-1">
+              <button onClick={() => setAnchor((a) => stepAnchor(mode, a, -1))} title={t('cal.prev')} className="rounded p-1.5 hover:bg-white/20">
+                <ChevronLeft size={16} />
+              </button>
+              <button onClick={gotoToday} className="rounded px-2.5 py-1 text-xs hover:bg-white/20">
+                {t('cal.today')}
+              </button>
+              <button onClick={() => setAnchor((a) => stepAnchor(mode, a, 1))} title={t('cal.next')} className="rounded p-1.5 hover:bg-white/20">
+                <ChevronRight size={16} />
+              </button>
+            </div>
+            {/* 表示単位の切替（年/月/2週/週） */}
+            <div className="flex items-center gap-0.5 rounded-lg bg-white/10 p-0.5 text-xs">
+              {MODES.map(({ m, key }) => (
+                <button
+                  key={m}
+                  onClick={() => setMode(m)}
+                  className={`rounded px-2 py-1 hover:bg-white/15 ${mode === m ? 'bg-white/25 font-medium' : ''}`}
+                >
+                  {t(key)}
+                </button>
+              ))}
+            </div>
+          </>
         )}
         <div className="flex-1" />
         <button
@@ -158,120 +240,80 @@ export function CalendarView() {
           onRestore={(id) => eventRestore(id).then(reload)}
           i18nLang={i18n.language}
         />
+      ) : period.kind === 'year' ? (
+        <div className="flex min-h-0 flex-1 gap-3">
+          <div className="min-h-0 flex-1 overflow-y-auto rounded-xl bg-white/5 p-3 ring-1 ring-white/10">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+              {Array.from({ length: 12 }, (_, m) => (
+                <MiniMonth
+                  key={m}
+                  year={period.year}
+                  month={m}
+                  weekdayNarrow={weekdayNarrow}
+                  eventDays={eventDays}
+                  selected={selected}
+                  todayStr={todayStr}
+                  locale={i18n.language}
+                  onSelectDay={setSelected}
+                  onOpenDay={(ds) => {
+                    setSelected(ds);
+                    setEditing('new');
+                  }}
+                  onOpenMonth={(mm) => {
+                    setAnchor(new Date(period.year, mm, 1));
+                    setMode('month');
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+          <AgendaPanel
+            selected={selected}
+            list={selectedList}
+            locale={i18n.language}
+            onOpen={setEditing}
+            onNew={() => setEditing('new')}
+          />
+        </div>
       ) : (
         <div className="flex min-h-0 flex-1 gap-3">
-          {/* 月グリッド */}
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10">
             <div className="grid grid-cols-7 border-b border-white/10 text-center text-xs text-white/60">
-              {weekdayLabels.map((w, i) => (
+              {weekdayShort.map((w, i) => (
                 <div key={w} className={`py-1.5 ${i === 0 ? 'text-red-300/80' : ''} ${i === 6 ? 'text-blue-300/80' : ''}`}>
                   {w}
                 </div>
               ))}
             </div>
-            <div className="grid min-h-0 flex-1 grid-cols-7 grid-rows-6">
-              {grid.map((day) => {
-                const ds = ymd(day);
-                const inMonth = day.getMonth() === cursor.getMonth();
-                const isToday = ds === todayStr;
-                const isSel = ds === selected;
-                const dayEvents = eventsOn(events, ds);
-                return (
-                  <button
-                    key={ds}
-                    onClick={() => setSelected(ds)}
-                    onDoubleClick={() => {
-                      setSelected(ds);
-                      setEditing('new');
-                    }}
-                    className={`flex min-h-0 flex-col items-stretch gap-0.5 border-b border-r border-white/5 p-1 text-left transition-colors hover:bg-white/10 ${
-                      isSel ? 'bg-white/15' : ''
-                    } ${inMonth ? '' : 'opacity-40'}`}
-                  >
-                    <div className="flex justify-end">
-                      <span
-                        className={`flex h-5 w-5 items-center justify-center rounded-full text-xs ${
-                          isToday ? 'bg-blue-500 font-semibold text-white' : 'text-white/80'
-                        }`}
-                      >
-                        {day.getDate()}
-                      </span>
-                    </div>
-                    <div className="flex min-h-0 flex-col gap-0.5 overflow-hidden">
-                      {dayEvents.slice(0, 3).map((e) => (
-                        <span
-                          key={e.id}
-                          className="flex items-center gap-1 truncate rounded px-1 py-0.5 text-[11px] leading-tight"
-                          style={{ backgroundColor: `${e.color ?? DEFAULT_COLOR}33` }}
-                        >
-                          <span
-                            className="h-1.5 w-1.5 shrink-0 rounded-full"
-                            style={{ backgroundColor: e.color ?? DEFAULT_COLOR }}
-                          />
-                          <span className="truncate">
-                            {!e.all_day && timeOf(e.start_at) ? `${timeOf(e.start_at)} ` : ''}
-                            {e.title}
-                          </span>
-                        </span>
-                      ))}
-                      {dayEvents.length > 3 && (
-                        <span className="px-1 text-[10px] text-white/50">＋{dayEvents.length - 3}</span>
-                      )}
-                    </div>
-                  </button>
-                );
-              })}
+            <div
+              className="grid min-h-0 flex-1 grid-cols-7"
+              style={{ gridTemplateRows: `repeat(${period.rows}, minmax(0, 1fr))` }}
+            >
+              {period.days.map((day) => (
+                <DayCell
+                  key={ymd(day)}
+                  date={day}
+                  events={events}
+                  selected={selected}
+                  todayStr={todayStr}
+                  dim={mode === 'month' && day.getMonth() !== anchor.getMonth()}
+                  maxVisible={maxVisible}
+                  onSelect={setSelected}
+                  onOpenNew={(ds) => {
+                    setSelected(ds);
+                    setEditing('new');
+                  }}
+                />
+              ))}
             </div>
           </div>
-
-          {/* 選択日のアジェンダ */}
-          <aside className="flex w-72 shrink-0 flex-col overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10">
-            <div className="border-b border-white/10 px-3 py-2 text-sm font-medium">
-              {new Intl.DateTimeFormat(i18n.language, {
-                month: 'long',
-                day: 'numeric',
-                weekday: 'short',
-              }).format(new Date(`${selected}T00:00`))}
-            </div>
-            <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-2">
-              {selectedList.length === 0 ? (
-                <p className="px-1 py-6 text-center text-sm text-white/45">{t('cal.noEvents')}</p>
-              ) : (
-                selectedList.map((e) => (
-                  <button
-                    key={e.id}
-                    onClick={() => setEditing(e)}
-                    className="flex w-full items-start gap-2 rounded-lg p-2 text-left hover:bg-white/10"
-                  >
-                    <span
-                      className="mt-1 h-3 w-1 shrink-0 rounded-full"
-                      style={{ backgroundColor: e.color ?? DEFAULT_COLOR }}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">{e.title}</span>
-                      <span className="mt-0.5 flex items-center gap-1 text-xs text-white/55">
-                        <Clock size={11} />
-                        {e.all_day ? t('cal.allDay') : timeRange(e)}
-                      </span>
-                      {e.location && (
-                        <span className="mt-0.5 flex items-center gap-1 truncate text-xs text-white/55">
-                          <MapPin size={11} />
-                          {e.location}
-                        </span>
-                      )}
-                    </span>
-                  </button>
-                ))
-              )}
-            </div>
-            <button
-              onClick={() => setEditing('new')}
-              className="m-2 flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-white/20 py-2 text-sm text-white/70 hover:bg-white/10"
-            >
-              <Plus size={14} />
-              {t('cal.newEvent')}
-            </button>
-          </aside>
+          <AgendaPanel
+            selected={selected}
+            list={selectedList}
+            locale={i18n.language}
+            onOpen={setEditing}
+            onNew={() => setEditing('new')}
+          />
         </div>
       )}
 
@@ -285,6 +327,211 @@ export function CalendarView() {
         />
       )}
     </div>
+  );
+}
+
+/** 曜日ラベルを Intl で生成（既知の日曜=2024-01-07 起点に7日）。 */
+function weekdayLabels(locale: string, width: 'short' | 'narrow'): string[] {
+  const fmt = new Intl.DateTimeFormat(locale, { weekday: width });
+  return Array.from({ length: 7 }, (_, i) => fmt.format(new Date(2024, 0, 7 + i)));
+}
+
+/** 予定チップ（色ドット＋時刻＋タイトル）。 */
+function EventChip({ e }: { e: EventSummary }) {
+  return (
+    <span
+      className="flex items-center gap-1 truncate rounded px-1 py-0.5 text-[11px] leading-tight"
+      style={{ backgroundColor: `${e.color ?? DEFAULT_COLOR}33` }}
+    >
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: e.color ?? DEFAULT_COLOR }} />
+      <span className="truncate">
+        {!e.all_day && timeOf(e.start_at) ? `${timeOf(e.start_at)} ` : ''}
+        {e.title}
+      </span>
+    </span>
+  );
+}
+
+/** 月/週/2週グリッドの1日セル。 */
+function DayCell({
+  date,
+  events,
+  selected,
+  todayStr,
+  dim,
+  maxVisible,
+  onSelect,
+  onOpenNew,
+}: {
+  date: Date;
+  events: EventSummary[];
+  selected: string;
+  todayStr: string;
+  dim: boolean;
+  maxVisible: number;
+  onSelect: (ds: string) => void;
+  onOpenNew: (ds: string) => void;
+}) {
+  const ds = ymd(date);
+  const isToday = ds === todayStr;
+  const isSel = ds === selected;
+  const dayEvents = eventsOn(events, ds);
+  return (
+    <button
+      onClick={() => onSelect(ds)}
+      onDoubleClick={() => onOpenNew(ds)}
+      className={`flex min-h-0 flex-col items-stretch gap-0.5 border-b border-r border-white/5 p-1 text-left transition-colors hover:bg-white/10 ${
+        isSel ? 'bg-white/15' : ''
+      } ${dim ? 'opacity-40' : ''}`}
+    >
+      <div className="flex justify-end">
+        <span
+          className={`flex h-5 w-5 items-center justify-center rounded-full text-xs ${
+            isToday ? 'bg-blue-500 font-semibold text-white' : 'text-white/80'
+          }`}
+        >
+          {date.getDate()}
+        </span>
+      </div>
+      <div className="flex min-h-0 flex-col gap-0.5 overflow-hidden">
+        {dayEvents.slice(0, maxVisible).map((e) => (
+          <EventChip key={e.id} e={e} />
+        ))}
+        {dayEvents.length > maxVisible && (
+          <span className="px-1 text-[10px] text-white/50">＋{dayEvents.length - maxVisible}</span>
+        )}
+      </div>
+    </button>
+  );
+}
+
+/** 年表示のミニ月（予定のある日にドット、月名クリックでその月へ）。 */
+function MiniMonth({
+  year,
+  month,
+  weekdayNarrow,
+  eventDays,
+  selected,
+  todayStr,
+  locale,
+  onSelectDay,
+  onOpenDay,
+  onOpenMonth,
+}: {
+  year: number;
+  month: number;
+  weekdayNarrow: string[];
+  eventDays: Set<string>;
+  selected: string;
+  todayStr: string;
+  locale: string;
+  onSelectDay: (ds: string) => void;
+  onOpenDay: (ds: string) => void;
+  onOpenMonth: (month: number) => void;
+}) {
+  const first = new Date(year, month, 1);
+  const gridStart = addDays(first, -first.getDay());
+  const days = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
+  const monthName = new Intl.DateTimeFormat(locale, { month: 'long' }).format(first);
+  return (
+    <div className="rounded-lg bg-white/5 p-2 ring-1 ring-white/10">
+      <button
+        onClick={() => onOpenMonth(month)}
+        className="mb-1 w-full truncate text-left text-xs font-semibold text-white/90 hover:text-white"
+      >
+        {monthName}
+      </button>
+      <div className="grid grid-cols-7 gap-0.5 text-center text-[9px] text-white/35">
+        {weekdayNarrow.map((w, i) => (
+          <span key={i}>{w}</span>
+        ))}
+      </div>
+      <div className="mt-0.5 grid grid-cols-7 gap-0.5">
+        {days.map((d) => {
+          const ds = ymd(d);
+          const inM = d.getMonth() === month;
+          const isToday = ds === todayStr;
+          const isSel = ds === selected;
+          const has = inM && eventDays.has(ds);
+          return (
+            <button
+              key={ds}
+              onClick={() => onSelectDay(ds)}
+              onDoubleClick={() => onOpenDay(ds)}
+              className={`relative flex h-5 items-center justify-center rounded text-[10px] hover:bg-white/15 ${
+                inM ? '' : 'opacity-25'
+              } ${isSel ? 'ring-1 ring-white/70' : ''}`}
+            >
+              <span className={`flex h-4 w-4 items-center justify-center rounded-full ${isToday ? 'bg-blue-500 text-white' : ''}`}>
+                {d.getDate()}
+              </span>
+              {has && !isToday && <span className="absolute bottom-0 h-1 w-1 rounded-full bg-white/70" />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** 選択日のアジェンダ（右側パネル。全モード共通）。 */
+function AgendaPanel({
+  selected,
+  list,
+  locale,
+  onOpen,
+  onNew,
+}: {
+  selected: string;
+  list: EventSummary[];
+  locale: string;
+  onOpen: (e: EventSummary) => void;
+  onNew: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <aside className="flex w-72 shrink-0 flex-col overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10">
+      <div className="border-b border-white/10 px-3 py-2 text-sm font-medium">
+        {new Intl.DateTimeFormat(locale, { month: 'long', day: 'numeric', weekday: 'short' }).format(
+          new Date(`${selected}T00:00`),
+        )}
+      </div>
+      <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-2">
+        {list.length === 0 ? (
+          <p className="px-1 py-6 text-center text-sm text-white/45">{t('cal.noEvents')}</p>
+        ) : (
+          list.map((e) => (
+            <button
+              key={e.id}
+              onClick={() => onOpen(e)}
+              className="flex w-full items-start gap-2 rounded-lg p-2 text-left hover:bg-white/10"
+            >
+              <span className="mt-1 h-3 w-1 shrink-0 rounded-full" style={{ backgroundColor: e.color ?? DEFAULT_COLOR }} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">{e.title}</span>
+                <span className="mt-0.5 flex items-center gap-1 text-xs text-white/55">
+                  <Clock size={11} />
+                  {e.all_day ? t('cal.allDay') : timeRange(e)}
+                </span>
+                {e.location && (
+                  <span className="mt-0.5 flex items-center gap-1 truncate text-xs text-white/55">
+                    <MapPin size={11} />
+                    {e.location}
+                  </span>
+                )}
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+      <button
+        onClick={onNew}
+        className="m-2 flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-white/20 py-2 text-sm text-white/70 hover:bg-white/10"
+      >
+        <Plus size={14} />
+        {t('cal.newEvent')}
+      </button>
+    </aside>
   );
 }
 
@@ -318,10 +565,7 @@ function TrashList({
     <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto rounded-xl bg-white/5 p-2 ring-1 ring-white/10">
       {items.map((e) => (
         <div key={e.id} className="flex items-center gap-2 rounded-lg p-2 hover:bg-white/10">
-          <span
-            className="h-3 w-1 shrink-0 rounded-full"
-            style={{ backgroundColor: e.color ?? DEFAULT_COLOR }}
-          />
+          <span className="h-3 w-1 shrink-0 rounded-full" style={{ backgroundColor: e.color ?? DEFAULT_COLOR }} />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-medium">{e.title}</span>
             <span className="text-xs text-white/50">{fmt.format(new Date(`${dayOf(e.start_at)}T00:00`))}</span>
@@ -420,10 +664,7 @@ function EventModal({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <div
         className="w-full max-w-md rounded-2xl bg-neutral-900/95 p-5 text-white shadow-2xl ring-1 ring-white/15"
         onClick={(e) => e.stopPropagation()}

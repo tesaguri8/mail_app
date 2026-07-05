@@ -80,7 +80,13 @@
     "av_free": "Free",
     "vis_default": "Default visibility",
     "vis_public": "Public",
-    "vis_private": "Private"
+    "vis_private": "Private",
+    "guestPlaceholder": "Guest email address",
+    "addGuest": "Add",
+    "removeGuest": "Remove",
+    "importIcs": "Import ICS",
+    "exportIcs": "Export ICS",
+    "importResult": "Imported {{imported}}, skipped {{skipped}}"
   },
   "comingSoon": "Coming soon",
   "filter": {

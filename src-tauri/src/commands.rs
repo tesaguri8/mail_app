@@ -1,8 +1,8 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult,
-    CalendarInput, CalendarSummary, ContactGroupSummary, ContactInput, ContactMatch,
-    ContactSummary, DataLocation, DbInfo, DraftContent, DraftInput, DuplicateGroup, EventInput,
-    EventSummary, GreenDomainEntry, ImportReport, MailDetail,
+    AttendeeInput, CalendarInput, CalendarSummary, ContactGroupSummary, ContactInput, ContactMatch,
+    ContactSummary, DataLocation, DbInfo, DraftContent, DraftInput, DuplicateGroup, EventAttendee,
+    EventInput, EventSummary, GreenDomainEntry, IcsImportReport, ImportReport, MailDetail,
     MailSummary, OrgDuplicateGroup, OrganizationDetail, OrganizationSummary, RebuildAction,
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict, StorageInfo, SyncProgress,
@@ -1407,6 +1407,38 @@ pub fn calendar_set_visible(store: State<Store>, id: i64, visible: bool) -> Resu
 #[tauri::command]
 pub fn calendar_delete(store: State<Store>, id: i64) -> Result<bool, String> {
     store.delete_calendar(id).map_err(|e| e.to_string())
+}
+
+/// 予定の参加者（ゲスト）一覧。
+#[tauri::command]
+pub fn event_attendee_list(store: State<Store>, event_id: i64) -> Result<Vec<EventAttendee>, String> {
+    store.list_event_attendees(event_id).map_err(|e| e.to_string())
+}
+
+/// 予定の参加者を入力の集合に一致させる（全置き換え）。
+#[tauri::command]
+pub fn event_attendee_set(
+    store: State<Store>,
+    event_id: i64,
+    attendees: Vec<AttendeeInput>,
+) -> Result<(), String> {
+    store
+        .set_event_attendees(event_id, &attendees)
+        .map_err(|e| e.to_string())
+}
+
+/// .ics ファイルを取り込む（各 VEVENT を予定として追加）。
+#[tauri::command]
+pub fn ics_import(store: State<Store>, path: String) -> Result<IcsImportReport, String> {
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("ファイルを読めません: {e}"))?;
+    store.import_ics(&text).map_err(|e| e.to_string())
+}
+
+/// 全予定（非削除）を .ics ファイルへ書き出す。
+#[tauri::command]
+pub fn ics_export(store: State<Store>, path: String) -> Result<(), String> {
+    let text = store.export_ics().map_err(|e| e.to_string())?;
+    std::fs::write(&path, text).map_err(|e| format!("ファイルを書けません: {e}"))
 }
 
 /// グリーン／警告ドメインの一覧（管理タブ用。住所録由来の自動グリーンも含む）。

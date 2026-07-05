@@ -409,6 +409,45 @@ pub struct CalendarInput {
     pub kind: Option<String>,
 }
 
+/// 予定の参加者（ゲスト）。docs/DATABASE_SCHEMA.md（event_attendees）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct EventAttendee {
+    pub id: i32,
+    /// 住所録と紐付く場合（任意）。
+    pub contact_id: Option<i32>,
+    pub email: Option<String>,
+    pub name: Option<String>,
+    /// 'accepted' | 'declined' | 'tentative' | 'none'。
+    pub response: String,
+}
+
+/// ゲスト設定の入力（保存時に一括で置き換える）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct AttendeeInput {
+    #[serde(default)]
+    pub contact_id: Option<i32>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub response: Option<String>,
+}
+
+/// ICS 取り込みの結果（docs/IMPORT_EXPORT.md）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct IcsImportReport {
+    /// ファイル内の VEVENT 総数。
+    pub total: i32,
+    /// 追加した件数。
+    pub imported: i32,
+    /// 成立せず飛ばした件数（開始日時なし等）。
+    pub skipped: i32,
+}
+
 /// 予定の作成・更新入力（フロントから受け取る）。`id` が None なら新規作成。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

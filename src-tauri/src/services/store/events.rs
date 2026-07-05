@@ -1,5 +1,6 @@
 use super::Store;
-use crate::models::{EventInput, EventSummary};
+use crate::models::{AttendeeInput, EventAttendee, EventInput, EventSummary, IcsImportReport};
+use crate::services::ics;
 use rusqlite::{params, OptionalExtension, Row};
 
 /// events の 1 行を EventSummary に写す（列順は EVENT_COLS と対応）。
@@ -175,6 +176,103 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         conn.execute("UPDATE events SET deleted_at = NULL WHERE id = ?1", params![id])?;
         Ok(())
+    }
+
+    /// 予定の参加者（ゲスト）一覧。
+    pub fn list_event_attendees(&self, event_id: i64) -> rusqlite::Result<Vec<EventAttendee>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, contact_id, email, name, response FROM event_attendees \
+             WHERE event_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![event_id], |r| {
+            Ok(EventAttendee {
+                id: r.get::<_, i64>(0)? as i32,
+                contact_id: r.get::<_, Option<i64>>(1)?.map(|v| v as i32),
+                email: r.get(2)?,
+                name: r.get(3)?,
+                response: r.get(4)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// 参加者を入力の集合に一致させる（全置き換え）。空の値は除く。
+    pub fn set_event_attendees(
+        &self,
+        event_id: i64,
+        attendees: &[AttendeeInput],
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM event_attendees WHERE event_id = ?1",
+            params![event_id],
+        )?;
+        for a in attendees {
+            let email = a.email.as_deref().map(str::trim).filter(|v| !v.is_empty());
+            let name = a.name.as_deref().map(str::trim).filter(|v| !v.is_empty());
+            // メール・連絡先・名前のいずれも無い行は捨てる。
+            if email.is_none() && a.contact_id.is_none() && name.is_none() {
+                continue;
+            }
+            conn.execute(
+                "INSERT INTO event_attendees (event_id, contact_id, email, name, response) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    event_id,
+                    a.contact_id,
+                    email,
+                    name,
+                    a.response.as_deref().unwrap_or("none"),
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// ICS テキストを取り込む（各 VEVENT を予定として追加。既定カレンダーへ）。
+    pub fn import_ics(&self, text: &str) -> rusqlite::Result<IcsImportReport> {
+        let parsed = ics::parse(text);
+        let total = parsed.len() as i32;
+        let mut imported = 0i32;
+        for p in parsed {
+            let input = EventInput {
+                id: None,
+                title: p.title,
+                description: p.description,
+                location: p.location,
+                start_at: p.start_at,
+                end_at: p.end_at,
+                all_day: p.all_day,
+                recurrence: p.recurrence,
+                ..Default::default()
+            };
+            if input.title.trim().is_empty() || input.start_at.trim().is_empty() {
+                continue;
+            }
+            self.upsert_event(&input)?;
+            imported += 1;
+        }
+        Ok(IcsImportReport {
+            total,
+            imported,
+            skipped: total - imported,
+        })
+    }
+
+    /// 全予定（非削除）を ICS テキストへ書き出す。
+    pub fn export_ics(&self) -> rusqlite::Result<String> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT {EVENT_COLS} FROM events WHERE deleted_at IS NULL ORDER BY start_at"
+        );
+        let events: Vec<EventSummary> = {
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map([], row_to_event)?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        drop(conn);
+        Ok(ics::generate(&events))
     }
 
     /// 保持期間（日数）を過ぎたゴミ箱の予定を完全削除する（参加者は CASCADE）。起動時などに呼ぶ。

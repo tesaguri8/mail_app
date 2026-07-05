@@ -80,7 +80,13 @@
     "av_free": "予定なし",
     "vis_default": "既定の公開設定",
     "vis_public": "公開",
-    "vis_private": "非公開"
+    "vis_private": "非公開",
+    "guestPlaceholder": "ゲストのメールアドレス",
+    "addGuest": "追加",
+    "removeGuest": "削除",
+    "importIcs": "ICS を取り込む",
+    "exportIcs": "ICS で書き出す",
+    "importResult": "取り込み {{imported}} 件・スキップ {{skipped}} 件"
   },
   "comingSoon": "準備中です",
   "filter": {

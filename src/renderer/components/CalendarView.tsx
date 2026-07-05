@@ -12,11 +12,16 @@ import {
   Repeat,
   Bell,
   PanelLeft,
+  Users,
+  Upload,
+  Download,
 } from 'lucide-react';
 import type { EventSummary } from '@bindings/EventSummary';
 import type { EventInput } from '@bindings/EventInput';
 import type { CalendarSummary } from '@bindings/CalendarSummary';
+import type { AttendeeInput } from '@bindings/AttendeeInput';
 import { openUrl } from '@tauri-apps/plugin-opener';
+import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import {
   eventList,
   eventListTrashed,
@@ -28,6 +33,10 @@ import {
   calendarUpsert,
   calendarSetVisible,
   calendarDelete,
+  eventAttendeeList,
+  eventAttendeeSet,
+  icsImport,
+  icsExport,
 } from '../services/calendar';
 import { expandEvents, presetToRule, ruleToPreset, RECUR_PRESETS, type RecurPreset } from '../utils/recurrence';
 
@@ -257,6 +266,22 @@ export function CalendarView() {
     reload();
   };
 
+  // ICS 取込/書出（Google 互換）。ファイルダイアログで選ぶ。
+  const importIcs = async () => {
+    const picked = await openDialog({ multiple: false, filters: [{ name: 'iCalendar', extensions: ['ics'] }] }).catch(() => null);
+    const path = typeof picked === 'string' ? picked : null;
+    if (!path) return;
+    const report = await icsImport(path).catch(() => null);
+    if (report) {
+      reload();
+      window.alert(t('cal.importResult', { imported: report.imported, skipped: report.skipped }));
+    }
+  };
+  const exportIcs = async () => {
+    const path = await saveDialog({ defaultPath: 'rondine-calendar.ics', filters: [{ name: 'iCalendar', extensions: ['ics'] }] }).catch(() => null);
+    if (typeof path === 'string' && path) await icsExport(path).catch(() => undefined);
+  };
+
   const eventDays = useMemo(() => new Set(events.flatMap(coveredDays)), [events]);
   const weekdayShort = useMemo(() => weekdayLabels(i18n.language, 'short'), [i18n.language]);
   const weekdayNarrow = useMemo(() => weekdayLabels(i18n.language, 'narrow'), [i18n.language]);
@@ -359,6 +384,12 @@ export function CalendarView() {
           </>
         )}
         <div className="flex-1" />
+        <button onClick={importIcs} title={t('cal.importIcs')} className="rounded p-1.5 hover:bg-white/20">
+          <Upload size={16} />
+        </button>
+        <button onClick={exportIcs} title={t('cal.exportIcs')} className="rounded p-1.5 hover:bg-white/20">
+          <Download size={16} />
+        </button>
         <button
           onClick={() => setShowTrash((v) => !v)}
           className={`flex items-center rounded p-1.5 hover:bg-white/20 ${showTrash ? 'bg-white/25' : ''}`}
@@ -1175,13 +1206,34 @@ function EventEditor({
   const [calendarId, setCalendarId] = useState<number | null>(event?.calendar_id ?? defaultCal?.id ?? null);
   const [availability, setAvailability] = useState(event?.availability ?? 'busy');
   const [visibility, setVisibility] = useState(event?.visibility ?? 'default');
+  const [attendees, setAttendees] = useState<AttendeeInput[]>([]);
+  const [guestInput, setGuestInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const eventId = event?.id ?? null;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  // 既存予定のゲストを読み込む。
+  useEffect(() => {
+    if (eventId == null) return;
+    eventAttendeeList(eventId)
+      .then((rows) =>
+        setAttendees(rows.map((r) => ({ contact_id: r.contact_id, email: r.email, name: r.name, response: r.response }))),
+      )
+      .catch(() => undefined);
+  }, [eventId]);
+
+  const addGuest = () => {
+    const v = guestInput.trim();
+    if (!v) return;
+    setAttendees((list) => [...list, { contact_id: null, email: v, name: null, response: 'none' }]);
+    setGuestInput('');
+  };
+  const removeGuest = (i: number) => setAttendees((list) => list.filter((_, idx) => idx !== i));
 
   const canSave = title.trim().length > 0 && !!startDate && !busy;
 
@@ -1214,7 +1266,8 @@ function EventEditor({
       visibility,
     };
     try {
-      await eventUpsert(input);
+      const saved = await eventUpsert(input);
+      await eventAttendeeSet(saved.id, attendees).catch(() => undefined);
       onSaved();
     } catch {
       setBusy(false);
@@ -1390,6 +1443,36 @@ function EventEditor({
               </option>
             ))}
           </select>
+        </div>
+
+        {/* ゲスト（参加者） */}
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <Users size={14} className="shrink-0 text-white/55" />
+            <input
+              value={guestInput}
+              onChange={(e) => setGuestInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  addGuest();
+                }
+              }}
+              placeholder={t('cal.guestPlaceholder')}
+              className={`flex-1 ${small}`}
+            />
+            <button type="button" onClick={addGuest} className="shrink-0 rounded-lg bg-white/10 px-2 py-1.5 text-xs hover:bg-white/20">
+              {t('cal.addGuest')}
+            </button>
+          </div>
+          {attendees.map((a, i) => (
+            <div key={i} className="flex items-center gap-2 rounded-lg bg-white/5 px-2 py-1 text-sm">
+              <span className="min-w-0 flex-1 truncate">{a.name || a.email}</span>
+              <button type="button" onClick={() => removeGuest(i)} title={t('cal.removeGuest')} className="shrink-0 rounded p-0.5 text-white/50 hover:text-white">
+                <X size={12} />
+              </button>
+            </div>
+          ))}
         </div>
       </div>
 

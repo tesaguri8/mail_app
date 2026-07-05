@@ -33,10 +33,12 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
     (async () => {
       let synced = false;
       let failed = false;
+      let stored = 0; // この巡回で新規保存されたメール総数（新着有無の判定に使う）。
       for (const id of ids) {
         try {
-          await mailSync(id);
+          const r = await mailSync(id);
           synced = true;
+          stored += r?.stored ?? 0;
         } catch {
           // アカウント単位の失敗は無視して次へ（ただし全滅ならクールダウン）。
           failed = true;
@@ -45,7 +47,8 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
       busy.current = false;
       // 1件も成功せず全滅＝接続不可の可能性大 → しばらく自動再試行を止める（手動は可）。
       cooldownUntil.current = failed && !synced ? Date.now() + AUTOSYNC_COOLDOWN_MS : 0;
-      if (synced) window.dispatchEvent(new Event(MAIL_SYNCED_EVENT));
+      // 新着件数を載せて通知（購読側は新着ゼロなら一覧の再取得を省ける）。
+      if (synced) window.dispatchEvent(new CustomEvent(MAIL_SYNCED_EVENT, { detail: { stored } }));
     })();
   }, [idsKey]);
 

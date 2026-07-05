@@ -182,6 +182,7 @@ pub fn account_add(
         signature_id: None,
         unread_count: 0,
         total_count: 0,
+        server_total_count: 0,
     })
 }
 

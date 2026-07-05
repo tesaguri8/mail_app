@@ -425,6 +425,7 @@
     "sync": "同期",
     "syncing": "同期中…",
     "accountTotal": "メール {{total}} 件",
+    "accountTotalOf": "メール {{shown}} / {{total}} 件",
     "allAccounts": "全て",
     "loadingMore": "さらに読み込み中…",
     "loadedOf": "表示 {{shown}} / 全 {{total}} 件（スクロールで続き）",

@@ -66,7 +66,11 @@ pub struct AccountSummary {
     /// 既定署名の ID（未設定なら None）。
     pub signature_id: Option<i32>,
     pub unread_count: i32,
+    /// ローカルに保存済みのメール件数（全フォルダ）。
     pub total_count: i32,
+    /// サーバ側のメール総数（同期対象フォルダの IMAP EXISTS の合計）。
+    /// 左下「ローカル/サーバ」表示（取り込みの完成度）に使う。未同期なら 0。
+    pub server_total_count: i32,
 }
 
 /// 署名（差出人ごとに使い回せる本文）。

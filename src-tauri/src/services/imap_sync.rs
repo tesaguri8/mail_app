@@ -403,15 +403,18 @@ fn sync_folder(
 
     // フォルダ別の同期状態を更新（upsert）。
     conn.execute(
-        "INSERT INTO folder_sync (account_id, folder, uid_validity, last_uid)
-         VALUES (?1, ?2, ?3, ?4)
+        "INSERT INTO folder_sync (account_id, folder, uid_validity, last_uid, server_total)
+         VALUES (?1, ?2, ?3, ?4, ?5)
          ON CONFLICT(account_id, folder)
-         DO UPDATE SET uid_validity=excluded.uid_validity, last_uid=excluded.last_uid",
+         DO UPDATE SET uid_validity=excluded.uid_validity, last_uid=excluded.last_uid,
+                       server_total=excluded.server_total",
         params![
             account_id,
             tag,
             uid_validity.map(|v| v as i64),
-            c.max_uid as i64
+            c.max_uid as i64,
+            // サーバ総数（IMAP SELECT の EXISTS）。左下「ローカル/サーバ」表示に使う。
+            total as i64
         ],
     )
     .map_err(|e| e.to_string())?;

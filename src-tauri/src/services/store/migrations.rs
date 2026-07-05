@@ -155,6 +155,10 @@ const MIGRATIONS: &[Migration] = &[
         version: 37,
         sql: include_str!("migrations/0037_reply_to.sql"),
     },
+    Migration {
+        version: 38,
+        sql: include_str!("migrations/0038_full_index.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
@@ -245,9 +249,15 @@ mod tests {
     #[test]
     fn run_tolerates_columns_added_by_other_branch() {
         let conn = Connection::open_in_memory().unwrap();
+        // 実在の v35 DB を忠実に模す: body_compacted(0011) と folder_sync(0015) は
+        // 35 より前に存在する。reply_to だけ「別枝で既存」の状態を作る。
         conn.execute_batch(
-            "CREATE TABLE emails (id INTEGER PRIMARY KEY, folder TEXT);
+            "CREATE TABLE emails (id INTEGER PRIMARY KEY, folder TEXT, body_compacted INTEGER DEFAULT 0);
              ALTER TABLE emails ADD COLUMN reply_to TEXT;
+             CREATE TABLE folder_sync (
+               account_id INTEGER NOT NULL, folder TEXT NOT NULL,
+               uid_validity INTEGER, last_uid INTEGER,
+               PRIMARY KEY (account_id, folder));
              PRAGMA user_version = 35;",
         )
         .unwrap();

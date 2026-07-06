@@ -17,11 +17,11 @@ body_window: string,
  */
 signature_id: number | null, unread_count: number, 
 /**
- * ローカルに保存済みのメール件数（全フォルダ）。
+ * 受信トレイ(inbox)にローカル保存済みのメール件数（未読数と基準を揃える）。
  */
 total_count: number, 
 /**
- * サーバ側のメール総数（同期対象フォルダの IMAP EXISTS の合計）。
+ * サーバ側の受信トレイ総数（inbox の IMAP EXISTS）。
  * 左下「ローカル/サーバ」表示（取り込みの完成度）に使う。未同期なら 0。
  */
 server_total_count: number, };

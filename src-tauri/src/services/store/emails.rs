@@ -145,10 +145,17 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
         .as_deref()
         .filter(|s| !s.trim().is_empty())
         .map(crate::services::quotes::fingerprint);
+    // 本文の取得状態を本文列の有無から導出する（docs/SYNC.md §3.6）。本文3列がすべて空＝
+    // ヘッダのみ取り込んだ「メタのみ行」＝'absent'（開いた時にサーバから本文取得）。本文が
+    // あれば 'present'。※要約落ち('evicted')は挿入ではなく storage.rs の更新側で付ける。
+    let has_body = e.clean_body.as_deref().is_some_and(|s| !s.trim().is_empty())
+        || e.body_plain.as_deref().is_some_and(|s| !s.is_empty())
+        || e.body_html.as_deref().is_some_and(|s| !s.is_empty());
+    let body_state = if has_body { "present" } else { "absent" };
     let changed = conn.execute(
         "INSERT OR IGNORE INTO emails
-           (account_id, message_id, canonical_key, subject, from_address, from_name, to_addresses, to_name, cc_addresses, date, date_ts, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read, in_reply_to, references_ids, thread_index, raw_headers, body_fingerprint, reply_to)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
+           (account_id, message_id, canonical_key, subject, from_address, from_name, to_addresses, to_name, cc_addresses, date, date_ts, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read, in_reply_to, references_ids, thread_index, raw_headers, body_fingerprint, reply_to, body_state)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)",
         params![
             e.account_id,
             e.message_id,
@@ -176,6 +183,7 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
             e.raw_headers,
             body_fingerprint,
             e.reply_to,
+            body_state,
         ],
     )?;
     if changed == 0 {
@@ -1146,7 +1154,8 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE emails
-             SET body_plain = ?1, clean_body = ?2, body_html_z = ?3, body_html = NULL, body_compacted = 0
+             SET body_plain = ?1, clean_body = ?2, body_html_z = ?3, body_html = NULL,
+                 body_compacted = 0, body_state = 'present'
              WHERE id = ?4",
             params![body_plain, clean_body, body_html_z, id],
         )?;

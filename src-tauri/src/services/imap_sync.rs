@@ -20,6 +20,10 @@ const SAFETY_MAX: usize = 2000;
 /// 「フリーズに見える」のを防ぐ（大きいと一括DL中に無反応になる）。往復回数と
 /// 応答性のバランスで 50 件。
 const CHUNK: usize = 50;
+/// 全件メタデータ索引（docs/SYNC.md §3.6）の 1 同期あたりの取得上限（ヘッダのみ）。
+/// 「古いのは急がない」ので少しずつ。30 秒間隔の定期同期で徐々に過去を埋める。
+/// 例: 受信箱 25,000 件なら 2,000/回 ×十数回で完了（本文は取得しないので軽い）。
+const BACKFILL_PER_SYNC: usize = 2000;
 
 /// 同期範囲（accounts.sync_window をパース）。
 /// "n50"=最新50件 / "3d"=3日 / "30d" / "3m" / "1y" / "all"
@@ -221,33 +225,43 @@ fn run_sync(
     progress: &dyn Fn(&str, i32, i32),
     cancel: &AtomicBool,
 ) -> Result<(), String> {
-    // 受信箱（必須）。
-    sync_folder(
-        session, conn, account_id, "INBOX", "inbox", window, result, progress, cancel,
-    )?;
-
-    // その他の標準フォルダ（存在すれば best-effort。無ければスキップ）。
-    // 中断要求があれば以降のフォルダはスキップして終了する。
-    if !is_cancelled(cancel) {
-        match session.list(Some(""), Some("*")) {
-            Ok(names) => {
-                let targets: Vec<(String, &'static str)> = SYNC_FOLDERS
-                    .iter()
-                    .filter_map(|spec| detect_mailbox(names.iter(), spec).map(|n| (n, spec.tag)))
-                    .collect();
-                drop(names);
-                for (mbox, tag) in targets {
-                    if is_cancelled(cancel) {
-                        break;
-                    }
-                    if let Err(e) = sync_folder(
-                        session, conn, account_id, &mbox, tag, window, result, progress, cancel,
-                    ) {
-                        log::warn!("フォルダ '{mbox}' ({tag}) の同期に失敗: {e}");
-                    }
+    // 同期対象フォルダ（受信箱＋存在する標準フォルダ）を一覧する。
+    // ※ names はセッションを借用するので、必要な名前を owned で取り出してから drop する。
+    let mut folders: Vec<(String, &'static str)> = vec![("INBOX".to_string(), "inbox")];
+    match session.list(Some(""), Some("*")) {
+        Ok(names) => {
+            for spec in SYNC_FOLDERS {
+                if let Some(n) = detect_mailbox(names.iter(), spec) {
+                    folders.push((n, spec.tag));
                 }
             }
-            Err(e) => log::warn!("フォルダ一覧の取得に失敗（受信箱のみ同期）: {e}"),
+            drop(names);
+        }
+        Err(e) => log::warn!("フォルダ一覧の取得に失敗（受信箱のみ同期）: {e}"),
+    }
+
+    // Pass 1: 新着（増分/初回）を全フォルダ分。新しいものを最優先で取り込む（docs/SYNC.md §3.6）。
+    for (mbox, tag) in &folders {
+        if is_cancelled(cancel) {
+            return Ok(());
+        }
+        if let Err(e) = sync_folder(
+            session, conn, account_id, mbox, tag, window, result, progress, cancel,
+        ) {
+            log::warn!("フォルダ '{mbox}' ({tag}) の同期に失敗: {e}");
+        }
+    }
+
+    // Pass 2: 古い側のメタデータ索引を少しずつ（低優先・再開可能・本文なし）。docs/SYNC.md §3.6。
+    // 新着（Pass 1）を全フォルダ終えてから走らせるので「新しいもの優先」を保つ。
+    for (mbox, tag) in &folders {
+        if is_cancelled(cancel) {
+            break;
+        }
+        if let Err(e) =
+            backfill_folder_metadata(session, conn, account_id, mbox, tag, result, progress, cancel)
+        {
+            log::warn!("フォルダ '{mbox}' ({tag}) のメタ索引に失敗: {e}");
         }
     }
     Ok(())
@@ -466,6 +480,68 @@ fn fetch_uids(
     Ok(())
 }
 
+/// 解析結果 ParsedEmail を挿入用 NewEmail へ写す（フル取得・ヘッダのみ取得で共通）。
+/// ヘッダのみ解析なら本文3列は空になり、insert_email 側で body_state='absent' になる。
+fn parsed_to_new_email(
+    p: parser::ParsedEmail,
+    account_id: i64,
+    folder: &str,
+    seen: bool,
+    uid: Option<i64>,
+) -> NewEmail {
+    let attachments = p
+        .attachments
+        .into_iter()
+        .map(|a| NewAttachment {
+            part_index: a.part_index,
+            filename: a.filename,
+            content_type: a.content_type,
+            size: a.size,
+            kind: a.kind,
+            content_id: a.content_id,
+        })
+        .collect();
+    let quotes = p
+        .quotes
+        .into_iter()
+        .map(|q| NewQuote {
+            order: q.order,
+            quoted_from: q.quoted_from,
+            quoted_at: q.quoted_at,
+            fingerprint: q.fingerprint,
+        })
+        .collect();
+    NewEmail {
+        account_id,
+        message_id: p.message_id,
+        canonical_key: p.canonical_key,
+        subject: p.subject,
+        from_address: p.from_address,
+        from_name: p.from_name,
+        to_addresses: p.to_addresses,
+        to_name: p.to_name,
+        reply_to: p.reply_to,
+        cc_addresses: p.cc_addresses,
+        date: p.date,
+        date_ts: p.date_ts,
+        body_plain: p.body_plain,
+        clean_body: p.clean_body,
+        body_html: p.body_html,
+        auth_result: p.auth_result,
+        list_id: p.list_id,
+        in_reply_to: p.in_reply_to,
+        references_ids: p.references_ids,
+        thread_index: p.thread_index,
+        raw_headers: p.raw_headers,
+        quotes,
+        has_attachments: p.has_attachments,
+        is_read: seen,
+        uid,
+        folder: folder.to_string(),
+        attachments,
+    }
+}
+
 fn store_fetches<'a>(
     conn: &Connection,
     account_id: i64,
@@ -491,63 +567,133 @@ fn store_fetches<'a>(
             .iter()
             .any(|f| matches!(f, imap::types::Flag::Seen));
         if let Some(p) = parser::parse_message(raw) {
-            let attachments = p
-                .attachments
-                .into_iter()
-                .map(|a| NewAttachment {
-                    part_index: a.part_index,
-                    filename: a.filename,
-                    content_type: a.content_type,
-                    size: a.size,
-                    kind: a.kind,
-                    content_id: a.content_id,
-                })
-                .collect();
-            let quotes = p
-                .quotes
-                .into_iter()
-                .map(|q| NewQuote {
-                    order: q.order,
-                    quoted_from: q.quoted_from,
-                    quoted_at: q.quoted_at,
-                    fingerprint: q.fingerprint,
-                })
-                .collect();
-            let ne = NewEmail {
-                account_id,
-                message_id: p.message_id,
-                canonical_key: p.canonical_key,
-                subject: p.subject,
-                from_address: p.from_address,
-                from_name: p.from_name,
-                to_addresses: p.to_addresses,
-                to_name: p.to_name,
-                reply_to: p.reply_to,
-                cc_addresses: p.cc_addresses,
-                date: p.date,
-                date_ts: p.date_ts,
-                body_plain: p.body_plain,
-                clean_body: p.clean_body,
-                body_html: p.body_html,
-                auth_result: p.auth_result,
-                list_id: p.list_id,
-                in_reply_to: p.in_reply_to,
-                references_ids: p.references_ids,
-                thread_index: p.thread_index,
-                raw_headers: p.raw_headers,
-                quotes,
-                has_attachments: p.has_attachments,
-                is_read: seen,
-                uid,
-                folder: folder.to_string(),
-                attachments,
-            };
+            let ne = parsed_to_new_email(p, account_id, folder, seen, uid);
             match insert_email(conn, &ne).map_err(|e| e.to_string())? {
                 InsertOutcome::Inserted(_) => c.stored += 1,
                 InsertOutcome::Backfilled => c.backfilled += 1,
                 InsertOutcome::Unchanged => {}
             }
         }
+    }
+    Ok(())
+}
+
+/// メタのみ行の書き込み（BODY.PEEK[HEADER] をそのまま parse_message へ）。ヘッダのみなので
+/// 本文3列は空 → insert_email 側で body_state='absent'。canonical_key 等はフル取得と一致し、
+/// 後で本文取得しても同じ行に統合される（重複しない）。docs/SYNC.md §3.6。
+fn store_header_fetches<'a>(
+    conn: &Connection,
+    account_id: i64,
+    folder: &str,
+    msgs: impl Iterator<Item = &'a imap::types::Fetch>,
+    result: &mut SyncResult,
+) -> Result<(), String> {
+    for m in msgs {
+        let raw = match m.header() {
+            Some(h) => h,
+            None => continue,
+        };
+        let uid = m.uid.map(|u| u as i64);
+        let seen = m
+            .flags()
+            .iter()
+            .any(|f| matches!(f, imap::types::Flag::Seen));
+        if let Some(p) = parser::parse_message(raw) {
+            let ne = parsed_to_new_email(p, account_id, folder, seen, uid);
+            if let InsertOutcome::Inserted(_) = insert_email(conn, &ne).map_err(|e| e.to_string())? {
+                result.backfilled += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// このフォルダの全件メタ索引が完了した印を付ける（これ以上古い UID が無い）。
+fn mark_index_complete(conn: &Connection, account_id: i64, tag: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE folder_sync SET index_complete=1 WHERE account_id=?1 AND folder=?2",
+        params![account_id, tag],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 古い側のメタデータを少しずつ索引する（本文なし・再開可能）。docs/SYNC.md §3.6。
+/// フロンティア = ローカル保存済みの最小 UID。これ未満の UID を新しい方から
+/// BACKFILL_PER_SYNC 件だけヘッダ取得して挿入する。これ以上古い UID が無ければ完了印。
+/// 30 秒間隔の定期同期で呼ばれ、毎回少しずつ過去を埋める（アプリ再起動も DB を見て続き）。
+#[allow(clippy::too_many_arguments)]
+fn backfill_folder_metadata(
+    session: &mut ImapSession,
+    conn: &Connection,
+    account_id: i64,
+    imap_name: &str,
+    tag: &str,
+    result: &mut SyncResult,
+    progress: &dyn Fn(&str, i32, i32),
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    // 完了済みフォルダ・中断要求はスキップ。
+    let done: i64 = conn
+        .query_row(
+            "SELECT COALESCE(index_complete,0) FROM folder_sync WHERE account_id=?1 AND folder=?2",
+            params![account_id, tag],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if done != 0 || is_cancelled(cancel) {
+        return Ok(());
+    }
+    // フロンティア = 保存済み最小 UID（これより古い側を索引する）。まだ 1 件も無ければ次回に委ねる。
+    let frontier: Option<i64> = conn
+        .query_row(
+            "SELECT MIN(uid) FROM emails WHERE account_id=?1 AND folder=?2 AND uid IS NOT NULL",
+            params![account_id, tag],
+            |r| r.get::<_, Option<i64>>(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let Some(frontier) = frontier else {
+        return Ok(());
+    };
+    if frontier <= 1 {
+        mark_index_complete(conn, account_id, tag)?;
+        return Ok(());
+    }
+    session.select(imap_name).map_err(|e| e.to_string())?;
+    // フロンティア未満の UID（サーバに存在する古い側）を検索。空なら完了。
+    let mut older: Vec<u32> = session
+        .uid_search(format!("UID 1:{}", frontier - 1))
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|&u| (u as i64) < frontier)
+        .collect();
+    if older.is_empty() {
+        mark_index_complete(conn, account_id, tag)?;
+        return Ok(());
+    }
+    older.sort_unstable();
+    // フロンティア直下（新しい方）から BACKFILL_PER_SYNC 件だけ取る＝一覧が上から下へ連続して埋まる。
+    let take = older.len().min(BACKFILL_PER_SYNC);
+    let mut batch: Vec<u32> = older[older.len() - take..].to_vec();
+    batch.reverse(); // 新しい UID から取得・保存（表示順を揃える）。
+    let total = batch.len() as i32;
+    let mut got = 0i32;
+    for chunk in batch.chunks(CHUNK) {
+        if is_cancelled(cancel) {
+            break;
+        }
+        let set = chunk
+            .iter()
+            .map(|u| u.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        // BODY.PEEK[HEADER]: 既読フラグを立てず、ヘッダのみ取得（本文は取らない＝軽い）。
+        let msgs = session
+            .uid_fetch(set, "(UID FLAGS BODY.PEEK[HEADER])")
+            .map_err(|e| e.to_string())?;
+        store_header_fetches(conn, account_id, tag, msgs.iter(), result)?;
+        got += chunk.len() as i32;
+        progress(tag, got, total);
     }
     Ok(())
 }

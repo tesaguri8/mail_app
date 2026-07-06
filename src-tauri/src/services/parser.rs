@@ -456,6 +456,32 @@ This is the new part.\r\n\
     }
 
     #[test]
+    fn parses_header_only_for_metadata_index() {
+        // BODY.PEEK[HEADER] 相当（ヘッダのみ・本文なし）。全件メタ索引はこれを parse_message へ
+        // 通す（docs/SYNC.md §3.6）。canonical_key 等がフル取得と一致し、本文は空になること。
+        let raw = b"From: Taro <taro@example.com>\r\n\
+To: Hanako <hanako@example.com>\r\n\
+Subject: Hello\r\n\
+Message-ID: <abc123@example.com>\r\n\
+In-Reply-To: <parent@example.com>\r\n\
+References: <root@example.com> <parent@example.com>\r\n\
+Date: Mon, 30 Jun 2025 10:00:00 +0900\r\n\
+\r\n";
+        let p = parse_message(raw).expect("header-only should parse");
+        // 重複排除キーは Message-ID 由来＝フル取得と一致（後で本文取得しても同じ行に統合）。
+        assert_eq!(p.canonical_key, "abc123@example.com");
+        assert_eq!(p.message_id.as_deref(), Some("abc123@example.com"));
+        assert_eq!(p.subject.as_deref(), Some("Hello"));
+        assert_eq!(p.from_address.as_deref(), Some("taro@example.com"));
+        assert_eq!(p.in_reply_to.as_deref(), Some("parent@example.com"));
+        let refs = p.references_ids.as_deref().unwrap_or("");
+        assert!(refs.contains("root@example.com") && refs.contains("parent@example.com"));
+        // 本文3列は空 → insert_email 側で body_state='absent' になる。
+        assert!(p.clean_body.as_deref().unwrap_or("").trim().is_empty());
+        assert!(p.body_plain.as_deref().unwrap_or("").is_empty());
+    }
+
+    #[test]
     fn html_to_text_breaks_on_block_elements() {
         // Apple Mail 系の <div> 1 行構造を改行付きで復元する。
         let html = "<div>末松　さま</div><div>お世話になっております。伊佐です。</div>\

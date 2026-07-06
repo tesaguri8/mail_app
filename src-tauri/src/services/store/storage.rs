@@ -210,7 +210,7 @@ impl Store {
             }
             let conn = self.conn.lock().unwrap();
             conn.execute(
-                "UPDATE emails SET body_html_z = NULL, body_plain = NULL, body_compacted = 1 WHERE id = ?1",
+                "UPDATE emails SET body_html_z = NULL, body_plain = NULL, body_compacted = 1, body_state = 'evicted' WHERE id = ?1",
                 params![id],
             )?;
             drop(conn);

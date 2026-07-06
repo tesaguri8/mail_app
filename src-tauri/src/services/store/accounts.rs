@@ -148,8 +148,10 @@ impl Store {
                     COALESCE(full_window,'all'), COALESCE(body_window,'off'), signature_id,
                     (SELECT COUNT(*) FROM emails e WHERE e.account_id = accounts.id AND e.is_read = 0
                        AND COALESCE(e.folder,'inbox') = 'inbox'),
-                    (SELECT COUNT(*) FROM emails e WHERE e.account_id = accounts.id),
-                    (SELECT COALESCE(SUM(server_total),0) FROM folder_sync fs WHERE fs.account_id = accounts.id)
+                    (SELECT COUNT(*) FROM emails e WHERE e.account_id = accounts.id
+                       AND COALESCE(e.folder,'inbox') = 'inbox'),
+                    (SELECT COALESCE(server_total,0) FROM folder_sync fs
+                       WHERE fs.account_id = accounts.id AND fs.folder = 'inbox')
              FROM accounts ORDER BY COALESCE(sort_order, id), id",
         )?;
         let rows = stmt.query_map([], |r| {

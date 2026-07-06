@@ -588,6 +588,16 @@ export function MailBody({
     }
   };
 
+  // 未取得(absent)本文はメールを開いた時に自動でサーバから取得する（docs/SYNC.md §3.6：
+  // 全件メタ索引で見出しだけ先に並べ、開いた本文はオンデマンド）。要約(evicted)は clean_body が
+  // あるので自動取得せず、必要時に「全文を再取得」ボタンで取る。
+  useEffect(() => {
+    if (detail.body_state === 'absent' && !refreshed && !refetching) {
+      void handleRefetch();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail.id, detail.body_state]);
+
   // 差出人ドメインをグリーン認定/解除（一覧のバッジは onGreenChange で更新）。
   const toggleGreen = async () => {
     if (!senderDomain) return;
@@ -837,6 +847,20 @@ export function MailBody({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
+        {d.body_state === 'absent' && !refreshed && (
+          <div className="mb-3 flex items-center gap-2 rounded-md border border-sky-300/25 bg-sky-300/10 px-3 py-2 text-[11px] leading-snug text-sky-100/80">
+            <RefreshCw size={12} className={refetching ? 'animate-spin' : ''} />
+            <span className="flex-1">{t('mailbox.bodyAbsent')}</span>
+            {!refetching && (
+              <button
+                onClick={handleRefetch}
+                className="shrink-0 rounded bg-white/10 px-2 py-1 text-sky-50 hover:bg-white/20"
+              >
+                {t('mailbox.refetch')}
+              </button>
+            )}
+          </div>
+        )}
         {d.body_compacted && (
           <div className="mb-3 flex items-center gap-2 rounded-md border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-[11px] leading-snug text-amber-100/80">
             <span className="flex-1">{t('mailbox.bodyCompacted')}</span>

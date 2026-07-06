@@ -1071,7 +1071,7 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let detail = conn
             .query_row(
-                "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id, from_name, to_name, account_id, cc_addresses, reply_to
+                "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id, from_name, to_name, account_id, cc_addresses, reply_to, COALESCE(body_state,'present')
                  FROM emails WHERE id = ?1",
                 params![id],
                 |r| {
@@ -1098,6 +1098,7 @@ impl Store {
                         body_html,
                         has_attachments: r.get::<_, i64>(9)? != 0,
                         body_compacted: r.get::<_, i64>(10)? != 0,
+                        body_state: r.get::<_, String>(17)?,
                         is_green: false,
                         is_vip: false,
                     })
@@ -1124,17 +1125,18 @@ impl Store {
         Ok(Some(d))
     }
 
-    /// 全文再取得に必要な情報（親メールの account_id と IMAP UID）。
-    /// UID が None のメールは再取得不可（要再同期）。
+    /// 全文再取得に必要な情報（親メールの account_id / IMAP UID / フォルダ）。
+    /// UID が None のメールは再取得不可（要再同期）。フォルダは正しい IMAP メールボックスを
+    /// select するために使う（従来 INBOX 決め打ちで送信済/迷惑の再取得が壊れていた）。
     pub fn email_refetch_info(
         &self,
         email_id: i64,
-    ) -> rusqlite::Result<Option<(i64, Option<i64>)>> {
+    ) -> rusqlite::Result<Option<(i64, Option<i64>, String)>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT account_id, uid FROM emails WHERE id = ?1",
+            "SELECT account_id, uid, COALESCE(folder,'inbox') FROM emails WHERE id = ?1",
             params![email_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()
     }

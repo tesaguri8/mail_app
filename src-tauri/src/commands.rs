@@ -1518,7 +1518,7 @@ pub async fn mail_refetch(
     store: State<'_, Store>,
     id: i64,
 ) -> Result<MailDetail, String> {
-    let (account_id, uid) = store
+    let (account_id, uid, folder) = store
         .email_refetch_info(id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "メールが見つかりません".to_string())?;
@@ -1536,7 +1536,7 @@ pub async fn mail_refetch(
         .map_err(|e| format!("資格情報を取得できません: {e}"))?;
 
     let parsed = tauri::async_runtime::spawn_blocking(move || {
-        imap_sync::fetch_message(&host, port, &login_user, &password, uid as u32)
+        imap_sync::fetch_message(&host, port, &login_user, &password, &folder, uid as u32)
     })
     .await
     .map_err(|e| e.to_string())??;

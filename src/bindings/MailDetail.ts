@@ -37,6 +37,11 @@ body_html: string | null, has_attachments: boolean,
  */
 body_compacted: boolean, 
 /**
+ * 本文の取得状態: 'present'（全文あり）/ 'evicted'（要約のみ）/ 'absent'（メタのみ・未取得）。
+ * 'absent' は開いた時にサーバから本文を取得する（docs/SYNC.md §3.6）。
+ */
+body_state: string, 
+/**
  * 差出人がグリーン（本人 or 認定ドメイン）か。バッジ・認定ボタン用。docs/GREEN_DOMAINS.md。
  */
 is_green: boolean, 

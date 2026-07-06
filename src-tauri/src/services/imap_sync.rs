@@ -897,13 +897,32 @@ pub fn fetch_attachment(
     })
 }
 
+/// フォルダのローカルタグ（inbox/sent/…）から実際の IMAP メールボックス名を解決する。
+/// inbox は "INBOX"。それ以外は LIST して特殊用途/名前で照合（sync と同じ検出）。
+fn imap_mailbox_for_tag(session: &mut ImapSession, tag: &str) -> Result<String, String> {
+    if tag == "inbox" {
+        return Ok("INBOX".to_string());
+    }
+    let spec = SYNC_FOLDERS
+        .iter()
+        .find(|s| s.tag == tag)
+        .ok_or_else(|| format!("未知のフォルダ: {tag}"))?;
+    let names = session
+        .list(Some(""), Some("*"))
+        .map_err(|e| e.to_string())?;
+    detect_mailbox(names.iter(), spec)
+        .ok_or_else(|| format!("フォルダ '{tag}' がサーバに見つかりません"))
+}
+
 /// 指定 UID のメッセージ全体を再取得して解析する（本文の全文キャッシュ復元用）。
-/// 要約保存に落とした本文をサーバーから取り直すときに使う。
+/// 要約保存('evicted')・メタのみ('absent')の本文をサーバーから取り直すときに使う。
+/// `folder` はローカルタグ（inbox/sent/…）。正しい IMAP メールボックスを select する。
 pub fn fetch_message(
     host: &str,
     port: u16,
     user: &str,
     password: &str,
+    folder: &str,
     uid: u32,
 ) -> Result<parser::ParsedEmail, String> {
     let tls = native_tls::TlsConnector::builder()
@@ -913,7 +932,8 @@ pub fn fetch_message(
     let mut session = client
         .login(user, password)
         .map_err(|(e, _)| e.to_string())?;
-    session.select("INBOX").map_err(|e| e.to_string())?;
+    let mailbox = imap_mailbox_for_tag(&mut session, folder)?;
+    session.select(&mailbox).map_err(|e| e.to_string())?;
 
     let msgs = session
         .uid_fetch(uid.to_string(), "(BODY[])")

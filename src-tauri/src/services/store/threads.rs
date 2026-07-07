@@ -625,13 +625,18 @@ pub fn process_pending_at(
         rows
     };
     let total = ids.len();
-    for chunk in ids.chunks(200) {
+    // 小さめのチャンク＋チャンク間で書き込みロックを一瞬手放す。メタ索引バックフィルで
+    // 大量の未スレッド行が来ても、UI の書き込み（既読化・会話を開く際の割当）が割り込めるように
+    // する（WAL の書き込みは 1 つずつ。長いトランザクションで握り続けると UI が待たされる）。
+    for chunk in ids.chunks(50) {
         let tx = conn.transaction()?;
         for id in chunk {
             assign_thread(&tx, *id)?;
             super::emails::maintain_folder_rep_on_insert(&tx, *id)?;
         }
         tx.commit()?;
+        // 次のチャンクまで少し待って、待機中の UI 書き込みにロックを譲る（背景処理なので遅くて可）。
+        std::thread::sleep(std::time::Duration::from_millis(15));
     }
     Ok(total)
 }

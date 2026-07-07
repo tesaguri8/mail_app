@@ -37,6 +37,14 @@ has_quotes: boolean, is_read: boolean,
  */
 is_starred: boolean, 
 /**
+ * 差出人がグリーン（住所録本人 or ドメインがグリーン集合）か。折りたたみバブルの緑バッジ用。
+ */
+is_green: boolean, 
+/**
+ * 差出人が住所録のお気に入り（VIP）か。折りたたみバブルの VIP バッジ用。
+ */
+is_vip: boolean, 
+/**
  * 保存フォルダ（'inbox' | 'sent' | ...）。
  */
 folder: string | null, 

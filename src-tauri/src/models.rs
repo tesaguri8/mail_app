@@ -676,6 +676,10 @@ pub struct ThreadMessage {
     pub is_read: bool,
     /// スター付きか（折りたたみバブルの★バッジ用）。
     pub is_starred: bool,
+    /// 差出人がグリーン（住所録本人 or ドメインがグリーン集合）か。折りたたみバブルの緑バッジ用。
+    pub is_green: bool,
+    /// 差出人が住所録のお気に入り（VIP）か。折りたたみバブルの VIP バッジ用。
+    pub is_vip: bool,
     /// 保存フォルダ（'inbox' | 'sent' | ...）。
     pub folder: Option<String>,
     /// スレッド割当が手動か（'auto' | 'manual'）。

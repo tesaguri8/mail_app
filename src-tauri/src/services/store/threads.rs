@@ -340,6 +340,9 @@ fn map_thread_message(r: &rusqlite::Row) -> rusqlite::Result<ThreadMessage> {
         has_quotes: r.get::<_, i64>(14)? != 0,
         is_read: r.get::<_, i64>(15)? != 0,
         is_starred: r.get::<_, i64>(18)? != 0,
+        // グリーン／VIP は差出人アドレス基準で load_thread_view 側でまとめて付与する。
+        is_green: false,
+        is_vip: false,
         folder: r.get(16)?,
         thread_assignment: r.get(17)?,
     })
@@ -414,6 +417,17 @@ impl Store {
             if m.from_name.is_none() {
                 m.from_name = contact_name_for(conn, m.from_address.as_deref())?;
             }
+        }
+        // グリーン／VIP バッジ（差出人ドメインがグリーン集合 or 住所録本人／お気に入り）を付与する。
+        // 折りたたみバブルのラベルに一覧・詳細と同じ基準でバッジを出すため（スレッドは少数）。
+        let green_set = super::greendomain::green_domain_set(conn)?;
+        for m in messages.iter_mut() {
+            let addr = m.from_address.as_deref();
+            m.is_green = super::greendomain::address_is_green(conn, &green_set, addr)?;
+            m.is_vip = match addr.map(str::trim).filter(|s| !s.is_empty()) {
+                Some(a) => super::greendomain::address_is_vip(conn, a)?,
+                None => false,
+            };
         }
         // ② 内容照合による引用剥がし（形式非依存。docs/THREADING.md §2 優先3）。
         // 同スレッドの「より古いメールの先頭行」をアンカーに、ヒューリスティックで取り切れなかった

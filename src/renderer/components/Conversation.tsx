@@ -5,6 +5,8 @@ import {
   ChevronDown,
   ChevronUp,
   Forward,
+  Gem,
+  LeafyGreen,
   Mail,
   MailOpen,
   MoreHorizontal,
@@ -25,6 +27,7 @@ import type { ThreadMessage } from '@bindings/ThreadMessage';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { TagSummary } from '@bindings/TagSummary';
 import { mailGet } from '../services/mail';
+import { greenDomainAdd, greenDomainWarn } from '../services/green';
 import { threadRename, threadSplit, threadView } from '../services/threads';
 import { parseAddress } from '../utils/address';
 import { getBubbleHtml, PREFS_EVENT } from '../config/prefs';
@@ -112,6 +115,27 @@ function Bubble({
     handlers.onSetRead(m.id, !read);
     setRead((v) => !v);
   };
+  // グリーン認定/解除（差出人ドメイン単位）を折りたたみバブルからも操作する。
+  // null＝ThreadMessage の is_green を使う（メール切替でリセット）。
+  const [greenOverride, setGreenOverride] = useState<boolean | null>(null);
+  useEffect(() => setGreenOverride(null), [m.id, m.is_green]);
+  const isGreen = greenOverride ?? m.is_green;
+  const senderDomain =
+    !out && (m.from_address ?? '').includes('@')
+      ? (m.from_address ?? '').split('@').pop()?.trim().toLowerCase() || ''
+      : '';
+  const toggleGreen = async () => {
+    if (!senderDomain) return;
+    const next = !isGreen;
+    try {
+      if (next) await greenDomainAdd(senderDomain);
+      else await greenDomainWarn(senderDomain);
+      setGreenOverride(next);
+      handlers.onGreenChange?.();
+    } catch {
+      /* noop */
+    }
+  };
   // 展開時に読む詳細（添付・HTML・画像は従来の MailBody を再利用）。
   const [detail, setDetail] = useState<MailDetail | null>(null);
   useEffect(() => {
@@ -168,6 +192,20 @@ function Bubble({
         if (menu) handlers.onTag(m.id, menu.x, menu.y);
       },
     },
+    ...(senderDomain
+      ? [
+          {
+            key: 'green',
+            label: isGreen
+              ? t('green.uncertify', { domain: senderDomain })
+              : t('green.certify', { domain: senderDomain }),
+            Icon: LeafyGreen,
+            onClick: () => {
+              void toggleGreen();
+            },
+          },
+        ]
+      : []),
     {
       key: 'spam',
       label: t('ctx.markSpam'),
@@ -199,7 +237,7 @@ function Bubble({
     <div className={`flex ${out ? 'justify-end' : 'justify-start'}`}>
       <div
         data-msg-content
-        className={`min-w-0 ${expanded ? 'w-full' : 'max-w-[82%]'}`}
+        className={`group/bubble min-w-0 ${expanded ? 'w-full' : 'max-w-[82%]'}`}
         onContextMenu={(e) => {
           // 文字選択中はコピー等のネイティブメニューを優先する。
           if (window.getSelection()?.toString()) return;
@@ -213,10 +251,45 @@ function Bubble({
             out ? 'justify-end' : 'justify-start'
           }`}
         >
+          {!out && m.is_vip && (
+            <Gem
+              size={11}
+              className="shrink-0 fill-sky-300/30 text-sky-300"
+              aria-label={t('filter.vip')}
+            />
+          )}
+          {!out && senderDomain && isGreen && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                void toggleGreen();
+              }}
+              title={t('green.uncertify', { domain: senderDomain })}
+              aria-label={t('green.uncertify', { domain: senderDomain })}
+              aria-pressed={true}
+              className="flex shrink-0 items-center text-emerald-400 hover:text-emerald-300"
+            >
+              <LeafyGreen size={11} />
+            </button>
+          )}
           <span className="truncate font-medium text-white/60">{senderName(m, you)}</span>
           <span className="shrink-0">{formatTime(m.date)}</span>
           {!read && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400" />}
           {starred && <Star size={11} className="shrink-0 fill-amber-300 text-amber-300" />}
+          {/* 迷惑メールとしてマーク（受信のみ）。ホバーで出す（普段はチャットのラベルを汚さない）。 */}
+          {!out && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handlers.onMarkSpam(m.id);
+              }}
+              title={t('ctx.markSpam')}
+              aria-label={t('ctx.markSpam')}
+              className="flex shrink-0 items-center text-white/40 opacity-0 transition-opacity hover:text-rose-300 group-hover/bubble:opacity-100"
+            >
+              <ThumbsDown size={11} />
+            </button>
+          )}
         </div>
 
         {expanded && detail ? (

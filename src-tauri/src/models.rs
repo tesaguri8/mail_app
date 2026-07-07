@@ -66,7 +66,11 @@ pub struct AccountSummary {
     /// 既定署名の ID（未設定なら None）。
     pub signature_id: Option<i32>,
     pub unread_count: i32,
+    /// 受信トレイ(inbox)にローカル保存済みのメール件数（未読数と基準を揃える）。
     pub total_count: i32,
+    /// サーバ側の受信トレイ総数（inbox の IMAP EXISTS）。
+    /// 左下「ローカル/サーバ」表示（取り込みの完成度）に使う。未同期なら 0。
+    pub server_total_count: i32,
 }
 
 /// 署名（差出人ごとに使い回せる本文）。
@@ -616,6 +620,9 @@ pub struct MailDetail {
     pub has_attachments: bool,
     /// 容量節約のため本文を要約保存に落としてある（clean_body のみ）。全文はサーバー再取得可。
     pub body_compacted: bool,
+    /// 本文の取得状態: 'present'（全文あり）/ 'evicted'（要約のみ）/ 'absent'（メタのみ・未取得）。
+    /// 'absent' は開いた時にサーバから本文を取得する（docs/SYNC.md §3.6）。
+    pub body_state: String,
     /// 差出人がグリーン（本人 or 認定ドメイン）か。バッジ・認定ボタン用。docs/GREEN_DOMAINS.md。
     pub is_green: bool,
     /// 差出人が住所録のお気に入り（VIP／Gem）連絡先か。バッジ用。

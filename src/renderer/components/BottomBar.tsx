@@ -15,6 +15,7 @@ export function BottomBar({
   mode,
   onModeChange,
   mailTotal,
+  mailServerTotal,
 }: {
   /** 背景のかぶせ（暗さ）。0〜BAR_MAX。 */
   dim: number;
@@ -25,8 +26,10 @@ export function BottomBar({
   /** スライダーの操作対象（背景の濃さ / 文字色）。 */
   mode: 'backdrop' | 'ink';
   onModeChange: (m: 'backdrop' | 'ink') => void;
-  /** 表示中アカウントのメール総数（メールモード時のみ。他は null）。 */
+  /** 表示中アカウントのローカル保存件数（メールモード時のみ。他は null）。 */
   mailTotal?: number | null;
+  /** 同じ集計のサーバ総数（IMAP EXISTS 合計）。分かれば「ローカル/サーバ」表示にする。 */
+  mailServerTotal?: number | null;
 }) {
   const { t } = useTranslation();
   const value = mode === 'ink' ? ink : dim;
@@ -44,7 +47,12 @@ export function BottomBar({
       <div className="flex-1">
         {mailTotal != null && (
           <span className="tabular-nums text-white/45">
-            {t('mailbox.accountTotal', { total: mailTotal.toLocaleString() })}
+            {mailServerTotal != null && mailServerTotal > 0
+              ? t('mailbox.accountTotalOf', {
+                  shown: mailTotal.toLocaleString(),
+                  total: mailServerTotal.toLocaleString(),
+                })
+              : t('mailbox.accountTotal', { total: mailTotal.toLocaleString() })}
           </span>
         )}
       </div>

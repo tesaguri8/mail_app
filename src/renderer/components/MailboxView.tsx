@@ -168,6 +168,10 @@ export function MailboxView({
   const pendingOpen = useRef<number | null>(initialMailId);
   // 一覧はスレッド単位（代表＋件数）。検索結果も同じ形へ写像して扱いを揃える。
   const [mails, setMails] = useState<ThreadListItem[]>([]);
+  // 現在の読み込み件数を常に最新で保持（同期イベントの購読は再購読しないため、
+  // クロージャの古い mails を避けて ref で参照する）。
+  const mailsLenRef = useRef(0);
+  mailsLenRef.current = mails.length;
   const [opened, setOpened] = useState<MailDetail | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [progress, setProgress] = useState<SyncProgress | null>(null);
@@ -402,21 +406,25 @@ export function MailboxView({
   const [scrollHint, setScrollHint] = useState<{ ratio: number; label: string } | null>(null);
   const scrollHintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const loadMails = () => {
+  // keepScroll: 同期後の再読込などで、すでに読み込んだページ数（＝スクロール位置）を
+  // 保つため、先頭ページに戻さず現在の読み込み件数ぶんをまとめて引き直す。既定は
+  // 先頭 1 ページ（フォルダ/アカウント切替時は先頭から表示したいため）。
+  const loadMails = (opts?: { keepScroll?: boolean }) => {
     const token = ++loadTokenRef.current;
     pageKeyRef.current = `${selected}:${folder}`;
     loadingMoreRef.current = false;
+    const count = opts?.keepScroll ? Math.max(PAGE_SIZE, mailsLenRef.current) : PAGE_SIZE;
     // 総数（スレッド件数）も取得して「表示 X / 全 Y」に使う。
     threadCount(queryAccount, folder)
       .then((n) => {
         if (loadTokenRef.current === token) setThreadTotal(n);
       })
       .catch(() => setThreadTotal(null));
-    return threadList(queryAccount, folder, PAGE_SIZE, 0)
+    return threadList(queryAccount, folder, count, 0)
       .then((rows) => {
         if (loadTokenRef.current !== token) return;
         setMails(rows);
-        setHasMore(rows.length >= PAGE_SIZE);
+        setHasMore(rows.length >= count);
       })
       .catch(() => undefined);
   };
@@ -495,8 +503,12 @@ export function MailboxView({
 
   // 自動同期の完了で一覧を再読み込み（手動同期中は onSync 側が再読込するのでスキップ）。
   useEffect(() => {
-    const onSynced = () => {
-      if (!syncing && selected != null) loadMails();
+    const onSynced = (e: Event) => {
+      if (syncing || selected == null) return;
+      // 新着が保存された時だけ一覧を更新（読み込み済みの位置は保持）。新着ゼロなら
+      // 再取得しない＝スクロール中に先頭ページ（最新＝2026）へ巻き戻る「ループ」を防ぐ。
+      const stored = (e as CustomEvent<{ stored?: number }>).detail?.stored ?? 0;
+      if (stored > 0) loadMails({ keepScroll: true });
     };
     window.addEventListener(MAIL_SYNCED_EVENT, onSynced);
     return () => window.removeEventListener(MAIL_SYNCED_EVENT, onSynced);
@@ -613,7 +625,8 @@ export function MailboxView({
         stored += r.stored;
       }
       setStatus(t('mailbox.result', { fetched, stored }));
-      await loadMails();
+      // 手動同期後も読み込み済みの位置を保つ（先頭ページへ巻き戻さない）。
+      await loadMails({ keepScroll: true });
     } catch (e) {
       setStatus('✕ ' + String(e));
     } finally {

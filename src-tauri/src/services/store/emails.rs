@@ -145,10 +145,17 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
         .as_deref()
         .filter(|s| !s.trim().is_empty())
         .map(crate::services::quotes::fingerprint);
+    // 本文の取得状態を本文列の有無から導出する（docs/SYNC.md §3.6）。本文3列がすべて空＝
+    // ヘッダのみ取り込んだ「メタのみ行」＝'absent'（開いた時にサーバから本文取得）。本文が
+    // あれば 'present'。※要約落ち('evicted')は挿入ではなく storage.rs の更新側で付ける。
+    let has_body = e.clean_body.as_deref().is_some_and(|s| !s.trim().is_empty())
+        || e.body_plain.as_deref().is_some_and(|s| !s.is_empty())
+        || e.body_html.as_deref().is_some_and(|s| !s.is_empty());
+    let body_state = if has_body { "present" } else { "absent" };
     let changed = conn.execute(
         "INSERT OR IGNORE INTO emails
-           (account_id, message_id, canonical_key, subject, from_address, from_name, to_addresses, to_name, cc_addresses, date, date_ts, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read, in_reply_to, references_ids, thread_index, raw_headers, body_fingerprint, reply_to)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
+           (account_id, message_id, canonical_key, subject, from_address, from_name, to_addresses, to_name, cc_addresses, date, date_ts, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read, in_reply_to, references_ids, thread_index, raw_headers, body_fingerprint, reply_to, body_state)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)",
         params![
             e.account_id,
             e.message_id,
@@ -176,6 +183,7 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
             e.raw_headers,
             body_fingerprint,
             e.reply_to,
+            body_state,
         ],
     )?;
     if changed == 0 {
@@ -601,7 +609,8 @@ impl Store {
         let Some(fts) = build_fts_query(query) else {
             return Ok(Vec::new());
         };
-        let conn = self.conn.lock().unwrap();
+        // 参照専用接続（検索の読み取りは書き込みに待たされない）。
+        let conn = self.read_conn.lock().unwrap();
         let acct = if account_id.is_some() {
             "e.account_id = ?4 AND "
         } else {
@@ -657,7 +666,8 @@ impl Store {
         limit: i64,
         offset: i64,
     ) -> rusqlite::Result<Vec<ThreadListItem>> {
-        let conn = self.conn.lock().unwrap();
+        // 参照専用接続（一覧の読み取りは書き込みに待たされない）。
+        let conn = self.read_conn.lock().unwrap();
         let acct = if account_id.is_some() {
             "AND account_id = ?4"
         } else {
@@ -752,7 +762,7 @@ impl Store {
     /// フォルダ内のスレッド総数（代表フラグ is_folder_rep=1 の件数）。一覧の「表示/全件」表示用。
     /// `account_id` が None なら全アカウント横断。部分索引で高速。
     pub fn thread_count(&self, account_id: Option<i64>, folder: &str) -> rusqlite::Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.read_conn.lock().unwrap();
         match account_id {
             Some(a) => conn.query_row(
                 "SELECT count(*) FROM emails WHERE folder = ?1 AND account_id = ?2 AND is_folder_rep = 1",
@@ -1060,10 +1070,11 @@ impl Store {
 
     /// メール本文の取得（表示用）。差出人/宛先の表示名は住所録から解決する。
     pub fn get_email(&self, id: i64) -> rusqlite::Result<Option<MailDetail>> {
-        let conn = self.conn.lock().unwrap();
+        // 参照専用接続（書き込みに待たされない）。
+        let conn = self.read_conn.lock().unwrap();
         let detail = conn
             .query_row(
-                "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id, from_name, to_name, account_id, cc_addresses, reply_to
+                "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id, from_name, to_name, account_id, cc_addresses, reply_to, COALESCE(body_state,'present')
                  FROM emails WHERE id = ?1",
                 params![id],
                 |r| {
@@ -1090,6 +1101,7 @@ impl Store {
                         body_html,
                         has_attachments: r.get::<_, i64>(9)? != 0,
                         body_compacted: r.get::<_, i64>(10)? != 0,
+                        body_state: r.get::<_, String>(17)?,
                         is_green: false,
                         is_vip: false,
                     })
@@ -1116,17 +1128,18 @@ impl Store {
         Ok(Some(d))
     }
 
-    /// 全文再取得に必要な情報（親メールの account_id と IMAP UID）。
-    /// UID が None のメールは再取得不可（要再同期）。
+    /// 全文再取得に必要な情報（親メールの account_id / IMAP UID / フォルダ）。
+    /// UID が None のメールは再取得不可（要再同期）。フォルダは正しい IMAP メールボックスを
+    /// select するために使う（従来 INBOX 決め打ちで送信済/迷惑の再取得が壊れていた）。
     pub fn email_refetch_info(
         &self,
         email_id: i64,
-    ) -> rusqlite::Result<Option<(i64, Option<i64>)>> {
+    ) -> rusqlite::Result<Option<(i64, Option<i64>, String)>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT account_id, uid FROM emails WHERE id = ?1",
+            "SELECT account_id, uid, COALESCE(folder,'inbox') FROM emails WHERE id = ?1",
             params![email_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()
     }
@@ -1146,7 +1159,8 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE emails
-             SET body_plain = ?1, clean_body = ?2, body_html_z = ?3, body_html = NULL, body_compacted = 0
+             SET body_plain = ?1, clean_body = ?2, body_html_z = ?3, body_html = NULL,
+                 body_compacted = 0, body_state = 'present'
              WHERE id = ?4",
             params![body_plain, clean_body, body_html_z, id],
         )?;
@@ -1321,24 +1335,19 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::store::migrations;
-    use rusqlite::Connection;
-    use std::path::PathBuf;
-    use std::sync::Mutex;
 
     fn test_store() -> Store {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        migrations::run(&conn).unwrap();
-        conn.execute(
-            "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1,'a@b','i','s')",
-            [],
-        )
-        .unwrap();
-        Store {
-            conn: Mutex::new(conn),
-            path: Mutex::new(PathBuf::new()),
-        }
+        let store = Store::open_in_memory_for_test();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1,'a@b','i','s')",
+                [],
+            )
+            .unwrap();
+        store
     }
 
     fn seed(store: &Store, subject: &str, from: &str, body: &str, folder: &str, key: &str) {

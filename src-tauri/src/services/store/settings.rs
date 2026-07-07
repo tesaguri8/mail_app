@@ -142,17 +142,10 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use super::super::migrations;
     use super::*;
-    use rusqlite::Connection;
 
     fn store() -> Store {
-        let conn = Connection::open_in_memory().unwrap();
-        migrations::run(&conn).unwrap();
-        Store {
-            conn: std::sync::Mutex::new(conn),
-            path: std::sync::Mutex::new(std::path::PathBuf::from(":memory:")),
-        }
+        Store::open_in_memory_for_test()
     }
 
     #[test]

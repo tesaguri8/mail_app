@@ -184,23 +184,19 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::Connection;
-    use std::path::PathBuf;
-    use std::sync::Mutex;
 
     fn test_store() -> Store {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        super::super::migrations::run(&conn).unwrap();
-        conn.execute(
-            "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1,'me@x','i','s')",
-            [],
-        )
-        .unwrap();
-        Store {
-            conn: Mutex::new(conn),
-            path: Mutex::new(PathBuf::from(":memory:")),
-        }
+        let store = Store::open_in_memory_for_test();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1,'me@x','i','s')",
+                [],
+            )
+            .unwrap();
+        store
     }
 
     fn add_contact(store: &Store, name: &str, email: &str, favorite: bool) {

@@ -20,6 +20,10 @@ const SAFETY_MAX: usize = 2000;
 /// 「フリーズに見える」のを防ぐ（大きいと一括DL中に無反応になる）。往復回数と
 /// 応答性のバランスで 50 件。
 const CHUNK: usize = 50;
+/// 全件メタデータ索引（docs/SYNC.md §3.6）の 1 同期あたりの取得上限（ヘッダのみ）。
+/// 「古いのは急がない」ので少しずつ。UI の快適さを優先し控えめに（挿入→process_pending の
+/// スレッド割当が書き込みロックを取るため、多いと UI 操作が待たされる）。定期同期で徐々に埋める。
+const BACKFILL_PER_SYNC: usize = 400;
 
 /// 同期範囲（accounts.sync_window をパース）。
 /// "n50"=最新50件 / "3d"=3日 / "30d" / "3m" / "1y" / "all"
@@ -221,33 +225,43 @@ fn run_sync(
     progress: &dyn Fn(&str, i32, i32),
     cancel: &AtomicBool,
 ) -> Result<(), String> {
-    // 受信箱（必須）。
-    sync_folder(
-        session, conn, account_id, "INBOX", "inbox", window, result, progress, cancel,
-    )?;
-
-    // その他の標準フォルダ（存在すれば best-effort。無ければスキップ）。
-    // 中断要求があれば以降のフォルダはスキップして終了する。
-    if !is_cancelled(cancel) {
-        match session.list(Some(""), Some("*")) {
-            Ok(names) => {
-                let targets: Vec<(String, &'static str)> = SYNC_FOLDERS
-                    .iter()
-                    .filter_map(|spec| detect_mailbox(names.iter(), spec).map(|n| (n, spec.tag)))
-                    .collect();
-                drop(names);
-                for (mbox, tag) in targets {
-                    if is_cancelled(cancel) {
-                        break;
-                    }
-                    if let Err(e) = sync_folder(
-                        session, conn, account_id, &mbox, tag, window, result, progress, cancel,
-                    ) {
-                        log::warn!("フォルダ '{mbox}' ({tag}) の同期に失敗: {e}");
-                    }
+    // 同期対象フォルダ（受信箱＋存在する標準フォルダ）を一覧する。
+    // ※ names はセッションを借用するので、必要な名前を owned で取り出してから drop する。
+    let mut folders: Vec<(String, &'static str)> = vec![("INBOX".to_string(), "inbox")];
+    match session.list(Some(""), Some("*")) {
+        Ok(names) => {
+            for spec in SYNC_FOLDERS {
+                if let Some(n) = detect_mailbox(names.iter(), spec) {
+                    folders.push((n, spec.tag));
                 }
             }
-            Err(e) => log::warn!("フォルダ一覧の取得に失敗（受信箱のみ同期）: {e}"),
+            drop(names);
+        }
+        Err(e) => log::warn!("フォルダ一覧の取得に失敗（受信箱のみ同期）: {e}"),
+    }
+
+    // Pass 1: 新着（増分/初回）を全フォルダ分。新しいものを最優先で取り込む（docs/SYNC.md §3.6）。
+    for (mbox, tag) in &folders {
+        if is_cancelled(cancel) {
+            return Ok(());
+        }
+        if let Err(e) = sync_folder(
+            session, conn, account_id, mbox, tag, window, result, progress, cancel,
+        ) {
+            log::warn!("フォルダ '{mbox}' ({tag}) の同期に失敗: {e}");
+        }
+    }
+
+    // Pass 2: 古い側のメタデータ索引を少しずつ（低優先・再開可能・本文なし）。docs/SYNC.md §3.6。
+    // 新着（Pass 1）を全フォルダ終えてから走らせるので「新しいもの優先」を保つ。
+    for (mbox, tag) in &folders {
+        if is_cancelled(cancel) {
+            break;
+        }
+        if let Err(e) =
+            backfill_folder_metadata(session, conn, account_id, mbox, tag, result, progress, cancel)
+        {
+            log::warn!("フォルダ '{mbox}' ({tag}) のメタ索引に失敗: {e}");
         }
     }
     Ok(())
@@ -270,7 +284,10 @@ pub fn sync_account(
     slot: &Mutex<Option<ImapSession>>,
 ) -> Result<SyncResult, String> {
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
-    let _ = conn.execute_batch("PRAGMA foreign_keys=ON;");
+    // busy_timeout: WAL でも書き込みロックは 1 つ。UI/ローカル加工/他アカウント同期と競合した
+    // とき即エラー(database is locked)にせず待つ。他の接続（Store・process_pending）と揃える。
+    // メタ索引バックフィルで書き込みが増えて競合が顕在化したため必須。
+    let _ = conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
 
     let window: String = conn
         .query_row(
@@ -403,15 +420,18 @@ fn sync_folder(
 
     // フォルダ別の同期状態を更新（upsert）。
     conn.execute(
-        "INSERT INTO folder_sync (account_id, folder, uid_validity, last_uid)
-         VALUES (?1, ?2, ?3, ?4)
+        "INSERT INTO folder_sync (account_id, folder, uid_validity, last_uid, server_total)
+         VALUES (?1, ?2, ?3, ?4, ?5)
          ON CONFLICT(account_id, folder)
-         DO UPDATE SET uid_validity=excluded.uid_validity, last_uid=excluded.last_uid",
+         DO UPDATE SET uid_validity=excluded.uid_validity, last_uid=excluded.last_uid,
+                       server_total=excluded.server_total",
         params![
             account_id,
             tag,
             uid_validity.map(|v| v as i64),
-            c.max_uid as i64
+            c.max_uid as i64,
+            // サーバ総数（IMAP SELECT の EXISTS）。左下「ローカル/サーバ」表示に使う。
+            total as i64
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -463,6 +483,68 @@ fn fetch_uids(
     Ok(())
 }
 
+/// 解析結果 ParsedEmail を挿入用 NewEmail へ写す（フル取得・ヘッダのみ取得で共通）。
+/// ヘッダのみ解析なら本文3列は空になり、insert_email 側で body_state='absent' になる。
+fn parsed_to_new_email(
+    p: parser::ParsedEmail,
+    account_id: i64,
+    folder: &str,
+    seen: bool,
+    uid: Option<i64>,
+) -> NewEmail {
+    let attachments = p
+        .attachments
+        .into_iter()
+        .map(|a| NewAttachment {
+            part_index: a.part_index,
+            filename: a.filename,
+            content_type: a.content_type,
+            size: a.size,
+            kind: a.kind,
+            content_id: a.content_id,
+        })
+        .collect();
+    let quotes = p
+        .quotes
+        .into_iter()
+        .map(|q| NewQuote {
+            order: q.order,
+            quoted_from: q.quoted_from,
+            quoted_at: q.quoted_at,
+            fingerprint: q.fingerprint,
+        })
+        .collect();
+    NewEmail {
+        account_id,
+        message_id: p.message_id,
+        canonical_key: p.canonical_key,
+        subject: p.subject,
+        from_address: p.from_address,
+        from_name: p.from_name,
+        to_addresses: p.to_addresses,
+        to_name: p.to_name,
+        reply_to: p.reply_to,
+        cc_addresses: p.cc_addresses,
+        date: p.date,
+        date_ts: p.date_ts,
+        body_plain: p.body_plain,
+        clean_body: p.clean_body,
+        body_html: p.body_html,
+        auth_result: p.auth_result,
+        list_id: p.list_id,
+        in_reply_to: p.in_reply_to,
+        references_ids: p.references_ids,
+        thread_index: p.thread_index,
+        raw_headers: p.raw_headers,
+        quotes,
+        has_attachments: p.has_attachments,
+        is_read: seen,
+        uid,
+        folder: folder.to_string(),
+        attachments,
+    }
+}
+
 fn store_fetches<'a>(
     conn: &Connection,
     account_id: i64,
@@ -488,63 +570,133 @@ fn store_fetches<'a>(
             .iter()
             .any(|f| matches!(f, imap::types::Flag::Seen));
         if let Some(p) = parser::parse_message(raw) {
-            let attachments = p
-                .attachments
-                .into_iter()
-                .map(|a| NewAttachment {
-                    part_index: a.part_index,
-                    filename: a.filename,
-                    content_type: a.content_type,
-                    size: a.size,
-                    kind: a.kind,
-                    content_id: a.content_id,
-                })
-                .collect();
-            let quotes = p
-                .quotes
-                .into_iter()
-                .map(|q| NewQuote {
-                    order: q.order,
-                    quoted_from: q.quoted_from,
-                    quoted_at: q.quoted_at,
-                    fingerprint: q.fingerprint,
-                })
-                .collect();
-            let ne = NewEmail {
-                account_id,
-                message_id: p.message_id,
-                canonical_key: p.canonical_key,
-                subject: p.subject,
-                from_address: p.from_address,
-                from_name: p.from_name,
-                to_addresses: p.to_addresses,
-                to_name: p.to_name,
-                reply_to: p.reply_to,
-                cc_addresses: p.cc_addresses,
-                date: p.date,
-                date_ts: p.date_ts,
-                body_plain: p.body_plain,
-                clean_body: p.clean_body,
-                body_html: p.body_html,
-                auth_result: p.auth_result,
-                list_id: p.list_id,
-                in_reply_to: p.in_reply_to,
-                references_ids: p.references_ids,
-                thread_index: p.thread_index,
-                raw_headers: p.raw_headers,
-                quotes,
-                has_attachments: p.has_attachments,
-                is_read: seen,
-                uid,
-                folder: folder.to_string(),
-                attachments,
-            };
+            let ne = parsed_to_new_email(p, account_id, folder, seen, uid);
             match insert_email(conn, &ne).map_err(|e| e.to_string())? {
                 InsertOutcome::Inserted(_) => c.stored += 1,
                 InsertOutcome::Backfilled => c.backfilled += 1,
                 InsertOutcome::Unchanged => {}
             }
         }
+    }
+    Ok(())
+}
+
+/// メタのみ行の書き込み（BODY.PEEK[HEADER] をそのまま parse_message へ）。ヘッダのみなので
+/// 本文3列は空 → insert_email 側で body_state='absent'。canonical_key 等はフル取得と一致し、
+/// 後で本文取得しても同じ行に統合される（重複しない）。docs/SYNC.md §3.6。
+fn store_header_fetches<'a>(
+    conn: &Connection,
+    account_id: i64,
+    folder: &str,
+    msgs: impl Iterator<Item = &'a imap::types::Fetch>,
+    result: &mut SyncResult,
+) -> Result<(), String> {
+    for m in msgs {
+        let raw = match m.header() {
+            Some(h) => h,
+            None => continue,
+        };
+        let uid = m.uid.map(|u| u as i64);
+        let seen = m
+            .flags()
+            .iter()
+            .any(|f| matches!(f, imap::types::Flag::Seen));
+        if let Some(p) = parser::parse_message(raw) {
+            let ne = parsed_to_new_email(p, account_id, folder, seen, uid);
+            if let InsertOutcome::Inserted(_) = insert_email(conn, &ne).map_err(|e| e.to_string())? {
+                result.backfilled += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// このフォルダの全件メタ索引が完了した印を付ける（これ以上古い UID が無い）。
+fn mark_index_complete(conn: &Connection, account_id: i64, tag: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE folder_sync SET index_complete=1 WHERE account_id=?1 AND folder=?2",
+        params![account_id, tag],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 古い側のメタデータを少しずつ索引する（本文なし・再開可能）。docs/SYNC.md §3.6。
+/// フロンティア = ローカル保存済みの最小 UID。これ未満の UID を新しい方から
+/// BACKFILL_PER_SYNC 件だけヘッダ取得して挿入する。これ以上古い UID が無ければ完了印。
+/// 30 秒間隔の定期同期で呼ばれ、毎回少しずつ過去を埋める（アプリ再起動も DB を見て続き）。
+#[allow(clippy::too_many_arguments)]
+fn backfill_folder_metadata(
+    session: &mut ImapSession,
+    conn: &Connection,
+    account_id: i64,
+    imap_name: &str,
+    tag: &str,
+    result: &mut SyncResult,
+    progress: &dyn Fn(&str, i32, i32),
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    // 完了済みフォルダ・中断要求はスキップ。
+    let done: i64 = conn
+        .query_row(
+            "SELECT COALESCE(index_complete,0) FROM folder_sync WHERE account_id=?1 AND folder=?2",
+            params![account_id, tag],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if done != 0 || is_cancelled(cancel) {
+        return Ok(());
+    }
+    // フロンティア = 保存済み最小 UID（これより古い側を索引する）。まだ 1 件も無ければ次回に委ねる。
+    let frontier: Option<i64> = conn
+        .query_row(
+            "SELECT MIN(uid) FROM emails WHERE account_id=?1 AND folder=?2 AND uid IS NOT NULL",
+            params![account_id, tag],
+            |r| r.get::<_, Option<i64>>(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let Some(frontier) = frontier else {
+        return Ok(());
+    };
+    if frontier <= 1 {
+        mark_index_complete(conn, account_id, tag)?;
+        return Ok(());
+    }
+    session.select(imap_name).map_err(|e| e.to_string())?;
+    // フロンティア未満の UID（サーバに存在する古い側）を検索。空なら完了。
+    let mut older: Vec<u32> = session
+        .uid_search(format!("UID 1:{}", frontier - 1))
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|&u| (u as i64) < frontier)
+        .collect();
+    if older.is_empty() {
+        mark_index_complete(conn, account_id, tag)?;
+        return Ok(());
+    }
+    older.sort_unstable();
+    // フロンティア直下（新しい方）から BACKFILL_PER_SYNC 件だけ取る＝一覧が上から下へ連続して埋まる。
+    let take = older.len().min(BACKFILL_PER_SYNC);
+    let mut batch: Vec<u32> = older[older.len() - take..].to_vec();
+    batch.reverse(); // 新しい UID から取得・保存（表示順を揃える）。
+    let total = batch.len() as i32;
+    let mut got = 0i32;
+    for chunk in batch.chunks(CHUNK) {
+        if is_cancelled(cancel) {
+            break;
+        }
+        let set = chunk
+            .iter()
+            .map(|u| u.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        // BODY.PEEK[HEADER]: 既読フラグを立てず、ヘッダのみ取得（本文は取らない＝軽い）。
+        let msgs = session
+            .uid_fetch(set, "(UID FLAGS BODY.PEEK[HEADER])")
+            .map_err(|e| e.to_string())?;
+        store_header_fetches(conn, account_id, tag, msgs.iter(), result)?;
+        got += chunk.len() as i32;
+        progress(tag, got, total);
     }
     Ok(())
 }
@@ -748,13 +900,32 @@ pub fn fetch_attachment(
     })
 }
 
+/// フォルダのローカルタグ（inbox/sent/…）から実際の IMAP メールボックス名を解決する。
+/// inbox は "INBOX"。それ以外は LIST して特殊用途/名前で照合（sync と同じ検出）。
+fn imap_mailbox_for_tag(session: &mut ImapSession, tag: &str) -> Result<String, String> {
+    if tag == "inbox" {
+        return Ok("INBOX".to_string());
+    }
+    let spec = SYNC_FOLDERS
+        .iter()
+        .find(|s| s.tag == tag)
+        .ok_or_else(|| format!("未知のフォルダ: {tag}"))?;
+    let names = session
+        .list(Some(""), Some("*"))
+        .map_err(|e| e.to_string())?;
+    detect_mailbox(names.iter(), spec)
+        .ok_or_else(|| format!("フォルダ '{tag}' がサーバに見つかりません"))
+}
+
 /// 指定 UID のメッセージ全体を再取得して解析する（本文の全文キャッシュ復元用）。
-/// 要約保存に落とした本文をサーバーから取り直すときに使う。
+/// 要約保存('evicted')・メタのみ('absent')の本文をサーバーから取り直すときに使う。
+/// `folder` はローカルタグ（inbox/sent/…）。正しい IMAP メールボックスを select する。
 pub fn fetch_message(
     host: &str,
     port: u16,
     user: &str,
     password: &str,
+    folder: &str,
     uid: u32,
 ) -> Result<parser::ParsedEmail, String> {
     let tls = native_tls::TlsConnector::builder()
@@ -764,7 +935,8 @@ pub fn fetch_message(
     let mut session = client
         .login(user, password)
         .map_err(|(e, _)| e.to_string())?;
-    session.select("INBOX").map_err(|e| e.to_string())?;
+    let mailbox = imap_mailbox_for_tag(&mut session, folder)?;
+    session.select(&mailbox).map_err(|e| e.to_string())?;
 
     let msgs = session
         .uid_fetch(uid.to_string(), "(BODY[])")

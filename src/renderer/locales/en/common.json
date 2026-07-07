@@ -492,6 +492,7 @@
     "sync": "Sync",
     "syncing": "Syncing…",
     "accountTotal": "{{total}} messages",
+    "accountTotalOf": "{{shown}} / {{total}} messages",
     "allAccounts": "All accounts",
     "loadingMore": "Loading more…",
     "loadedOf": "Showing {{shown}} / {{total}} (scroll for more)",
@@ -569,6 +570,7 @@
     "w_2y": "2 years",
     "w_all": "All",
     "refetch": "Re-fetch full text",
+    "bodyAbsent": "Only this message's headers are indexed (full index). Fetching the body from the server…",
     "bodyCompacted": "To save space, this message's body is stored in compact form (only the new, unquoted part). Use \"Re-fetch full text\" to get the full body from the server.",
     "cc": "Cc",
     "composeTo": "New message to {{email}}"

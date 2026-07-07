@@ -313,18 +313,11 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use super::super::migrations;
     use super::*;
     use crate::models::ContactInput;
 
     fn store() -> Store {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        migrations::run(&conn).unwrap();
-        Store {
-            conn: std::sync::Mutex::new(conn),
-            path: std::sync::Mutex::new(std::path::PathBuf::from(":memory:")),
-        }
+        Store::open_in_memory_for_test()
     }
 
     #[test]

@@ -210,7 +210,7 @@ impl Store {
             }
             let conn = self.conn.lock().unwrap();
             conn.execute(
-                "UPDATE emails SET body_html_z = NULL, body_plain = NULL, body_compacted = 1 WHERE id = ?1",
+                "UPDATE emails SET body_html_z = NULL, body_plain = NULL, body_compacted = 1, body_state = 'evicted' WHERE id = ?1",
                 params![id],
             )?;
             drop(conn);
@@ -278,19 +278,9 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::store::migrations;
-    use rusqlite::Connection;
-    use std::path::PathBuf;
-    use std::sync::Mutex;
 
     fn test_store() -> Store {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        migrations::run(&conn).unwrap();
-        Store {
-            conn: Mutex::new(conn),
-            path: Mutex::new(PathBuf::new()),
-        }
+        Store::open_in_memory_for_test()
     }
 
     #[test]

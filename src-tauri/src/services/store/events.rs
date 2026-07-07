@@ -291,17 +291,9 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn mem_store() -> Store {
-        // in-memory DB でマイグレーションを流した Store を作る。
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        super::super::migrations::run(&conn).unwrap();
-        Store {
-            conn: std::sync::Mutex::new(conn),
-            path: std::sync::Mutex::new(PathBuf::from(":memory:")),
-        }
+        Store::open_in_memory_for_test()
     }
 
     fn ev(title: &str, start: &str, end: Option<&str>, all_day: bool) -> EventInput {

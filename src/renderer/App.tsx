@@ -115,6 +115,13 @@ export default function App() {
       : mailSel === 'all'
         ? accounts.reduce((s, a) => s + a.total_count, 0)
         : (accounts.find((a) => a.id === mailSel)?.total_count ?? null);
+  // 同じ集計のサーバ総数（IMAP EXISTS の合計）。左下を「ローカル/サーバ」表示にする（取り込み完成度）。
+  const mailServerTotal =
+    view !== 'mail'
+      ? null
+      : mailSel === 'all'
+        ? accounts.reduce((s, a) => s + a.server_total_count, 0)
+        : (accounts.find((a) => a.id === mailSel)?.server_total_count ?? null);
 
   // タイトルバーからの遷移。メールは特定メッセージを開かずに開く。
   // ホーム/メールは押すたびに同期（同じビューを再度押した時も含む）。
@@ -172,6 +179,7 @@ export default function App() {
           mode={barMode}
           onModeChange={setBarMode}
           mailTotal={mailTotal}
+          mailServerTotal={mailServerTotal}
         />
       </div>
     </SyncProvider>

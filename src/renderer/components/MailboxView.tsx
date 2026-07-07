@@ -18,6 +18,7 @@ import {
   StarOff,
   Tag,
   ThumbsDown,
+  ThumbsUp,
   Trash2,
   Undo2,
   UserRoundPlus,
@@ -39,6 +40,7 @@ import {
   mailGet,
   mailGetDraft,
   mailMarkSpam,
+  mailMarkNotSpam,
   mailSearch,
   mailSetRead,
   mailSetStarred,
@@ -869,6 +871,19 @@ export function MailboxView({
       /* noop */
     }
   };
+  // 非迷惑に戻す: 隔離解除＋ham 学習。迷惑フォルダ表示から外し受信箱へ戻す（楽観更新）。
+  const actMarkNotSpam = async () => {
+    const idSet = new Set(targetIds());
+    const ids = emailIdsFor(targetIds());
+    updateLists((prev) => prev.filter((m) => !idSet.has(m.id)));
+    if (opened && ids.includes(opened.id)) setOpened(null);
+    setSelectedIds(new Set());
+    try {
+      await mailMarkNotSpam(ids);
+    } catch {
+      /* noop */
+    }
+  };
 
   // 選択メール群へタグを付与/解除（楽観更新 → 永続化）。
   const applyTagDelta = async (ids: number[], tagId: number, add: boolean) => {
@@ -920,10 +935,12 @@ export function MailboxView({
           if (menu) setTagPicker({ x: menu.x, y: menu.y, ids: targetIds() });
         },
       },
-      // ゴミ箱内は「復元」、それ以外は「迷惑」。
+      // ゴミ箱内は「復元」、迷惑フォルダは「非迷惑に戻す」、それ以外は「迷惑」。
       inTrash
         ? { key: 'restore', label: t('ctx.restore'), Icon: RotateCcw, onClick: actRestore }
-        : { key: 'spam', label: t('ctx.markSpam'), Icon: ThumbsDown, onClick: actMarkSpam },
+        : folder === 'spam'
+          ? { key: 'notSpam', label: t('ctx.notSpam'), Icon: ThumbsUp, onClick: actMarkNotSpam }
+          : { key: 'spam', label: t('ctx.markSpam'), Icon: ThumbsDown, onClick: actMarkSpam },
       {
         key: 'delete',
         // ゴミ箱内は完全削除（復元不可）、それ以外はゴミ箱へ移動。
@@ -1340,6 +1357,17 @@ export function MailboxView({
         /* noop */
       }
     },
+    // 迷惑フォルダで「非迷惑に戻す」（隔離解除＋ham 学習）。表示から外し受信箱へ戻す。
+    onMarkNotSpam: async (id) => {
+      updateLists((prev) => prev.filter((m) => m.id !== id));
+      if (opened?.id === id) setOpened(null);
+      try {
+        await mailMarkNotSpam([id]);
+      } catch {
+        /* noop */
+      }
+    },
+    isSpam: folder === 'spam',
     // 特定のメッセージへ返信/転送（会話内のどのメールにも返信できる）。
     onReply: async (mode, messageId) => {
       try {

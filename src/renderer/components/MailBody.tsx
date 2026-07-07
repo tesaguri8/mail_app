@@ -20,6 +20,7 @@ import {
   Star,
   Tag,
   ThumbsDown,
+  ThumbsUp,
   X,
 } from 'lucide-react';
 import type { MailDetail } from '@bindings/MailDetail';
@@ -221,6 +222,7 @@ export function MailBody({
   onRemoveTag,
   onReply,
   onMarkSpam,
+  onMarkNotSpam,
   onAddContact,
   onEditContact,
   onComposeTo,
@@ -242,6 +244,8 @@ export function MailBody({
   onReply?: (mode: 'reply' | 'replyAll' | 'forward') => void;
   /** 迷惑としてマーク（学習＋隔離）。 */
   onMarkSpam?: () => void;
+  /** 非迷惑に戻す（隔離解除＋ham 学習）。迷惑フォルダ表示時に onMarkSpam の代わりに出す。 */
+  onMarkNotSpam?: () => void;
   /** ヘッダ/本文のメールアドレスから住所録へ追加（名前・メールを渡す）。 */
   onAddContact?: (name: string | null, email: string) => void;
   /** 登録済みアドレスの編集アイコンから、その連絡先を開く。 */
@@ -707,16 +711,27 @@ export function MailBody({
                 <LeafyGreen size={16} />
               </button>
             )}
-            {/* 迷惑としてマーク（学習＋隔離） */}
-            {onMarkSpam && (
+            {/* 迷惑としてマーク（学習＋隔離）／迷惑フォルダでは「非迷惑に戻す」 */}
+            {onMarkNotSpam ? (
               <button
-                onClick={onMarkSpam}
-                title={t('ctx.markSpam')}
-                aria-label={t('ctx.markSpam')}
-                className="flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-rose-300"
+                onClick={onMarkNotSpam}
+                title={t('ctx.notSpam')}
+                aria-label={t('ctx.notSpam')}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-emerald-300"
               >
-                <ThumbsDown size={16} />
+                <ThumbsUp size={16} />
               </button>
+            ) : (
+              onMarkSpam && (
+                <button
+                  onClick={onMarkSpam}
+                  title={t('ctx.markSpam')}
+                  aria-label={t('ctx.markSpam')}
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-rose-300"
+                >
+                  <ThumbsDown size={16} />
+                </button>
+              )
             )}
             {/* 全文をサーバーから再取得（要約保存の解除・本文キャッシュの復元） */}
             <button

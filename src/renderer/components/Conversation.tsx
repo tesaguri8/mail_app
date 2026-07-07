@@ -19,6 +19,7 @@ import {
   StarOff,
   Tag,
   ThumbsDown,
+  ThumbsUp,
   Trash2,
   X,
 } from 'lucide-react';
@@ -46,6 +47,10 @@ export interface ConversationHandlers {
   onTag: (id: number, x: number, y: number) => void;
   onRemoveTag: (id: number, tagId: number) => void;
   onMarkSpam: (id: number) => void;
+  /** 非迷惑に戻す（迷惑フォルダ表示時）。 */
+  onMarkNotSpam: (id: number) => void;
+  /** 迷惑フォルダを表示中か（true なら迷惑操作を「非迷惑に戻す」に切り替える）。 */
+  isSpam: boolean;
   /** 単一メールの既読/未読切替（バブルの右クリックメニューから）。 */
   onSetRead: (id: number, read: boolean) => void;
   /** 単一メールをゴミ箱へ。会話側は実行後に会話を再読込する。 */
@@ -206,12 +211,19 @@ function Bubble({
           },
         ]
       : []),
-    {
-      key: 'spam',
-      label: t('ctx.markSpam'),
-      Icon: ThumbsDown,
-      onClick: () => handlers.onMarkSpam(m.id),
-    },
+    handlers.isSpam
+      ? {
+          key: 'notSpam',
+          label: t('ctx.notSpam'),
+          Icon: ThumbsUp,
+          onClick: () => handlers.onMarkNotSpam(m.id),
+        }
+      : {
+          key: 'spam',
+          label: t('ctx.markSpam'),
+          Icon: ThumbsDown,
+          onClick: () => handlers.onMarkSpam(m.id),
+        },
     {
       key: 'delete',
       label: t('ctx.delete'),
@@ -276,20 +288,34 @@ function Bubble({
           <span className="shrink-0">{formatTime(m.date)}</span>
           {!read && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400" />}
           {starred && <Star size={11} className="shrink-0 fill-amber-300 text-amber-300" />}
-          {/* 迷惑メールとしてマーク（受信のみ）。ホバーで出す（普段はチャットのラベルを汚さない）。 */}
-          {!out && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                handlers.onMarkSpam(m.id);
-              }}
-              title={t('ctx.markSpam')}
-              aria-label={t('ctx.markSpam')}
-              className="flex shrink-0 items-center text-white/40 opacity-0 transition-opacity hover:text-rose-300 group-hover/bubble:opacity-100"
-            >
-              <ThumbsDown size={11} />
-            </button>
-          )}
+          {/* 迷惑メールとしてマーク（受信のみ）。ホバーで出す（普段はチャットのラベルを汚さない）。
+              迷惑フォルダ表示中は「非迷惑に戻す」に切り替える。 */}
+          {!out &&
+            (handlers.isSpam ? (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handlers.onMarkNotSpam(m.id);
+                }}
+                title={t('ctx.notSpam')}
+                aria-label={t('ctx.notSpam')}
+                className="flex shrink-0 items-center text-white/40 opacity-0 transition-opacity hover:text-emerald-300 group-hover/bubble:opacity-100"
+              >
+                <ThumbsUp size={11} />
+              </button>
+            ) : (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handlers.onMarkSpam(m.id);
+                }}
+                title={t('ctx.markSpam')}
+                aria-label={t('ctx.markSpam')}
+                className="flex shrink-0 items-center text-white/40 opacity-0 transition-opacity hover:text-rose-300 group-hover/bubble:opacity-100"
+              >
+                <ThumbsDown size={11} />
+              </button>
+            ))}
         </div>
 
         {expanded && detail ? (
@@ -306,7 +332,8 @@ function Bubble({
               onTag={(x, y) => handlers.onTag(m.id, x, y)}
               onRemoveTag={(tagId) => handlers.onRemoveTag(m.id, tagId)}
               onReply={(mode) => handlers.onReply(mode, m.id)}
-              onMarkSpam={() => handlers.onMarkSpam(m.id)}
+              onMarkSpam={handlers.isSpam ? undefined : () => handlers.onMarkSpam(m.id)}
+              onMarkNotSpam={handlers.isSpam ? () => handlers.onMarkNotSpam(m.id) : undefined}
               onAddContact={handlers.onAddContact}
               onEditContact={handlers.onEditContact}
               onComposeTo={handlers.onComposeTo}

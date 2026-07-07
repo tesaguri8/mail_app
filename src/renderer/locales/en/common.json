@@ -189,6 +189,7 @@
     "tags": "Tags…",
     "removeTag": "Remove this tag",
     "markSpam": "Mark as spam",
+    "notSpam": "Not spam",
     "delete": "Delete",
     "restore": "Restore",
     "deletePermanent": "Delete permanently",

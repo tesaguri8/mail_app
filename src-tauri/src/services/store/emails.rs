@@ -60,6 +60,22 @@ fn folder_key(folder: &str, canonical_key: &str) -> String {
     }
 }
 
+/// 一覧・件数クエリのフォルダ絞り込み述語を作る（docs/SPAM.md §8.2）。
+/// 手動隔離（is_junk=1）は実フォルダに関わらず「迷惑メール(spam)」の仮想フォルダへ集約する:
+///  - 迷惑ビュー（folder="spam"）: サーバ側 Junk（folder='spam'）＋ローカル隔離（is_junk=1）を表示。
+///  - それ以外のフォルダ（inbox 等）: 隔離済み（is_junk=1）は除外する。
+///
+/// これが無いと、手動マーク（is_junk=1・folder は元のまま）が受信箱の一覧クエリに
+/// 素通りして再読み込み/同期のたびに復活してしまう。
+/// `p` は列プレフィックス（"" / "e." / "t."）、`ph` はフォルダ値のプレースホルダ（"?1" 等）。
+fn folder_predicate(folder: &str, p: &str, ph: &str) -> String {
+    if folder == "spam" {
+        format!("({p}folder = {ph} OR {p}is_junk = 1)")
+    } else {
+        format!("{p}folder = {ph} AND {p}is_junk = 0")
+    }
+}
+
 /// 引用ブロック挿入用（内部）。message_quotes に対応。docs/THREADING.md §7。
 pub struct NewQuote {
     pub order: i64,
@@ -579,9 +595,10 @@ impl Store {
                     CASE WHEN emails.logical_thread_id IS NULL THEN 1
                          ELSE (SELECT count(*) FROM emails t WHERE t.logical_thread_id = emails.logical_thread_id)
                     END AS message_count
-             FROM emails WHERE {acct}folder = ?1
+             FROM emails WHERE {acct}{fp}
              ORDER BY date_ts DESC, id DESC LIMIT ?2 OFFSET ?3",
             known_vip = known_vip_cols("emails.from_address"),
+            fp = folder_predicate(folder, "", "?1"),
         );
         let mut stmt = conn.prepare(&sql)?;
         let mut rows: Vec<MailSummary> = match account_id {
@@ -626,7 +643,7 @@ impl Store {
                          PARTITION BY COALESCE(e.logical_thread_id, -e.id)
                          ORDER BY e.date_ts DESC, e.id DESC) AS rn
                 FROM email_fts JOIN emails e ON e.id = email_fts.rowid
-                WHERE email_fts MATCH ?1 AND {acct}e.folder = ?2
+                WHERE email_fts MATCH ?1 AND {acct}{fp}
              )
              SELECT e.id, e.subject, e.from_address, e.date, e.is_read, e.has_attachments,
                     substr(COALESCE(e.clean_body, e.body_plain, ''), 1, 140) AS preview,
@@ -642,6 +659,7 @@ impl Store {
              WHERE m.rn = 1
              ORDER BY e.date_ts DESC, e.id DESC LIMIT ?3",
             known_vip = known_vip_cols("e.from_address"),
+            fp = folder_predicate(folder, "e.", "?2"),
         );
         let mut stmt = conn.prepare(&sql)?;
         let mut rows: Vec<MailSummary> = match account_id {
@@ -680,7 +698,7 @@ impl Store {
         let sql = format!(
             "WITH page AS MATERIALIZED (
                 SELECT id, date_ts FROM emails
-                WHERE folder = ?1 {acct} AND is_folder_rep = 1
+                WHERE {fp_page} {acct} AND is_folder_rep = 1
                 ORDER BY date_ts DESC, id DESC
                 LIMIT ?2 OFFSET ?3
              )
@@ -697,14 +715,16 @@ impl Store {
                          ELSE (SELECT count(*) FROM emails t WHERE t.logical_thread_id = r.logical_thread_id) END AS msg_count,
                     CASE WHEN r.logical_thread_id IS NULL THEN (CASE WHEN r.is_read = 0 THEN 1 ELSE 0 END)
                          ELSE (SELECT count(*) FROM emails t INDEXED BY idx_emails_thread_folder
-                               WHERE t.logical_thread_id = r.logical_thread_id AND t.folder = ?1 AND t.is_read = 0) END AS unread_cnt,
+                               WHERE t.logical_thread_id = r.logical_thread_id AND {fp_sub} AND t.is_read = 0) END AS unread_cnt,
                     CASE WHEN r.logical_thread_id IS NULL THEN CAST(r.id AS TEXT)
                          ELSE (SELECT group_concat(t.id) FROM emails t INDEXED BY idx_emails_thread_folder
-                               WHERE t.logical_thread_id = r.logical_thread_id AND t.folder = ?1) END AS folder_ids
+                               WHERE t.logical_thread_id = r.logical_thread_id AND {fp_sub}) END AS folder_ids
              FROM page JOIN emails r ON r.id = page.id
              LEFT JOIN logical_threads lt ON lt.id = r.logical_thread_id
              ORDER BY page.date_ts DESC, page.id DESC",
             known_vip = known_vip_cols("r.from_address"),
+            fp_page = folder_predicate(folder, "", "?1"),
+            fp_sub = folder_predicate(folder, "t.", "?1"),
         );
         let mut stmt = conn.prepare(&sql)?;
         let map = |row: &rusqlite::Row| -> rusqlite::Result<ThreadListItem> {
@@ -763,14 +783,18 @@ impl Store {
     /// `account_id` が None なら全アカウント横断。部分索引で高速。
     pub fn thread_count(&self, account_id: Option<i64>, folder: &str) -> rusqlite::Result<i64> {
         let conn = self.read_conn.lock().unwrap();
+        // 一覧と同じ実効フォルダ絞り込み（迷惑隔離 is_junk を反映）。
+        let fp = folder_predicate(folder, "", "?1");
         match account_id {
             Some(a) => conn.query_row(
-                "SELECT count(*) FROM emails WHERE folder = ?1 AND account_id = ?2 AND is_folder_rep = 1",
+                &format!(
+                    "SELECT count(*) FROM emails WHERE {fp} AND account_id = ?2 AND is_folder_rep = 1"
+                ),
                 params![folder, a],
                 |r| r.get(0),
             ),
             None => conn.query_row(
-                "SELECT count(*) FROM emails WHERE folder = ?1 AND is_folder_rep = 1",
+                &format!("SELECT count(*) FROM emails WHERE {fp} AND is_folder_rep = 1"),
                 params![folder],
                 |r| r.get(0),
             ),
@@ -845,19 +869,23 @@ impl Store {
     /// 指定フォルダを空にする（全メールを完全削除）。`account_id` が None なら全アカウント。
     /// 削除件数を返す。ゴミ箱/迷惑メールの「空にする」で使う。
     pub fn empty_folder(&self, account_id: Option<i64>, folder: &str) -> rusqlite::Result<i32> {
+        // 「空にする」は一覧に見えているものを消す意味に揃える（迷惑フォルダなら is_junk 隔離分も対象）。
+        let fp = folder_predicate(folder, "", "?1");
         let ids: Vec<i64> = {
             let conn = self.conn.lock().unwrap();
             match account_id {
                 Some(a) => {
-                    let mut stmt = conn
-                        .prepare("SELECT id FROM emails WHERE folder = ?1 AND account_id = ?2")?;
+                    let mut stmt = conn.prepare(&format!(
+                        "SELECT id FROM emails WHERE {fp} AND account_id = ?2"
+                    ))?;
                     let v: Vec<i64> = stmt
                         .query_map(params![folder, a], |r| r.get(0))?
                         .collect::<rusqlite::Result<_>>()?;
                     v
                 }
                 None => {
-                    let mut stmt = conn.prepare("SELECT id FROM emails WHERE folder = ?1")?;
+                    let mut stmt =
+                        conn.prepare(&format!("SELECT id FROM emails WHERE {fp}"))?;
                     let v: Vec<i64> = stmt
                         .query_map(params![folder], |r| r.get(0))?
                         .collect::<rusqlite::Result<_>>()?;
@@ -1645,6 +1673,75 @@ mod tests {
         assert_eq!(a.unread_count, 1);
         assert!(!a.is_read);
         assert_eq!(a.email_ids.len(), 2);
+    }
+
+    /// 迷惑マーク（is_junk=1・folder は inbox のまま）は受信箱の一覧から外れ、迷惑ビューに現れる。
+    /// これが無いと再読み込み/同期のたびに受信箱へ復活してしまう（回帰防止）。
+    #[test]
+    fn junk_moves_thread_from_inbox_to_spam_view() {
+        let store = test_store();
+        let mk = |mid: &str, ts: i64| NewEmail {
+            account_id: 1,
+            message_id: Some(mid.into()),
+            canonical_key: mid.into(),
+            subject: Some("件名".into()),
+            from_address: Some("spammer@x".into()),
+            from_name: None,
+            to_addresses: None,
+            to_name: None,
+            reply_to: None,
+            cc_addresses: None,
+            date: Some(format!("2026-06-{:02}T10:00:00Z", ts)),
+            date_ts: Some(1_767_000_000 + ts * 86400),
+            body_plain: Some("body".into()),
+            clean_body: Some("body".into()),
+            body_html: None,
+            auth_result: None,
+            list_id: None,
+            in_reply_to: None,
+            references_ids: None,
+            thread_index: None,
+            raw_headers: None,
+            quotes: vec![],
+            has_attachments: false,
+            is_read: true,
+            uid: None,
+            folder: "inbox".into(),
+            attachments: vec![],
+        };
+        {
+            let conn = store.conn.lock().unwrap();
+            insert_email(&conn, &mk("a0@x", 1)).unwrap();
+            insert_email(&conn, &mk("b0@x", 2)).unwrap();
+        }
+        super::super::threads::process_pending_conn(&store.conn.lock().unwrap(), 1).unwrap();
+
+        // 初期: 受信箱に2件、迷惑は0件。
+        assert_eq!(store.list_threads(Some(1), "inbox", 50, 0).unwrap().len(), 2);
+        assert_eq!(store.thread_count(Some(1), "inbox").unwrap(), 2);
+        assert_eq!(store.list_threads(Some(1), "spam", 50, 0).unwrap().len(), 0);
+
+        // b を迷惑としてマーク（is_junk=1、folder は inbox のまま）。
+        let bid: i64 = {
+            let conn = store.conn.lock().unwrap();
+            conn.query_row("SELECT id FROM emails WHERE message_id='b0@x'", [], |r| r.get(0))
+                .unwrap()
+        };
+        store.set_emails_junk(&[bid], true).unwrap();
+
+        // 受信箱からは消え（1件）、迷惑ビューに現れる（1件）。
+        let inbox = store.list_threads(Some(1), "inbox", 50, 0).unwrap();
+        assert_eq!(inbox.len(), 1, "迷惑マークした b は受信箱から外れる");
+        assert_eq!(store.thread_count(Some(1), "inbox").unwrap(), 1);
+        let spam = store.list_threads(Some(1), "spam", 50, 0).unwrap();
+        assert_eq!(spam.len(), 1, "b は迷惑ビューに現れる");
+        assert_eq!(spam[0].id as i64, bid);
+        assert_eq!(store.thread_count(Some(1), "spam").unwrap(), 1);
+
+        // 非迷惑に戻すと受信箱へ復帰。
+        store.set_emails_junk(&[bid], false).unwrap();
+        assert_eq!(store.list_threads(Some(1), "inbox", 50, 0).unwrap().len(), 2);
+        assert_eq!(store.list_threads(Some(1), "spam", 50, 0).unwrap().len(), 0);
     }
 
     /// 取り込みと加工の分離: 取り込み直後はスレッド未束ね（各メール1行）。process_pending で束ねる。

@@ -189,6 +189,7 @@
     "tags": "タグ…",
     "removeTag": "このタグを外す",
     "markSpam": "迷惑メールに設定",
+    "notSpam": "非迷惑に戻す",
     "delete": "削除",
     "restore": "復元",
     "deletePermanent": "完全に削除",

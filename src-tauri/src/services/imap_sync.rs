@@ -284,7 +284,10 @@ pub fn sync_account(
     slot: &Mutex<Option<ImapSession>>,
 ) -> Result<SyncResult, String> {
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
-    let _ = conn.execute_batch("PRAGMA foreign_keys=ON;");
+    // busy_timeout: WAL でも書き込みロックは 1 つ。UI/ローカル加工/他アカウント同期と競合した
+    // とき即エラー(database is locked)にせず待つ。他の接続（Store・process_pending）と揃える。
+    // メタ索引バックフィルで書き込みが増えて競合が顕在化したため必須。
+    let _ = conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
 
     let window: String = conn
         .query_row(

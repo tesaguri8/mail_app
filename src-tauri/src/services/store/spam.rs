@@ -193,9 +193,7 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use super::super::migrations;
     use super::*;
-    use rusqlite::Connection;
 
     fn store_with_email() -> Store {
         let store = Store::open_in_memory_for_test();

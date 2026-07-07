@@ -241,10 +241,6 @@ impl Store {
 mod tests {
     use super::*;
     use crate::services::dataver;
-    use crate::services::store::migrations;
-    use rusqlite::Connection;
-    use std::path::PathBuf;
-    use std::sync::Mutex;
 
     fn test_store() -> Store {
         Store::open_in_memory_for_test()

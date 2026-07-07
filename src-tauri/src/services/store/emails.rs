@@ -1335,10 +1335,6 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::store::migrations;
-    use rusqlite::Connection;
-    use std::path::PathBuf;
-    use std::sync::Mutex;
 
     fn test_store() -> Store {
         let store = Store::open_in_memory_for_test();

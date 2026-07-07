@@ -142,9 +142,7 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use super::super::migrations;
     use super::*;
-    use rusqlite::Connection;
 
     fn store() -> Store {
         Store::open_in_memory_for_test()

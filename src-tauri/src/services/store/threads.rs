@@ -963,9 +963,7 @@ fn contact_name_for(conn: &Connection, address: Option<&str>) -> rusqlite::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::store::{insert_email, migrations, NewEmail};
-    use std::path::PathBuf;
-    use std::sync::Mutex;
+    use crate::services::store::{insert_email, NewEmail};
 
     fn test_store() -> Store {
         let store = Store::open_in_memory_for_test();

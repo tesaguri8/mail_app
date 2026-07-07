@@ -184,9 +184,6 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::Connection;
-    use std::path::PathBuf;
-    use std::sync::Mutex;
 
     fn test_store() -> Store {
         let store = Store::open_in_memory_for_test();

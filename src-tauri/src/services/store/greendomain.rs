@@ -313,7 +313,6 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use super::super::migrations;
     use super::*;
     use crate::models::ContactInput;
 

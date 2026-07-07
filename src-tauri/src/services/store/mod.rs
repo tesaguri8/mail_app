@@ -28,6 +28,10 @@ use std::sync::Mutex;
 /// 暗号化（SQLCipher）は後続でフィーチャ差し替え（PRAGMA key を追加）。
 pub struct Store {
     pub conn: Mutex<Connection>,
+    /// UI の参照専用接続。SQLite は WAL なら「書き込み中でも読み取り並行可」なので、読み取りを
+    /// 書き込み用 conn と別接続にすることで、背景の書き込み（同期・スレッド割当）に一切
+    /// 待たされない。一覧・会話・詳細などの純粋な読み取りはこちらを使う（query_only で保護）。
+    read_conn: Mutex<Connection>,
     /// 現在の mail.db パス。保存先の移動（relocate）で差し替わるため内部可変。
     path: Mutex<PathBuf>,
 }
@@ -44,8 +48,15 @@ impl Store {
             "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
         )?;
         migrations::run(&conn)?;
+        // 参照専用の別接続。WAL の読み取りは書き込みと並行できるので、UI の読み取りが
+        // 背景の書き込みに待たされない。query_only で誤って書き込まないよう保護する。
+        let read_conn = Connection::open(path)?;
+        read_conn.execute_batch(
+            "PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA query_only=ON;",
+        )?;
         let store = Self {
             conn: Mutex::new(conn),
+            read_conn: Mutex::new(read_conn),
             path: Mutex::new(path.to_path_buf()),
         };
         // 旧 TEXT 本文を一度だけ圧縮列へ移す（初回のみ実行、以降は no-op）。
@@ -77,6 +88,32 @@ impl Store {
     /// 現在の mail.db パス。
     pub fn path(&self) -> PathBuf {
         self.path.lock().unwrap().clone()
+    }
+
+    /// テスト用: 共有キャッシュのインメモリ DB で conn/read_conn を張る。名前付き共有
+    /// キャッシュにより両接続が同じ in-memory DB を見る（read_conn が conn の書き込みを
+    /// 読める）。名前は呼び出しごとに一意なのでテスト間でデータが混ざらない。
+    #[cfg(test)]
+    pub(crate) fn open_in_memory_for_test() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let name = format!(
+            "file:rondine_test_{}?mode=memory&cache=shared",
+            N.fetch_add(1, Ordering::Relaxed)
+        );
+        let flags = rusqlite::OpenFlags::default() | rusqlite::OpenFlags::SQLITE_OPEN_URI;
+        let conn = Connection::open_with_flags(&name, flags).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        migrations::run(&conn).unwrap();
+        let read_conn = Connection::open_with_flags(&name, flags).unwrap();
+        read_conn
+            .execute_batch("PRAGMA foreign_keys=ON; PRAGMA query_only=ON;")
+            .unwrap();
+        Self {
+            conn: Mutex::new(conn),
+            read_conn: Mutex::new(read_conn),
+            path: Mutex::new(PathBuf::new()),
+        }
     }
 
     /// mail.db と attachments を置いているフォルダ。
@@ -148,6 +185,15 @@ impl Store {
             .map_err(|e| e.to_string())?;
         *guard = newc;
         drop(guard);
+        // 参照専用接続も新DBへ差し替える（旧ファイルを消す前に。古い接続が閉じてロックが外れる）。
+        {
+            let rc = Connection::open(&new_db).map_err(|e| e.to_string())?;
+            rc.execute_batch(
+                "PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA query_only=ON;",
+            )
+            .map_err(|e| e.to_string())?;
+            *self.read_conn.lock().unwrap() = rc;
+        }
         *self.path.lock().unwrap() = new_db;
 
         // 6) 旧ファイルを削除（best-effort）。

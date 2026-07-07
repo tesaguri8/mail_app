@@ -198,23 +198,22 @@ mod tests {
     use rusqlite::Connection;
 
     fn store_with_email() -> Store {
-        let conn = Connection::open_in_memory().unwrap();
-        migrations::run(&conn).unwrap();
-        conn.execute(
-            "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1, 'a@b', 'i', 's')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO emails (id, account_id, canonical_key, from_address, subject, clean_body)
-             VALUES (1, 1, 'k1', 'x@spam.example', '当選', '無料 当選 しました')",
-            [],
-        )
-        .unwrap();
-        Store {
-            conn: std::sync::Mutex::new(conn),
-            path: std::sync::Mutex::new(std::path::PathBuf::from(":memory:")),
+        let store = Store::open_in_memory_for_test();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1, 'a@b', 'i', 's')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO emails (id, account_id, canonical_key, from_address, subject, clean_body)
+                 VALUES (1, 1, 'k1', 'x@spam.example', '当選', '無料 当選 しました')",
+                [],
+            )
+            .unwrap();
         }
+        store
     }
 
     #[test]

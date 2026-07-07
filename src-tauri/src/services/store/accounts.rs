@@ -142,7 +142,8 @@ impl Store {
     }
 
     pub fn list_accounts(&self) -> rusqlite::Result<Vec<AccountSummary>> {
-        let conn = self.conn.lock().unwrap();
+        // 参照専用接続（左下カウント等の読み取りは書き込みに待たされない）。
+        let conn = self.read_conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, email, display_name, imap_host, smtp_host, COALESCE(sync_window,'6m'),
                     COALESCE(full_window,'all'), COALESCE(body_window,'off'), signature_id,
@@ -246,13 +247,7 @@ mod tests {
     use std::sync::Mutex;
 
     fn test_store() -> Store {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        migrations::run(&conn).unwrap();
-        Store {
-            conn: Mutex::new(conn),
-            path: Mutex::new(PathBuf::new()),
-        }
+        Store::open_in_memory_for_test()
     }
 
     #[test]

@@ -349,24 +349,32 @@ impl Store {
     /// 指定メールが属する論理スレッドの会話（時系列）を返す。
     /// スレッド未割当のメール（旧データ）はここで遅延割当する。
     pub fn thread_view(&self, email_id: i64) -> rusqlite::Result<Option<ThreadView>> {
-        let conn = self.conn.lock().unwrap();
-        // 未割当なら割り当てる。
-        let tid: Option<i64> = conn
-            .query_row(
-                "SELECT logical_thread_id FROM emails WHERE id = ?1",
-                params![email_id],
-                |r| r.get(0),
-            )
-            .optional()?
-            .flatten();
+        // まず参照専用接続で thread_id を引く（会話を開く操作は読み取りが主。書き込みに待たされない）。
+        let tid: Option<i64> = {
+            let rconn = self.read_conn.lock().unwrap();
+            rconn
+                .query_row(
+                    "SELECT logical_thread_id FROM emails WHERE id = ?1",
+                    params![email_id],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .flatten()
+        };
+        // 未割当（process_pending 待ちの行を開いた稀なケース）だけ、書き込み接続で割り当てる。
         let tid = match tid {
             Some(t) => t,
-            None => match assign_thread(&conn, email_id)? {
-                Some(t) => t,
-                None => return Ok(None),
-            },
+            None => {
+                let conn = self.conn.lock().unwrap();
+                match assign_thread(&conn, email_id)? {
+                    Some(t) => t,
+                    None => return Ok(None),
+                }
+            }
         };
-        Self::load_thread_view(&conn, tid)
+        // 会話本体の組み立ては参照専用接続で（書き込みに待たされない）。
+        let rconn = self.read_conn.lock().unwrap();
+        Self::load_thread_view(&rconn, tid)
     }
 
     /// スレッド id から会話を組み立てる（内部）。
@@ -960,18 +968,17 @@ mod tests {
     use std::sync::Mutex;
 
     fn test_store() -> Store {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        migrations::run(&conn).unwrap();
-        conn.execute(
-            "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1,'me@example.com','i','s')",
-            [],
-        )
-        .unwrap();
-        Store {
-            conn: Mutex::new(conn),
-            path: Mutex::new(PathBuf::new()),
-        }
+        let store = Store::open_in_memory_for_test();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1,'me@example.com','i','s')",
+                [],
+            )
+            .unwrap();
+        store
     }
 
     #[allow(clippy::too_many_arguments)]

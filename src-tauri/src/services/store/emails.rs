@@ -609,7 +609,8 @@ impl Store {
         let Some(fts) = build_fts_query(query) else {
             return Ok(Vec::new());
         };
-        let conn = self.conn.lock().unwrap();
+        // 参照専用接続（検索の読み取りは書き込みに待たされない）。
+        let conn = self.read_conn.lock().unwrap();
         let acct = if account_id.is_some() {
             "e.account_id = ?4 AND "
         } else {
@@ -665,7 +666,8 @@ impl Store {
         limit: i64,
         offset: i64,
     ) -> rusqlite::Result<Vec<ThreadListItem>> {
-        let conn = self.conn.lock().unwrap();
+        // 参照専用接続（一覧の読み取りは書き込みに待たされない）。
+        let conn = self.read_conn.lock().unwrap();
         let acct = if account_id.is_some() {
             "AND account_id = ?4"
         } else {
@@ -760,7 +762,7 @@ impl Store {
     /// フォルダ内のスレッド総数（代表フラグ is_folder_rep=1 の件数）。一覧の「表示/全件」表示用。
     /// `account_id` が None なら全アカウント横断。部分索引で高速。
     pub fn thread_count(&self, account_id: Option<i64>, folder: &str) -> rusqlite::Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.read_conn.lock().unwrap();
         match account_id {
             Some(a) => conn.query_row(
                 "SELECT count(*) FROM emails WHERE folder = ?1 AND account_id = ?2 AND is_folder_rep = 1",
@@ -1068,7 +1070,8 @@ impl Store {
 
     /// メール本文の取得（表示用）。差出人/宛先の表示名は住所録から解決する。
     pub fn get_email(&self, id: i64) -> rusqlite::Result<Option<MailDetail>> {
-        let conn = self.conn.lock().unwrap();
+        // 参照専用接続（書き込みに待たされない）。
+        let conn = self.read_conn.lock().unwrap();
         let detail = conn
             .query_row(
                 "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id, from_name, to_name, account_id, cc_addresses, reply_to, COALESCE(body_state,'present')
@@ -1338,18 +1341,17 @@ mod tests {
     use std::sync::Mutex;
 
     fn test_store() -> Store {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        migrations::run(&conn).unwrap();
-        conn.execute(
-            "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1,'a@b','i','s')",
-            [],
-        )
-        .unwrap();
-        Store {
-            conn: Mutex::new(conn),
-            path: Mutex::new(PathBuf::new()),
-        }
+        let store = Store::open_in_memory_for_test();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1,'a@b','i','s')",
+                [],
+            )
+            .unwrap();
+        store
     }
 
     fn seed(store: &Store, subject: &str, from: &str, body: &str, folder: &str, key: &str) {

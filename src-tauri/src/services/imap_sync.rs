@@ -847,6 +847,129 @@ pub fn delete_draft_remote(
     r
 }
 
+/// 完全削除する 1 通の指定（サーバー上の元フォルダのローカルタグ＋Message-ID の中身）。
+pub struct PurgeItem {
+    /// 元のサーバーフォルダのローカルタグ（'inbox' | 'sent' | 'drafts' | 'spam' 等）。
+    pub source_tag: String,
+    /// Message-ID の中身（山括弧なし）。サーバー上の該当メールを HEADER 検索で引く。
+    pub message_id_inner: String,
+}
+
+/// 選択済みメールボックスから、複数 Message-ID に一致する UID を集めてカンマ区切りにする。
+fn collect_uids_for_message_ids(session: &mut ImapSession, message_ids: &[&str]) -> String {
+    let mut uids: Vec<String> = Vec::new();
+    for mid in message_ids {
+        match session.uid_search(format!("HEADER \"Message-ID\" \"{mid}\"")) {
+            Ok(found) => uids.extend(found.iter().map(|u| u.to_string())),
+            Err(e) => log::warn!("purge: 検索失敗 mid={mid}: {e}"),
+        }
+    }
+    uids.sort_unstable();
+    uids.dedup();
+    uids.join(",")
+}
+
+/// ローカルで完全削除したメールを、サーバー上でも「Trash へ移動 → 完全削除」する（best-effort）。
+/// 元フォルダから Trash へコピー → 元フォルダで \Deleted＋expunge（＝移動）→ 最後に Trash からも
+/// expunge して恒久削除する。Trash が無いサーバーでは元フォルダから直接 expunge する。
+/// UID は uid_validity 変化に弱いので Message-ID 検索で解決する（下書き削除と同じ作法）。
+/// 失敗しても呼び出し側は best-effort（ローカルは既に削除済み）。
+pub fn purge_emails_remote(
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    items: &[PurgeItem],
+) -> Result<(), String> {
+    if items.is_empty() {
+        return Ok(());
+    }
+    let mut session = connect_login(host, port, user, password)?;
+
+    // フォルダ名を解決: source タグ→サーバー名でグループ化。Trash 名も引く。
+    // （names はセッションを借用しないが、owned に取り出してから以降の操作に進む。）
+    let mut by_source: std::collections::HashMap<String, Vec<&str>> = std::collections::HashMap::new();
+    let trash_name: Option<String>;
+    {
+        let names = session.list(Some(""), Some("*")).map_err(|e| e.to_string())?;
+        let resolve = |tag: &str| -> Option<String> {
+            if tag == "inbox" {
+                return Some("INBOX".to_string());
+            }
+            SYNC_FOLDERS
+                .iter()
+                .find(|s| s.tag == tag)
+                .and_then(|spec| detect_mailbox(names.iter(), spec))
+        };
+        for it in items {
+            match resolve(&it.source_tag) {
+                Some(mbox) => by_source
+                    .entry(mbox)
+                    .or_default()
+                    .push(it.message_id_inner.as_str()),
+                None => log::warn!(
+                    "purge: 元フォルダ '{}' のサーバー名を解決できず（スキップ）",
+                    it.source_tag
+                ),
+            }
+        }
+        trash_name = SYNC_FOLDERS
+            .iter()
+            .find(|s| s.tag == "trash")
+            .and_then(|spec| detect_mailbox(names.iter(), spec));
+    }
+
+    // 元フォルダごとに: Message-ID から UID を集め、Trash へコピー → \Deleted → expunge。
+    for (mbox, msgids) in &by_source {
+        let same_as_trash = trash_name.as_deref() == Some(mbox.as_str());
+        if let Err(e) = session.select(mbox) {
+            log::warn!("purge: SELECT '{mbox}' 失敗（スキップ）: {e}");
+            continue;
+        }
+        let set = collect_uids_for_message_ids(&mut session, msgids);
+        if set.is_empty() {
+            continue;
+        }
+        // Trash があり、元フォルダが Trash 自身でなければコピー（＝Trash へ移動の第一歩）。
+        if let (Some(t), false) = (trash_name.as_deref(), same_as_trash) {
+            if let Err(e) = session.uid_copy(&set, t) {
+                log::warn!("purge: Trash '{t}' へのコピー失敗（元から直接削除にフォールバック）: {e}");
+            }
+        }
+        if let Err(e) = session.uid_store(&set, "+FLAGS (\\Deleted)") {
+            log::warn!("purge: \\Deleted 付与失敗 '{mbox}': {e}");
+            continue;
+        }
+        let _ = session
+            .uid_expunge(&set)
+            .map(|_| ())
+            .or_else(|_| session.expunge().map(|_| ()));
+    }
+
+    // Trash から恒久削除（「移動して更に削除」の“更に削除”）。Trash が無ければ元で削除済み。
+    if let Some(t) = trash_name.as_deref() {
+        if let Err(e) = session.select(t) {
+            log::warn!("purge: Trash '{t}' の SELECT 失敗: {e}");
+        } else {
+            let ids: Vec<&str> = items.iter().map(|i| i.message_id_inner.as_str()).collect();
+            let set = collect_uids_for_message_ids(&mut session, &ids);
+            if !set.is_empty() {
+                if let Err(e) = session.uid_store(&set, "+FLAGS (\\Deleted)") {
+                    log::warn!("purge(trash): \\Deleted 付与失敗: {e}");
+                } else {
+                    let _ = session
+                        .uid_expunge(&set)
+                        .map(|_| ())
+                        .or_else(|_| session.expunge().map(|_| ()));
+                }
+            }
+        }
+    }
+
+    let _ = session.logout();
+    Ok(())
+}
+
 /// 取得した添付の本体（バイト列・ファイル名・MIME型）。
 pub struct FetchedAttachment {
     pub bytes: Vec<u8>,

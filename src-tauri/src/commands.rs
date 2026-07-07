@@ -16,7 +16,7 @@ use crate::services::imap_sync;
 use crate::services::media;
 use crate::services::smtp;
 use crate::services::spam;
-use crate::services::store::{NewAccount, NewServerAccount, Store};
+use crate::services::store::{NewAccount, NewServerAccount, PurgeRef, Store};
 use crate::services::vcard;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -743,10 +743,63 @@ pub fn mail_set_bookmarked(store: State<Store>, ids: Vec<i64>, value: bool) -> R
         .map_err(|e| e.to_string())
 }
 
-/// 複数メールを一括削除（完全削除。ゴミ箱内からの削除や内部利用向け）。
+/// 複数メールを一括削除（完全削除。ゴミ箱内からの削除等）。
+/// ローカルは即削除し、サーバー上のコピーも「Trash へ移動→完全削除」でバックグラウンド反映する（best-effort）。
 #[tauri::command]
-pub fn mail_delete(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
-    store.delete_emails(&ids).map_err(|e| e.to_string())
+pub async fn mail_delete(
+    app: AppHandle,
+    store: State<'_, Store>,
+    ids: Vec<i64>,
+) -> Result<(), String> {
+    // サーバー反映に要る情報は、ローカル削除で消える前に読み出しておく。
+    let refs = store.purge_refs(&ids).map_err(|e| e.to_string())?;
+    store.delete_emails(&ids).map_err(|e| e.to_string())?;
+    spawn_remote_purge(&app, &store, refs);
+    Ok(())
+}
+
+/// ローカルで完全削除したメールを、サーバー上でも「Trash へ移動→完全削除」する（best-effort・非同期）。
+/// アカウントごとに資格情報を取り出してからバックグラウンドで実行する（UI は待たせない）。
+fn spawn_remote_purge(app: &AppHandle, store: &Store, refs: Vec<PurgeRef>) {
+    if refs.is_empty() {
+        return;
+    }
+    let identifier = app.config().identifier.clone();
+    // アカウント別に PurgeItem（Message-ID は山括弧を外す）へまとめる。
+    let mut by_acct: HashMap<i64, Vec<imap_sync::PurgeItem>> = HashMap::new();
+    for r in refs {
+        let inner = r
+            .message_id
+            .trim()
+            .trim_start_matches('<')
+            .trim_end_matches('>')
+            .to_string();
+        if inner.is_empty() {
+            continue;
+        }
+        by_acct.entry(r.account_id).or_default().push(imap_sync::PurgeItem {
+            source_tag: r.source_tag,
+            message_id_inner: inner,
+        });
+    }
+    for (account_id, items) in by_acct {
+        // 資格情報の取得は削除前後どちらでもよいが、spawn へ移す前に owned にしておく。
+        let Some((email, login, host, port)) = store.get_account_imap(account_id).ok().flatten()
+        else {
+            continue;
+        };
+        let identifier = identifier.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Ok(password) =
+                keyring::Entry::new(&identifier, &email).and_then(|e| e.get_password())
+            {
+                let _ = tauri::async_runtime::spawn_blocking(move || {
+                    imap_sync::purge_emails_remote(&host, port, &login, &password, &items)
+                })
+                .await;
+            }
+        });
+    }
 }
 
 /// 複数メールをゴミ箱（trash フォルダ）へ移動する（既定の削除操作）。復元可能。
@@ -764,15 +817,23 @@ pub fn mail_restore(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
 }
 
 /// 指定フォルダ（trash/spam 等）を空にする。`account_id` が None なら全アカウント。削除件数を返す。
+/// ローカルは即削除し、サーバー上のコピーも「Trash へ移動→完全削除」でバックグラウンド反映する（best-effort）。
 #[tauri::command]
-pub fn mail_empty_folder(
-    store: State<Store>,
+pub async fn mail_empty_folder(
+    app: AppHandle,
+    store: State<'_, Store>,
     account_id: Option<i64>,
     folder: String,
 ) -> Result<i32, String> {
-    store
+    // サーバー反映に要る情報は、ローカル削除で消える前に読み出しておく。
+    let refs = store
+        .purge_refs_for_folder(account_id, &folder)
+        .map_err(|e| e.to_string())?;
+    let n = store
         .empty_folder(account_id, &folder)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    spawn_remote_purge(&app, &store, refs);
+    Ok(n)
 }
 
 /// 書きかけのメールを下書き（drafts）へ保存/更新する。保存した下書きの emails.id を返す。

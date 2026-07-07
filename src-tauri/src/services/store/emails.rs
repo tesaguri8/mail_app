@@ -2,6 +2,16 @@ use super::Store;
 use crate::models::{AttachmentSummary, MailDetail, MailSummary, ThreadListItem};
 use rusqlite::{params, Connection, OptionalExtension};
 
+/// サーバー側の恒久削除（Trash 移動→完全削除）に必要な 1 通分の参照。
+/// ローカルで完全削除する直前に集める（削除後は取れないため）。docs/SYNC.md。
+pub struct PurgeRef {
+    pub account_id: i64,
+    /// 元のサーバーフォルダのローカルタグ（trash 由来なら prev_folder、無ければ 'inbox'）。
+    pub source_tag: String,
+    /// Message-ID（山括弧つきのことがある。呼び出し側で中身を取り出す）。
+    pub message_id: String,
+}
+
 /// メール挿入用（内部）。
 pub struct NewEmail {
     pub account_id: i64,
@@ -896,6 +906,75 @@ impl Store {
         let n = ids.len() as i32;
         self.delete_emails(&ids)?;
         Ok(n)
+    }
+
+    /// 指定フォルダを空にするとき恒久削除される各メールの、サーバー側削除参照を集める。
+    /// empty_folder と同じ実効フォルダ絞り込み。Message-ID が無い行は対象外（サーバーで特定できない）。
+    /// ローカル削除の前に呼ぶこと（削除後は取れない）。
+    pub fn purge_refs_for_folder(
+        &self,
+        account_id: Option<i64>,
+        folder: &str,
+    ) -> rusqlite::Result<Vec<PurgeRef>> {
+        let conn = self.conn.lock().unwrap();
+        let fp = folder_predicate(folder, "", "?1");
+        let base = format!(
+            "SELECT account_id,
+                    CASE WHEN folder = 'trash' THEN COALESCE(NULLIF(prev_folder,''),'inbox') ELSE folder END,
+                    message_id
+             FROM emails
+             WHERE {fp} AND message_id IS NOT NULL AND message_id <> ''"
+        );
+        let sql = match account_id {
+            Some(_) => format!("{base} AND account_id = ?2"),
+            None => base,
+        };
+        let mut stmt = conn.prepare(&sql)?;
+        let mk = |r: &rusqlite::Row| -> rusqlite::Result<PurgeRef> {
+            Ok(PurgeRef {
+                account_id: r.get(0)?,
+                source_tag: r.get(1)?,
+                message_id: r.get(2)?,
+            })
+        };
+        let rows = match account_id {
+            Some(a) => stmt
+                .query_map(params![folder, a], mk)?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+            None => stmt
+                .query_map(params![folder], mk)?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+        };
+        Ok(rows)
+    }
+
+    /// 指定 ID 群の、サーバー側削除参照を集める（個別の完全削除用）。ローカル削除の前に呼ぶ。
+    pub fn purge_refs(&self, ids: &[i64]) -> rusqlite::Result<Vec<PurgeRef>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT account_id,
+                    CASE WHEN folder = 'trash' THEN COALESCE(NULLIF(prev_folder,''),'inbox') ELSE folder END,
+                    message_id
+             FROM emails
+             WHERE id IN ({placeholders}) AND message_id IS NOT NULL AND message_id <> ''"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|i| i as &dyn rusqlite::ToSql).collect();
+        let rows = stmt
+            .query_map(params.as_slice(), |r| {
+                Ok(PurgeRef {
+                    account_id: r.get(0)?,
+                    source_tag: r.get(1)?,
+                    message_id: r.get(2)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
     }
 
     /// 選択メールをゴミ箱（trash フォルダ）へ移す（ローカル）。移動前の folder を prev_folder に控え、

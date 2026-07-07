@@ -4,7 +4,6 @@ import { BottomBar } from './components/BottomBar';
 import { Home } from './components/Home';
 import { MailboxView } from './components/MailboxView';
 import { AddressBook } from './components/AddressBook';
-import type { ContactPrefill } from './components/ContactsView';
 import { CalendarView } from './components/CalendarView';
 import { Settings } from './components/Settings';
 import { accountList } from './services/accounts';
@@ -34,10 +33,6 @@ export default function App() {
   const [mailOpenId, setMailOpenId] = useState<number | null>(null);
   // メール画面で現在表示中のアカウント選択（'all'=全て）。フッターの件数表示に使う。
   const [mailSel, setMailSel] = useState<number | 'all' | null>(null);
-  // メールのアドレスから住所録へ追加するときの初期値（住所録の新規フォームに埋める）。
-  const [contactPrefill, setContactPrefill] = useState<ContactPrefill | null>(null);
-  // メールのアドレスから既存連絡先を開くときの ID（編集アイコン）。
-  const [contactOpenId, setContactOpenId] = useState<number | null>(null);
   // 背景のかぶせ（暗さ）。写真によって文字が見づらい時に上げる。
   const [dim, setDim] = useState<number>(() => Number(localStorage.getItem('rondine.dim') ?? 0));
   useEffect(() => {
@@ -96,18 +91,6 @@ export default function App() {
     setView('mail');
   };
 
-  // メールのアドレスから住所録へ: 新規フォームに名前・メールを埋めて住所録へ切り替える。
-  const addContactFromMail = (name: string | null, email: string) => {
-    setContactPrefill({ name, email });
-    setView('contacts');
-  };
-
-  // メールのアドレスから既存連絡先を開く（編集アイコン）。住所録へ切り替えてその連絡先を開く。
-  const openContactFromMail = (id: number) => {
-    setContactOpenId(id);
-    setView('contacts');
-  };
-
   // フッター左に出す「表示中アカウントのメール総数」（メールモード時のみ。'all'=全合計）。
   const mailTotal =
     view !== 'mail'
@@ -155,18 +138,9 @@ export default function App() {
               initialAccountId={mailAccountId}
               initialMailId={mailOpenId}
               onAccountChange={setMailSel}
-              onAddContact={addContactFromMail}
-              onOpenContact={openContactFromMail}
             />
           )}
-          {view === 'contacts' && (
-            <AddressBook
-              prefill={contactPrefill}
-              onPrefillConsumed={() => setContactPrefill(null)}
-              openId={contactOpenId}
-              onOpenIdConsumed={() => setContactOpenId(null)}
-            />
-          )}
+          {view === 'contacts' && <AddressBook />}
           {view === 'calendar' && <CalendarView />}
           {view === 'settings' && <Settings accounts={accounts} onChanged={refreshAccounts} />}
         </main>

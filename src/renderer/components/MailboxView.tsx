@@ -20,6 +20,7 @@ import {
   ThumbsDown,
   Trash2,
   Undo2,
+  UserRoundPlus,
   X,
 } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
@@ -50,6 +51,7 @@ import { mailAddTag, mailRemoveTag, tagCreate, tagList } from '../services/tags'
 import { pickTagColor, DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import { parseAddress } from '../utils/address';
 import { MailBody } from './MailBody';
+import { ContactEditor, type EditorRequest } from './ContactEditor';
 import { Conversation, type ConversationHandlers } from './Conversation';
 import { threadList, threadCount } from '../services/threads';
 import { Compose, type ComposeTarget } from './Compose';
@@ -69,6 +71,11 @@ const iconBtn =
 export const MIN_SIDEBAR_WIDTH = 380;
 export const MAX_SIDEBAR_WIDTH = 640;
 export const DEFAULT_SIDEBAR_WIDTH = 380;
+
+// 住所録の編集パネル（メールを見ながら編集する右サイドバー）の幅。ドラッグで可変。
+const MIN_CONTACT_PANEL_WIDTH = 320;
+const MAX_CONTACT_PANEL_WIDTH = 560;
+const DEFAULT_CONTACT_PANEL_WIDTH = 400;
 
 function formatDate(d: string | null): string {
   if (!d) return '';
@@ -118,18 +125,12 @@ export function MailboxView({
   initialAccountId,
   initialMailId,
   onAccountChange,
-  onAddContact,
-  onOpenContact,
 }: {
   accounts: AccountSummary[];
   initialAccountId: number | null;
   initialMailId: number | null;
   /** 表示中アカウントの変化を親へ通知（フッターの件数表示用）。'all'=全アカウント。 */
   onAccountChange?: (id: number | 'all' | null) => void;
-  /** メールのアドレスから住所録へ追加（名前・メールを渡す）。 */
-  onAddContact?: (name: string | null, email: string) => void;
-  /** メールのアドレスから既存連絡先を開く（編集アイコン）。 */
-  onOpenContact?: (id: number) => void;
 }) {
   const { t } = useTranslation();
   // 'all' = 全アカウント横断表示 / number = 特定アカウント / null = 未選択。
@@ -225,8 +226,65 @@ export function MailboxView({
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
   };
+
+  // 住所録の編集パネル（メールを見ながら編集する右サイドバー）。null なら閉じている。
+  // アドレスの ＋（追加）／編集アイコンから開く。閲覧ペインは残したまま右に並べて出す。
+  const [contactPanel, setContactPanel] = useState<EditorRequest | null>(null);
+  const [contactPanelW, setContactPanelW] = useState(() => {
+    const saved = Number(localStorage.getItem('rondine.contactPanelW'));
+    return Number.isFinite(saved) && saved >= MIN_CONTACT_PANEL_WIDTH
+      ? Math.min(MAX_CONTACT_PANEL_WIDTH, saved)
+      : DEFAULT_CONTACT_PANEL_WIDTH;
+  });
+  useEffect(() => {
+    localStorage.setItem('rondine.contactPanelW', String(contactPanelW));
+  }, [contactPanelW]);
+  const panelSplitRef = useRef<HTMLDivElement>(null);
+  // パネルを開く前のサイドバー表示状態（閉じたら元に戻すため）。
+  const sidebarBeforePanelRef = useRef<boolean | null>(null);
+  const openContactPanel = (req: EditorRequest) => {
+    if (sidebarBeforePanelRef.current == null) sidebarBeforePanelRef.current = sidebarOpen;
+    setSidebarOpen(false); // 一覧サイドバーを隠して、閲覧＋編集の2画面にする。
+    setContactPanel(req);
+  };
+  const closeContactPanel = () => {
+    setContactPanel(null);
+    if (sidebarBeforePanelRef.current != null) {
+      setSidebarOpen(sidebarBeforePanelRef.current);
+      sidebarBeforePanelRef.current = null;
+    }
+  };
+  const startPanelResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const onMove = (ev: MouseEvent) => {
+      const rect = panelSplitRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const w = Math.min(
+        MAX_CONTACT_PANEL_WIDTH,
+        Math.max(MIN_CONTACT_PANEL_WIDTH, rect.right - ev.clientX),
+      );
+      setContactPanelW(w);
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+
   // メール作成モーダル（新規／返信／転送）。null なら閉じている。
   const [compose, setCompose] = useState<ComposeTarget | null>(null);
+  // 作成画面に入ったら編集パネルは閉じる（全幅で作成に集中）。
+  useEffect(() => {
+    if (compose) closeContactPanel();
+    // closeContactPanel は毎回同じ挙動。compose の変化だけをトリガにする。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compose]);
   // 表示するフォルダ/グループ（受信箱以外は後続実装）
   const [folder, setFolder] = useState('inbox');
   // リスト絞り込みトグル
@@ -1291,8 +1349,9 @@ export function MailboxView({
         /* noop */
       }
     },
-    onAddContact,
-    onEditContact: onOpenContact,
+    // アドレスの ＋（追加）／編集は、住所録ページへ移動せず、右パネルで開く（メールを見ながら編集）。
+    onAddContact: (name, email) => openContactPanel({ kind: 'prefill', prefill: { name, email } }),
+    onEditContact: (id) => openContactPanel({ kind: 'existing', id }),
     onComposeTo: (email) => setCompose({ mode: 'new', to: `${email}, ` }),
     onGreenChange: loadMails,
     onThreadChanged: loadMails,
@@ -1455,6 +1514,45 @@ export function MailboxView({
         ) : (
           <div className="min-h-0 flex-1 overflow-hidden">{composeEl}</div>
         )
+      ) : contactPanel ? (
+        // 住所録の編集: 左＝閲覧ペイン、右＝編集パネル。一覧サイドバーは隠して2画面にする。
+        <div
+          ref={panelSplitRef}
+          className="grid min-h-0 flex-1 overflow-hidden"
+          style={{ gridTemplateColumns: `1fr 6px ${contactPanelW}px` }}
+        >
+          <div className="min-h-0 overflow-hidden">{bodyPane}</div>
+          <div
+            onMouseDown={startPanelResize}
+            title={t('mailbox.resize')}
+            className="cursor-col-resize bg-transparent transition-colors hover:bg-sky-400/40"
+          />
+          <aside className="flex min-h-0 flex-col overflow-hidden border-l border-white/10">
+            <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2">
+              <UserRoundPlus size={15} className="shrink-0 text-white/60" />
+              <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                {contactPanel.kind === 'existing'
+                  ? t('contact.panelEdit')
+                  : t('contact.panelNew')}
+              </span>
+              <button
+                onClick={closeContactPanel}
+                title={t('contact.closePanel')}
+                aria-label={t('contact.closePanel')}
+                className={iconBtn}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <ContactEditor
+                request={contactPanel}
+                onDeleted={closeContactPanel}
+                onOpenContact={(id) => setContactPanel({ kind: 'existing', id })}
+              />
+            </div>
+          </aside>
+        </div>
       ) : layout === 'side' ? (
         <div
           ref={splitRef}

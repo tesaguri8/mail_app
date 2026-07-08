@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
-  CalendarDays,
   Contact,
   House,
   Image,
@@ -14,8 +13,9 @@ import {
   X,
 } from 'lucide-react';
 import { APP } from '../config/appIdentity';
+import { CalendarDateIcon } from './CalendarDateIcon';
 
-const ICON = 15;
+const ICON = 18;
 
 /**
  * フレームレス用の自作タイトルバー（docs/UI_UX_DESIGN.md §1.5）。
@@ -115,7 +115,7 @@ export function TitleBar({
           title={t('nav.calendar')}
           className="flex items-center justify-center rounded p-1.5 hover:bg-white/20 focus:bg-white/20"
         >
-          <CalendarDays size={ICON} />
+          <CalendarDateIcon size={ICON} />
         </button>
         <button
           onClick={(e) => {

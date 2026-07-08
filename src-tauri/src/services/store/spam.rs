@@ -3,9 +3,43 @@
 //! カウンタ整合（§4.3）は同一 tx で担保する。分類ロジックは services/spam を使う。
 
 use super::Store;
-use rusqlite::{params, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// epoch 秒（取得できなければ 0）。
+fn now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// 差出人アドレスを一致判定用に正規化する。`"Name <addr>"` 形式なら `<>` の中を採用し、
+/// 前後空白を除いて小文字化する（保存済み from_address は素のアドレスだが防御的に <> も処理）。
+pub fn normalize_sender_address(raw: &str) -> String {
+    let s = raw.trim();
+    let core = match (s.rfind('<'), s.rfind('>')) {
+        (Some(l), Some(r)) if l < r => &s[l + 1..r],
+        _ => s,
+    };
+    core.trim().to_lowercase()
+}
+
+/// このアドレスが「迷惑差出人」に登録済みか（挿入は同期スレッドの別接続から呼ぶため
+/// `&Connection` 版。docs/SPAM.md）。
+pub fn is_spam_sender_conn(conn: &Connection, address: &str) -> rusqlite::Result<bool> {
+    let norm = normalize_sender_address(address);
+    if norm.is_empty() {
+        return Ok(false);
+    }
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM spam_senders WHERE address = ?1",
+        params![norm],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
 
 /// 迷惑判定・学習に使うメールの素性（保存済み emails 行から取り出す）。
 pub struct SpamFeatures {
@@ -23,10 +57,7 @@ pub struct SpamFeatures {
 /// `dir`: 1=spam 方向 / -1=ham 方向。`sign`: +1=加算 / -1=打ち消し。
 /// カウントは MAX(0, ...) で負に落ちないようにする。
 fn apply_counts(tx: &Transaction, tokens: &[&String], dir: i64, sign: i64) -> rusqlite::Result<()> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let now = now_secs();
     // spam 方向なら spam_count を、ham 方向なら ham_count を sign 分動かす。
     let (ds, dh) = if dir > 0 { (sign, 0) } else { (0, sign) };
     let mut stmt = tx.prepare(
@@ -189,6 +220,98 @@ impl Store {
         }
         tx.commit()
     }
+
+    /// 指定メール群の差出人アドレス（正規化・重複排除）から、自分の口座アドレスを除いた集合を返す。
+    /// 「この差出人を迷惑扱いにする」対象を決めるのに使う（自分自身は迷惑差出人にしない）。docs/SPAM.md。
+    pub fn spam_sender_candidates(&self, ids: &[i64]) -> rusqlite::Result<Vec<String>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        // 自分の口座アドレス（正規化）。
+        let mut own = HashSet::new();
+        {
+            let mut stmt = conn.prepare("SELECT email FROM accounts")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            for e in rows {
+                own.insert(normalize_sender_address(&e?));
+            }
+        }
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT DISTINCT from_address FROM emails
+             WHERE id IN ({placeholders}) AND from_address IS NOT NULL AND from_address <> ''"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+            r.get::<_, String>(0)
+        })?;
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for a in rows {
+            let norm = normalize_sender_address(&a?);
+            if norm.is_empty() || own.contains(&norm) {
+                continue;
+            }
+            if seen.insert(norm.clone()) {
+                out.push(norm);
+            }
+        }
+        Ok(out)
+    }
+
+    /// アドレスを「迷惑差出人」に登録する（既存なら何もしない）。docs/SPAM.md。
+    pub fn add_spam_sender(&self, address: &str) -> rusqlite::Result<()> {
+        let norm = normalize_sender_address(address);
+        if norm.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO spam_senders(address, created_at) VALUES (?1, ?2)",
+            params![norm, now_secs()],
+        )?;
+        Ok(())
+    }
+
+    /// アドレスの「迷惑差出人」登録を解除する（非迷惑に戻す時。docs/SPAM.md）。
+    pub fn remove_spam_sender(&self, address: &str) -> rusqlite::Result<()> {
+        let norm = normalize_sender_address(address);
+        if norm.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM spam_senders WHERE address = ?1", params![norm])?;
+        Ok(())
+    }
+
+    /// 差出人アドレス一致のメールを一括で隔離/復帰する（大文字小文字は無視）。
+    /// `value=true`: 受信箱にある同アドレスのメールを迷惑へ（is_junk=1）。
+    /// `value=false`: 隔離済み（is_junk=1）の同アドレスを受信箱へ戻す。戻り値は更新件数。
+    pub fn set_sender_junk(&self, address: &str, value: bool) -> rusqlite::Result<usize> {
+        let norm = normalize_sender_address(address);
+        if norm.is_empty() {
+            return Ok(0);
+        }
+        let conn = self.conn.lock().unwrap();
+        let n = if value {
+            conn.execute(
+                "UPDATE emails SET is_junk = 1
+                 WHERE from_address = ?1 COLLATE NOCASE
+                   AND COALESCE(folder,'inbox') = 'inbox'
+                   AND is_junk = 0",
+                params![norm],
+            )?
+        } else {
+            conn.execute(
+                "UPDATE emails SET is_junk = 0
+                 WHERE from_address = ?1 COLLATE NOCASE
+                   AND is_junk = 1",
+                params![norm],
+            )?
+        };
+        Ok(n)
+    }
 }
 
 #[cfg(test)]
@@ -248,5 +371,60 @@ mod tests {
         // 同じ向きの再学習は冪等。
         store.spam_learn(1, &toks, false).unwrap();
         assert_eq!(store.spam_totals().unwrap(), (0, 1));
+    }
+
+    #[test]
+    fn normalize_sender_extracts_and_lowercases() {
+        assert_eq!(normalize_sender_address("  Foo@Bar.COM "), "foo@bar.com");
+        assert_eq!(
+            normalize_sender_address("Bad Guy <SPAM@Bad.Example>"),
+            "spam@bad.example"
+        );
+        assert_eq!(normalize_sender_address(""), "");
+    }
+
+    #[test]
+    fn spam_sender_junks_matching_and_excludes_self() {
+        let store = Store::open_in_memory_for_test();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO accounts (id, email, imap_host, smtp_host)
+                 VALUES (1, 'me@self.example', 'i', 's')",
+                [],
+            )
+            .unwrap();
+            // 迷惑差出人からの受信 2 通（大文字小文字違い）＋自分の送信 1 通。
+            conn.execute(
+                "INSERT INTO emails (id, account_id, canonical_key, from_address, folder) VALUES
+                   (10, 1, 'k10', 'spam@bad.example', 'inbox'),
+                   (11, 1, 'k11', 'SPAM@Bad.Example', 'inbox'),
+                   (12, 1, 'k12', 'me@self.example', 'sent')",
+                [],
+            )
+            .unwrap();
+        }
+
+        // 候補は spam@bad.example のみ（自分の口座アドレスは除外・正規化して小文字）。
+        let cands = store.spam_sender_candidates(&[10, 11, 12]).unwrap();
+        assert_eq!(cands, vec!["spam@bad.example".to_string()]);
+
+        store.add_spam_sender("spam@bad.example").unwrap();
+        // 大文字小文字を無視して受信箱の 2 通が隔離される（送信は対象外）。
+        assert_eq!(store.set_sender_junk("spam@bad.example", true).unwrap(), 2);
+
+        // 挿入時判定（同期の別接続想定）も true（表示名つき・大文字でも一致）。
+        {
+            let conn = store.conn.lock().unwrap();
+            assert!(is_spam_sender_conn(&conn, "Bad Guy <SPAM@bad.example>").unwrap());
+        }
+
+        // 非迷惑に戻す: 登録解除＋受信箱へ復帰（2 通）。
+        store.remove_spam_sender("spam@bad.example").unwrap();
+        assert_eq!(store.set_sender_junk("spam@bad.example", false).unwrap(), 2);
+        {
+            let conn = store.conn.lock().unwrap();
+            assert!(!is_spam_sender_conn(&conn, "spam@bad.example").unwrap());
+        }
     }
 }

@@ -1039,6 +1039,8 @@ pub fn mail_remove_tag(store: State<Store>, ids: Vec<i64>, tag_id: i64) -> Resul
 }
 
 /// 迷惑としてマーク（学習＋隔離）。既存の一括操作規約に合わせ ids を受ける（docs/SPAM.md §7.5）。
+/// さらに差出人アドレスを「迷惑差出人」に登録し、同アドレスの既存メールも迷惑へ移す
+/// （今後の新着は挿入時に自動隔離。「このアドレスを迷惑にしたら他のメールも迷惑へ」）。
 #[tauri::command]
 pub fn mail_mark_spam(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
     for id in &ids {
@@ -1055,10 +1057,24 @@ pub fn mail_mark_spam(store: State<Store>, ids: Vec<i64>) -> Result<(), String> 
                 .map_err(|e| e.to_string())?;
         }
     }
-    store.set_emails_junk(&ids, true).map_err(|e| e.to_string())
+    store
+        .set_emails_junk(&ids, true)
+        .map_err(|e| e.to_string())?;
+    // 差出人アドレス（自分の口座は除く）を迷惑差出人にし、同アドレスの既存メールも迷惑へ。
+    for addr in store
+        .spam_sender_candidates(&ids)
+        .map_err(|e| e.to_string())?
+    {
+        store.add_spam_sender(&addr).map_err(|e| e.to_string())?;
+        store
+            .set_sender_junk(&addr, true)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// 非迷惑に戻す（学習＋隔離解除）。誤検知リカバリ（§8.4）から呼ぶ。
+/// 迷惑差出人の登録も解除し、同アドレスのメールを受信箱へ戻す（マークと対称。docs/SPAM.md）。
 #[tauri::command]
 pub fn mail_mark_not_spam(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
     for id in &ids {
@@ -1077,7 +1093,18 @@ pub fn mail_mark_not_spam(store: State<Store>, ids: Vec<i64>) -> Result<(), Stri
     }
     store
         .set_emails_junk(&ids, false)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // 迷惑差出人の登録を外し、同アドレスの隔離済みメールを受信箱へ戻す。
+    for addr in store
+        .spam_sender_candidates(&ids)
+        .map_err(|e| e.to_string())?
+    {
+        store.remove_spam_sender(&addr).map_err(|e| e.to_string())?;
+        store
+            .set_sender_junk(&addr, false)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// メールの迷惑スコアを算出して保存し、判定（バンド・根拠）を返す（§7.5）。

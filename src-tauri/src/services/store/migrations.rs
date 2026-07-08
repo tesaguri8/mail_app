@@ -179,6 +179,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 42,
         sql: include_str!("migrations/0042_event_remote_calendar.sql"),
     },
+    Migration {
+        // 43 は迷惑差出人（このアドレスを迷惑にしたら同アドレスの他メールも迷惑へ。docs/SPAM.md）。
+        version: 43,
+        sql: include_str!("migrations/0043_spam_senders.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
@@ -269,10 +274,10 @@ mod tests {
     #[test]
     fn run_tolerates_columns_added_by_other_branch() {
         let conn = Connection::open_in_memory().unwrap();
-        // 実在の v35 DB を忠実に模す: body_compacted(0011) と folder_sync(0015) は
-        // 35 より前に存在する。reply_to だけ「別枝で既存」の状態を作る。
+        // 実在の v35 DB を忠実に模す: from_address(0001)・body_compacted(0011) と
+        // folder_sync(0015) は 35 より前に存在する。reply_to だけ「別枝で既存」の状態を作る。
         conn.execute_batch(
-            "CREATE TABLE emails (id INTEGER PRIMARY KEY, folder TEXT, body_compacted INTEGER DEFAULT 0);
+            "CREATE TABLE emails (id INTEGER PRIMARY KEY, folder TEXT, from_address TEXT, body_compacted INTEGER DEFAULT 0);
              ALTER TABLE emails ADD COLUMN reply_to TEXT;
              CREATE TABLE folder_sync (
                account_id INTEGER NOT NULL, folder TEXT NOT NULL,

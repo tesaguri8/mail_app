@@ -524,12 +524,13 @@ export function Conversation({
     return () => window.removeEventListener(PREFS_EVENT, onPrefs);
   }, []);
 
-  // メール切替後、開いたメッセージまでスクロールする（検索語が無いときのみ。
-  // 検索中は下の効果で最初の一致へ移動する）。
+  // メール切替後、開いたメッセージの見出し（ラベル）を読書域の先頭にそろえてスクロールする
+  // （検索語が無いときのみ。検索中は下の効果で最初の一致へ移動する）。
+  // block:'center' だと長いメールで見出しが上に隠れ、毎回上へスクロールが要るため 'start' で先頭に。
   useEffect(() => {
     if (!view || terms.length > 0) return;
     const el = document.getElementById(`bubble-${openedId}`);
-    el?.scrollIntoView({ block: 'center' });
+    el?.scrollIntoView({ block: 'start' });
   }, [view, openedId, terms.length]);
 
   // 会話の描画後に検索一致を数え、最初の一致へ移動する（展開・語句変更にも追従）。

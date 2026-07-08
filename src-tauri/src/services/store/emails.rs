@@ -55,6 +55,8 @@ pub struct NewEmail {
     pub uid: Option<i64>,
     /// 保存先フォルダ（'inbox' | 'sent' | 'drafts' | 'trash' | 'spam'）。
     pub folder: String,
+    /// 「本物の自分から」検証済み（X-Rondine-Self が HMAC 一致）。docs/SPAM.md。
+    pub verified_self: bool,
     /// 添付メタ（本体は未取得。ダウンロード時に再取得）。
     pub attachments: Vec<NewAttachment>,
 }
@@ -180,8 +182,8 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
     let body_state = if has_body { "present" } else { "absent" };
     let changed = conn.execute(
         "INSERT OR IGNORE INTO emails
-           (account_id, message_id, canonical_key, subject, from_address, from_name, to_addresses, to_name, cc_addresses, date, date_ts, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read, in_reply_to, references_ids, thread_index, raw_headers, body_fingerprint, reply_to, body_state)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)",
+           (account_id, message_id, canonical_key, subject, from_address, from_name, to_addresses, to_name, cc_addresses, date, date_ts, has_attachments, body_plain, clean_body, body_html_z, uid, auth_result, list_id, folder, is_read, in_reply_to, references_ids, thread_index, raw_headers, body_fingerprint, reply_to, body_state, verified_self)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)",
         params![
             e.account_id,
             e.message_id,
@@ -210,6 +212,7 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
             body_fingerprint,
             e.reply_to,
             body_state,
+            e.verified_self as i64,
         ],
     )?;
     if changed == 0 {
@@ -1190,7 +1193,7 @@ impl Store {
         let conn = self.read_conn.lock().unwrap();
         let detail = conn
             .query_row(
-                "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id, from_name, to_name, account_id, cc_addresses, reply_to, COALESCE(body_state,'present')
+                "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id, from_name, to_name, account_id, cc_addresses, reply_to, COALESCE(body_state,'present'), COALESCE(verified_self,0)
                  FROM emails WHERE id = ?1",
                 params![id],
                 |r| {
@@ -1218,6 +1221,7 @@ impl Store {
                         has_attachments: r.get::<_, i64>(9)? != 0,
                         body_compacted: r.get::<_, i64>(10)? != 0,
                         body_state: r.get::<_, String>(17)?,
+                        verified_self: r.get::<_, i64>(18)? != 0,
                         is_green: false,
                         is_vip: false,
                     })
@@ -1495,6 +1499,7 @@ mod tests {
             is_read: false,
             uid: None,
             folder: folder.to_string(),
+            verified_self: false,
             attachments: vec![],
         };
         insert_email(&conn, &e).unwrap();
@@ -1533,6 +1538,7 @@ mod tests {
             is_read: read,
             uid: None,
             folder: "inbox".to_string(),
+            verified_self: false,
             attachments: vec![],
         };
         let read_of = |key: &str| -> i64 {
@@ -1666,6 +1672,7 @@ mod tests {
             is_read: true,
             uid: None,
             folder: "inbox".into(),
+            verified_self: false,
             attachments: vec![],
         };
         // 旧データ相当: 引用が残ったままの clean_body で保存。
@@ -1730,6 +1737,7 @@ mod tests {
             is_read: read,
             uid: None,
             folder: "inbox".into(),
+            verified_self: false,
             attachments: vec![],
         };
         {
@@ -1795,6 +1803,7 @@ mod tests {
             is_read: true,
             uid: None,
             folder: "inbox".into(),
+            verified_self: false,
             attachments: vec![],
         };
         {
@@ -1864,6 +1873,7 @@ mod tests {
             is_read: true,
             uid: None,
             folder: "inbox".into(),
+            verified_self: false,
             attachments: vec![],
         };
         {
@@ -1941,6 +1951,7 @@ mod tests {
             is_read: true,
             uid: None,
             folder: "inbox".into(),
+            verified_self: false,
             attachments: vec![],
         };
         let (a0, a1) = {

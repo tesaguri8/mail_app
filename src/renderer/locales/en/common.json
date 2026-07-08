@@ -550,6 +550,7 @@
     "remoteBlocked": "{{count}} external image(s) blocked for privacy",
     "remoteShownCount": "{{count}} external image(s) shown (click an image to zoom)",
     "openCalendar": "Add to calendar",
+    "verifiedSelf": "From you (verified)",
     "remoteShow": "Show images",
     "remoteHide": "Hide images",
     "remoteLoading": "Loading…",

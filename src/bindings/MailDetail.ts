@@ -48,4 +48,8 @@ is_green: boolean,
 /**
  * 差出人が住所録のお気に入り（VIP／Gem）連絡先か。バッジ用。
  */
-is_vip: boolean, };
+is_vip: boolean, 
+/**
+ * 「本物の自分から」検証済み（X-Rondine-Self が HMAC 一致）。バッジ用。docs/SPAM.md。
+ */
+verified_self: boolean, };

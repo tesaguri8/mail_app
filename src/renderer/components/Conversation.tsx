@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  BadgeCheck,
   Check,
   ChevronDown,
   ChevronUp,
@@ -280,6 +281,14 @@ function Bubble({
             out ? 'justify-end' : 'justify-start'
           }`}
         >
+          {m.verified_self && (
+            <span
+              title={t('mailbox.verifiedSelf')}
+              className="inline-flex shrink-0 text-sky-300"
+            >
+              <BadgeCheck size={11} aria-label={t('mailbox.verifiedSelf')} />
+            </span>
+          )}
           {!out && m.is_vip && (
             <Gem
               size={11}

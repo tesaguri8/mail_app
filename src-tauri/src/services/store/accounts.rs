@@ -141,6 +141,29 @@ impl Store {
         .optional()
     }
 
+    /// アカウントの自己検証用 HMAC 秘密（16 進）を返す。未生成なら生成して保存する。
+    /// 自分宛メールに付ける X-Rondine-Self の署名鍵（docs/SPAM.md）。
+    pub fn get_or_create_self_secret(&self, account_id: i64) -> rusqlite::Result<String> {
+        let conn = self.conn.lock().unwrap();
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT self_secret FROM accounts WHERE id = ?1",
+                params![account_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        if let Some(s) = existing.filter(|s| !s.is_empty()) {
+            return Ok(s);
+        }
+        let secret = crate::services::selfmark::generate_secret_hex();
+        conn.execute(
+            "UPDATE accounts SET self_secret = ?1 WHERE id = ?2",
+            params![secret, account_id],
+        )?;
+        Ok(secret)
+    }
+
     pub fn list_accounts(&self) -> rusqlite::Result<Vec<AccountSummary>> {
         // 参照専用接続（左下カウント等の読み取りは書き込みに待たされない）。
         let conn = self.read_conn.lock().unwrap();

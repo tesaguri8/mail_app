@@ -340,6 +340,7 @@ fn map_thread_message(r: &rusqlite::Row) -> rusqlite::Result<ThreadMessage> {
         has_quotes: r.get::<_, i64>(14)? != 0,
         is_read: r.get::<_, i64>(15)? != 0,
         is_starred: r.get::<_, i64>(18)? != 0,
+        verified_self: r.get::<_, i64>(19)? != 0,
         // グリーン／VIP は差出人アドレス基準で load_thread_view 側でまとめて付与する。
         is_green: false,
         is_vip: false,
@@ -404,7 +405,8 @@ impl Store {
                           e.clean_body, e.body_plain, e.body_html, e.body_html_z,
                           e.has_attachments,
                           (length(COALESCE(e.body_plain,'')) > length(COALESCE(e.clean_body,''))) AS has_quotes,
-                          e.is_read, e.folder, COALESCE(e.thread_assignment,'auto'), e.is_flagged
+                          e.is_read, e.folder, COALESCE(e.thread_assignment,'auto'), e.is_flagged,
+                          COALESCE(e.verified_self,0)
                    FROM emails e
                    WHERE e.logical_thread_id = ?1
                    ORDER BY e.date_ts ASC, e.id ASC";
@@ -1030,6 +1032,7 @@ mod tests {
             is_read: true,
             uid: None,
             folder: folder.to_string(),
+            verified_self: false,
             attachments: vec![],
         }
     }

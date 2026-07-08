@@ -10,6 +10,7 @@ pub mod imap_sync;
 pub mod media;
 pub mod parser;
 pub mod quotes;
+pub mod selfmark;
 pub mod smtp;
 pub mod spam;
 pub mod store;

@@ -672,6 +672,8 @@ pub struct MailDetail {
     pub is_green: bool,
     /// 差出人が住所録のお気に入り（VIP／Gem）連絡先か。バッジ用。
     pub is_vip: bool,
+    /// 「本物の自分から」検証済み（X-Rondine-Self が HMAC 一致）。バッジ用。docs/SPAM.md。
+    pub verified_self: bool,
 }
 
 /// 論理スレッド（アプリが再構築する会話単位。ヘッダスレッドとは独立）。docs/THREADING.md。
@@ -725,6 +727,8 @@ pub struct ThreadMessage {
     pub is_green: bool,
     /// 差出人が住所録のお気に入り（VIP）か。折りたたみバブルの VIP バッジ用。
     pub is_vip: bool,
+    /// 「本物の自分から」検証済み（X-Rondine-Self が HMAC 一致）。バッジ用。docs/SPAM.md。
+    pub verified_self: bool,
     /// 保存フォルダ（'inbox' | 'sent' | ...）。
     pub folder: Option<String>,
     /// スレッド割当が手動か（'auto' | 'manual'）。

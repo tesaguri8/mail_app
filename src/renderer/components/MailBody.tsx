@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { ask, open, save } from '@tauri-apps/plugin-dialog';
 import { downloadDir, join } from '@tauri-apps/api/path';
 import {
+  BadgeCheck,
   BookOpen,
   CalendarPlus,
   ChevronDown,
@@ -865,6 +866,14 @@ export function MailBody({
         <div className="mt-1 text-xs text-white/50">
           <div className="flex items-baseline justify-between gap-3">
             <span className="min-w-0 truncate">
+              {d.verified_self && (
+                <span
+                  title={t('mailbox.verifiedSelf')}
+                  className="mr-1 inline-flex align-[-2px] text-sky-300"
+                >
+                  <BadgeCheck size={12} aria-label={t('mailbox.verifiedSelf')} />
+                </span>
+              )}
               {d.is_vip && (
                 <Gem
                   size={12}

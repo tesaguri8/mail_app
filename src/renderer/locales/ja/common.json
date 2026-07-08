@@ -550,6 +550,7 @@
     "remoteBlocked": "外部画像 {{count}} 個を保護のためブロック中",
     "remoteShownCount": "外部画像 {{count}} 個を表示中（画像クリックで拡大/縮小）",
     "openCalendar": "カレンダーに追加",
+    "verifiedSelf": "自分から（検証済み）",
     "remoteShow": "画像を表示",
     "remoteHide": "画像を隠す",
     "remoteLoading": "読み込み中…",

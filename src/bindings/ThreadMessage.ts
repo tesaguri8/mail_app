@@ -45,6 +45,10 @@ is_green: boolean,
  */
 is_vip: boolean, 
 /**
+ * 「本物の自分から」検証済み（X-Rondine-Self が HMAC 一致）。バッジ用。docs/SPAM.md。
+ */
+verified_self: boolean, 
+/**
  * 保存フォルダ（'inbox' | 'sent' | ...）。
  */
 folder: string | null, 

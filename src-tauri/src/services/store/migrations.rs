@@ -184,6 +184,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 43,
         sql: include_str!("migrations/0043_spam_senders.sql"),
     },
+    Migration {
+        // 44 は「本物の自分から」検証（emails.verified_self / accounts.self_secret。docs/SPAM.md）。
+        version: 44,
+        sql: include_str!("migrations/0044_verified_self.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

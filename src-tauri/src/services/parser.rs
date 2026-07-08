@@ -54,6 +54,8 @@ pub struct ParsedEmail {
     pub auth_result: Option<String>,
     /// List-Id の生テキスト（メルマガ/ML 判定。docs/SPAM.md §7.7）。
     pub list_id: Option<String>,
+    /// X-Rondine-Self（自分宛メールの検証マーク。受信時に HMAC 検証する。docs/SPAM.md）。
+    pub x_rondine_self: Option<String>,
     /// In-Reply-To（返信元 Message-ID。山括弧なし。スレッド束ね。docs/THREADING.md §2）。
     pub in_reply_to: Option<String>,
     /// References（祖先 Message-ID の連鎖。空白区切り・山括弧なし・古い順）。
@@ -350,6 +352,7 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
     // ヘッダ素性（§7.7）: 認証結果・メール種別。トークン化と認証バッジで共有する。
     let auth_result = header_text(&msg, "Authentication-Results");
     let list_id = header_text(&msg, "List-Id");
+    let x_rondine_self = header_text(&msg, "X-Rondine-Self");
     // スレッド束ね用ヘッダ（docs/THREADING.md §2）。ID は山括弧を外して保存する。
     let in_reply_to = extract_ids(header_text(&msg, "In-Reply-To"))
         .into_iter()
@@ -422,6 +425,7 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
         body_html,
         auth_result,
         list_id,
+        x_rondine_self,
         in_reply_to,
         references_ids,
         thread_index,

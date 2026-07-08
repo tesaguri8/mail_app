@@ -485,13 +485,45 @@ fn fetch_uids(
 
 /// 解析結果 ParsedEmail を挿入用 NewEmail へ写す（フル取得・ヘッダのみ取得で共通）。
 /// ヘッダのみ解析なら本文3列は空になり、insert_email 側で body_state='absent' になる。
+/// account の self_secret（16進）を取り出す（未生成なら None）。
+fn account_self_secret(conn: &Connection, account_id: i64) -> Option<String> {
+    conn.query_row(
+        "SELECT self_secret FROM accounts WHERE id = ?1",
+        params![account_id],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
+}
+
+/// 受信メールが「本物の自分から」か（X-Rondine-Self を account の秘密で HMAC 検証。docs/SPAM.md）。
+fn is_verified_self(secret: &Option<String>, p: &parser::ParsedEmail) -> bool {
+    match (
+        secret.as_deref(),
+        p.x_rondine_self.as_deref(),
+        p.message_id.as_deref(),
+    ) {
+        (Some(sec), Some(mark), Some(mid)) if !sec.is_empty() => {
+            crate::services::selfmark::verify_mark(sec, mid, mark)
+        }
+        _ => false,
+    }
+}
+
 fn parsed_to_new_email(
     p: parser::ParsedEmail,
     account_id: i64,
     folder: &str,
     seen: bool,
     uid: Option<i64>,
+    verified_self: bool,
 ) -> NewEmail {
+    // 「本物の自分から」がサーバーの迷惑フォルダに入っていたら受信箱に出す（ローカルで迷惑解除）。
+    let folder = if verified_self && folder == "spam" {
+        "inbox"
+    } else {
+        folder
+    };
     let attachments = p
         .attachments
         .into_iter()
@@ -541,6 +573,7 @@ fn parsed_to_new_email(
         is_read: seen,
         uid,
         folder: folder.to_string(),
+        verified_self,
         attachments,
     }
 }
@@ -552,6 +585,7 @@ fn store_fetches<'a>(
     msgs: impl Iterator<Item = &'a imap::types::Fetch>,
     c: &mut Counters,
 ) -> Result<(), String> {
+    let self_secret = account_self_secret(conn, account_id);
     for m in msgs {
         c.fetched += 1;
         if let Some(u) = m.uid {
@@ -570,7 +604,8 @@ fn store_fetches<'a>(
             .iter()
             .any(|f| matches!(f, imap::types::Flag::Seen));
         if let Some(p) = parser::parse_message(raw) {
-            let ne = parsed_to_new_email(p, account_id, folder, seen, uid);
+            let verified = is_verified_self(&self_secret, &p);
+            let ne = parsed_to_new_email(p, account_id, folder, seen, uid, verified);
             match insert_email(conn, &ne).map_err(|e| e.to_string())? {
                 InsertOutcome::Inserted(_) => c.stored += 1,
                 InsertOutcome::Backfilled => c.backfilled += 1,
@@ -591,6 +626,7 @@ fn store_header_fetches<'a>(
     msgs: impl Iterator<Item = &'a imap::types::Fetch>,
     result: &mut SyncResult,
 ) -> Result<(), String> {
+    let self_secret = account_self_secret(conn, account_id);
     for m in msgs {
         let raw = match m.header() {
             Some(h) => h,
@@ -602,7 +638,8 @@ fn store_header_fetches<'a>(
             .iter()
             .any(|f| matches!(f, imap::types::Flag::Seen));
         if let Some(p) = parser::parse_message(raw) {
-            let ne = parsed_to_new_email(p, account_id, folder, seen, uid);
+            let verified = is_verified_self(&self_secret, &p);
+            let ne = parsed_to_new_email(p, account_id, folder, seen, uid, verified);
             if let InsertOutcome::Inserted(_) = insert_email(conn, &ne).map_err(|e| e.to_string())? {
                 result.backfilled += 1;
             }

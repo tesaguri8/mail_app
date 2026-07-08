@@ -444,6 +444,43 @@ pub async fn mail_send(
         attachments.push((name, bytes, ct));
     }
 
+    // 自分宛（自分の口座アドレスが宛先に含まれる）なら「本物の自分から」検証マークを付ける。
+    // Message-ID を自前で採番し、その HMAC を X-Rondine-Self ヘッダに載せる（docs/SPAM.md）。
+    let self_addr = acct.email.trim().to_lowercase();
+    let norm_addr = |s: &str| -> String {
+        let s = s.trim();
+        let core = match (s.rfind('<'), s.rfind('>')) {
+            (Some(l), Some(r)) if l < r => &s[l + 1..r],
+            _ => s,
+        };
+        core.trim().to_lowercase()
+    };
+    let is_self_send = to
+        .iter()
+        .chain(cc.iter())
+        .chain(bcc.iter())
+        .any(|a| norm_addr(a) == self_addr);
+    let (self_message_id, self_mark) = if is_self_send && !self_addr.is_empty() {
+        match store.get_or_create_self_secret(input.account_id as i64) {
+            Ok(secret) => {
+                let domain = self_addr.split('@').nth(1).unwrap_or("localhost");
+                let mut rnd = [0u8; 8];
+                let _ = getrandom::getrandom(&mut rnd);
+                let rnd_hex: String = rnd.iter().map(|b| format!("{b:02x}")).collect();
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0);
+                let mid = format!("{nanos}.{rnd_hex}@{domain}");
+                let mark = crate::services::selfmark::compute_mark(&secret, &mid);
+                (Some(mid), mark)
+            }
+            Err(_) => (None, None),
+        }
+    } else {
+        (None, None)
+    };
+
     let config = smtp::SmtpConfig {
         host: acct.smtp_host,
         port: acct.smtp_port,
@@ -462,8 +499,10 @@ pub async fn mail_send(
         body_html: Some(body_html),
         in_reply_to: input.in_reply_to,
         references,
-        message_id: None, // 実送信は lettre の自動採番でよい
+        // 自分宛は自前採番の Message-ID（HMAC 検証のため）。それ以外は lettre の自動採番でよい。
+        message_id: self_message_id,
         attachments,
+        self_mark,
     };
 
     // 送信メッセージを 1 度だけ組み立て、SMTP 送信と Sent 保存で共有する。
@@ -1076,6 +1115,7 @@ pub async fn mail_draft_sync_remote(
         references,
         message_id: Some(message_id.clone()),
         attachments: Vec::new(), // 下書きのサーバー保存は本文のみ（添付の永続化は今回対象外）
+        self_mark: None,         // 下書きには検証マークを付けない
     };
     let email = smtp::build_message(&message)?;
     let raw = email.formatted();

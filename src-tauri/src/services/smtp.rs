@@ -40,6 +40,24 @@ pub struct OutgoingMessage {
     pub message_id: Option<String>,
     /// 添付（表示名, バイト列, content-type）。空なら添付なし（本文のみ）。
     pub attachments: Vec<(String, Vec<u8>, String)>,
+    /// 自分宛メールの検証マーク（X-Rondine-Self ヘッダ値。HMAC。docs/SPAM.md）。None なら付けない。
+    pub self_mark: Option<String>,
+}
+
+/// 自分宛メールの検証ヘッダ `X-Rondine-Self`（値は Message-ID の HMAC。docs/SPAM.md）。
+#[derive(Clone)]
+struct XRondineSelf(String);
+
+impl lettre::message::header::Header for XRondineSelf {
+    fn name() -> lettre::message::header::HeaderName {
+        lettre::message::header::HeaderName::new_from_ascii_str("X-Rondine-Self")
+    }
+    fn parse(s: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(XRondineSelf(s.to_string()))
+    }
+    fn display(&self) -> lettre::message::header::HeaderValue {
+        lettre::message::header::HeaderValue::new(Self::name(), self.0.clone())
+    }
 }
 
 /// "名前 <addr>" / "addr" のどちらでも Mailbox に解釈する。
@@ -77,6 +95,11 @@ pub fn build_message(msg: &OutgoingMessage) -> Result<Message, String> {
     if let Some(mid) = msg.message_id.as_ref().filter(|s| !s.trim().is_empty()) {
         let inner = mid.trim().trim_start_matches('<').trim_end_matches('>');
         builder = builder.message_id(Some(inner.to_string()));
+    }
+
+    // 自分宛メールの検証マーク（本物の自分からを受信側で判定できるように。docs/SPAM.md）。
+    if let Some(mark) = msg.self_mark.as_ref().filter(|s| !s.trim().is_empty()) {
+        builder = builder.header(XRondineSelf(mark.clone()));
     }
 
     for a in &msg.to {

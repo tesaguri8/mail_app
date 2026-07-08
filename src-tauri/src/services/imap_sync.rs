@@ -24,6 +24,34 @@ const CHUNK: usize = 50;
 /// 「古いのは急がない」ので少しずつ。UI の快適さを優先し控えめに（挿入→process_pending の
 /// スレッド割当が書き込みロックを取るため、多いと UI 操作が待たされる）。定期同期で徐々に埋める。
 const BACKFILL_PER_SYNC: usize = 400;
+/// 本文バックフィル（保証期間内の未取得本文を全文取得。docs/SYNC.md）の 1 同期あたりの取得上限。
+/// 本文はヘッダより重いので控えめに。定期同期で少しずつ「保証期間ぶんの全文」を揃える。
+const BODY_BACKFILL_PER_SYNC: usize = 60;
+
+/// body_window（テキスト全文の保証期間）を日数に。'all'/'off'/'' は None（＝期間指定なし）。
+/// 任意年数（'5y' 等）や '<n>d'/'<n>m'/'<n>y' も受ける（storage.rs の window_days と揃える）。
+fn body_window_days(w: &str) -> Option<i64> {
+    let w = w.trim().to_lowercase();
+    match w.as_str() {
+        "all" | "off" | "" => None,
+        "7d" => Some(7),
+        "30d" => Some(30),
+        "3m" => Some(90),
+        "6m" => Some(180),
+        "1y" => Some(365),
+        "2y" => Some(730),
+        other => {
+            let parse = |suffix: char| other.strip_suffix(suffix).and_then(|s| s.parse::<i64>().ok());
+            if let Some(n) = parse('d') {
+                Some(n)
+            } else if let Some(n) = parse('m') {
+                Some(n * 30)
+            } else {
+                parse('y').map(|n| n * 365)
+            }
+        }
+    }
+}
 
 /// 同期範囲（accounts.sync_window をパース）。
 /// "n50"=最新50件 / "3d"=3日 / "30d" / "3m" / "1y" / "all"
@@ -262,6 +290,35 @@ fn run_sync(
             backfill_folder_metadata(session, conn, account_id, mbox, tag, result, progress, cancel)
         {
             log::warn!("フォルダ '{mbox}' ({tag}) のメタ索引に失敗: {e}");
+        }
+    }
+
+    // Pass 3: 保証期間（body_window）内で本文が未取得のメールを少しずつ全文取得する
+    // （低優先・再開可能・容量上限尊重・PEEK で既読にしない）。設定「テキスト全文を確実に
+    // 残す期間」ぶんの本文を、開かなくても手元に揃える。docs/SYNC.md §3.6。
+    let body_window: String = conn
+        .query_row(
+            "SELECT COALESCE(body_window,'off') FROM accounts WHERE id=?1",
+            params![account_id],
+            |r| r.get(0),
+        )
+        .unwrap_or_else(|_| "off".to_string());
+    for (mbox, tag) in &folders {
+        if is_cancelled(cancel) {
+            break;
+        }
+        if let Err(e) = backfill_folder_bodies(
+            session,
+            conn,
+            account_id,
+            mbox,
+            tag,
+            &body_window,
+            result,
+            progress,
+            cancel,
+        ) {
+            log::warn!("フォルダ '{mbox}' ({tag}) の本文バックフィルに失敗: {e}");
         }
     }
     Ok(())
@@ -735,6 +792,106 @@ fn backfill_folder_metadata(
         got += chunk.len() as i32;
         progress(tag, got, total);
     }
+    Ok(())
+}
+
+/// 本文バックフィル: 保証期間（body_window）内で本文が未取得('absent')のメールを、少しずつ
+/// 全文取得してローカルに揃える。新しい順・容量上限を尊重・中断/再開可（定期同期ごとに少しずつ）。
+/// BODY.PEEK[] で取得するのでサーバー側は既読にしない。docs/SYNC.md §3.6。
+#[allow(clippy::too_many_arguments)]
+fn backfill_folder_bodies(
+    session: &mut ImapSession,
+    conn: &Connection,
+    account_id: i64,
+    imap_name: &str,
+    tag: &str,
+    body_window: &str,
+    result: &mut SyncResult,
+    progress: &dyn Fn(&str, i32, i32),
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    // 'off' は先読みしない（開いたときだけ取得）。中断要求もスキップ。
+    if body_window.trim().eq_ignore_ascii_case("off") || is_cancelled(cancel) {
+        return Ok(());
+    }
+    // 容量上限に達していたら本文を増やさない（超過分は要約側に任せる）。
+    let limit: i64 = conn
+        .query_row(
+            "SELECT COALESCE(storage_limit, 2147483648) FROM accounts WHERE id=?1",
+            params![account_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(2_147_483_648);
+    let used: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(COALESCE(length(body_html_z),0)+COALESCE(length(body_plain),0)),0)
+               + (SELECT COALESCE(SUM(a.size),0) FROM attachments a JOIN emails e ON e.id=a.email_id
+                  WHERE e.account_id=?1 AND a.file_path IS NOT NULL)
+             FROM emails WHERE account_id=?1",
+            params![account_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if used >= limit {
+        return Ok(());
+    }
+    // 保証期間の下限（date_ts >= cutoff）。'all'（日数 None）は全期間。
+    let cutoff_ts: Option<i64> = body_window_days(body_window).map(|days| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        now - days * 86400
+    });
+    // 未取得（absent）で uid のあるメールを新しい順に。期間指定があれば date_ts で絞る。
+    let uids: Vec<u32> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT uid FROM emails
+                 WHERE account_id=?1 AND COALESCE(folder,'inbox')=?2
+                   AND COALESCE(body_state,'present')='absent' AND uid IS NOT NULL
+                   AND (?3 IS NULL OR date_ts >= ?3)
+                 ORDER BY date_ts DESC, uid DESC LIMIT ?4",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(
+                params![account_id, tag, cutoff_ts, BODY_BACKFILL_PER_SYNC as i64],
+                |r| r.get::<_, i64>(0),
+            )
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|r| r.ok()).map(|u| u as u32).collect()
+    };
+    if uids.is_empty() {
+        return Ok(());
+    }
+    session.select(imap_name).map_err(|e| e.to_string())?;
+    let total = uids.len() as i32;
+    let mut got = 0i32;
+    let mut c = Counters {
+        fetched: 0,
+        stored: 0,
+        backfilled: 0,
+        max_uid: 0,
+    };
+    for chunk in uids.chunks(CHUNK) {
+        if is_cancelled(cancel) {
+            break;
+        }
+        let set = chunk
+            .iter()
+            .map(|u| u.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        // PEEK: 既読フラグを立てずに本文全体を取得する（過去メールを勝手に既読化しない）。
+        let msgs = session
+            .uid_fetch(set, "(UID FLAGS BODY.PEEK[])")
+            .map_err(|e| e.to_string())?;
+        store_fetches(conn, account_id, tag, msgs.iter(), &mut c)?;
+        got += chunk.len() as i32;
+        progress(tag, got, total);
+    }
+    result.backfilled += c.backfilled;
     Ok(())
 }
 

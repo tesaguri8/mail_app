@@ -18,7 +18,7 @@ use crate::services::imap_sync;
 use crate::services::media;
 use crate::services::smtp;
 use crate::services::spam;
-use crate::services::store::{NewAccount, NewServerAccount, PurgeRef, Store};
+use crate::services::store::{NewAccount, NewAttachment, NewServerAccount, PurgeRef, Store};
 use crate::services::vcard;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -2246,6 +2246,21 @@ pub async fn mail_refetch(
             parsed.body_html.as_deref(),
         )
         .map_err(|e| e.to_string())?;
+
+    // 添付メタが未保存（absent をヘッダのみで取り込んでいた）なら、ここで復元する。
+    let atts: Vec<NewAttachment> = parsed
+        .attachments
+        .into_iter()
+        .map(|a| NewAttachment {
+            part_index: a.part_index,
+            filename: a.filename,
+            content_type: a.content_type,
+            size: a.size,
+            kind: a.kind,
+            content_id: a.content_id,
+        })
+        .collect();
+    store.ensure_attachments(id, &atts).map_err(|e| e.to_string())?;
 
     store
         .get_email(id)

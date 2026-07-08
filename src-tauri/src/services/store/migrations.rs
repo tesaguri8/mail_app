@@ -287,12 +287,17 @@ mod tests {
         // 実在の v35 DB を忠実に模す: from_address(0001)・body_compacted(0011) と
         // folder_sync(0015) は 35 より前に存在する。reply_to だけ「別枝で既存」の状態を作る。
         conn.execute_batch(
-            "CREATE TABLE emails (id INTEGER PRIMARY KEY, folder TEXT, from_address TEXT, body_compacted INTEGER DEFAULT 0);
+            "CREATE TABLE emails (id INTEGER PRIMARY KEY, folder TEXT, from_address TEXT, body_compacted INTEGER DEFAULT 0, has_attachments INTEGER DEFAULT 0);
              ALTER TABLE emails ADD COLUMN reply_to TEXT;
              CREATE TABLE folder_sync (
                account_id INTEGER NOT NULL, folder TEXT NOT NULL,
                uid_validity INTEGER, last_uid INTEGER,
                PRIMARY KEY (account_id, folder));
+             -- 実在の v35 DB にある基盤テーブル（accounts=0001 / attachments=0006）。
+             -- 0044(accounts 列追加)・0045(attachments/emails のデータ更新)が動くよう用意する。
+             CREATE TABLE accounts (id INTEGER PRIMARY KEY, email TEXT);
+             CREATE TABLE attachments (id INTEGER PRIMARY KEY, email_id INTEGER NOT NULL,
+               kind TEXT, content_type TEXT, content_id TEXT, size INTEGER);
              PRAGMA user_version = 35;",
         )
         .unwrap();

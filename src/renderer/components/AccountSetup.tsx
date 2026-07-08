@@ -553,15 +553,56 @@ export function AccountSetup({
                       </span>
                       <select
                         className={inputCls}
-                        value={editBodyWindow}
-                        onChange={(e) => changeBodyWindow(a.id, e.target.value)}
+                        value={
+                          (BODY_WINDOWS as readonly string[]).includes(editBodyWindow)
+                            ? editBodyWindow
+                            : 'custom'
+                        }
+                        onChange={(e) => {
+                          if (e.target.value === 'custom') {
+                            // カスタムに切替: 既にプリセット外のカスタム年数ならそのまま、
+                            // そうでなければ（プリセット '1y'/'2y' 等からの切替も含め）既定 3 年。
+                            const isPreset = (BODY_WINDOWS as readonly string[]).includes(
+                              editBodyWindow,
+                            );
+                            changeBodyWindow(
+                              a.id,
+                              !isPreset && /^\d+y$/.test(editBodyWindow) ? editBodyWindow : '3y',
+                            );
+                          } else {
+                            changeBodyWindow(a.id, e.target.value);
+                          }
+                        }}
                       >
                         {BODY_WINDOWS.map((w) => (
                           <option key={w} value={w} className="text-black">
                             {windowLabel(t, w)}
                           </option>
                         ))}
+                        <option value="custom" className="text-black">
+                          {t('storage.bodyWindowCustom')}
+                        </option>
                       </select>
+                      {!(BODY_WINDOWS as readonly string[]).includes(editBodyWindow) && (
+                        <div className="mt-2 flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={1}
+                            max={99}
+                            key={editBodyWindow}
+                            defaultValue={/^(\d+)y$/.exec(editBodyWindow)?.[1] ?? '3'}
+                            onBlur={(e) => {
+                              const n = Math.max(
+                                1,
+                                Math.min(99, Math.floor(Number(e.target.value) || 1)),
+                              );
+                              changeBodyWindow(a.id, `${n}y`);
+                            }}
+                            className="w-20 rounded-md bg-white/10 px-2 py-1.5 text-sm text-white outline-none focus:bg-white/20"
+                          />
+                          <span className="text-xs text-white/55">{t('storage.years')}</span>
+                        </div>
+                      )}
                       <span className="mt-1 block text-[11px] leading-snug text-white/40">
                         {t('storage.bodyWindowHint')}
                       </span>

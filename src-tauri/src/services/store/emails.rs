@@ -472,6 +472,34 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
             touched = true;
         }
     }
+    // 本文が未取得（absent）の既存行に全文取得できたときは、全文(body_plain)・HTML・状態を
+    // 復元する（本文バックフィル）。clean_body/FTS は上のブロック、添付は下のブロックで揃う。
+    let new_has_body = e.body_plain.as_deref().is_some_and(|s| !s.is_empty())
+        || e.body_html.as_deref().is_some_and(|s| !s.is_empty())
+        || e.clean_body.as_deref().is_some_and(|s| !s.trim().is_empty());
+    let stored_absent = conn
+        .query_row(
+            "SELECT COALESCE(body_state,'present')='absent' FROM emails WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, i64>(0).map(|v| v != 0),
+        )
+        .unwrap_or(false);
+    if stored_absent && new_has_body {
+        let body_html_z = e
+            .body_html
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(crate::services::compress::compress_text);
+        conn.execute(
+            "UPDATE emails
+             SET body_plain = ?1, body_html_z = ?2, body_html = NULL,
+                 has_attachments = ?3, body_compacted = 0, body_state = 'present'
+             WHERE id = ?4",
+            params![e.body_plain, body_html_z, e.has_attachments as i64, id],
+        )?;
+        touched = true;
+    }
+
     // 添付行が無ければ挿入する（重複防止）。
     let existing: i64 = conn.query_row(
         "SELECT count(*) FROM attachments WHERE email_id = ?1",
@@ -1289,6 +1317,33 @@ impl Store {
             "UPDATE email_fts SET clean_body = ?1 WHERE rowid = ?2",
             params![clean_body, id],
         )?;
+        Ok(())
+    }
+
+    /// 添付メタが未保存なら入れる（ヘッダのみ取り込んだ absent 行を全文取得で開いたとき、
+    /// 本文だけでなく添付も復元する。has_attachments も立て直す）。
+    pub fn ensure_attachments(
+        &self,
+        email_id: i64,
+        attachments: &[NewAttachment],
+    ) -> rusqlite::Result<()> {
+        if attachments.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().unwrap();
+        let n: i64 = conn.query_row(
+            "SELECT count(*) FROM attachments WHERE email_id = ?1",
+            params![email_id],
+            |r| r.get(0),
+        )?;
+        if n == 0 {
+            insert_attachments(&conn, email_id, attachments)?;
+            let has_real = attachments.iter().any(|a| a.kind == "attachment");
+            conn.execute(
+                "UPDATE emails SET has_attachments = ?1 WHERE id = ?2",
+                params![has_real as i64, email_id],
+            )?;
+        }
         Ok(())
     }
 

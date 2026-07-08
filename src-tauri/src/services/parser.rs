@@ -14,14 +14,17 @@ pub struct ParsedAttachment {
 }
 
 /// 添付パートを「本来の添付」と「本文埋め込み(inline)」に分類する。
-/// Content-Disposition が inline、または Content-ID を持つ画像は inline 扱い。
+/// 本文に cid: で埋め込む**画像**だけを inline（添付一覧から隠す）扱いにする。
+/// Content-Disposition: inline でも PDF 等は「本来の添付」として一覧に出す（Thunderbird 等と同じ）。
+/// 以前は disp=inline や Content-ID があるだけで inline としていたため、inline 指定の PDF が
+/// 添付一覧から漏れていた。
 fn classify_part(part: &mail_parser::MessagePart) -> &'static str {
-    let disp_inline = part
-        .content_disposition()
-        .map(|d| d.ctype().eq_ignore_ascii_case("inline"))
+    let is_image = part
+        .content_type()
+        .map(|ct| ct.ctype().eq_ignore_ascii_case("image"))
         .unwrap_or(false);
     let has_cid = part.content_id().is_some();
-    if disp_inline || has_cid {
+    if has_cid && is_image {
         "inline"
     } else {
         "attachment"
@@ -323,9 +326,8 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
     let to = msg.to().and_then(|a| a.first());
-    let to_addresses = to
-        .and_then(|addr| addr.address.as_deref())
-        .map(|s| s.to_string());
+    // To は全宛先を表示用文字列に（Cc と同じ形式。複数宛先が 1 件目で切れないように）。
+    let to_addresses = format_address_list(msg.to());
     let to_name = to
         .and_then(|addr| addr.name.as_deref())
         .map(|s| s.trim().to_string())

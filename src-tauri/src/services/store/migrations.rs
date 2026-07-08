@@ -189,6 +189,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 44,
         sql: include_str!("migrations/0044_verified_self.sql"),
     },
+    Migration {
+        // 45 は添付の再分類（inline 指定の PDF 等を添付一覧に出す。既存メールも直す）。
+        version: 45,
+        sql: include_str!("migrations/0045_attachment_reclassify.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

@@ -911,11 +911,10 @@ export function MailBody({
             </div>
           )}
           {d.to_addresses && (
-            <div className="truncate">
+            <div className="break-words">
               {t('mailbox.to')}:{' '}
-              <AddressLine
-                name={d.to_name}
-                address={d.to_addresses}
+              <LinkifyEmails
+                text={d.to_addresses}
                 onAdd={onAddContact}
                 onEdit={onEditContact}
                 onCompose={onComposeTo}

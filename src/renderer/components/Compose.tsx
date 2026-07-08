@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Send, X } from 'lucide-react';
+import { open } from '@tauri-apps/plugin-dialog';
+import { Paperclip, Send, X } from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { DraftContent } from '@bindings/DraftContent';
 import type { SignatureSummary } from '@bindings/SignatureSummary';
-import { mailDraftDiscard, mailDraftSyncRemote, mailSaveDraft, mailSend } from '../services/mail';
+import {
+  attachmentMeta,
+  mailDraftDiscard,
+  mailDraftSyncRemote,
+  mailSaveDraft,
+  mailSend,
+} from '../services/mail';
 import { signatureList } from '../services/signatures';
 import { getFlyAnimation } from '../config/prefs';
 import { playFlySound } from '../utils/flySound';
@@ -21,6 +28,19 @@ export type ComposeTarget =
   | { mode: 'draft'; draft: DraftContent };
 
 /** "Re: " / "Fwd: " を二重に付けない。 */
+/** 添付の合計サイズ上限（Rust 側の MAX_ATTACHMENT_TOTAL と揃える）。 */
+const MAX_ATTACH_TOTAL = 25 * 1024 * 1024;
+
+/** バイト数を人が読みやすい単位に整形する。 */
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** 作成画面で保持する添付（送信時に path を Rust へ渡す）。 */
+type Attach = { path: string; name: string; size: number };
+
 function withPrefix(subject: string | null, prefix: 'Re' | 'Fwd'): string {
   const s = (subject ?? '').trim();
   const re = new RegExp(`^${prefix}:`, 'i');
@@ -235,6 +255,8 @@ export function Compose({
   const [body, setBody] = useState(target.mode === 'draft' ? target.draft.body : '');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
+  // 添付ファイル（picker で選択。送信時に path を Rust へ渡して読み込ませる）。
+  const [attachments, setAttachments] = useState<Attach[]>([]);
 
   // 送信時に本文末へ足す引用/転送ブロック（編集欄には入れない）。プレーンと、あれば HTML。
   const quotedRef = useRef(init.quoted);
@@ -355,7 +377,27 @@ export function Compose({
   const flyRef = useRef<FlySwallowHandle>(null);
   const sendBtnRef = useRef<HTMLButtonElement>(null);
 
-  const canSend = accountId != null && splitAddresses(to).length > 0 && !sending;
+  const attachTotal = attachments.reduce((s, a) => s + a.size, 0);
+  const attachTooBig = attachTotal > MAX_ATTACH_TOTAL;
+  const canSend =
+    accountId != null && splitAddresses(to).length > 0 && !sending && !attachTooBig;
+
+  // ファイルを選んで添付に追加する（重複パスは除外）。
+  const pickAttachments = async () => {
+    const picked = await open({ multiple: true }).catch(() => null);
+    if (!picked) return;
+    const paths = Array.isArray(picked) ? picked : [picked];
+    const metas = await attachmentMeta(paths).catch(() => []);
+    setAttachments((prev) => {
+      const seen = new Set(prev.map((a) => a.path));
+      const add = metas
+        .filter((m) => !seen.has(m.path))
+        .map((m) => ({ path: m.path, name: m.name, size: Number(m.size) }));
+      return [...prev, ...add];
+    });
+  };
+  const removeAttachment = (path: string) =>
+    setAttachments((prev) => prev.filter((a) => a.path !== path));
 
   const onSend = async () => {
     if (accountId == null) return;
@@ -377,6 +419,8 @@ export function Compose({
       in_reply_to: init.inReplyTo,
       // References チェーンは Rust 側で in_reply_to から祖先を辿って積む（docs/THREADING.md）。
       references: null,
+      // 添付はローカルパスを渡し、Rust が送信時に読み込んで MIME に同梱する。
+      attachments: attachments.map((a) => a.path),
     });
     try {
       if (flyOn && flyRef.current && sendBtnRef.current) {
@@ -502,6 +546,53 @@ export function Compose({
             }}
             placeholder={t('compose.subjectPlaceholder')}
           />
+        </div>
+
+        {/* 添付ファイル */}
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <label className="w-12 shrink-0 text-xs text-white/45">{t('compose.attachLabel')}</label>
+            <button
+              type="button"
+              onClick={pickAttachments}
+              className="flex items-center gap-1.5 rounded-md bg-white/10 px-2.5 py-1.5 text-xs text-white/80 hover:bg-white/20"
+            >
+              <Paperclip size={13} />
+              {t('compose.attach')}
+            </button>
+            {attachments.length > 0 && (
+              <span className={`text-[11px] ${attachTooBig ? 'text-red-400' : 'text-white/40'}`}>
+                {t('compose.attachCount', { count: attachments.length })}・{formatSize(attachTotal)}
+              </span>
+            )}
+          </div>
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 pl-14">
+              {attachments.map((a) => (
+                <span
+                  key={a.path}
+                  title={`${a.name}（${formatSize(a.size)}）`}
+                  className="inline-flex max-w-[16rem] items-center gap-1.5 rounded-md bg-white/10 py-1 pl-2 pr-1 text-xs"
+                >
+                  <Paperclip size={12} className="shrink-0 text-white/50" />
+                  <span className="min-w-0 flex-1 truncate">{a.name}</span>
+                  <span className="shrink-0 text-white/40">{formatSize(a.size)}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeAttachment(a.path)}
+                    title={t('compose.attachRemove')}
+                    aria-label={t('compose.attachRemove')}
+                    className="shrink-0 rounded p-0.5 text-white/50 hover:bg-white/15 hover:text-white"
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          {attachTooBig && (
+            <p className="pl-14 text-[11px] text-red-400">{t('compose.attachTooLarge')}</p>
+          )}
         </div>
 
         {/* 署名の選択（切り替え）。署名が 1 つも無いときは行ごと隠す。 */}

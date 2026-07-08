@@ -880,6 +880,21 @@ pub struct SendInput {
     /// docs/THREADING.md）。
     #[serde(default)]
     pub references: Option<String>,
+    /// 添付するローカルファイルのパス配列（送信時に読み込み MIME に同梱）。空なら添付なし。
+    #[serde(default)]
+    pub attachments: Vec<String>,
+}
+
+/// 添付候補ファイルのメタ情報（作成画面の一覧表示・事前検証用）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct AttachmentMeta {
+    /// 元のファイルパス（送信時に Rust が読み込むキー）。
+    pub path: String,
+    /// 表示名（パスの basename）。
+    pub name: String,
+    /// バイト数。
+    pub size: i64,
 }
 
 /// 下書きの自動保存の入力（フロントから受け取る。docs/COMPOSE.md）。

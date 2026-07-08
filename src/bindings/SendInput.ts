@@ -33,4 +33,8 @@ in_reply_to: string | null,
  * スレッド表示させるため。返信時は「元メールの References ＋ 元メールの Message-ID」。
  * docs/THREADING.md）。
  */
-references: string | null, };
+references: string | null, 
+/**
+ * 添付するローカルファイルのパス配列（送信時に読み込み MIME に同梱）。空なら添付なし。
+ */
+attachments: Array<string>, };

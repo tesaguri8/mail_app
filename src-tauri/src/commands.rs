@@ -1,5 +1,5 @@
 use crate::models::{
-    AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult,
+    AccountInput, AccountSummary, AppInfo, AttachmentMeta, AttachmentSummary, AutoconfigResult,
     AttendeeInput, CalendarInput, CalendarSummary, ContactGroupSummary, ContactInput, ContactMatch,
     ContactSummary, DataLocation, DbInfo, DraftContent, DraftInput, DuplicateGroup, EventAttendee,
     EventInput, EventSummary, GcalCredentialsStatus, GcalSyncResult, GoogleAccount, GreenDomainEntry,
@@ -425,6 +425,25 @@ pub async fn mail_send(
             .references_chain_for(input.in_reply_to.as_deref())
             .map_err(|e| e.to_string())?,
     };
+    // 添付を読み込む（ローカルパスから Rust が直接読む）。合計サイズを検証する。
+    let mut attachments: Vec<(String, Vec<u8>, String)> = Vec::new();
+    let mut total: u64 = 0;
+    for path in &input.attachments {
+        let p = std::path::Path::new(path);
+        let bytes = std::fs::read(p).map_err(|e| format!("添付を読み込めません（{path}）: {e}"))?;
+        total += bytes.len() as u64;
+        if total > MAX_ATTACHMENT_TOTAL {
+            return Err("添付の合計が25MBを超えています。ファイルを減らしてください".to_string());
+        }
+        let name = p
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("attachment")
+            .to_string();
+        let ct = guess_content_type(&name).to_string();
+        attachments.push((name, bytes, ct));
+    }
+
     let config = smtp::SmtpConfig {
         host: acct.smtp_host,
         port: acct.smtp_port,
@@ -444,6 +463,7 @@ pub async fn mail_send(
         in_reply_to: input.in_reply_to,
         references,
         message_id: None, // 実送信は lettre の自動採番でよい
+        attachments,
     };
 
     // 送信メッセージを 1 度だけ組み立て、SMTP 送信と Sent 保存で共有する。
@@ -458,22 +478,89 @@ pub async fn mail_send(
     // 失敗しても送信自体は成功しているので、警告ログにとどめてエラーにはしない。
     // ただし Gmail 等はサーバーが送信時に自動で控えを保存するため、APPEND すると二重に
     // なる。該当プロバイダでは APPEND をスキップし、サーバー保存分を次回同期で取り込む。
+    //
+    // Sent への保存は本文をもう一度アップロードするので、添付つきの大きなメールでは
+    // 送信の完了体感が大きく遅くなる。ここでは待たずにバックグラウンドで走らせ、SMTP が
+    // 受理した時点で送信完了とする（次回同期でも Sent は取り込まれる）。
     if let Ok(Some((_email, login, host, port))) = store.get_account_imap(input.account_id as i64) {
         if imap_sync::server_saves_sent_copy(&host) {
             log::info!("Sent への APPEND をスキップ（サーバーが自動保存: {host}）");
         } else {
-            let res = tauri::async_runtime::spawn_blocking(move || {
-                imap_sync::append_to_sent(&host, port, &login, &password, &raw)
-            })
-            .await;
-            match res {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => log::warn!("送信は成功、Sent への保存に失敗: {e}"),
-                Err(e) => log::warn!("Sent 保存タスクに失敗: {e}"),
-            }
+            tauri::async_runtime::spawn(async move {
+                let res = tauri::async_runtime::spawn_blocking(move || {
+                    imap_sync::append_to_sent(&host, port, &login, &password, &raw)
+                })
+                .await;
+                match res {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => log::warn!("送信は成功、Sent への保存に失敗: {e}"),
+                    Err(e) => log::warn!("Sent 保存タスクに失敗: {e}"),
+                }
+            });
         }
     }
     Ok(())
+}
+
+/// 添付の合計サイズ上限（多くの SMTP サーバーの制限に合わせて 25MB）。
+const MAX_ATTACHMENT_TOTAL: u64 = 25 * 1024 * 1024;
+
+/// 拡張子から content-type を推定する（既定は application/octet-stream）。
+fn guess_content_type(name: &str) -> &'static str {
+    let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "heic" => "image/heic",
+        "heif" => "image/heif",
+        "txt" | "log" => "text/plain",
+        "csv" => "text/csv",
+        "html" | "htm" => "text/html",
+        "md" => "text/markdown",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "zip" => "application/zip",
+        "gz" | "tgz" => "application/gzip",
+        "7z" => "application/x-7z-compressed",
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        _ => "application/octet-stream",
+    }
+}
+
+/// 添付候補ファイルのメタ（名前・サイズ）を返す。作成画面の一覧表示・事前検証に使う。
+#[tauri::command]
+pub fn attachment_meta(paths: Vec<String>) -> Result<Vec<AttachmentMeta>, String> {
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let p = std::path::Path::new(&path);
+        let meta =
+            std::fs::metadata(p).map_err(|e| format!("ファイルを確認できません（{path}）: {e}"))?;
+        let name = p
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("attachment")
+            .to_string();
+        out.push(AttachmentMeta {
+            path: path.clone(),
+            name,
+            size: meta.len() as i64,
+        });
+    }
+    Ok(out)
 }
 
 /// リモート画像のディスクキャッシュ用フォルダ。**許可済み差出人**のときだけ Some を返す。
@@ -901,6 +988,7 @@ pub async fn mail_draft_sync_remote(
         in_reply_to: draft.in_reply_to,
         references,
         message_id: Some(message_id.clone()),
+        attachments: Vec::new(), // 下書きのサーバー保存は本文のみ（添付の永続化は今回対象外）
     };
     let email = smtp::build_message(&message)?;
     let raw = email.formatted();

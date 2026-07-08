@@ -6,6 +6,7 @@ import type { AttachmentSummary } from '@bindings/AttachmentSummary';
 import type { StorageInfo } from '@bindings/StorageInfo';
 import type { RetentionReport } from '@bindings/RetentionReport';
 import type { SendInput } from '@bindings/SendInput';
+import type { AttachmentMeta } from '@bindings/AttachmentMeta';
 import type { DraftInput } from '@bindings/DraftInput';
 import type { DraftContent } from '@bindings/DraftContent';
 import type { RemoteImage } from '@bindings/RemoteImage';
@@ -18,8 +19,12 @@ export const mailSync = (accountId: number) => invoke<SyncResult>('mail_sync', {
 export const mailSyncCancel = (accountId: number) =>
   invoke<boolean>('mail_sync_cancel', { accountId });
 
-// メールを送信する（SMTP）。input は差出人アカウント・宛先・件名・本文など。
+// メールを送信する（SMTP）。input は差出人アカウント・宛先・件名・本文・添付パスなど。
 export const mailSend = (input: SendInput) => invoke<void>('mail_send', { input });
+
+// 添付候補ファイルの名前・サイズを取得する（作成画面の一覧表示・事前検証用）。
+export const attachmentMeta = (paths: string[]) =>
+  invoke<AttachmentMeta[]>('attachment_meta', { paths });
 
 // 書きかけのメールを下書き（drafts）へ保存/更新する。保存した下書きの id を返す。
 // input.draft_id があれば更新、無ければ新規作成。破棄は mailDelete を使う。

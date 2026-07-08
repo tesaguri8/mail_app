@@ -1,7 +1,8 @@
 //! SMTP 送信（lettre）。IMAP 同期と同様にブロッキング API を spawn_blocking で回す。
 //! TLS は native-tls（Win=SChannel / mac=SecureTransport）で OpenSSL 依存を避ける。
 
-use lettre::message::{Mailbox, MultiPart};
+use lettre::message::header::ContentType;
+use lettre::message::{Attachment, Mailbox, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Message, SmtpTransport, Transport};
 
@@ -37,6 +38,8 @@ pub struct OutgoingMessage {
     /// 自メッセージの Message-ID を明示指定する（山括弧なしの中身）。None なら lettre が自動採番。
     /// 下書きをサーバー Drafts へ APPEND する際、後で同定・削除できるよう固定 ID を使う。
     pub message_id: Option<String>,
+    /// 添付（表示名, バイト列, content-type）。空なら添付なし（本文のみ）。
+    pub attachments: Vec<(String, Vec<u8>, String)>,
 }
 
 /// "名前 <addr>" / "addr" のどちらでも Mailbox に解釈する。
@@ -110,14 +113,37 @@ pub fn build_message(msg: &OutgoingMessage) -> Result<Message, String> {
     }
 
     // 本文: HTML があれば plain + HTML の multipart/alternative、無ければ plain のみ。
-    match msg.body_html.as_ref().filter(|s| !s.trim().is_empty()) {
-        Some(html) => builder.multipart(MultiPart::alternative_plain_html(
-            msg.body_plain.clone(),
-            html.clone(),
-        )),
-        None => builder.body(msg.body_plain.clone()),
+    // 添付があるときは multipart/mixed で本文パートに添付を足す。
+    let has_html = msg
+        .body_html
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .cloned();
+    if msg.attachments.is_empty() {
+        match has_html {
+            Some(html) => {
+                builder.multipart(MultiPart::alternative_plain_html(msg.body_plain.clone(), html))
+            }
+            None => builder.body(msg.body_plain.clone()),
+        }
+        .map_err(|e| format!("メッセージの組み立てに失敗しました: {e}"))
+    } else {
+        // 本文パート（HTML ありは alternative、無しは plain 単体）。
+        let mut mixed = match has_html {
+            Some(html) => MultiPart::mixed()
+                .multipart(MultiPart::alternative_plain_html(msg.body_plain.clone(), html)),
+            None => MultiPart::mixed().singlepart(SinglePart::plain(msg.body_plain.clone())),
+        };
+        // 添付を順に足す。content-type が壊れていても octet-stream で送る。
+        let octet = ContentType::parse("application/octet-stream").unwrap();
+        for (name, bytes, ct) in &msg.attachments {
+            let content_type = ContentType::parse(ct).unwrap_or_else(|_| octet.clone());
+            mixed = mixed.singlepart(Attachment::new(name.clone()).body(bytes.clone(), content_type));
+        }
+        builder
+            .multipart(mixed)
+            .map_err(|e| format!("メッセージの組み立てに失敗しました: {e}"))
     }
-    .map_err(|e| format!("メッセージの組み立てに失敗しました: {e}"))
 }
 
 /// 組み立て済みメッセージを SMTP で送信する。成功なら Ok(())。
@@ -132,7 +158,12 @@ pub fn send(config: &SmtpConfig, email: &Message) -> Result<(), String> {
         // 平文（非推奨。テスト用途など）。
         _ => SmtpTransport::builder_dangerous(host),
     };
-    let mailer = builder.port(config.port).credentials(creds).build();
+    let mailer = builder
+        .port(config.port)
+        .credentials(creds)
+        // 接続・応答の停滞で無限に待たないよう上限を設ける（大きめの添付の送出も見込んで 120 秒）。
+        .timeout(Some(std::time::Duration::from_secs(120)))
+        .build();
 
     mailer
         .send(email)

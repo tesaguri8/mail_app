@@ -1,4 +1,5 @@
 mod accounts;
+mod calendar_sync;
 mod calendars;
 mod contacts;
 mod emails;
@@ -15,6 +16,7 @@ mod tags;
 mod threads;
 
 pub use accounts::{NewAccount, SmtpAccount};
+pub use calendar_sync::{ApplyOutcome, LocalChange, RemoteEvent};
 pub use emails::{
     insert_email, AttachmentFetchInfo, InsertOutcome, NewAttachment, NewEmail, NewQuote, PurgeRef,
 };

@@ -11,10 +11,15 @@ fn row_to_calendar(r: &Row) -> rusqlite::Result<CalendarSummary> {
         visible: r.get::<_, i64>(4)? != 0,
         is_default: r.get::<_, i64>(5)? != 0,
         sort_order: r.get::<_, i64>(6)? as i32,
+        source: r.get(7)?,
+        access_role: r.get(8)?,
+        account_email: r.get(9)?,
     })
 }
 
-const CAL_COLS: &str = "id, name, color, kind, visible, is_default, sort_order";
+// account_email は相関サブクエリで引く（calendars 側だけ SELECT すればよく、JOIN 不要）。
+const CAL_COLS: &str = "id, name, color, kind, visible, is_default, sort_order, source, access_role, \
+    (SELECT email FROM calendar_accounts a WHERE a.id = calendars.account_id) AS account_email";
 
 impl Store {
     /// カレンダー一覧（既定→種別→並び順→名前）。マイを先、他を後に並べる。

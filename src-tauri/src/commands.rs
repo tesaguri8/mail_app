@@ -2,7 +2,8 @@ use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentSummary, AutoconfigResult,
     AttendeeInput, CalendarInput, CalendarSummary, ContactGroupSummary, ContactInput, ContactMatch,
     ContactSummary, DataLocation, DbInfo, DraftContent, DraftInput, DuplicateGroup, EventAttendee,
-    EventInput, EventSummary, GreenDomainEntry, IcsImportReport, ImportReport, MailDetail,
+    EventInput, EventSummary, GcalCredentialsStatus, GcalSyncResult, GoogleAccount, GreenDomainEntry,
+    IcsImportReport, ImportReport, MailDetail,
     MailSummary, OrgDuplicateGroup, OrganizationDetail, OrganizationSummary, RebuildAction,
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict, StorageInfo, SyncProgress,
@@ -11,6 +12,7 @@ use crate::models::{
 use crate::services::autoconfig;
 use crate::services::datadir;
 use crate::services::dataver;
+use crate::services::gcal;
 use crate::services::gcsv;
 use crate::services::imap_sync;
 use crate::services::media;
@@ -1416,21 +1418,54 @@ pub fn event_get(store: State<Store>, id: i64) -> Result<EventSummary, String> {
 }
 
 /// 予定を作成または更新（確定後の行を返す）。`input.id` が無ければ新規。
+/// Google カレンダー（書き込み可）所属なら、保存後にその予定を即 Google へ送る（ベストエフォート）。
 #[tauri::command]
-pub fn event_upsert(store: State<Store>, input: EventInput) -> Result<EventSummary, String> {
+pub async fn event_upsert(
+    app: AppHandle,
+    store: State<'_, Store>,
+    input: EventInput,
+) -> Result<EventSummary, String> {
     if input.title.trim().is_empty() {
         return Err("タイトルを入力してください".to_string());
     }
     if input.start_at.trim().is_empty() {
         return Err("開始日時を入力してください".to_string());
     }
-    store.upsert_event(&input).map_err(|e| e.to_string())
+    // 更新前の (external_id, remote_calendar) を控える（カレンダー移動の検出用）。
+    // remote_calendar は Google 上で今この予定が実在するカレンダー。
+    let prev = match input.id {
+        Some(id) => store.event_sync_ref(id as i64).ok().flatten(),
+        None => None,
+    };
+    let saved = store.upsert_event(&input).map_err(|e| e.to_string())?;
+    let new_cal = saved.calendar_id.map(|v| v as i64);
+    // 新カレンダーが Google 書き込み可なら、その external_id（＝新しい送信先）。
+    let new_target_ext = new_cal.and_then(|cid| match store.google_calendar_meta(cid) {
+        Ok(Some((_, ext, role))) if matches!(role.as_str(), "owner" | "writer") => Some(ext),
+        _ => None,
+    });
+    // Google 上の実在場所が新カレンダーと違うなら、実在場所から削除して連携解除（新カレンダーへ作成し直す）。
+    if let Some((ext, remote_cal)) = prev {
+        gcal_handle_move(&app, store.inner(), ext, remote_cal, new_target_ext, saved.id as i64).await;
+    }
+    // 新カレンダーへ送信（新規 or 既存の更新）。
+    gcal_try_autopush(&app, store.inner(), new_cal).await;
+    Ok(saved)
 }
 
 /// 予定を論理削除（ゴミ箱へ。保持期間後に完全削除）。
+/// Google カレンダー所属なら、削除も即 Google へ伝播する（ベストエフォート）。
 #[tauri::command]
-pub fn event_delete(store: State<Store>, id: i64) -> Result<(), String> {
-    store.delete_event(id).map_err(|e| e.to_string())
+pub async fn event_delete(
+    app: AppHandle,
+    store: State<'_, Store>,
+    id: i64,
+) -> Result<(), String> {
+    // 所属カレンダーを削除前に控える（削除後も残るが順序を明確にするため）。
+    let cal_id = store.get_event(id).ok().and_then(|e| e.calendar_id).map(|v| v as i64);
+    store.delete_event(id).map_err(|e| e.to_string())?;
+    gcal_try_autopush(&app, store.inner(), cal_id).await;
+    Ok(())
 }
 
 /// 論理削除した予定を復元。
@@ -1501,6 +1536,248 @@ pub fn ics_import(store: State<Store>, path: String) -> Result<IcsImportReport, 
 pub fn ics_export(store: State<Store>, path: String) -> Result<(), String> {
     let text = store.export_ics().map_err(|e| e.to_string())?;
     std::fs::write(&path, text).map_err(|e| format!("ファイルを書けません: {e}"))
+}
+
+// ────────────────── Google カレンダー同期（docs/CALENDAR_SYNC.md） ──────────────────
+
+/// keyring 内の Client Secret のキー（OAuth アプリは 1 つなので固定）。
+const GCAL_CLIENT_SECRET_KEY: &str = "gcal:client_secret";
+
+/// keyring 内の refresh_token のキー（連携アカウントのメールごと）。
+fn gcal_refresh_key(email: &str) -> String {
+    format!("gcal:refresh:{email}")
+}
+
+/// Client ID / Secret を解決する。優先順位は「アプリに保存済み（app_settings/keyring）」→
+/// 「環境変数（GCAL_CLIENT_ID / GCAL_CLIENT_SECRET。dev の .env 用）」。無ければ None。
+fn gcal_resolve_credentials(app: &AppHandle, store: &Store) -> (Option<String>, Option<String>) {
+    let non_empty = |s: String| Some(s).filter(|v| !v.trim().is_empty());
+    // Client ID: 保存済み → 環境変数。
+    let client_id = store
+        .get_setting("gcal_client_id")
+        .ok()
+        .flatten()
+        .and_then(non_empty)
+        .or_else(|| std::env::var("GCAL_CLIENT_ID").ok().and_then(non_empty));
+    // Client Secret: keyring → 環境変数。
+    let service = app.config().identifier.clone();
+    let client_secret = keyring::Entry::new(&service, GCAL_CLIENT_SECRET_KEY)
+        .and_then(|e| e.get_password())
+        .ok()
+        .and_then(non_empty)
+        .or_else(|| std::env::var("GCAL_CLIENT_SECRET").ok().and_then(non_empty));
+    (client_id, client_secret)
+}
+
+/// 保存/削除した予定が Google（書き込み可）カレンダー所属なら、その予定の変更だけを即 Google へ
+/// 送る（保存時オート送信）。ベストエフォート: 失敗しても保存自体は成功扱い（警告ログのみ）。
+/// ローカル専用・読み取り専用カレンダー・未連携なら即 return（ネットワークアクセスなし）。
+/// アカウントのアクセストークンを取得（refresh_token → access_token）。失敗時は None。
+async fn gcal_account_access(app: &AppHandle, store: &Store, account_id: i64) -> Option<String> {
+    let email = store.calendar_account_email(account_id).ok().flatten()?;
+    let (client_id, client_secret) = gcal_read_credentials(app, store).ok()?;
+    let service = app.config().identifier.clone();
+    let refresh = keyring::Entry::new(&service, &gcal_refresh_key(&email))
+        .and_then(|e| e.get_password())
+        .ok()?;
+    match gcal::oauth::refresh_access_token(&client_id, &client_secret, &refresh).await {
+        Ok(a) => Some(a),
+        Err(e) => {
+            log::warn!("Google カレンダー: トークン更新に失敗: {e}");
+            None
+        }
+    }
+}
+
+async fn gcal_try_autopush(app: &AppHandle, store: &Store, calendar_local_id: Option<i64>) {
+    let Some(cal_id) = calendar_local_id else {
+        return;
+    };
+    let (account_id, ext_id, access_role) = match store.google_calendar_meta(cal_id) {
+        Ok(Some(m)) => m,
+        _ => {
+            log::info!("gcal autopush: カレンダー {cal_id} はローカル/未連携のため送信しません");
+            return; // ローカル/未連携カレンダー
+        }
+    };
+    if !matches!(access_role.as_str(), "owner" | "writer") {
+        log::info!(
+            "gcal autopush: カレンダー {cal_id}（{access_role}）は読み取り専用のため送信しません"
+        );
+        return; // 読み取り専用（購読カレンダー等）は送れない
+    }
+    let Some(access) = gcal_account_access(app, store, account_id).await else {
+        return;
+    };
+    match gcal::sync::push_calendar_only(store, &access, cal_id, &ext_id).await {
+        Ok(r) => log::info!(
+            "gcal autopush: カレンダー {cal_id} 送信 pushed={} deleted_out={}",
+            r.pushed,
+            r.deleted_out
+        ),
+        Err(e) => log::warn!("Google カレンダー自動送信に失敗: {e}"),
+    }
+}
+
+/// 予定が別の Google カレンダーへ移った（またはローカル/読み取り専用へ移った）ときの後始末。
+/// `remote_calendar`（＝Google 上で今この予定が実在するカレンダー）から予定を削除し、ローカルの
+/// 連携情報を解除して、新カレンダーで新規作成扱いにする（Google は単純 patch でカレンダー間移動を
+/// 扱えないため、「実在場所から削除 → 新へ作成」で反映する）。ローカル calendar_id ではなく Google
+/// 上の実在場所を使うので、付け替えでズレていても正しい場所から消せる。
+async fn gcal_handle_move(
+    app: &AppHandle,
+    store: &Store,
+    external_id: Option<String>,
+    remote_calendar: Option<String>,
+    new_target_ext: Option<String>,
+    event_id: i64,
+) {
+    let (Some(gid), Some(remote_cal)) = (external_id, remote_calendar) else {
+        return; // Google 上に無い予定は、移動元として消すものが無い
+    };
+    if Some(&remote_cal) == new_target_ext.as_ref() {
+        return; // 同じ Google カレンダーのまま＝通常の編集（patch）。移動ではない
+    }
+    // 実在カレンダー（remote_cal）から削除する。書き込み可のときだけ。
+    if let Ok(Some((account_id, role))) = store.google_calendar_by_ext(&remote_cal) {
+        if matches!(role.as_str(), "owner" | "writer") {
+            if let Some(access) = gcal_account_access(app, store, account_id).await {
+                if let Ok(client) = gcal::http_client() {
+                    match gcal::api::delete_event(&client, &access, &remote_cal, &gid).await {
+                        Ok(()) => log::info!(
+                            "gcal move: 実在カレンダー {remote_cal} から gid={gid} を削除"
+                        ),
+                        Err(e) => log::warn!("gcal move: 旧予定の削除に失敗: {e}"),
+                    }
+                }
+            }
+        }
+    }
+    // 連携情報を解除 → 新カレンダーの autopush で新規作成される（dirty は 1 のまま）。
+    if let Err(e) = store.reset_event_remote(event_id) {
+        log::warn!("gcal move: 連携情報のリセットに失敗: {e}");
+    }
+}
+
+/// 解決済み Client ID / Secret を返す。どちらか欠けていれば分かるエラー。
+fn gcal_read_credentials(app: &AppHandle, store: &Store) -> Result<(String, String), String> {
+    let (client_id, client_secret) = gcal_resolve_credentials(app, store);
+    let client_id = client_id.ok_or(
+        "Google の Client ID が未設定です。設定 > Google カレンダー で入力（または .env の GCAL_CLIENT_ID）してください",
+    )?;
+    let client_secret = client_secret
+        .ok_or("Google の Client Secret が未設定です（.env の GCAL_CLIENT_SECRET でも可）")?;
+    Ok((client_id, client_secret))
+}
+
+/// OAuth クライアント資格情報（Client ID / Secret）を保存する。
+#[tauri::command]
+pub fn gcal_set_credentials(
+    app: AppHandle,
+    store: State<Store>,
+    client_id: String,
+    client_secret: String,
+) -> Result<(), String> {
+    let cid = client_id.trim();
+    let cs = client_secret.trim();
+    if cid.is_empty() || cs.is_empty() {
+        return Err("Client ID と Client Secret を入力してください".into());
+    }
+    store
+        .set_setting("gcal_client_id", cid)
+        .map_err(|e| e.to_string())?;
+    let service = app.config().identifier.clone();
+    keyring::Entry::new(&service, GCAL_CLIENT_SECRET_KEY)
+        .and_then(|e| e.set_password(cs))
+        .map_err(|e| format!("Client Secret を保存できません: {e}"))?;
+    Ok(())
+}
+
+/// OAuth クライアント資格情報の設定状況（値は返さず、有無とヒントのみ）。
+#[tauri::command]
+pub fn gcal_credentials_status(
+    app: AppHandle,
+    store: State<Store>,
+) -> Result<GcalCredentialsStatus, String> {
+    // 保存済み・環境変数（.env）どちらでも「設定済み」と見なす。
+    let (client_id, client_secret) = gcal_resolve_credentials(&app, store.inner());
+    let hint = client_id.as_ref().map(|id| {
+        let head: String = id.chars().take(12).collect();
+        format!("{head}…")
+    });
+    Ok(GcalCredentialsStatus {
+        configured: client_id.is_some() && client_secret.is_some(),
+        client_id_hint: hint,
+    })
+}
+
+/// 連携済み Google アカウント一覧。
+#[tauri::command]
+pub fn gcal_accounts(store: State<Store>) -> Result<Vec<GoogleAccount>, String> {
+    store.list_calendar_accounts().map_err(|e| e.to_string())
+}
+
+/// Google アカウントを連携する（OAuth 同意フロー → refresh_token を keyring に保存）。
+#[tauri::command]
+pub async fn gcal_connect(
+    app: AppHandle,
+    store: State<'_, Store>,
+) -> Result<GoogleAccount, String> {
+    let (client_id, client_secret) = gcal_read_credentials(&app, store.inner())?;
+    let (tokens, email) = gcal::oauth::run_flow(&app, &client_id, &client_secret).await?;
+    let refresh = tokens.refresh_token.ok_or(
+        "refresh_token を取得できませんでした（同意画面でカレンダーの権限を許可してください）",
+    )?;
+    let service = app.config().identifier.clone();
+    keyring::Entry::new(&service, &gcal_refresh_key(&email))
+        .and_then(|e| e.set_password(&refresh))
+        .map_err(|e| format!("認証情報を保存できません: {e}"))?;
+    let id = store
+        .upsert_calendar_account(&email, None)
+        .map_err(|e| e.to_string())?;
+    Ok(GoogleAccount {
+        id: id as i32,
+        email,
+        last_sync_at: None,
+    })
+}
+
+/// Google アカウントの連携を解除する（refresh_token と、取り込んだカレンダー/予定を削除）。
+#[tauri::command]
+pub fn gcal_disconnect(
+    app: AppHandle,
+    store: State<Store>,
+    account_id: i64,
+) -> Result<(), String> {
+    if let Ok(Some(email)) = store.calendar_account_email(account_id) {
+        let service = app.config().identifier.clone();
+        if let Ok(entry) = keyring::Entry::new(&service, &gcal_refresh_key(&email)) {
+            let _ = entry.delete_credential();
+        }
+    }
+    store
+        .delete_calendar_account(account_id)
+        .map_err(|e| e.to_string())
+}
+
+/// 指定アカウントのカレンダーを同期する（push → pull の双方向）。
+#[tauri::command]
+pub async fn gcal_sync(
+    app: AppHandle,
+    store: State<'_, Store>,
+    account_id: i64,
+) -> Result<GcalSyncResult, String> {
+    let email = store
+        .calendar_account_email(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("連携アカウントが見つかりません")?;
+    let (client_id, client_secret) = gcal_read_credentials(&app, store.inner())?;
+    let service = app.config().identifier.clone();
+    let refresh = keyring::Entry::new(&service, &gcal_refresh_key(&email))
+        .and_then(|e| e.get_password())
+        .map_err(|_| "保存された認証情報がありません。もう一度連携してください".to_string())?;
+    let access = gcal::oauth::refresh_access_token(&client_id, &client_secret, &refresh).await?;
+    gcal::sync::sync_account(store.inner(), &access, account_id).await
 }
 
 /// グリーン／警告ドメインの一覧（管理タブ用。住所録由来の自動グリーンも含む）。

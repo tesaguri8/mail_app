@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
-import { FolderInput, HardDrive, RotateCcw } from 'lucide-react';
+import { FolderInput, HardDrive, RotateCcw, RefreshCw, Link2, Unlink } from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { SpamSettings as SpamSettingsType } from '@bindings/SpamSettings';
 import type { DataLocation } from '@bindings/DataLocation';
@@ -45,6 +45,16 @@ import {
   mailTrashRetentionSet,
   mailTrashPurge,
 } from '../services/trash';
+import {
+  gcalAccounts,
+  gcalConnect,
+  gcalCredentialsStatus,
+  gcalDisconnect,
+  gcalSetCredentials,
+  gcalSync,
+} from '../services/gcal';
+import type { GoogleAccount } from '@bindings/GoogleAccount';
+import type { GcalCredentialsStatus } from '@bindings/GcalCredentialsStatus';
 import { AccountSetup } from './AccountSetup';
 import { SignatureManager } from './SignatureManager';
 import { TagManager } from './TagManager';
@@ -55,7 +65,15 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 // 実値はアプリ起動時に spam_settings_get で上書きする（DB が単一ソース）。
 const SPAM_DEFAULTS: SpamSettingsType = { enabled: true, threshold_low: 0.5, threshold_high: 0.9 };
 
-type Section = 'accounts' | 'signatures' | 'tags' | 'display' | 'spam' | 'data' | 'about';
+type Section =
+  | 'accounts'
+  | 'signatures'
+  | 'tags'
+  | 'display'
+  | 'calendar'
+  | 'spam'
+  | 'data'
+  | 'about';
 
 /** バイト数を読みやすい単位に整形。 */
 function formatBytes(n: number): string {
@@ -88,6 +106,7 @@ export function Settings({
     { key: 'signatures', label: t('settings.signatures') },
     { key: 'tags', label: t('settings.tags') },
     { key: 'display', label: t('settings.display') },
+    { key: 'calendar', label: t('settings.calendarSync') },
     { key: 'spam', label: t('settings.spam') },
     { key: 'data', label: t('settings.data') },
     { key: 'about', label: t('settings.about') },
@@ -115,6 +134,7 @@ export function Settings({
         {section === 'signatures' && <SignatureManager />}
         {section === 'tags' && <TagManager />}
         {section === 'display' && <DisplaySettings />}
+        {section === 'calendar' && <GoogleCalendarSettings />}
         {section === 'spam' && <SpamSettings />}
         {section === 'data' && (
           <div className="space-y-6">
@@ -636,6 +656,218 @@ function TrashSettings() {
       >
         {t('settings.trashPurgeNow')}
       </button>
+    </div>
+  );
+}
+
+/**
+ * Google カレンダー連携（双方向同期。docs/CALENDAR_SYNC.md）。
+ * OAuth クライアント認証情報の入力 → アカウント連携（ブラウザ同意）→ 今すぐ同期／解除。
+ */
+function GoogleCalendarSettings() {
+  const { t } = useTranslation();
+  const [creds, setCreds] = useState<GcalCredentialsStatus | null>(null);
+  const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
+  const [accounts, setAccounts] = useState<GoogleAccount[]>([]);
+  const [busy, setBusy] = useState<'idle' | 'saving' | 'connecting' | 'syncing'>('idle');
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = () => {
+    if (!isTauri) return;
+    gcalCredentialsStatus().then(setCreds).catch(() => undefined);
+    gcalAccounts().then(setAccounts).catch(() => setAccounts([]));
+  };
+  useEffect(refresh, []);
+
+  const saveCreds = async () => {
+    if (!isTauri || busy !== 'idle') return;
+    setBusy('saving');
+    setError(null);
+    setMessage(null);
+    try {
+      await gcalSetCredentials(clientId.trim(), clientSecret.trim());
+      setClientId('');
+      setClientSecret('');
+      setMessage(t('settings.gcalSaved'));
+      gcalCredentialsStatus().then(setCreds).catch(() => undefined);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy('idle');
+    }
+  };
+
+  const connect = async () => {
+    if (!isTauri || busy !== 'idle') return;
+    if (!creds?.configured) {
+      setError(t('settings.gcalNeedCredentials'));
+      return;
+    }
+    setBusy('connecting');
+    setError(null);
+    setMessage(null);
+    try {
+      await gcalConnect();
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy('idle');
+    }
+  };
+
+  const syncNow = async (id: number) => {
+    if (!isTauri || busy !== 'idle') return;
+    setBusy('syncing');
+    setError(null);
+    setMessage(null);
+    try {
+      const r = await gcalSync(id);
+      setMessage(
+        t('settings.gcalSyncDone', {
+          pulled: r.pulled,
+          pushed: r.pushed,
+          deletedIn: r.deleted_in,
+          deletedOut: r.deleted_out,
+        }),
+      );
+      gcalAccounts().then(setAccounts).catch(() => undefined);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy('idle');
+    }
+  };
+
+  const disconnect = async (id: number) => {
+    if (!isTauri || busy !== 'idle') return;
+    if (!window.confirm(t('settings.gcalDisconnectConfirm'))) return;
+    setError(null);
+    setMessage(null);
+    try {
+      await gcalDisconnect(id);
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  return (
+    <div className="max-w-xl space-y-6">
+      <div>
+        <div className="text-base font-semibold text-white">{t('settings.gcalTitle')}</div>
+        <p className="mt-0.5 text-xs text-white/45">{t('settings.gcalIntro')}</p>
+      </div>
+
+      {/* OAuth クライアント認証情報 */}
+      <div className="space-y-3 rounded-lg bg-white/5 p-4">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium text-white/85">{t('settings.gcalCredentials')}</span>
+          <span
+            className={`rounded-full px-2 py-0.5 text-xs ${
+              creds?.configured ? 'bg-emerald-500/20 text-emerald-200' : 'bg-white/10 text-white/50'
+            }`}
+          >
+            {creds?.configured
+              ? `${t('settings.gcalConfigured')}${creds.client_id_hint ? ` (${creds.client_id_hint})` : ''}`
+              : t('settings.gcalNotConfigured')}
+          </span>
+        </div>
+        <p className="text-xs text-white/45">{t('settings.gcalCredentialsHint')}</p>
+        <label className="block">
+          <span className="mb-1 block text-xs text-white/50">{t('settings.gcalClientId')}</span>
+          <input
+            type="text"
+            value={clientId}
+            onChange={(e) => setClientId(e.target.value)}
+            placeholder="xx…apps.googleusercontent.com"
+            className="w-full rounded bg-white/10 px-2 py-1.5 font-mono text-xs outline-none focus:bg-white/15"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs text-white/50">{t('settings.gcalClientSecret')}</span>
+          <input
+            type="password"
+            value={clientSecret}
+            onChange={(e) => setClientSecret(e.target.value)}
+            placeholder="GOCSPX-…"
+            className="w-full rounded bg-white/10 px-2 py-1.5 font-mono text-xs outline-none focus:bg-white/15"
+          />
+        </label>
+        <button
+          onClick={saveCreds}
+          disabled={busy !== 'idle' || !clientId.trim() || !clientSecret.trim()}
+          className="rounded-md bg-white/15 px-3 py-1.5 text-sm font-medium hover:bg-white/25 disabled:opacity-40"
+        >
+          {busy === 'saving' ? '…' : t('settings.gcalSave')}
+        </button>
+      </div>
+
+      {/* 連携ボタン */}
+      <div>
+        <button
+          onClick={connect}
+          disabled={busy !== 'idle' || !creds?.configured}
+          className="flex items-center gap-1.5 rounded-md bg-sky-500/90 px-3 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-40"
+        >
+          <Link2 size={15} />
+          {busy === 'connecting' ? t('settings.gcalConnecting') : t('settings.gcalConnect')}
+        </button>
+        <p className="mt-2 text-xs text-white/40">{t('settings.gcalTestUserNote')}</p>
+      </div>
+
+      {/* 連携中アカウント一覧 */}
+      <div>
+        <div className="mb-2 text-sm font-medium text-white/85">{t('settings.gcalAccounts')}</div>
+        {accounts.length === 0 ? (
+          <p className="text-xs text-white/40">{t('settings.gcalNoAccounts')}</p>
+        ) : (
+          <ul className="space-y-2">
+            {accounts.map((a) => (
+              <li
+                key={a.id}
+                className="flex items-center justify-between gap-3 rounded-lg bg-white/5 px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <div className="truncate text-sm text-white/90">{a.email}</div>
+                  <div className="text-xs text-white/40">
+                    {a.last_sync_at
+                      ? t('settings.gcalLastSync', {
+                          // SQLite の CURRENT_TIMESTAMP は 'YYYY-MM-DD HH:MM:SS'(UTC)。ISO 化して解釈。
+                          when: new Date(a.last_sync_at.replace(' ', 'T') + 'Z').toLocaleString(),
+                        })
+                      : t('settings.gcalNeverSynced')}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    onClick={() => syncNow(a.id)}
+                    disabled={busy !== 'idle'}
+                    className="flex items-center gap-1 rounded-md bg-white/15 px-2.5 py-1.5 text-xs font-medium hover:bg-white/25 disabled:opacity-40"
+                  >
+                    <RefreshCw size={13} className={busy === 'syncing' ? 'animate-spin' : ''} />
+                    {busy === 'syncing' ? t('settings.gcalSyncing') : t('settings.gcalSyncNow')}
+                  </button>
+                  <button
+                    onClick={() => disconnect(a.id)}
+                    disabled={busy !== 'idle'}
+                    className="flex items-center gap-1 rounded-md border border-white/20 px-2.5 py-1.5 text-xs text-white/70 hover:bg-white/10 disabled:opacity-40"
+                  >
+                    <Unlink size={13} />
+                    {t('settings.gcalDisconnect')}
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {message && <p className="text-sm text-emerald-300">{message}</p>}
+      {error && <p className="text-sm text-red-300">{t('settings.gcalError', { message: error })}</p>}
+      {!isTauri && <p className="text-xs text-white/40">{t('settings.spamPreviewNote')}</p>}
     </div>
   );
 }

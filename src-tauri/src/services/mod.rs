@@ -3,6 +3,7 @@ pub mod compress;
 pub mod datadir;
 pub mod dataver;
 pub mod dedupe;
+pub mod gcal;
 pub mod gcsv;
 pub mod ics;
 pub mod imap_sync;

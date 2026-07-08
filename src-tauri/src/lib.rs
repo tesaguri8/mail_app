@@ -8,6 +8,10 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 開発時: プロジェクト直下（または親）の .env を環境変数へ読み込む。
+    // Google OAuth の Client ID/Secret を dev で渡すのに使う（無ければ何もしない）。
+    let _ = dotenvy::dotenv();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::default().build())
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -150,6 +154,12 @@ pub fn run() {
             commands::event_attendee_set,
             commands::ics_import,
             commands::ics_export,
+            commands::gcal_set_credentials,
+            commands::gcal_credentials_status,
+            commands::gcal_accounts,
+            commands::gcal_connect,
+            commands::gcal_disconnect,
+            commands::gcal_sync,
             commands::data_location,
             commands::data_relocate,
             commands::data_reset_location,

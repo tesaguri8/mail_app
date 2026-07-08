@@ -19,4 +19,17 @@ visible: boolean,
 /**
  * 既定カレンダー（新規予定の初期。削除不可）。
  */
-is_default: boolean, sort_order: number, };
+is_default: boolean, sort_order: number, 
+/**
+ * 由来。'local' | 'ics' | 'google' | 'caldav'。UI のプロバイダー分け・ロゴ表示に使う。
+ */
+source: string, 
+/**
+ * Google 連携カレンダーの場合の連携アカウント（メール）。ローカルは None。
+ */
+account_email: string | null, 
+/**
+ * Google の権限。'owner' | 'writer' | 'reader' | 'freeBusyReader'。書き込み可否の表示に使う。
+ * ローカルカレンダーは None（暗黙的に編集可）。
+ */
+access_role: string | null, };

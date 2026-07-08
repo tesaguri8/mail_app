@@ -400,6 +400,13 @@ pub struct CalendarSummary {
     /// 既定カレンダー（新規予定の初期。削除不可）。
     pub is_default: bool,
     pub sort_order: i32,
+    /// 由来。'local' | 'ics' | 'google' | 'caldav'。UI のプロバイダー分け・ロゴ表示に使う。
+    pub source: String,
+    /// Google 連携カレンダーの場合の連携アカウント（メール）。ローカルは None。
+    pub account_email: Option<String>,
+    /// Google の権限。'owner' | 'writer' | 'reader' | 'freeBusyReader'。書き込み可否の表示に使う。
+    /// ローカルカレンダーは None（暗黙的に編集可）。
+    pub access_role: Option<String>,
 }
 
 /// カレンダーの作成・更新入力。`id` が None なら新規作成。
@@ -450,6 +457,44 @@ pub struct IcsImportReport {
     pub imported: i32,
     /// 成立せず飛ばした件数（開始日時なし等）。
     pub skipped: i32,
+}
+
+/// 連携した Google（カレンダー）アカウント。資格情報（refresh_token）は keyring に保存し、
+/// ここにはメタ情報のみ持つ（docs/CALENDAR_SYNC.md）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct GoogleAccount {
+    pub id: i32,
+    /// 連携した Google アカウントのメールアドレス。
+    pub email: String,
+    /// 最終同期時刻（UTC 文字列）。未同期なら None。
+    pub last_sync_at: Option<String>,
+}
+
+/// Google カレンダー同期の結果サマリ（docs/CALENDAR_SYNC.md）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct GcalSyncResult {
+    /// Google から取り込み（新規＋更新）した予定数。
+    pub pulled: i32,
+    /// Google へ送信（新規＋更新）した予定数。
+    pub pushed: i32,
+    /// 取り込みで削除扱いにした予定数（Google 側で削除された分）。
+    pub deleted_in: i32,
+    /// Google 側で削除した予定数（ローカルで削除した分）。
+    pub deleted_out: i32,
+    /// 同期したカレンダー数。
+    pub calendars: i32,
+}
+
+/// OAuth クライアント資格情報の設定状況（Client ID の有無を UI に伝える。値は返さない）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct GcalCredentialsStatus {
+    /// Client ID / Secret の両方が保存済みなら true。
+    pub configured: bool,
+    /// 保存済みの Client ID（末尾のみ表示用。未設定なら None）。
+    pub client_id_hint: Option<String>,
 }
 
 /// 予定の作成・更新入力（フロントから受け取る）。`id` が None なら新規作成。

@@ -105,12 +105,14 @@ impl Store {
             };
             match input.id {
                 Some(id) => {
+                    // dirty=1: ユーザー編集は Google へ送信対象（Google カレンダー所属時のみ push される）。
                     conn.execute(
                         "UPDATE events SET \
                              title = ?1, description = ?2, location = ?3, start_at = ?4, \
                              end_at = ?5, all_day = ?6, color = ?7, recurrence = ?8, \
                              reminder_minutes = ?9, related_email_id = ?10, calendar_id = ?11, \
-                             availability = ?12, visibility = ?13, updated_at = CURRENT_TIMESTAMP \
+                             availability = ?12, visibility = ?13, dirty = 1, \
+                             updated_at = CURRENT_TIMESTAMP \
                          WHERE id = ?14",
                         params![
                             input.title.trim(),
@@ -132,12 +134,13 @@ impl Store {
                     id as i64
                 }
                 None => {
+                    // dirty=1: 新規作成もローカル変更として送信対象にする。
                     conn.execute(
                         "INSERT INTO events \
                              (title, description, location, start_at, end_at, all_day, color, \
                               recurrence, reminder_minutes, related_email_id, calendar_id, \
-                              availability, visibility) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                              availability, visibility, dirty) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1)",
                         params![
                             input.title.trim(),
                             trimmed(&input.description),
@@ -162,10 +165,11 @@ impl Store {
     }
 
     /// 予定を論理削除（ゴミ箱へ。deleted_at を立てて一覧から隠す。保持期間後に完全削除）。
+    /// dirty=1 も立て、Google カレンダーの予定なら次回同期で Google 側も削除する。
     pub fn delete_event(&self, id: i64) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE events SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?1",
+            "UPDATE events SET deleted_at = CURRENT_TIMESTAMP, dirty = 1 WHERE id = ?1",
             params![id],
         )?;
         Ok(())

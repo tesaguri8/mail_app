@@ -150,6 +150,23 @@ export function setPhoneAutoformat(value: boolean): void {
   window.dispatchEvent(new Event(PREFS_EVENT));
 }
 
+/**
+ * 新規予定の既定カレンダー（ローカル calendars.id）。最後に新規作成で使ったカレンダーを覚える。
+ * 未設定（null）なら EventEditor は既定カレンダーにフォールバックする。
+ */
+const DEFAULT_CALENDAR_KEY = 'rondine.defaultCalendarId';
+
+export function getDefaultCalendarId(): number | null {
+  const n = Number(localStorage.getItem(DEFAULT_CALENDAR_KEY));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export function setDefaultCalendarId(id: number | null): void {
+  if (id == null) localStorage.removeItem(DEFAULT_CALENDAR_KEY);
+  else localStorage.setItem(DEFAULT_CALENDAR_KEY, String(id));
+  window.dispatchEvent(new Event(PREFS_EVENT));
+}
+
 /** 郵便番号を自動整形するか（日本: 7桁→NNN-NNNN）。既定: オン。 */
 export function getPostalAutoformat(): boolean {
   return localStorage.getItem(POSTAL_AUTOFORMAT_KEY) !== '0';

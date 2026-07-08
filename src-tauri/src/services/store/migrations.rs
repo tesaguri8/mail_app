@@ -169,6 +169,16 @@ const MIGRATIONS: &[Migration] = &[
         version: 40,
         sql: include_str!("migrations/0040_full_index.sql"),
     },
+    Migration {
+        // 41 は Google カレンダー双方向同期の同期メタ（calendar_accounts + 列追加）。
+        version: 41,
+        sql: include_str!("migrations/0041_calendar_sync.sql"),
+    },
+    Migration {
+        // 42 は予定の Google 上の実在カレンダー追跡（カレンダー間移動を正しく反映するため）。
+        version: 42,
+        sql: include_str!("migrations/0042_event_remote_calendar.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

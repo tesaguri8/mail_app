@@ -42,6 +42,7 @@ import {
 import { expandEvents, presetToRule, ruleToPreset, RECUR_PRESETS, type RecurPreset } from '../utils/recurrence';
 import { isHoliday, holidayName } from '../utils/holidays';
 import { getDefaultCalendarId, setDefaultCalendarId } from '../config/prefs';
+import { Dropdown } from './Dropdown';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -1547,15 +1548,21 @@ export function EventEditor({
             <span className="w-8 text-xs text-white/55">{t('cal.fStart')}</span>
             <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={`flex-1 ${small}`} />
             {!allDay && (
-              <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className={`w-24 ${small}`} />
+              <TimeSelect
+                value={startTime}
+                onChange={(v) => {
+                  // 開始を変えたら終了も＋1時間に追従（同日）。過去の終了時刻が残らないように。
+                  setStartTime(v);
+                  setEndTime(addOneHour(v));
+                  setEndDate(startDate);
+                }}
+              />
             )}
           </div>
           <div className="flex items-center gap-2">
             <span className="w-8 text-xs text-white/55">{t('cal.fEnd')}</span>
             <input type="date" value={endDate} min={startDate} onChange={(e) => setEndDate(e.target.value)} className={`flex-1 ${small}`} />
-            {!allDay && (
-              <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className={`w-24 ${small}`} />
-            )}
+            {!allDay && <TimeSelect value={endTime} onChange={setEndTime} />}
           </div>
         </div>
 
@@ -1751,4 +1758,38 @@ function addOneHour(hm: string): string {
   const [h, m] = hm.split(':').map(Number);
   if (h >= 23) return '23:59';
   return `${pad(h + 1)}:${pad(m)}`;
+}
+
+/**
+ * 時刻の選択（時＝24択、分＝15分刻み）。素の input[type=time] の代わりに使う。
+ * 分は 00/15/30/45＋現在値（Google 等由来で 15 の倍数でない値も選べるよう保持）。
+ * 候補リストは半透明の共通 Dropdown を使う。
+ */
+function TimeSelect({ value, onChange }: { value: string; onChange: (hm: string) => void }) {
+  const [hh, mm] = (value || '09:00').split(':');
+  const hour = hh ?? '09';
+  const minute = mm ?? '00';
+  const hourOpts = Array.from({ length: 24 }, (_, i) => ({ value: pad(i), label: pad(i) }));
+  const minuteOpts = Array.from(new Set([0, 15, 30, 45, Number(minute) || 0]))
+    .sort((a, b) => a - b)
+    .map((n) => ({ value: pad(n), label: pad(n) }));
+  return (
+    <span className="inline-flex items-center gap-1">
+      <Dropdown
+        value={hour}
+        options={hourOpts}
+        onChange={(h) => onChange(`${h}:${minute}`)}
+        className="w-14"
+        ariaLabel="hour"
+      />
+      <span className="text-white/45">:</span>
+      <Dropdown
+        value={minute}
+        options={minuteOpts}
+        onChange={(m) => onChange(`${hour}:${m}`)}
+        className="w-14"
+        ariaLabel="minute"
+      />
+    </span>
+  );
 }

@@ -229,6 +229,15 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
     )?;
     insert_attachments(conn, id, &e.attachments)?;
     insert_quotes(conn, id, &e.quotes)?;
+    // 迷惑差出人に登録済みのアドレスからの新着（受信箱）は、受信時に自動で迷惑へ隔離する
+    // （「このアドレスを迷惑にしたら今後の同アドレスも迷惑へ」。docs/SPAM.md）。
+    if e.folder == "inbox" {
+        if let Some(addr) = e.from_address.as_deref() {
+            if super::spam::is_spam_sender_conn(conn, addr)? {
+                conn.execute("UPDATE emails SET is_junk = 1 WHERE id = ?1", params![id])?;
+            }
+        }
+    }
     // 取り込み（download＋保存）はここまで。スレッド割当・代表フラグ（＝他メール参照が要る
     // クロス処理）は接続を閉じた後のローカル加工パス process_pending で行う（docs/THREADING.md §5）。
     // ここで logical_thread_id は NULL のまま＝一覧では 1 通ずつ即表示され、加工後に束ねられる。

@@ -870,6 +870,8 @@ export function MailboxView({
     } catch {
       /* noop */
     }
+    // 同じ差出人の他メールもサーバー側で迷惑へ移るため、一覧を取り直して反映する。
+    await loadMails();
   };
   // 非迷惑に戻す: 隔離解除＋ham 学習。迷惑フォルダ表示から外し受信箱へ戻す（楽観更新）。
   const actMarkNotSpam = async () => {
@@ -883,6 +885,8 @@ export function MailboxView({
     } catch {
       /* noop */
     }
+    // 迷惑差出人の解除で同アドレスのメールが受信箱へ戻るため、一覧を取り直して反映する。
+    await loadMails();
   };
 
   // 選択メール群へタグを付与/解除（楽観更新 → 永続化）。
@@ -1356,6 +1360,8 @@ export function MailboxView({
       } catch {
         /* noop */
       }
+      // 同じ差出人の他メールも迷惑へ移るため、一覧を取り直して反映する。
+      await loadMails();
     },
     // 迷惑フォルダで「非迷惑に戻す」（隔離解除＋ham 学習）。表示から外し受信箱へ戻す。
     onMarkNotSpam: async (id) => {
@@ -1366,6 +1372,8 @@ export function MailboxView({
       } catch {
         /* noop */
       }
+      // 迷惑差出人の解除で同アドレスのメールが受信箱へ戻るため、一覧を取り直して反映する。
+      await loadMails();
     },
     isSpam: folder === 'spam',
     // 特定のメッセージへ返信/転送（会話内のどのメールにも返信できる）。

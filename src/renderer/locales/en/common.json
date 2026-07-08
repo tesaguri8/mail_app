@@ -24,6 +24,8 @@
   },
   "cal": {
     "today": "Today",
+    "panelTitle": "Calendar",
+    "addFromDate": "Add an event on this date",
     "prev": "Previous",
     "next": "Next",
     "vYear": "Year",
@@ -541,6 +543,7 @@
     "editContactDup": "Edit in contacts ({{count}} duplicates)",
     "remoteBlocked": "{{count}} external image(s) blocked for privacy",
     "remoteShownCount": "{{count}} external image(s) shown (click an image to zoom)",
+    "openCalendar": "Add to calendar",
     "remoteShow": "Show images",
     "remoteHide": "Hide images",
     "remoteLoading": "Loading…",

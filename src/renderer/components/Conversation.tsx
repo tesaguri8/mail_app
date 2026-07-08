@@ -32,9 +32,17 @@ import { greenDomainAdd, greenDomainWarn } from '../services/green';
 import { threadRename, threadSplit, threadView } from '../services/threads';
 import { parseAddress } from '../utils/address';
 import { getBubbleHtml, PREFS_EVENT } from '../config/prefs';
-import { MailBody } from './MailBody';
+import { MailBody, makeRenderDate } from './MailBody';
 import { AutoLinkText, HtmlText } from './HtmlText';
 import { ContextMenu, type MenuItem } from './ContextMenu';
+import type { CalendarPanelInitial } from './CalendarPanel';
+
+/** 端末ローカルの今日（'YYYY-MM-DD'）。ヘッダの「カレンダーに追加」の既定日に使う。 */
+const todayLocalDay = (): string => {
+  const n = new Date();
+  const p = (x: number) => String(x).padStart(2, '0');
+  return `${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())}`;
+};
 
 /** 会話ビューが親（MailboxView）に要求する、メール1通単位の操作・状態。 */
 export interface ConversationHandlers {
@@ -60,6 +68,8 @@ export interface ConversationHandlers {
   onAddContact?: (name: string | null, email: string) => void;
   onEditContact?: (id: number) => void;
   onComposeTo?: (email: string) => void;
+  /** 本文の日付＋、またはヘッダの「カレンダーに追加」から、右ペインのカレンダー入力を開く。 */
+  onAddCalendar?: (init: CalendarPanelInitial) => void;
   onGreenChange?: () => void;
   /** スレッド構成（分割/再件名）が変わったら一覧を作り直す。 */
   onThreadChanged?: () => void;
@@ -162,6 +172,13 @@ function Bubble({
   // ただし HTML には引用除去版が無いので、引用のある返信（has_quotes）はチャット感を保つため
   // プレーン（新規部分のみ）にフォールバックする。実質「引用のないメールだけ HTML 描画」。
   const renderHtml = !!htmlBody && !!m.body_html?.trim() && !m.has_quotes;
+
+  // 本文中の日付に＋（カレンダー追加）を出す描画関数（折りたたみバブル・全文表示で共有）。
+  const renderDate = makeRenderDate(handlers.onAddCalendar, {
+    baseISO: m.date ?? undefined,
+    title: m.subject ?? undefined,
+    relatedEmailId: m.id,
+  });
 
   // 右クリック（と「…」ボタン）のメニュー。一覧の右クリックと同じ操作をメール単位で提供する。
   const menuItems: MenuItem[] = [
@@ -337,6 +354,17 @@ function Bubble({
               onAddContact={handlers.onAddContact}
               onEditContact={handlers.onEditContact}
               onComposeTo={handlers.onComposeTo}
+              onAddCalendar={handlers.onAddCalendar}
+              onOpenCalendar={
+                handlers.onAddCalendar
+                  ? () =>
+                      handlers.onAddCalendar?.({
+                        day: todayLocalDay(),
+                        title: m.subject ?? undefined,
+                        relatedEmailId: m.id,
+                      })
+                  : undefined
+              }
               onGreenChange={handlers.onGreenChange}
               highlight={highlight}
               onCollapse={onToggleExpand}
@@ -375,9 +403,9 @@ function Bubble({
               </div>
             )}
             {renderHtml ? (
-              <HtmlText html={m.body_html as string} highlight={highlight} />
+              <HtmlText html={m.body_html as string} highlight={highlight} renderDate={renderDate} />
             ) : body ? (
-              <AutoLinkText text={body} highlight={highlight} />
+              <AutoLinkText text={body} highlight={highlight} renderDate={renderDate} />
             ) : (
               <span className="text-white/40">{t('mailbox.noBody')}</span>
             )}

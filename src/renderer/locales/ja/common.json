@@ -24,6 +24,8 @@
   },
   "cal": {
     "today": "今日",
+    "panelTitle": "カレンダー",
+    "addFromDate": "この日付で予定を追加",
     "prev": "前へ",
     "next": "次へ",
     "vYear": "年",
@@ -541,6 +543,7 @@
     "editContactDup": "住所録で編集（{{count}} 件重複）",
     "remoteBlocked": "外部画像 {{count}} 個を保護のためブロック中",
     "remoteShownCount": "外部画像 {{count}} 個を表示中（画像クリックで拡大/縮小）",
+    "openCalendar": "カレンダーに追加",
     "remoteShow": "画像を表示",
     "remoteHide": "画像を隠す",
     "remoteLoading": "読み込み中…",

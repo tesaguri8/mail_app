@@ -1,5 +1,6 @@
 import { Fragment, useState, type ReactNode } from 'react';
 import { openUrl } from '@tauri-apps/plugin-opener';
+import { matchDates } from '../utils/dateparse';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -92,6 +93,7 @@ function renderNode(
   remoteImages: RemoteImages,
   remoteDefaultExpanded: boolean,
   renderEmail: ((email: string) => ReactNode) | undefined,
+  renderDate: ((raw: string) => ReactNode) | undefined,
   highlightRe: RegExp | null,
   insideLink = false,
 ): ReactNode {
@@ -100,8 +102,8 @@ function renderNode(
     if (!text) return text;
     // 既に <a> の内側のテキストは、リンクの二重化を避けて再リンク化しない（ハイライトのみ）。
     if (insideLink) return highlightText(text, highlightRe, `hl${key}`);
-    // 生の URL / メールアドレスを自動リンク化（プレーンの AutoLinkText と同じロジック）。
-    return linkifyToNodes(text, renderEmail, highlightRe);
+    // 生の URL / メールアドレス / 日付を自動リンク化（プレーンの AutoLinkText と同じロジック）。
+    return linkifyToNodes(text, renderEmail, highlightRe, renderDate);
   }
   if (node.nodeType !== Node.ELEMENT_NODE) return null;
 
@@ -167,6 +169,7 @@ function renderNode(
         remoteImages,
         remoteDefaultExpanded,
         renderEmail,
+        renderDate,
         highlightRe,
         insideChildLink,
       ),
@@ -276,12 +279,29 @@ function linkifyToNodes(
   text: string,
   renderEmail: ((email: string) => ReactNode) | undefined,
   re: RegExp | null,
+  renderDate?: (raw: string) => ReactNode,
 ): ReactNode[] {
   const nodes: ReactNode[] = [];
   let last = 0;
   let key = 0;
   const pushText = (s: string) => {
     if (!s) return;
+    // 日付導線があれば、URL/メール以外のプレーン部分をさらに日付で分割して＋を差し込む。
+    if (renderDate) {
+      const dates = matchDates(s);
+      if (dates.length > 0) {
+        let p = 0;
+        for (const dm of dates) {
+          if (dm.index > p)
+            nodes.push(<Fragment key={key++}>{highlightText(s.slice(p, dm.index), re, `lt${key}`)}</Fragment>);
+          nodes.push(<Fragment key={key++}>{renderDate(dm.raw)}</Fragment>);
+          p = dm.index + dm.raw.length;
+        }
+        if (p < s.length)
+          nodes.push(<Fragment key={key++}>{highlightText(s.slice(p), re, `lt${key}`)}</Fragment>);
+        return;
+      }
+    }
     nodes.push(<Fragment key={key++}>{highlightText(s, re, `lt${key}`)}</Fragment>);
   };
   for (const m of text.matchAll(AUTOLINK_RE)) {
@@ -330,11 +350,14 @@ function linkifyToNodes(
 export function AutoLinkText({
   text,
   renderEmail,
+  renderDate,
   highlight,
   className = '',
 }: {
   text: string;
   renderEmail?: (email: string) => ReactNode;
+  /** 本文中の日付の描画（ホバーで＋・クリックでカレンダー入力）。 */
+  renderDate?: (raw: string) => ReactNode;
   /** 検索語（複数）。本文中の一致を <mark> でハイライトする。 */
   highlight?: string[];
   className?: string;
@@ -342,7 +365,7 @@ export function AutoLinkText({
   const re = buildHighlightRe(highlight);
   return (
     <pre className={`whitespace-pre-wrap break-words font-sans ${className}`}>
-      {linkifyToNodes(text, renderEmail, re)}
+      {linkifyToNodes(text, renderEmail, re, renderDate)}
     </pre>
   );
 }
@@ -361,6 +384,7 @@ export function HtmlText({
   remoteImages = {},
   remoteDefaultExpanded = false,
   renderEmail,
+  renderDate,
   highlight,
 }: {
   html: string;
@@ -370,6 +394,8 @@ export function HtmlText({
   remoteDefaultExpanded?: boolean;
   /** 本文テキスト/ mailto 中のメールアドレスの描画（クリックで新規作成・＋登録）。 */
   renderEmail?: (email: string) => ReactNode;
+  /** 本文中の日付の描画（ホバーで＋・クリックでカレンダー入力）。 */
+  renderDate?: (raw: string) => ReactNode;
   /** 検索語（複数）。本文中の一致を <mark> でハイライトする。 */
   highlight?: string[];
 }) {
@@ -382,7 +408,9 @@ export function HtmlText({
   const re = buildHighlightRe(highlight);
   const nodes: ReactNode[] = [];
   doc.body.childNodes.forEach((c, i) =>
-    nodes.push(renderNode(c, i, inlineImages, remoteImages, remoteDefaultExpanded, renderEmail, re)),
+    nodes.push(
+      renderNode(c, i, inlineImages, remoteImages, remoteDefaultExpanded, renderEmail, renderDate, re),
+    ),
   );
   return (
     <div className="break-words text-sm leading-relaxed text-white/90 [&_a]:break-all">{nodes}</div>

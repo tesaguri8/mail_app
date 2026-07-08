@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  CalendarPlus,
   Columns2,
   FlipHorizontal2,
   Gem,
@@ -54,6 +55,7 @@ import { pickTagColor, DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import { parseAddress } from '../utils/address';
 import { MailBody } from './MailBody';
 import { ContactEditor, type EditorRequest } from './ContactEditor';
+import { CalendarPanel, type CalendarPanelInitial } from './CalendarPanel';
 import { Conversation, type ConversationHandlers } from './Conversation';
 import { threadList, threadCount } from '../services/threads';
 import { Compose, type ComposeTarget } from './Compose';
@@ -244,13 +246,30 @@ export function MailboxView({
   const panelSplitRef = useRef<HTMLDivElement>(null);
   // パネルを開く前のサイドバー表示状態（閉じたら元に戻すため）。
   const sidebarBeforePanelRef = useRef<boolean | null>(null);
+  // カレンダー入力パネル（メールを見ながら予定を入れる右サイドバー）。null なら閉じている。
+  // 本文の日付の ＋、またはヘッダの「カレンダーに追加」から開く。住所録パネルと同じ枠を使う。
+  const [calendarPanel, setCalendarPanel] = useState<CalendarPanelInitial | null>(null);
   const openContactPanel = (req: EditorRequest) => {
     if (sidebarBeforePanelRef.current == null) sidebarBeforePanelRef.current = sidebarOpen;
     setSidebarOpen(false); // 一覧サイドバーを隠して、閲覧＋編集の2画面にする。
+    setCalendarPanel(null); // 住所録とカレンダーの右パネルは相互排他。
     setContactPanel(req);
   };
   const closeContactPanel = () => {
     setContactPanel(null);
+    if (sidebarBeforePanelRef.current != null) {
+      setSidebarOpen(sidebarBeforePanelRef.current);
+      sidebarBeforePanelRef.current = null;
+    }
+  };
+  const openCalendarPanel = (init: CalendarPanelInitial) => {
+    if (sidebarBeforePanelRef.current == null) sidebarBeforePanelRef.current = sidebarOpen;
+    setSidebarOpen(false);
+    setContactPanel(null); // 相互排他。
+    setCalendarPanel(init);
+  };
+  const closeCalendarPanel = () => {
+    setCalendarPanel(null);
     if (sidebarBeforePanelRef.current != null) {
       setSidebarOpen(sidebarBeforePanelRef.current);
       sidebarBeforePanelRef.current = null;
@@ -281,10 +300,13 @@ export function MailboxView({
 
   // メール作成モーダル（新規／返信／転送）。null なら閉じている。
   const [compose, setCompose] = useState<ComposeTarget | null>(null);
-  // 作成画面に入ったら編集パネルは閉じる（全幅で作成に集中）。
+  // 作成画面に入ったら編集/カレンダーパネルは閉じる（全幅で作成に集中）。
   useEffect(() => {
-    if (compose) closeContactPanel();
-    // closeContactPanel は毎回同じ挙動。compose の変化だけをトリガにする。
+    if (compose) {
+      closeContactPanel();
+      closeCalendarPanel();
+    }
+    // close* は毎回同じ挙動。compose の変化だけをトリガにする。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compose]);
   // 表示するフォルダ/グループ（受信箱以外は後続実装）
@@ -1389,6 +1411,8 @@ export function MailboxView({
     onAddContact: (name, email) => openContactPanel({ kind: 'prefill', prefill: { name, email } }),
     onEditContact: (id) => openContactPanel({ kind: 'existing', id }),
     onComposeTo: (email) => setCompose({ mode: 'new', to: `${email}, ` }),
+    // 本文日付の ＋ / ヘッダの「カレンダーに追加」から、右ペインにカレンダー入力を開く。
+    onAddCalendar: (init) => openCalendarPanel(init),
     onGreenChange: loadMails,
     onThreadChanged: loadMails,
   };
@@ -1586,6 +1610,39 @@ export function MailboxView({
                 onDeleted={closeContactPanel}
                 onOpenContact={(id) => setContactPanel({ kind: 'existing', id })}
               />
+            </div>
+          </aside>
+        </div>
+      ) : calendarPanel ? (
+        // カレンダー入力: 左＝閲覧ペイン、右＝カレンダーパネル。一覧サイドバーは隠して2画面にする。
+        <div
+          ref={panelSplitRef}
+          className="grid min-h-0 flex-1 overflow-hidden"
+          style={{ gridTemplateColumns: `1fr 6px ${contactPanelW}px` }}
+        >
+          <div className="min-h-0 overflow-hidden">{bodyPane}</div>
+          <div
+            onMouseDown={startPanelResize}
+            title={t('mailbox.resize')}
+            className="cursor-col-resize bg-transparent transition-colors hover:bg-sky-400/40"
+          />
+          <aside className="flex min-h-0 flex-col overflow-hidden border-l border-white/10">
+            <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2">
+              <CalendarPlus size={15} className="shrink-0 text-white/60" />
+              <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                {t('cal.panelTitle')}
+              </span>
+              <button
+                onClick={closeCalendarPanel}
+                title={t('contact.closePanel')}
+                aria-label={t('contact.closePanel')}
+                className={iconBtn}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <CalendarPanel initial={calendarPanel} />
             </div>
           </aside>
         </div>

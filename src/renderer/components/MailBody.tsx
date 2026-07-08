@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ask, open, save } from '@tauri-apps/plugin-dialog';
 import { downloadDir, join } from '@tauri-apps/api/path';
 import {
   BookOpen,
+  CalendarPlus,
   ChevronDown,
   Download,
   Forward,
@@ -41,6 +42,8 @@ import { contactLookupEmail } from '../services/contacts';
 import { mailLoadRemote, senderRemoteAllowed, senderSetRemotePolicy } from '../services/mail';
 import { AutoLinkText, HtmlText, remoteImageUrls } from './HtmlText';
 import { ContextMenu } from './ContextMenu';
+import type { CalendarPanelInitial } from './CalendarPanel';
+import { parseDateTime, type ParsedDate } from '../utils/dateparse';
 
 function formatDate(d: string | null): string {
   if (!d) return '';
@@ -141,6 +144,73 @@ function EmailAdd({
   );
 }
 
+/**
+ * 本文中の日付＋（ホバー/フォーカスで現れる）カレンダー追加ボタン。
+ * ＋を押すと右ペインのカレンダー入力が、この日時をプレフィルして開く。
+ */
+function DateAdd({
+  raw,
+  parsed,
+  onAdd,
+}: {
+  raw: string;
+  parsed: ParsedDate;
+  onAdd: (parsed: ParsedDate) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <span className="group/date inline-flex items-center gap-0.5 align-baseline">
+      <span>{raw}</span>
+      <button
+        type="button"
+        onClick={(e) => {
+          // クリックが親（バブルの展開トグル等）へ伝播しないよう止める。
+          e.stopPropagation();
+          onAdd(parsed);
+        }}
+        title={t('cal.addFromDate')}
+        aria-label={t('cal.addFromDate')}
+        className="inline-flex h-4 items-center justify-center rounded-full bg-white/10 px-1 text-white/60 opacity-0 transition-opacity hover:bg-sky-500/50 hover:text-white focus:opacity-100 focus:outline-none group-hover/date:opacity-100"
+      >
+        <CalendarPlus size={11} />
+      </button>
+    </span>
+  );
+}
+
+/**
+ * 本文中の日付を「日付＋＋ボタン」に描画する関数を作る（HtmlText/AutoLinkText の renderDate 用）。
+ * 会話バブルと全文表示（MailBody）で共有し、＋の挙動を揃える。
+ * baseISO（メール受信日）で年を補い、件名・元メール id をプレフィルに渡す。
+ */
+export function makeRenderDate(
+  onAddCalendar: ((init: CalendarPanelInitial) => void) | undefined,
+  ctx: { baseISO?: string; title?: string; relatedEmailId?: number },
+): ((raw: string) => ReactNode) | undefined {
+  if (!onAddCalendar) return undefined;
+  // これはコンポーネントではなく描画関数（renderProp）。display-name 規則は当てはまらない。
+  // eslint-disable-next-line react/display-name
+  return (raw: string) => {
+    const parsed = parseDateTime(raw, ctx.baseISO);
+    if (!parsed) return <>{raw}</>;
+    return (
+      <DateAdd
+        raw={raw}
+        parsed={parsed}
+        onAdd={(p) =>
+          onAddCalendar({
+            day: p.day,
+            time: p.time,
+            allDay: p.allDay,
+            title: ctx.title,
+            relatedEmailId: ctx.relatedEmailId,
+          })
+        }
+      />
+    );
+  };
+}
+
 /** ヘッダの差出人/宛先。onAdd があればアドレスに＋/編集を出す（無ければ従来のテキスト）。 */
 function AddressLine({
   name,
@@ -226,6 +296,8 @@ export function MailBody({
   onAddContact,
   onEditContact,
   onComposeTo,
+  onAddCalendar,
+  onOpenCalendar,
   onGreenChange,
   highlight,
   onCollapse,
@@ -252,6 +324,10 @@ export function MailBody({
   onEditContact?: (id: number) => void;
   /** ヘッダ/本文のメールアドレスのクリックで、そのアドレス宛の新規メール作成を開く。 */
   onComposeTo?: (email: string) => void;
+  /** 本文中の日付の＋から、日時をプレフィルしてカレンダー入力（右ペイン）を開く。 */
+  onAddCalendar?: (init: CalendarPanelInitial) => void;
+  /** ヘッダの「カレンダーに追加」から、このメールに紐づくカレンダー入力を開く。 */
+  onOpenCalendar?: () => void;
   /** グリーン認定/解除で一覧のバッジを更新するための通知。 */
   onGreenChange?: () => void;
   /** 検索語（複数）。本文中の一致を <mark> でハイライトする。 */
@@ -629,6 +705,13 @@ export function MailBody({
   const hasQuotedExtra = !hasHtml && full.trim().length > clean.trim().length;
   const body = showQuotes ? full : clean || full;
 
+  // 本文中の日付に＋（カレンダー追加）を出す描画関数。年はメール受信日を基準に補う。
+  const renderDate = makeRenderDate(onAddCalendar, {
+    baseISO: d.date ?? undefined,
+    title: d.subject ?? undefined,
+    relatedEmailId: d.id,
+  });
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* ヘッダ（件名・差出人・操作）。本文は下の body で内部スクロールするため、ヘッダは
@@ -676,6 +759,17 @@ export function MailBody({
                 className="flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80"
               >
                 <Tag size={16} />
+              </button>
+            )}
+            {/* カレンダーに追加（右ペインにカレンダー入力を開く） */}
+            {onOpenCalendar && (
+              <button
+                onClick={onOpenCalendar}
+                title={t('mailbox.openCalendar')}
+                aria-label={t('mailbox.openCalendar')}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80"
+              >
+                <CalendarPlus size={16} />
               </button>
             )}
             {/* 外部画像の表示 on/off（このメールに外部画像があるときだけ表示）。
@@ -896,6 +990,7 @@ export function MailBody({
             remoteImages={remoteShown ? remoteImages : {}}
             remoteDefaultExpanded={remoteExpandDefault}
             highlight={highlight}
+            renderDate={renderDate}
             renderEmail={
               onAddContact
                 ? (email) => (
@@ -914,6 +1009,7 @@ export function MailBody({
             text={body}
             className="text-sm leading-relaxed text-white/90"
             highlight={highlight}
+            renderDate={renderDate}
             renderEmail={
               onAddContact
                 ? (email) => (

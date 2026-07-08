@@ -105,17 +105,28 @@ const MODES: { m: ViewMode; key: string }[] = [
   { m: 'day', key: 'cal.vDay' },
 ];
 
-/** 編集対象。新規はプレフィル（日・時刻・終日）を運ぶ。 */
-type EditTarget =
+/** 編集対象。新規はプレフィル（日・時刻・終日・件名・場所・元メール）を運ぶ。 */
+export type EditTarget =
   | { mode: 'edit'; event: EventSummary }
-  | { mode: 'new'; day: string; time?: string; allDay?: boolean };
+  | {
+      mode: 'new';
+      day: string;
+      time?: string;
+      allDay?: boolean;
+      /** 件名の初期値（メールから作成時に件名を入れる等）。 */
+      title?: string;
+      /** 場所の初期値。 */
+      location?: string;
+      /** 作成元メールとの紐付け（emails.id）。 */
+      relatedEmailId?: number;
+    };
 
 // ── 日付ヘルパー（保存は端末ローカルの素の ISO 文字列。UTC 変換はしない） ──
 const pad = (n: number) => String(n).padStart(2, '0');
 /** Date → 'YYYY-MM-DD'（ローカル）。 */
-const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+export const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 /** date の n 日後（ローカル）。 */
-const addDays = (date: Date, n: number) => {
+export const addDays = (date: Date, n: number) => {
   const d = new Date(date);
   d.setDate(d.getDate() + n);
   return d;
@@ -126,7 +137,7 @@ const startOfWeek = (d: Date) => {
   return addDays(x, -x.getDay());
 };
 /** 日付部分（先頭10文字）を取り出す。'2026-07-06T10:00' → '2026-07-06'。 */
-const dayOf = (iso: string) => iso.slice(0, 10);
+export const dayOf = (iso: string) => iso.slice(0, 10);
 /** 時刻部分（HH:MM）を取り出す。日付のみなら空。 */
 const timeOf = (iso: string) => (iso.length > 10 ? iso.slice(11, 16) : '');
 /** ISO の時刻を「その日の 0 時からの分」に。日付のみは 0。 */
@@ -185,7 +196,7 @@ function eventsOn(events: EventSummary[], d: string): EventSummary[] {
 }
 
 /** 予定が掛かる全日付（'YYYY-MM-DD'）。年表示のドット表示・存在判定に使う。 */
-function coveredDays(e: EventSummary): string[] {
+export function coveredDays(e: EventSummary): string[] {
   const start = dayOf(e.start_at);
   const end = e.end_at ? dayOf(e.end_at) : start;
   const out: string[] = [];
@@ -609,7 +620,7 @@ export function CalendarView() {
 }
 
 /** 曜日ラベルを Intl で生成（既知の日曜=2024-01-07 起点に7日）。 */
-function weekdayLabels(locale: string, width: 'short' | 'narrow'): string[] {
+export function weekdayLabels(locale: string, width: 'short' | 'narrow'): string[] {
   const fmt = new Intl.DateTimeFormat(locale, { weekday: width });
   return Array.from({ length: 7 }, (_, i) => fmt.format(new Date(2024, 0, 7 + i)));
 }
@@ -981,7 +992,7 @@ function ghostMinutes(time?: string): number {
 }
 
 /** 年表示のミニ月（予定のある日にドット、月名クリックでその月へ）。 */
-function MiniMonth({
+export function MiniMonth({
   year,
   month,
   weekdayNarrow,
@@ -1052,13 +1063,14 @@ function MiniMonth({
 }
 
 /** 選択日のアジェンダ（右側パネル。年/月/2週で表示）。 */
-function AgendaPanel({
+export function AgendaPanel({
   selected,
   list,
   locale,
   showHolidays,
   onOpen,
   onNew,
+  className = 'w-72 shrink-0',
 }: {
   selected: string;
   list: EventSummary[];
@@ -1066,11 +1078,13 @@ function AgendaPanel({
   showHolidays: boolean;
   onOpen: (e: EventSummary) => void;
   onNew: () => void;
+  /** 外側 <aside> の幅などを差し替える（カレンダーパネルでは全幅にする）。 */
+  className?: string;
 }) {
   const { t } = useTranslation();
   const holiday = showHolidays ? holidayName(selected) : null;
   return (
-    <aside className="flex w-72 shrink-0 flex-col overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10">
+    <aside className={`flex flex-col overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10 ${className}`}>
       <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2 text-sm font-medium">
         {new Intl.DateTimeFormat(locale, { month: 'long', day: 'numeric', weekday: 'short' }).format(new Date(`${selected}T00:00`))}
         {holiday && <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-xs font-normal text-red-200">{holiday}</span>}
@@ -1358,7 +1372,7 @@ function CalendarSidebar({
 }
 
 /** 予定の作成/編集パネル（右サイドに常設。2週表示の右サイドと同じ場所・見た目）。 */
-function EventEditor({
+export function EventEditor({
   target,
   calendars,
   onClose,
@@ -1376,6 +1390,10 @@ function EventEditor({
   const prefDay = target.mode === 'new' ? target.day : dayOf(target.event.start_at);
   const prefTime = target.mode === 'new' ? target.time : undefined;
   const prefAllDay = target.mode === 'new' ? target.allDay ?? false : target.event.all_day;
+  // 新規のプレフィル（メールから作成時の件名・場所・元メール紐付け）。
+  const prefTitle = target.mode === 'new' ? target.title ?? '' : '';
+  const prefLocation = target.mode === 'new' ? target.location ?? '' : '';
+  const prefRelatedEmailId = target.mode === 'new' ? target.relatedEmailId ?? null : null;
   const defaultCal = calendars.find((c) => c.is_default) ?? calendars[0];
   // 新規予定の既定カレンダー: 最後に使ったカレンダー（存在すれば）→ 既定カレンダー。
   const prefCalId = getDefaultCalendarId();
@@ -1384,7 +1402,7 @@ function EventEditor({
     (prefCalId != null && calendars.some((c) => c.id === prefCalId) ? prefCalId : defaultCal?.id) ??
     null;
 
-  const [title, setTitle] = useState(event?.title ?? '');
+  const [title, setTitle] = useState(event?.title ?? prefTitle);
   const [allDay, setAllDay] = useState(prefAllDay);
   const [startDate, setStartDate] = useState(event ? dayOf(event.start_at) : prefDay);
   const [startTime, setStartTime] = useState(event ? timeOf(event.start_at) || '09:00' : prefTime || '09:00');
@@ -1392,7 +1410,7 @@ function EventEditor({
   const [endTime, setEndTime] = useState(
     event?.end_at ? timeOf(event.end_at) || '10:00' : addOneHour(prefTime || '09:00'),
   );
-  const [location, setLocation] = useState(event?.location ?? '');
+  const [location, setLocation] = useState(event?.location ?? prefLocation);
   const [description, setDescription] = useState(event?.description ?? '');
   const initialRecur = ruleToPreset(event?.recurrence ?? null);
   const [recur, setRecur] = useState<RecurPreset>(initialRecur.preset);
@@ -1468,7 +1486,7 @@ function EventEditor({
       color: null, // 色はカレンダーの属性（サイドバーで設定）。予定ごとには持たせない
       recurrence: presetToRule(recur, until || null),
       reminder_minutes: reminder,
-      related_email_id: event?.related_email_id ?? null,
+      related_email_id: event?.related_email_id ?? prefRelatedEmailId,
       calendar_id: calendarId,
       availability,
       visibility,

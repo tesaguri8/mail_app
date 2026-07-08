@@ -474,6 +474,18 @@ pub async fn mail_send(
         .await
         .map_err(|e| e.to_string())??;
 
+    // ドロップ由来の一時添付は送信後に掃除する（picker で選んだ実ファイルは消さない）。
+    let stage_root = drop_stage_root();
+    for path in &input.attachments {
+        let p = std::path::Path::new(path);
+        if p.starts_with(&stage_root) {
+            let _ = std::fs::remove_file(p);
+            if let Some(parent) = p.parent() {
+                let _ = std::fs::remove_dir(parent); // 空になった一意フォルダを消す（best-effort）
+            }
+        }
+    }
+
     // 送信成功後、送信控えを IMAP の Sent フォルダへ保存する（best-effort）。
     // 失敗しても送信自体は成功しているので、警告ログにとどめてエラーにはしない。
     // ただし Gmail 等はサーバーが送信時に自動で控えを保存するため、APPEND すると二重に
@@ -561,6 +573,81 @@ pub fn attachment_meta(paths: Vec<String>) -> Result<Vec<AttachmentMeta>, String
         });
     }
     Ok(out)
+}
+
+/// ドロップされた添付を書き出す一時フォルダの土台（OS の一時ディレクトリ配下）。
+/// 送信後にこの配下のファイルは掃除する（picker で選んだ実ファイルは消さない）。
+fn drop_stage_root() -> std::path::PathBuf {
+    std::env::temp_dir().join("rondine-drop-attachments")
+}
+
+static STAGE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 一時ファイル名の衝突を避ける一意 ID（ナノ秒＋連番）。
+fn stage_uid() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let seq = STAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{nanos}-{seq}")
+}
+
+/// パーセントエンコード（%XX）を素朴にデコードする（ヘッダで渡すファイル名の復元用）。
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// ドラッグ＆ドロップされたファイルの中身を一時ファイルへ書き出し、追加用メタを返す。
+/// ブラウザ側からはパスが取れないため、本体を生バイト、ファイル名をヘッダ x-name
+/// （percent-encoded）で受け取る。送信時にこのパスを読み込んで MIME に同梱する。
+#[tauri::command]
+pub fn attachment_stage(request: tauri::ipc::Request<'_>) -> Result<AttachmentMeta, String> {
+    let name_enc = request
+        .headers()
+        .get("x-name")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("attachment");
+    let name = {
+        // パス区切りを潰して一時フォルダの外に出られないようにする。
+        let n = percent_decode(name_enc).replace(['/', '\\'], "_");
+        let n = n.trim().to_string();
+        if n.is_empty() {
+            "attachment".to_string()
+        } else {
+            n
+        }
+    };
+    let bytes = match request.body() {
+        tauri::ipc::InvokeBody::Raw(b) => b,
+        _ => return Err("添付データの受け取りに失敗しました".to_string()),
+    };
+    if bytes.len() as u64 > MAX_ATTACHMENT_TOTAL {
+        return Err("添付の合計が25MBを超えています。ファイルを減らしてください".to_string());
+    }
+    let dir = drop_stage_root().join(stage_uid());
+    std::fs::create_dir_all(&dir).map_err(|e| format!("一時フォルダを作成できません: {e}"))?;
+    let path = dir.join(&name);
+    std::fs::write(&path, bytes).map_err(|e| format!("添付を書き出せません: {e}"))?;
+    Ok(AttachmentMeta {
+        path: path.to_string_lossy().into_owned(),
+        name,
+        size: bytes.len() as i64,
+    })
 }
 
 /// リモート画像のディスクキャッシュ用フォルダ。**許可済み差出人**のときだけ Some を返す。

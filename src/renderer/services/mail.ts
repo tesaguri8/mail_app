@@ -26,6 +26,13 @@ export const mailSend = (input: SendInput) => invoke<void>('mail_send', { input 
 export const attachmentMeta = (paths: string[]) =>
   invoke<AttachmentMeta[]>('attachment_meta', { paths });
 
+// ドラッグ＆ドロップされたファイルの中身を一時ファイルへ退避し、追加用メタを返す。
+// 本体は生バイト（ArrayBuffer）、ファイル名はヘッダで渡す（パスが取れないブラウザ由来のため）。
+export const attachmentStage = (name: string, data: ArrayBuffer) =>
+  invoke<AttachmentMeta>('attachment_stage', data, {
+    headers: { 'x-name': encodeURIComponent(name) },
+  });
+
 // 書きかけのメールを下書き（drafts）へ保存/更新する。保存した下書きの id を返す。
 // input.draft_id があれば更新、無ければ新規作成。破棄は mailDelete を使う。
 export const mailSaveDraft = (input: DraftInput) => invoke<number>('mail_save_draft', { input });

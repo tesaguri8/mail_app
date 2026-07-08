@@ -8,6 +8,7 @@ import type { DraftContent } from '@bindings/DraftContent';
 import type { SignatureSummary } from '@bindings/SignatureSummary';
 import {
   attachmentMeta,
+  attachmentStage,
   mailDraftDiscard,
   mailDraftSyncRemote,
   mailSaveDraft,
@@ -255,8 +256,10 @@ export function Compose({
   const [body, setBody] = useState(target.mode === 'draft' ? target.draft.body : '');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
-  // 添付ファイル（picker で選択。送信時に path を Rust へ渡して読み込ませる）。
+  // 添付ファイル（picker 選択 or ドロップ。送信時に path を Rust へ渡して読み込ませる）。
   const [attachments, setAttachments] = useState<Attach[]>([]);
+  // OS からファイルをドラッグ中か（ドロップ領域のハイライト用）。
+  const [dragOver, setDragOver] = useState(false);
 
   // 送信時に本文末へ足す引用/転送ブロック（編集欄には入れない）。プレーンと、あれば HTML。
   const quotedRef = useRef(init.quoted);
@@ -382,22 +385,51 @@ export function Compose({
   const canSend =
     accountId != null && splitAddresses(to).length > 0 && !sending && !attachTooBig;
 
-  // ファイルを選んで添付に追加する（重複パスは除外）。
+  // 添付を一覧へ追加する（同名・同サイズは重複とみなして除外。バッチ内の重複も除く）。
+  const dedupKey = (a: Attach) => `${a.name}|${a.size}`;
+  const addAttachments = (items: Attach[]) =>
+    setAttachments((prev) => {
+      const seen = new Set(prev.map(dedupKey));
+      const add: Attach[] = [];
+      for (const it of items) {
+        const k = dedupKey(it);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        add.push(it);
+      }
+      return [...prev, ...add];
+    });
+  const removeAttachment = (path: string) =>
+    setAttachments((prev) => prev.filter((a) => a.path !== path));
+
+  // ファイル選択ダイアログから添付を追加する。
   const pickAttachments = async () => {
     const picked = await open({ multiple: true }).catch(() => null);
     if (!picked) return;
     const paths = Array.isArray(picked) ? picked : [picked];
     const metas = await attachmentMeta(paths).catch(() => []);
-    setAttachments((prev) => {
-      const seen = new Set(prev.map((a) => a.path));
-      const add = metas
-        .filter((m) => !seen.has(m.path))
-        .map((m) => ({ path: m.path, name: m.name, size: Number(m.size) }));
-      return [...prev, ...add];
-    });
+    addAttachments(metas.map((m) => ({ path: m.path, name: m.name, size: Number(m.size) })));
   };
-  const removeAttachment = (path: string) =>
-    setAttachments((prev) => prev.filter((a) => a.path !== path));
+
+  // OS からドロップされたファイルを一時退避して添付に追加する（パスが取れないため中身を渡す）。
+  const onDropFiles = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+    const existing = new Set(attachments.map((a) => `${a.name}|${a.size}`));
+    const staged: Attach[] = [];
+    for (const f of files) {
+      if (existing.has(`${f.name}|${f.size}`)) continue; // 既に同じものがあれば退避もしない
+      try {
+        const m = await attachmentStage(f.name, await f.arrayBuffer());
+        staged.push({ path: m.path, name: m.name, size: Number(m.size) });
+      } catch {
+        /* この1件はスキップ（他は続行） */
+      }
+    }
+    addAttachments(staged);
+  };
 
   const onSend = async () => {
     if (accountId == null) return;
@@ -452,7 +484,26 @@ export function Compose({
     'w-full rounded-md bg-white/10 px-3 py-1.5 text-sm outline-none placeholder:text-white/30 focus:bg-white/15';
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+    <div
+      className="relative flex h-full min-h-0 flex-col overflow-hidden"
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (!dragOver) setDragOver(true);
+      }}
+      onDragLeave={(e) => {
+        // 子要素へ移っただけのときは維持し、コンテナの外へ出たときだけ解除する。
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false);
+      }}
+      onDrop={onDropFiles}
+    >
+      {dragOver && (
+        <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center rounded-lg border-2 border-dashed border-sky-400/70 bg-sky-500/10 backdrop-blur-sm">
+          <div className="flex items-center gap-2 rounded-lg bg-neutral-900/70 px-4 py-2 text-sm font-medium text-sky-100 ring-1 ring-white/15">
+            <Paperclip size={16} />
+            {t('compose.dropHint')}
+          </div>
+        </div>
+      )}
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
         <h2 className="text-sm font-semibold">{t(`compose.${target.mode}`)}</h2>
         <button

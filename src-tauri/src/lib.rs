@@ -62,6 +62,7 @@ pub fn run() {
             commands::mail_sync_cancel,
             commands::mail_send,
             commands::attachment_meta,
+            commands::attachment_stage,
             commands::mail_load_remote,
             commands::sender_remote_allowed,
             commands::sender_set_remote_policy,

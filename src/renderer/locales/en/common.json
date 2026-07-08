@@ -175,6 +175,7 @@
     "attachCount": "{{count}} file(s)",
     "attachRemove": "Remove this attachment",
     "attachTooLarge": "Attachments exceed 25MB. Please remove some files.",
+    "dropHint": "Drop files here to attach",
     "bodyPlaceholder": "Write your message…",
     "send": "Send",
     "fly": "Fly",

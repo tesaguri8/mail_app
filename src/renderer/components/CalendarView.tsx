@@ -1312,10 +1312,8 @@ function CalendarSidebar({
                   className="shrink-0"
                   style={{ accentColor: c.color ?? DEFAULT_COLOR }}
                 />
-                <span
-                  className="h-3 w-3 shrink-0 rounded-full ring-1 ring-white/20"
-                  style={{ backgroundColor: c.color ?? DEFAULT_COLOR }}
-                />
+                {/* 色はチェックボックスで表現。ここは Google 連携の目印にロゴを出す。 */}
+                <GoogleGlyph size={10} />
                 <span className="min-w-0 flex-1 truncate text-sm">{c.name || t('cal.defaultCalendar')}</span>
                 {ro && <Lock size={11} className="shrink-0 text-white/35" aria-label={t('cal.readonly')} />}
               </li>

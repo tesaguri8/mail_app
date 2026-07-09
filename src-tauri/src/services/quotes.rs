@@ -245,7 +245,10 @@ pub fn strip_signature(clean: &str) -> String {
 pub fn split_reply(plain: &str) -> Split {
     let lines: Vec<&str> = plain.lines().collect();
 
-    // 1) 引用開始行を探す: 最初の属性行、または最初の `>` 引用行の直前の空行境界。
+    // 1) 引用開始行を探す。
+    //    a) まず属性行（"On … wrote:" / "…が書きました:" / "-----元のメッセージ-----" 等）。
+    //       これは末尾の返信引用の確実な目印なので、本文途中のインライン `>` 引用より優先する
+    //       （インライン引用の後ろに書いた新規テキストを clean から落とさないため）。
     let mut quote_start: Option<usize> = None;
     let mut attribution: Option<(Option<String>, Option<String>)> = None;
     for (i, line) in lines.iter().enumerate() {
@@ -254,10 +257,15 @@ pub fn split_reply(plain: &str) -> Split {
             attribution = Some((from, at));
             break;
         }
-        if line.trim_start().starts_with('>') {
-            // 属性行なしでいきなり `>` 引用が来るケース。ここから引用扱い。
-            quote_start = Some(i);
-            break;
+    }
+    //    b) 属性行が無いときだけ、最初の `>` 引用行を引用開始とする（属性行なしで下部に
+    //       いきなり `>` 引用が来る返信のため。従来動作）。
+    if quote_start.is_none() {
+        for (i, line) in lines.iter().enumerate() {
+            if line.trim_start().starts_with('>') {
+                quote_start = Some(i);
+                break;
+            }
         }
     }
 
@@ -397,6 +405,23 @@ mod tests {
             Some("Taro <taro@example.com>")
         );
         assert!(s.quotes[0].quoted_at.is_some());
+    }
+
+    #[test]
+    fn keeps_new_text_after_inline_quote() {
+        // 本文途中にインライン引用（`>`）があり、その後にも新規テキストがある返信。
+        // 末尾の属性行（"On … wrote:"）を引用開始とし、インライン引用の後の新規文は clean に残す。
+        let body = "伊佐様\nお世話になっております。\n> ・4/6 (月) 午後\n> ・4/7 (火) 午前/午後\n→いづれかで大丈夫です。\n宜しくお願い致します。\n\nOn 2026/03/31 16:27, Isa <isa@example.com> wrote:\n> 末松 さま\n> お世話になっております。";
+        let s = split_reply(body);
+        assert!(
+            s.clean.contains("→いづれかで大丈夫です。"),
+            "インライン引用の後の新規文が clean に残る"
+        );
+        assert!(s.clean.contains("宜しくお願い致します。"));
+        assert!(s.clean.contains("お世話になっております。"));
+        // 末尾の返信引用（属性行以降）は clean に含まない。
+        assert!(!s.clean.contains("末松 さま"));
+        assert_eq!(s.quotes.len(), 1);
     }
 
     #[test]

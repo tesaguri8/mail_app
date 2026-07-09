@@ -190,6 +190,8 @@ export function MailboxView({
     return Number.isFinite(saved) && saved >= MIN_SIDEBAR_WIDTH ? saved : DEFAULT_SIDEBAR_WIDTH;
   });
   const splitRef = useRef<HTMLDivElement>(null);
+  // スクロールする一覧本体（<ul>）。自動追い読み込みで高さ実測に使う。
+  const listRef = useRef<HTMLUListElement>(null);
   // 矢印キー移動用の「最新値」ref（早期 return より前の effect から参照する）。
   const keyNavRef = useRef<{
     mails: ThreadListItem[];
@@ -478,6 +480,8 @@ export function MailboxView({
   // 一覧の取得（無限スクロール）: 1 ページずつ読み込み、スクロールで続きを追加する。
   // 切替時の取り違えを防ぐため、呼び出しトークン／ページキーで整合を取る。
   const PAGE_SIZE = 100;
+  // フィルタで可視行が少ないとき、ビューポートが埋まるまで自動で読み足す上限（一気読みの安全弁）。
+  const AUTO_FILL_CAP = 1500;
   const loadTokenRef = useRef(0);
   const pageKeyRef = useRef('');
   const loadingMoreRef = useRef(false);
@@ -561,6 +565,29 @@ export function MailboxView({
       scrollHintTimer.current = setTimeout(() => setScrollHint(null), 1200);
     }
   };
+
+  // 自動追い読み込み: フィルタ絞り込みは前段でクライアント側適用のため、読み込み済みページ内の
+  // 一致が数件だと一覧がスクロール可能にならない。すると続きを読む「きっかけ」（スクロール）が
+  // 起きず、少数の一致だけ表示して止まって見える（ウィンドウを小さくすると溢れてスクロールでき、
+  // 続きが読める、という回避挙動になっていた）。ここではビューポートが埋まる＝スクロール可能に
+  // なるまで、上限（AUTO_FILL_CAP 件）まで次ページを自動で読み足す。内容量・ウィンドウ/サイドバー
+  // 幅の変化のたびに scrollHeight を実測して再判定する。上限超過後は通常のスクロールで続きを読む。
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const fill = () => {
+      if (searchMode || loadingMoreRef.current || !hasMore) return;
+      if (mails.length >= AUTO_FILL_CAP) return; // 一気読みの安全弁（以降は手動スクロール）
+      if (el.clientHeight <= 0) return; // 未レイアウト時は判定しない
+      if (el.scrollHeight <= el.clientHeight + 1) loadMore(); // まだスクロールできない＝続きを読む
+    };
+    fill();
+    const ro = new ResizeObserver(fill);
+    ro.observe(el);
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mails, searchResults, hasMore, searchMode, filters, filterInvert, dateFilter, tagFilter, folder, selected]);
+
   useEffect(() => {
     setOpened(null);
     setSelectedIds(new Set());
@@ -1206,7 +1233,11 @@ export function MailboxView({
             {scrollHint.label}
           </div>
         )}
-        <ul className="h-full space-y-1 overflow-y-auto p-2" onScroll={onListScroll}>
+        <ul
+          ref={listRef}
+          className="h-full space-y-1 overflow-y-auto p-2"
+          onScroll={onListScroll}
+        >
           {visibleMails.length === 0 ? (
             <li className="px-2 py-3 text-sm text-white/50">
               {searchMode
@@ -1564,7 +1595,7 @@ export function MailboxView({
         // 左=下書き・右=元メールの2分割で、並べて作成できる。
         'source' in compose ? (
           <div
-            className="grid min-h-0 flex-1 overflow-hidden"
+            className="grid grid-rows-1 min-h-0 flex-1 overflow-hidden"
             style={{ gridTemplateColumns: '1fr 1fr' }}
           >
             <div className="min-h-0 overflow-hidden">{composeEl}</div>
@@ -1579,7 +1610,7 @@ export function MailboxView({
         // 住所録の編集: 左＝閲覧ペイン、右＝編集パネル。一覧サイドバーは隠して2画面にする。
         <div
           ref={panelSplitRef}
-          className="grid min-h-0 flex-1 overflow-hidden"
+          className="grid grid-rows-1 min-h-0 flex-1 overflow-hidden"
           style={{ gridTemplateColumns: `1fr 6px ${contactPanelW}px` }}
         >
           <div className="min-h-0 overflow-hidden">{bodyPane}</div>
@@ -1618,7 +1649,7 @@ export function MailboxView({
         // カレンダー入力: 左＝閲覧ペイン、右＝カレンダーパネル。一覧サイドバーは隠して2画面にする。
         <div
           ref={panelSplitRef}
-          className="grid min-h-0 flex-1 overflow-hidden"
+          className="grid grid-rows-1 min-h-0 flex-1 overflow-hidden"
           style={{ gridTemplateColumns: `1fr 6px ${contactPanelW}px` }}
         >
           <div className="min-h-0 overflow-hidden">{bodyPane}</div>
@@ -1648,9 +1679,12 @@ export function MailboxView({
           </aside>
         </div>
       ) : layout === 'side' ? (
+        // grid-rows-1（=minmax(0,1fr)）で単一行の高さをコンテナに固定し、内側の h-full スクロール一覧が
+        // 確定したビューポート高を持てるようにする（下の自動追い読み込みの scrollHeight 判定の前提）。
+        // 他の分割グリッドも同様。
         <div
           ref={splitRef}
-          className="grid min-h-0 flex-1 overflow-hidden"
+          className="grid grid-rows-1 min-h-0 flex-1 overflow-hidden"
           style={{ gridTemplateColumns: sidebarOpen ? `${sidebarW}px 6px 1fr` : '1fr' }}
         >
           {/* overflow-hidden は付けない: 絞り込みのポップオーバーをコンテンツ側へ重ねて表示するため */}

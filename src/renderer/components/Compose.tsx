@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
-import { Paperclip, Send, X } from 'lucide-react';
+import { Paperclip, Save, Send, X } from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { DraftContent } from '@bindings/DraftContent';
@@ -315,7 +315,12 @@ export function Compose({
   const dirtyRef = useRef(false);
   const [dirty, setDirty] = useState(false);
   const [saved, setSaved] = useState(false);
+  // 未保存の変更（最後の保存以降に編集があるか）。閉じる確認と保存ボタンの活性に使う。
+  const [unsaved, setUnsaved] = useState(false);
+  // 閉じる確認ダイアログ（未保存の変更があるとき表示）。
+  const [confirmClose, setConfirmClose] = useState(false);
   const markDirty = () => {
+    setUnsaved(true); // 毎回: 未保存の変更あり（保存で false に戻す）
     if (!dirtyRef.current) {
       dirtyRef.current = true;
       setDirty(true);
@@ -341,6 +346,7 @@ export function Compose({
       });
       draftIdRef.current = id;
       setSaved(true);
+      setUnsaved(false);
     } catch {
       // 自動保存の失敗は致命的でないので黙って無視（次の入力で再試行）。
     }
@@ -353,28 +359,52 @@ export function Compose({
     return () => clearTimeout(h);
   }, [dirty, saveDraft]);
 
-  // 閉じる時、書きかけがあれば「下書きに残すか」を確認する。
-  // 残す → 最新をローカル保存し、サーバー Drafts へも同期（背景）。
-  // 破棄 → ローカル＋サーバーの下書きを削除。
-  const closeGuarded = async () => {
-    if (dirty) {
-      const keep = window.confirm(t('compose.keepDraftConfirm'));
-      if (keep) {
-        await saveDraft(); // 最新の内容で確定保存
-        if (draftIdRef.current != null) {
-          // サーバー同期は待たない（IMAP 往復で閉じるのを遅らせない）。
-          void mailDraftSyncRemote(draftIdRef.current).catch(() => undefined);
-        }
-      } else if (draftIdRef.current != null) {
-        try {
-          await mailDraftDiscard(draftIdRef.current); // ローカルは即時・サーバーは背景で削除
-        } catch {
-          // 破棄の失敗は致命的でないので無視
-        }
-      }
+  // 閉じる時、未保存の変更があれば確認ダイアログを出す（保存して閉じる / 破棄 / 編集に戻る）。
+  // 未保存が無く自動保存済みの下書きがあれば、サーバー Drafts へ背景同期してそのまま閉じる。
+  const closeGuarded = () => {
+    if (unsaved) {
+      setConfirmClose(true);
+      return;
+    }
+    if (draftIdRef.current != null) {
+      void mailDraftSyncRemote(draftIdRef.current).catch(() => undefined);
     }
     onClose();
   };
+  // ダイアログ「保存して閉じる」: 最新を確定保存し、サーバー Drafts へ背景同期して閉じる。
+  const saveAndClose = async () => {
+    await saveDraft();
+    if (draftIdRef.current != null) {
+      // サーバー同期は待たない（IMAP 往復で閉じるのを遅らせない）。
+      void mailDraftSyncRemote(draftIdRef.current).catch(() => undefined);
+    }
+    setConfirmClose(false);
+    onClose();
+  };
+  // ダイアログ「破棄」: 自動保存済みの下書きがあれば削除して閉じる（未保存の入力は捨てる）。
+  const discardAndClose = async () => {
+    if (draftIdRef.current != null) {
+      try {
+        await mailDraftDiscard(draftIdRef.current); // ローカルは即時・サーバーは背景で削除
+      } catch {
+        // 破棄の失敗は致命的でないので無視
+      }
+    }
+    setConfirmClose(false);
+    onClose();
+  };
+  // 確認ダイアログ表示中は Esc で「編集に戻る」（キャンセル）。
+  useEffect(() => {
+    if (!confirmClose) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setConfirmClose(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [confirmClose]);
 
   // 送信アニメーション（つばめ）を使うか（設定・既定オン）。開いた時点の値を採用。
   const [flyOn] = useState(getFlyAnimation);
@@ -701,14 +731,55 @@ export function Compose({
           {flyOn ? <img src={swallowUrl} alt="" className="h-4 w-auto" /> : <Send size={14} />}
           {sending ? t('compose.sending') : flyOn ? t('compose.fly') : t('compose.send')}
         </button>
+        {/* 下書きを今すぐ保存（自動保存に加えて明示保存）。未保存の変更が無いときは無効。 */}
+        <button
+          type="button"
+          onClick={() => void saveDraft()}
+          disabled={sending || accountId == null || !unsaved}
+          title={t('compose.saveDraft')}
+          className="flex items-center gap-1.5 rounded-md bg-white/10 px-3 py-1.5 text-sm text-white/80 hover:bg-white/15 disabled:opacity-40"
+        >
+          <Save size={14} />
+          {t('compose.saveDraft')}
+        </button>
         {error ? (
           <span className="flex-1 truncate text-xs text-rose-300">{error}</span>
         ) : (
-          saved && (
-            <span className="flex-1 truncate text-xs text-white/40">{t('compose.draftSaved')}</span>
-          )
+          <span className="flex-1 truncate text-xs text-white/40">
+            {unsaved ? t('compose.unsavedShort') : saved ? t('compose.draftSaved') : ''}
+          </span>
         )}
       </div>
+
+      {/* 未保存の変更があるまま閉じようとしたときの確認ダイアログ（保存/破棄/編集に戻る）。 */}
+      {confirmClose && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-sm rounded-lg bg-neutral-900/95 p-4 shadow-xl ring-1 ring-white/10">
+            <p className="mb-1 text-sm font-semibold text-white">{t('compose.unsavedTitle')}</p>
+            <p className="mb-4 text-sm text-white/70">{t('compose.unsavedMessage')}</p>
+            <div className="flex flex-wrap justify-end gap-2 text-sm">
+              <button
+                onClick={() => setConfirmClose(false)}
+                className="rounded-md px-3 py-1.5 text-white/70 hover:bg-white/10"
+              >
+                {t('compose.unsavedCancel')}
+              </button>
+              <button
+                onClick={() => void discardAndClose()}
+                className="rounded-md px-3 py-1.5 text-rose-300 hover:bg-rose-500/20"
+              >
+                {t('compose.unsavedDiscard')}
+              </button>
+              <button
+                onClick={() => void saveAndClose()}
+                className="rounded-md bg-sky-500/90 px-3 py-1.5 font-medium text-white hover:bg-sky-500"
+              >
+                {t('compose.unsavedSave')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {flyOn && <FlySwallow ref={flyRef} />}
     </div>

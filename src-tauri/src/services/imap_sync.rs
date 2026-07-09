@@ -407,7 +407,12 @@ pub fn rederive_account_attachments(
     let session = guard.as_mut().unwrap();
 
     let mut updated = 0u32;
-    for spec in SYNC_FOLDERS {
+    // 受信箱(inbox)は SYNC_FOLDERS に含まれない固定フォルダなので、明示的に先頭へ足す
+    // （抜けていると inbox の添付が再導出されない）。
+    let tags: Vec<&str> = std::iter::once("inbox")
+        .chain(SYNC_FOLDERS.iter().map(|s| s.tag))
+        .collect();
+    for tag in tags {
         if is_cancelled(cancel) {
             break;
         }
@@ -420,9 +425,7 @@ pub fn rederive_account_attachments(
                 )
                 .map_err(|e| e.to_string())?;
             let mapped = stmt
-                .query_map(params![account_id, spec.tag], |r| {
-                    Ok((r.get(0)?, r.get(1)?))
-                })
+                .query_map(params![account_id, tag], |r| Ok((r.get(0)?, r.get(1)?)))
                 .map_err(|e| e.to_string())?;
             mapped
                 .collect::<rusqlite::Result<Vec<_>>>()
@@ -432,7 +435,7 @@ pub fn rederive_account_attachments(
             continue;
         }
         // サーバー側の該当メールボックスを select（見つからなければスキップ）。
-        let mailbox = match imap_mailbox_for_tag(session, spec.tag) {
+        let mailbox = match imap_mailbox_for_tag(session, tag) {
             Ok(m) => m,
             Err(_) => continue,
         };
@@ -441,7 +444,7 @@ pub fn rederive_account_attachments(
         let uid_to_id: std::collections::HashMap<i64, i64> = rows.iter().copied().collect();
         let total = rows.len() as i32;
         let mut done = 0i32;
-        progress(spec.tag, 0, total);
+        progress(tag, 0, total);
         // UID をまとめて BODYSTRUCTURE のみ取得（本体は落とさない＝軽い）。
         for chunk in rows.chunks(200) {
             if is_cancelled(cancel) {
@@ -472,7 +475,7 @@ pub fn rederive_account_attachments(
                 }
             }
             done += chunk.len() as i32;
-            progress(spec.tag, done, total);
+            progress(tag, done, total);
         }
     }
     Ok(updated)

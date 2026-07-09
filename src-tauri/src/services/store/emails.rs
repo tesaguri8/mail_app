@@ -104,6 +104,8 @@ pub struct NewAttachment {
     pub size: i64,
     pub kind: &'static str,
     pub content_id: Option<String>,
+    /// IMAP section パス（"1"/"2"/"1.1"）。BODYSTRUCTURE 由来。無ければ part_index で従来取得。
+    pub section: Option<String>,
 }
 
 /// オンデマンド再取得に必要な情報（添付＋親メール）。
@@ -115,6 +117,8 @@ pub struct AttachmentFetchInfo {
     pub filename: String,
     /// 取得済みの保存先（未取得なら None）。
     pub file_path: Option<String>,
+    /// IMAP section（あれば BODY[section] で該当パートだけ取得。無ければ part_index で従来取得）。
+    pub section: Option<String>,
 }
 
 /// 添付メタ（本体は file_path NULL = 未取得）を一括挿入する。
@@ -127,8 +131,8 @@ fn insert_attachments(
         return Ok(());
     }
     let mut stmt = conn.prepare(
-        "INSERT INTO attachments (email_id, filename, content_type, size, part_index, kind, content_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO attachments (email_id, filename, content_type, size, part_index, kind, content_id, section)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )?;
     for a in atts {
         stmt.execute(params![
@@ -138,10 +142,37 @@ fn insert_attachments(
             a.size,
             a.part_index,
             a.kind,
-            a.content_id
+            a.content_id,
+            a.section
         ])?;
     }
     Ok(())
+}
+
+/// 添付メタを作り直す（既存行を消して入れ直し、has_attachments を再計算）。
+/// BODYSTRUCTURE から section 付きで再導出する開発コマンド用。既存の誤登録も一掃できる。
+/// 戻り値は「作り直した（=行があった or 新しく入れた）」か。
+pub fn rederive_attachments(
+    conn: &Connection,
+    email_id: i64,
+    atts: &[NewAttachment],
+) -> rusqlite::Result<bool> {
+    let before: i64 = conn.query_row(
+        "SELECT count(*) FROM attachments WHERE email_id = ?1",
+        params![email_id],
+        |r| r.get(0),
+    )?;
+    conn.execute(
+        "DELETE FROM attachments WHERE email_id = ?1",
+        params![email_id],
+    )?;
+    insert_attachments(conn, email_id, atts)?;
+    let has_real = atts.iter().any(|a| a.kind == "attachment");
+    conn.execute(
+        "UPDATE emails SET has_attachments = ?1 WHERE id = ?2",
+        params![has_real as i64, email_id],
+    )?;
+    Ok(before != 0 || !atts.is_empty())
 }
 
 /// メール挿入の結果。
@@ -1464,7 +1495,7 @@ impl Store {
     ) -> rusqlite::Result<Option<AttachmentFetchInfo>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT e.account_id, e.uid, a.part_index, a.filename, a.file_path
+            "SELECT e.account_id, e.uid, a.part_index, a.filename, a.file_path, a.section
              FROM attachments a JOIN emails e ON e.id = a.email_id
              WHERE a.id = ?1",
             params![attachment_id],
@@ -1475,6 +1506,7 @@ impl Store {
                     part_index: r.get(2)?,
                     filename: r.get(3)?,
                     file_path: r.get(4)?,
+                    section: r.get(5)?,
                 })
             },
         )

@@ -199,6 +199,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 46,
         sql: include_str!("migrations/0046_attachment_cleanup.sql"),
     },
+    Migration {
+        // 47 は添付の取得キーを IMAP section に（BODYSTRUCTURE 化。attachments.section 追加）。
+        version: 47,
+        sql: include_str!("migrations/0047_attachment_section.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

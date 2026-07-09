@@ -1,4 +1,5 @@
 pub mod autoconfig;
+pub mod bodystructure;
 pub mod compress;
 pub mod datadir;
 pub mod dataver;

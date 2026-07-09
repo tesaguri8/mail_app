@@ -130,6 +130,11 @@ export const mailResync = (accountId: number) => invoke<SyncResult>('mail_resync
 // 作り直す。パーサ改良を既存メールへ反映する用途。処理件数を返す。
 export const mailReprocess = (accountId: number) => invoke<number>('mail_reprocess', { accountId });
 
+// 開発用: 添付本体を落とさず BODYSTRUCTURE だけ取り直し、既存メールの添付メタを section 付きで
+// 作り直す（ネスト添付の取りこぼし修正・開発DBの掃除）。作り直した件数を返す。
+export const mailRederiveAttachments = (accountId: number) =>
+  invoke<number>('mail_rederive_attachments', { accountId });
+
 // 再構築の実行計画: データ形式バージョンから、全体再取り込み（resync）が必要か
 // ローカル再解析（reprocess）で足りるかを判定して返す。実行はしない。
 export const rebuildPlan = (accountId: number) =>

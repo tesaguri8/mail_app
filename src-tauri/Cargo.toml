@@ -51,6 +51,8 @@ keyring = { version = "3", features = [
 
 # IMAP 受信（同期）。TLS は native-tls（Win=SChannel / mac=SecureTransport → OpenSSL不要）
 imap = "2"
+# BODYSTRUCTURE 型（imap::Fetch::bodystructure が返す型）。imap は再エクスポートしないため直接依存。
+imap-proto = "0.10"
 native-tls = "0.2"
 
 # SMTP 送信。IMAP と同じく native-tls を使い OpenSSL 依存を避ける。

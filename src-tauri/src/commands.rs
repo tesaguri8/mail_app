@@ -2258,6 +2258,7 @@ pub async fn mail_refetch(
             size: a.size,
             kind: a.kind,
             content_id: a.content_id,
+            section: None,
         })
         .collect();
     store.ensure_attachments(id, &atts).map_err(|e| e.to_string())?;
@@ -2303,6 +2304,7 @@ async fn ensure_attachment_file(
     })?;
     let part_index = info.part_index;
     let filename = info.filename;
+    let section = info.section;
 
     let (email, login, host, port) = store
         .get_account_imap(info.account_id)
@@ -2321,6 +2323,7 @@ async fn ensure_attachment_file(
             &password,
             uid as u32,
             part_index as usize,
+            section.as_deref(),
         )
     })
     .await
@@ -2576,6 +2579,75 @@ pub async fn mail_resync(
         }
     }
     result
+}
+
+/// 開発用: 添付本体を落とさず BODYSTRUCTURE だけ取り直し、既存メールの添付メタを section 付きで
+/// 作り直す（ネスト添付の取りこぼし修正・開発DBの掃除）。本体を落とさないので軽い。作り直した件数を返す。
+#[tauri::command]
+pub async fn mail_rederive_attachments(
+    app: AppHandle,
+    store: State<'_, Store>,
+    control: State<'_, SyncControl>,
+    pool: State<'_, ImapPool>,
+    account_id: i64,
+) -> Result<u32, String> {
+    let (email, login_user, host, port) = store
+        .get_account_imap(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "アカウントが見つかりません".to_string())?;
+    let service = app.config().identifier.clone();
+    let password = keyring::Entry::new(&service, &email)
+        .and_then(|e| e.get_password())
+        .map_err(|e| format!("資格情報を取得できません: {e}"))?;
+
+    // 明示操作。実行中の自動同期があれば中断させ、枠が解放されるまで待つ。
+    if control.request_cancel(account_id) {
+        for _ in 0..100 {
+            if !control.is_running(account_id) {
+                break;
+            }
+            let _ = tauri::async_runtime::spawn_blocking(|| {
+                std::thread::sleep(std::time::Duration::from_millis(100))
+            })
+            .await;
+        }
+    }
+    let Some(cancel) = control.try_begin(account_id) else {
+        return Err(
+            "実行中の同期を中断できませんでした。少し待ってから再度お試しください。".to_string(),
+        );
+    };
+    let db_path = store.path();
+
+    let app_ev = app.clone();
+    let cancel_task = cancel.clone();
+    let session_slot = pool.slot(account_id);
+    let out = tauri::async_runtime::spawn_blocking(move || {
+        let progress = |folder: &str, current: i32, total: i32| {
+            let _ = app_ev.emit(
+                "sync:progress",
+                SyncProgress {
+                    folder: folder.to_string(),
+                    current,
+                    total,
+                },
+            );
+        };
+        imap_sync::rederive_account_attachments(
+            &db_path,
+            account_id,
+            &host,
+            port,
+            &login_user,
+            &password,
+            &progress,
+            &cancel_task,
+            &session_slot,
+        )
+    })
+    .await;
+    control.end(account_id);
+    out.map_err(|e| e.to_string())?
 }
 
 /// ファイル名を保存に安全な形へ正規化する（パス区切り・禁止文字を除去）。

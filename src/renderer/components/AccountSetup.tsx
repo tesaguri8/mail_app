@@ -22,6 +22,7 @@ import {
   accountSetFullWindow,
   accountSetStorageLimit,
   accountStorageInfo,
+  mailRederiveAttachments,
   mailReprocess,
   rebuildPlan,
   storageOptimize,
@@ -225,6 +226,22 @@ export function AccountSetup({
       sync.toast(String(e), 'error');
     } finally {
       setRebuilding(null);
+    }
+  };
+
+  // 開発用: 添付本体を落とさず BODYSTRUCTURE だけ取り直し、添付メタを section 付きで作り直す。
+  // ネスト添付の取りこぼし修正＆開発DBの掃除（再ダウンロードなしで軽い）。
+  const [rederiving, setRederiving] = useState<number | null>(null);
+  const startRederive = async (id: number) => {
+    setRederiving(id);
+    try {
+      const n = await mailRederiveAttachments(id);
+      sync.toast(`添付メタを再導出しました（${n} 件）`);
+      onChanged();
+    } catch (e) {
+      sync.toast(String(e), 'error');
+    } finally {
+      setRederiving(null);
     }
   };
 
@@ -663,6 +680,19 @@ export function AccountSetup({
                     <span className="mt-1 block text-[11px] leading-snug text-white/40">
                       {t('storage.rebuildHint')}
                     </span>
+                    {/* 開発用: 添付メタ再導出（BODYSTRUCTURE のみ・本体を落とさない） */}
+                    {import.meta.env.DEV && (
+                      <div className="mt-2">
+                        <button
+                          className={btnCls}
+                          disabled={rederiving === a.id || !!sync.active}
+                          onClick={() => startRederive(a.id)}
+                          title="添付本体を落とさず BODYSTRUCTURE だけ取り直し、添付メタを section 付きで作り直します（開発用）"
+                        >
+                          {rederiving === a.id ? '添付メタを再導出中…' : '添付メタを再導出（dev）'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

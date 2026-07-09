@@ -1,6 +1,8 @@
 use crate::models::SyncResult;
 use crate::services::parser;
-use crate::services::store::{insert_email, InsertOutcome, NewAttachment, NewEmail, NewQuote};
+use crate::services::store::{
+    insert_email, rederive_attachments, InsertOutcome, NewAttachment, NewEmail, NewQuote,
+};
 use chrono::{Duration, Utc};
 use mail_parser::MessageParser;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -382,6 +384,100 @@ pub fn sync_account(
     }
 }
 
+/// 開発用: 添付本体を落とさず BODYSTRUCTURE だけを取り直して、既存メールの添付メタを section 付き
+/// で作り直す（ネスト添付の取りこぼし修正・開発DBの掃除）。本体を落とさないので軽い。
+/// 戻り値は作り直したメール件数。
+#[allow(clippy::too_many_arguments)]
+pub fn rederive_account_attachments(
+    db_path: &Path,
+    account_id: i64,
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    progress: &dyn Fn(&str, i32, i32),
+    cancel: &AtomicBool,
+    slot: &Mutex<Option<ImapSession>>,
+) -> Result<u32, String> {
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let _ = conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
+
+    let mut guard = slot.lock().unwrap();
+    ensure_live_session(&mut guard, host, port, user, password)?;
+    let session = guard.as_mut().unwrap();
+
+    let mut updated = 0u32;
+    for spec in SYNC_FOLDERS {
+        if is_cancelled(cancel) {
+            break;
+        }
+        // このフォルダのローカル (uid -> email_id)。UID の無い行（送信控え等）は対象外。
+        let rows: Vec<(i64, i64)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT uid, id FROM emails
+                     WHERE account_id=?1 AND folder=?2 AND uid IS NOT NULL",
+                )
+                .map_err(|e| e.to_string())?;
+            let mapped = stmt
+                .query_map(params![account_id, spec.tag], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .map_err(|e| e.to_string())?;
+            mapped
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| e.to_string())?
+        };
+        if rows.is_empty() {
+            continue;
+        }
+        // サーバー側の該当メールボックスを select（見つからなければスキップ）。
+        let mailbox = match imap_mailbox_for_tag(session, spec.tag) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        session.select(&mailbox).map_err(|e| e.to_string())?;
+
+        let uid_to_id: std::collections::HashMap<i64, i64> = rows.iter().copied().collect();
+        let total = rows.len() as i32;
+        let mut done = 0i32;
+        progress(spec.tag, 0, total);
+        // UID をまとめて BODYSTRUCTURE のみ取得（本体は落とさない＝軽い）。
+        for chunk in rows.chunks(200) {
+            if is_cancelled(cancel) {
+                break;
+            }
+            let set = chunk
+                .iter()
+                .map(|(u, _)| u.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            let msgs = session
+                .uid_fetch(set, "(UID BODYSTRUCTURE)")
+                .map_err(|e| e.to_string())?;
+            for m in msgs.iter() {
+                let uid = match m.uid {
+                    Some(u) => u as i64,
+                    None => continue,
+                };
+                let email_id = match uid_to_id.get(&uid) {
+                    Some(id) => *id,
+                    None => continue,
+                };
+                if let Some(bs) = m.bodystructure() {
+                    let atts = attachments_from_bodystructure(bs);
+                    if rederive_attachments(&conn, email_id, &atts).map_err(|e| e.to_string())? {
+                        updated += 1;
+                    }
+                }
+            }
+            done += chunk.len() as i32;
+            progress(spec.tag, done, total);
+        }
+    }
+    Ok(updated)
+}
+
 /// 1 フォルダを同期する（select → folder_sync 状態確認 → 取得 → 状態更新）。
 /// 集計はアカウント全体の result に加算する。
 #[allow(clippy::too_many_arguments)]
@@ -442,7 +538,7 @@ fn sync_folder(
                 let low = total.saturating_sub(n.saturating_sub(1)).max(1);
                 let seq = format!("{}:{}", low, total);
                 let msgs = session
-                    .fetch(seq, "(UID FLAGS BODY[])")
+                    .fetch(seq, "(UID FLAGS BODY[] BODYSTRUCTURE)")
                     .map_err(|e| e.to_string())?;
                 let planned = msgs.len() as i32;
                 progress(tag, 0, planned);
@@ -531,7 +627,7 @@ fn fetch_uids(
             .collect::<Vec<_>>()
             .join(",");
         let msgs = session
-            .uid_fetch(set, "(UID FLAGS BODY[])")
+            .uid_fetch(set, "(UID FLAGS BODY[] BODYSTRUCTURE)")
             .map_err(|e| e.to_string())?;
         store_fetches(conn, account_id, folder, msgs.iter(), c)?;
         // チャンクごとに進捗を通知（取得済み / 予定件数）。
@@ -567,6 +663,53 @@ fn is_verified_self(secret: &Option<String>, p: &parser::ParsedEmail) -> bool {
     }
 }
 
+/// BODYSTRUCTURE（本体なし）から添付メタ一覧を section 付きで作る。ネスト添付にも section で届く。
+fn attachments_from_bodystructure(bs: &imap_proto::types::BodyStructure) -> Vec<NewAttachment> {
+    crate::services::bodystructure::attachments(bs)
+        .into_iter()
+        .enumerate()
+        .map(|(i, sp)| {
+            let kind = if sp.content_id.is_some() && sp.content_type.starts_with("image/") {
+                "inline"
+            } else {
+                "attachment"
+            };
+            NewAttachment {
+                part_index: i as i64,
+                filename: sp
+                    .filename
+                    .unwrap_or_else(|| format!("attachment-{}", i + 1)),
+                content_type: Some(sp.content_type),
+                size: sp.size,
+                kind,
+                content_id: sp.content_id,
+                section: Some(sp.section),
+            }
+        })
+        .collect()
+}
+
+/// この取得結果から添付メタ一覧を作る。BODYSTRUCTURE があればそれを正本にし（section 付き・
+/// ネスト対応・本体を落とさない）、無ければ従来の parse 結果（section なし）にフォールバックする。
+fn attachments_from_fetch(m: &imap::types::Fetch, p: &parser::ParsedEmail) -> Vec<NewAttachment> {
+    if let Some(bs) = m.bodystructure() {
+        attachments_from_bodystructure(bs)
+    } else {
+        p.attachments
+            .iter()
+            .map(|a| NewAttachment {
+                part_index: a.part_index,
+                filename: a.filename.clone(),
+                content_type: a.content_type.clone(),
+                size: a.size,
+                kind: a.kind,
+                content_id: a.content_id.clone(),
+                section: None,
+            })
+            .collect()
+    }
+}
+
 fn parsed_to_new_email(
     p: parser::ParsedEmail,
     account_id: i64,
@@ -574,6 +717,7 @@ fn parsed_to_new_email(
     seen: bool,
     uid: Option<i64>,
     verified_self: bool,
+    attachments: Vec<NewAttachment>,
 ) -> NewEmail {
     // 「本物の自分から」がサーバーの迷惑フォルダに入っていたら受信箱に出す（ローカルで迷惑解除）。
     let folder = if verified_self && folder == "spam" {
@@ -581,18 +725,6 @@ fn parsed_to_new_email(
     } else {
         folder
     };
-    let attachments = p
-        .attachments
-        .into_iter()
-        .map(|a| NewAttachment {
-            part_index: a.part_index,
-            filename: a.filename,
-            content_type: a.content_type,
-            size: a.size,
-            kind: a.kind,
-            content_id: a.content_id,
-        })
-        .collect();
     let quotes = p
         .quotes
         .into_iter()
@@ -662,7 +794,8 @@ fn store_fetches<'a>(
             .any(|f| matches!(f, imap::types::Flag::Seen));
         if let Some(p) = parser::parse_message(raw) {
             let verified = is_verified_self(&self_secret, &p);
-            let ne = parsed_to_new_email(p, account_id, folder, seen, uid, verified);
+            let atts = attachments_from_fetch(m, &p);
+            let ne = parsed_to_new_email(p, account_id, folder, seen, uid, verified, atts);
             match insert_email(conn, &ne).map_err(|e| e.to_string())? {
                 InsertOutcome::Inserted(_) => c.stored += 1,
                 InsertOutcome::Backfilled => c.backfilled += 1,
@@ -696,7 +829,8 @@ fn store_header_fetches<'a>(
             .any(|f| matches!(f, imap::types::Flag::Seen));
         if let Some(p) = parser::parse_message(raw) {
             let verified = is_verified_self(&self_secret, &p);
-            let ne = parsed_to_new_email(p, account_id, folder, seen, uid, verified);
+            let atts = attachments_from_fetch(m, &p);
+            let ne = parsed_to_new_email(p, account_id, folder, seen, uid, verified, atts);
             if let InsertOutcome::Inserted(_) = insert_email(conn, &ne).map_err(|e| e.to_string())? {
                 result.backfilled += 1;
             }
@@ -786,7 +920,7 @@ fn backfill_folder_metadata(
             .join(",");
         // BODY.PEEK[HEADER]: 既読フラグを立てず、ヘッダのみ取得（本文は取らない＝軽い）。
         let msgs = session
-            .uid_fetch(set, "(UID FLAGS BODY.PEEK[HEADER])")
+            .uid_fetch(set, "(UID FLAGS BODY.PEEK[HEADER] BODYSTRUCTURE)")
             .map_err(|e| e.to_string())?;
         store_header_fetches(conn, account_id, tag, msgs.iter(), result)?;
         got += chunk.len() as i32;
@@ -885,7 +1019,7 @@ fn backfill_folder_bodies(
             .join(",");
         // PEEK: 既読フラグを立てずに本文全体を取得する（過去メールを勝手に既読化しない）。
         let msgs = session
-            .uid_fetch(set, "(UID FLAGS BODY.PEEK[])")
+            .uid_fetch(set, "(UID FLAGS BODY.PEEK[] BODYSTRUCTURE)")
             .map_err(|e| e.to_string())?;
         store_fetches(conn, account_id, tag, msgs.iter(), &mut c)?;
         got += chunk.len() as i32;
@@ -1171,7 +1305,38 @@ pub struct FetchedAttachment {
     pub content_type: Option<String>,
 }
 
-/// 指定 UID のメッセージを再取得し、part_index 番目の添付本体を取り出す（オンデマンド）。
+/// IMAP section 文字列（"1" / "2" / "1.1"）を数値パスに変換する。
+fn parse_section_path(section: &str) -> Option<Vec<u32>> {
+    let parts: Vec<u32> = section
+        .split('.')
+        .map(|s| s.parse::<u32>())
+        .collect::<Result<_, _>>()
+        .ok()?;
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts)
+    }
+}
+
+/// `[section.MIME]`（そのパートのヘッダ）と `[section]`（そのパートの本体）を結合し、
+/// mail_parser が charset/転送エンコードを解いて読める 1 つの MIME エンティティにする。
+fn combine_mime_part(mime: &[u8], body: &[u8]) -> Vec<u8> {
+    // MIME ヘッダ末尾の改行を一旦落として、必ず空行 1 つで本体と区切る。
+    let mut end = mime.len();
+    while end > 0 && (mime[end - 1] == b'\r' || mime[end - 1] == b'\n') {
+        end -= 1;
+    }
+    let mut out = Vec::with_capacity(end + body.len() + 4);
+    out.extend_from_slice(&mime[..end]);
+    out.extend_from_slice(b"\r\n\r\n");
+    out.extend_from_slice(body);
+    out
+}
+
+/// 指定 UID のメッセージから添付本体を取り出す（オンデマンド）。
+/// `section` があれば `BODY.PEEK[section]` で該当パートだけ取得（本体を丸ごと落とさず軽い）。
+/// 無ければ従来どおり `BODY[]` を取得し `part_index` 番目の実添付を取り出す（後方互換）。
 pub fn fetch_attachment(
     host: &str,
     port: u16,
@@ -1179,7 +1344,10 @@ pub fn fetch_attachment(
     password: &str,
     uid: u32,
     part_index: usize,
+    section: Option<&str>,
 ) -> Result<FetchedAttachment, String> {
+    use imap_proto::types::{MessageSection, SectionPath};
+
     let tls = native_tls::TlsConnector::builder()
         .build()
         .map_err(|e| e.to_string())?;
@@ -1189,6 +1357,47 @@ pub fn fetch_attachment(
         .map_err(|(e, _)| e.to_string())?;
     session.select("INBOX").map_err(|e| e.to_string())?;
 
+    // section があれば該当パートの MIME ヘッダ＋本体だけ取得（軽量経路）。
+    if let Some(path) = section.and_then(parse_section_path) {
+        let sec = path
+            .iter()
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(".");
+        let query = format!("(BODY.PEEK[{sec}.MIME] BODY.PEEK[{sec}])");
+        let msgs = session
+            .uid_fetch(uid.to_string(), query)
+            .map_err(|e| e.to_string())?;
+        let m = msgs
+            .iter()
+            .next()
+            .ok_or_else(|| "メッセージが見つかりませんでした".to_string())?;
+        let mime = m
+            .section(&SectionPath::Part(path.clone(), Some(MessageSection::Mime)))
+            .unwrap_or(&[]);
+        let body = m
+            .section(&SectionPath::Part(path.clone(), None))
+            .ok_or_else(|| "添付パートを取得できませんでした".to_string())?;
+        let combined = combine_mime_part(mime, body);
+        let msg = MessageParser::default()
+            .parse(&combined)
+            .ok_or_else(|| "添付パートを解析できませんでした".to_string())?;
+        let part = msg
+            .parts
+            .first()
+            .ok_or_else(|| "添付パートが空でした".to_string())?;
+        let bytes = part.contents().to_vec();
+        let filename = parser::part_filename(part, part_index);
+        let content_type = parser::part_content_type(part);
+        let _ = session.logout();
+        return Ok(FetchedAttachment {
+            bytes,
+            filename,
+            content_type,
+        });
+    }
+
+    // フォールバック: section が無い既存行はメッセージ全体を取得して part_index で取り出す。
     let msgs = session
         .uid_fetch(uid.to_string(), "(BODY[])")
         .map_err(|e| e.to_string())?;

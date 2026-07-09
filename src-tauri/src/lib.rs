@@ -89,6 +89,7 @@ pub fn run() {
             commands::account_set_storage_limit,
             commands::storage_optimize,
             commands::mail_resync,
+            commands::mail_rederive_attachments,
             commands::mail_set_read,
             commands::mail_set_starred,
             commands::mail_set_bookmarked,

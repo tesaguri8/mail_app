@@ -1201,8 +1201,11 @@ pub fn fetch_attachment(
     let msg = MessageParser::default()
         .parse(raw)
         .ok_or_else(|| "メッセージを解析できませんでした".to_string())?;
-    let part = msg
-        .attachment(part_index)
+    // 保存時と同じ「実添付パート一覧」から part_index 番目を取り出す（ネストした添付にも届く）。
+    let parts = parser::real_attachment_parts(&msg);
+    let part = parts
+        .get(part_index)
+        .copied()
         .ok_or_else(|| "添付が見つかりませんでした".to_string())?;
 
     let bytes = part.contents().to_vec();

@@ -194,6 +194,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 45,
         sql: include_str!("migrations/0045_attachment_reclassify.sql"),
     },
+    Migration {
+        // 46 は添付の誤登録掃除（本文の代替パート/multipart コンテナを添付から除外。既存も掃除）。
+        version: 46,
+        sql: include_str!("migrations/0046_attachment_cleanup.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
@@ -297,7 +302,7 @@ mod tests {
              -- 0044(accounts 列追加)・0045(attachments/emails のデータ更新)が動くよう用意する。
              CREATE TABLE accounts (id INTEGER PRIMARY KEY, email TEXT);
              CREATE TABLE attachments (id INTEGER PRIMARY KEY, email_id INTEGER NOT NULL,
-               kind TEXT, content_type TEXT, content_id TEXT, size INTEGER);
+               filename TEXT, kind TEXT, content_type TEXT, content_id TEXT, size INTEGER);
              PRAGMA user_version = 35;",
         )
         .unwrap();

@@ -158,6 +158,23 @@ pub fn part_filename(part: &mail_parser::MessagePart, index: usize) -> String {
         .unwrap_or_else(|| format!("attachment-{}", index + 1))
 }
 
+/// メッセージの全パート（`parts` はネストも含めて平坦化されている）から「本来の添付」だけを
+/// 文書順に集める。名前（Content-Disposition filename / Content-Type name）を持つか cid: 埋め込み
+/// （Content-ID）を持ち、かつ中身のある「葉」パートのみ。multipart コンテナや本文パートは除外する。
+/// mail_parser の `.attachments()` はネスト構造で内側の実添付ではなくコンテナ（multipart/mixed 等）を
+/// 返すことがあるため、`parts` を直接辿って実添付を取り出す。保存(part_index)と再取得で同じ関数を
+/// 使うので、part_index はこの一覧内の序数で一貫する。
+pub fn real_attachment_parts<'a>(
+    msg: &'a mail_parser::Message<'a>,
+) -> Vec<&'a mail_parser::MessagePart<'a>> {
+    msg.parts
+        .iter()
+        .filter(|p| {
+            (p.attachment_name().is_some() || p.content_id().is_some()) && !p.contents().is_empty()
+        })
+        .collect()
+}
+
 /// ブロック要素（この境界で改行を入れる）。フロントの HtmlText の BLOCK と同方針。
 const BLOCK_TAGS: &[&str] = &[
     "p", "div", "br", "tr", "li", "ul", "ol", "table", "thead", "tbody", "h1", "h2", "h3", "h4",
@@ -367,8 +384,8 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
     };
     let thread_index = header_text(&msg, "Thread-Index");
     let raw_headers = header_block(raw);
-    let attachments: Vec<ParsedAttachment> = msg
-        .attachments()
+    let attachments: Vec<ParsedAttachment> = real_attachment_parts(&msg)
+        .into_iter()
         .enumerate()
         .map(|(i, part)| ParsedAttachment {
             part_index: i as i64,

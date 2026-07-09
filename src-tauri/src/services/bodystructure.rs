@@ -50,6 +50,16 @@ pub fn attachments(bs: &BodyStructure) -> Vec<StructPart> {
     parse(bs).into_iter().filter(|p| p.is_attachment).collect()
 }
 
+/// 本文テキスト葉（text/* で添付でない）の section を文書順で返す（Stage2 の本文取得用）。
+/// これらの section だけ `BODY[section]` で取れば、添付本体を落とさず本文が得られる。
+pub fn body_text_sections(bs: &BodyStructure) -> Vec<String> {
+    parse(bs)
+        .into_iter()
+        .filter(|p| p.is_body_text)
+        .map(|p| p.section)
+        .collect()
+}
+
 fn walk(bs: &BodyStructure, prefix: &str, out: &mut Vec<StructPart>) {
     match bs {
         // コンテナ: 子を 1..N で番号付けして辿る（コンテナ自体は葉ではない）。

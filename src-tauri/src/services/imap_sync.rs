@@ -537,13 +537,23 @@ fn sync_folder(
                 // 最新 n 件（シーケンス範囲で効率的に）。新しい順に保存する。
                 let low = total.saturating_sub(n.saturating_sub(1)).max(1);
                 let seq = format!("{}:{}", low, total);
-                let msgs = session
-                    .fetch(seq, "(UID FLAGS BODY[] BODYSTRUCTURE)")
-                    .map_err(|e| e.to_string())?;
-                let planned = msgs.len() as i32;
+                let planned = (total - low + 1) as i32;
                 progress(tag, 0, planned);
                 if !is_cancelled(cancel) {
-                    store_fetches(conn, account_id, tag, msgs.iter().rev(), &mut c)?;
+                    let self_secret = account_self_secret(conn, account_id);
+                    // 添付本体を落とさない軽量取得（Pass1 メタ → Pass2 本文だけ）。新しい順に保存。
+                    fetch_light_chunk(
+                        session,
+                        conn,
+                        account_id,
+                        tag,
+                        &self_secret,
+                        &seq,
+                        false,
+                        true,
+                        &mut c,
+                        cancel,
+                    )?;
                 }
                 progress(tag, c.fetched, planned);
             }
@@ -616,6 +626,7 @@ fn fetch_uids(
 ) -> Result<(), String> {
     let total = uids.len() as i32;
     progress(folder, 0, total);
+    let self_secret = account_self_secret(conn, account_id);
     for chunk in uids.chunks(CHUNK) {
         // 中断要求があればチャンク境界で取得を止める（取得済みは保存済み）。
         if is_cancelled(cancel) {
@@ -626,10 +637,19 @@ fn fetch_uids(
             .map(|u| u.to_string())
             .collect::<Vec<_>>()
             .join(",");
-        let msgs = session
-            .uid_fetch(set, "(UID FLAGS BODY[] BODYSTRUCTURE)")
-            .map_err(|e| e.to_string())?;
-        store_fetches(conn, account_id, folder, msgs.iter(), c)?;
+        // 添付本体を落とさない軽量取得（Pass1 メタ → Pass2 本文だけ）。取得順のまま保存。
+        fetch_light_chunk(
+            session,
+            conn,
+            account_id,
+            folder,
+            &self_secret,
+            &set,
+            true,
+            false,
+            c,
+            cancel,
+        )?;
         // チャンクごとに進捗を通知（取得済み / 予定件数）。
         progress(folder, c.fetched, total);
     }
@@ -735,6 +755,9 @@ fn parsed_to_new_email(
             fingerprint: q.fingerprint,
         })
         .collect();
+    // 📎 は BODYSTRUCTURE 由来の添付一覧を正本に判定する（本文を落とす Stage2 では p.has_attachments
+    // は再構成本文からの推定になり信用できないため）。実添付（kind=="attachment"）があれば立てる。
+    let has_attachments = attachments.iter().any(|a| a.kind == "attachment");
     NewEmail {
         account_id,
         message_id: p.message_id,
@@ -758,7 +781,7 @@ fn parsed_to_new_email(
         thread_index: p.thread_index,
         raw_headers: p.raw_headers,
         quotes,
-        has_attachments: p.has_attachments,
+        has_attachments,
         is_read: seen,
         uid,
         folder: folder.to_string(),
@@ -767,14 +790,27 @@ fn parsed_to_new_email(
     }
 }
 
-fn store_fetches<'a>(
-    conn: &Connection,
-    account_id: i64,
-    folder: &str,
+/// 軽量取得（Stage2）の 1 メッセージ分の owned メタ。Pass1（FLAGS/BODYSTRUCTURE/HEADER）から取り、
+/// セッションの借用を跨いで Pass2（本文取得）まで保持する。
+struct MsgMeta {
+    uid: Option<i64>,
+    seen: bool,
+    /// トップレベルヘッダ（BODY[HEADER]。末尾空行を含む）。
+    header: Vec<u8>,
+    /// BODYSTRUCTURE 由来の添付メタ（section 付き）。
+    attachments: Vec<NewAttachment>,
+    /// 本文テキスト葉の section 一覧（is_body_text）。
+    body_sections: Vec<String>,
+    /// 実添付/inline を持つか（true なら本文だけ section 取得、false なら BODY[TEXT] で全体復元）。
+    has_att: bool,
+}
+
+/// Pass1 の取得結果から owned メタを取り出す（本体はまだ取らない）。fetched/max_uid を加算する。
+fn collect_metas<'a>(
     msgs: impl Iterator<Item = &'a imap::types::Fetch>,
     c: &mut Counters,
-) -> Result<(), String> {
-    let self_secret = account_self_secret(conn, account_id);
+) -> Vec<MsgMeta> {
+    let mut out = Vec::new();
     for m in msgs {
         c.fetched += 1;
         if let Some(u) = m.uid {
@@ -782,20 +818,166 @@ fn store_fetches<'a>(
                 c.max_uid = u;
             }
         }
-        let raw = match m.body() {
-            Some(b) => b,
+        let header = match m.header() {
+            Some(h) => h.to_vec(),
             None => continue,
         };
-        let uid = m.uid.map(|u| u as i64);
-        // サーバー上の既読状態（\Seen）。未読数をサーバーと一致させる。
         let seen = m
             .flags()
             .iter()
             .any(|f| matches!(f, imap::types::Flag::Seen));
-        if let Some(p) = parser::parse_message(raw) {
-            let verified = is_verified_self(&self_secret, &p);
-            let atts = attachments_from_fetch(m, &p);
-            let ne = parsed_to_new_email(p, account_id, folder, seen, uid, verified, atts);
+        let (attachments, body_sections, has_att) = match m.bodystructure() {
+            Some(bs) => {
+                let atts = attachments_from_bodystructure(bs);
+                let has = !atts.is_empty();
+                let sections = crate::services::bodystructure::body_text_sections(bs);
+                (atts, sections, has)
+            }
+            // BODYSTRUCTURE 無し（稀なサーバー）: 添付判定できないので BODY[TEXT] で全体復元にフォールバック。
+            None => (Vec::new(), Vec::new(), false),
+        };
+        out.push(MsgMeta {
+            uid: m.uid.map(|u| u as i64),
+            seen,
+            header,
+            attachments,
+            body_sections,
+            has_att,
+        });
+    }
+    out
+}
+
+/// メッセージ 1 通の本文テキスト section を取得して `(MIME, 本体)` の並びで返す（添付は取らない）。
+#[allow(clippy::type_complexity)]
+fn fetch_body_parts(
+    session: &mut ImapSession,
+    uid: i64,
+    sections: &[String],
+) -> Result<Vec<(Vec<u8>, Vec<u8>)>, String> {
+    use imap_proto::types::{MessageSection, SectionPath};
+    if sections.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut items = Vec::new();
+    for s in sections {
+        items.push(format!("BODY.PEEK[{s}]"));
+        items.push(format!("BODY.PEEK[{s}.MIME]"));
+    }
+    let query = format!("({})", items.join(" "));
+    let fetches = session
+        .uid_fetch(uid.to_string(), query)
+        .map_err(|e| e.to_string())?;
+    let mut parts = Vec::new();
+    if let Some(m) = fetches.iter().next() {
+        for s in sections {
+            if let Some(path) = parse_section_path(s) {
+                if let Some(body) = m.section(&SectionPath::Part(path.clone(), None)) {
+                    let mime = m
+                        .section(&SectionPath::Part(path.clone(), Some(MessageSection::Mime)))
+                        .map(|b| b.to_vec())
+                        .unwrap_or_default();
+                    parts.push((mime, body.to_vec()));
+                }
+            }
+        }
+    }
+    Ok(parts)
+}
+
+/// 保険用: メッセージ全体（BODY[]）を取り直す。section 組み直しで本文が取れなかったときだけ使う。
+fn fetch_full_raw(session: &mut ImapSession, uid: i64) -> Option<Vec<u8>> {
+    let fetches = session.uid_fetch(uid.to_string(), "(BODY.PEEK[])").ok()?;
+    fetches
+        .iter()
+        .next()
+        .and_then(|m| m.body())
+        .map(|b| b.to_vec())
+}
+
+/// Pass2: 本文だけ取得して 1 通に組み直し保存する（添付本体は落とさない）。docs/SYNC.md（Stage2）。
+/// - 添付なし: `UID … FETCH BODY[TEXT]` を一括取得し「ヘッダ+TEXT」で元通り復元（合成不要）。
+/// - 添付あり: 本文テキスト section だけ取得し multipart/alternative に組み直す。
+#[allow(clippy::too_many_arguments)]
+fn store_bodies(
+    session: &mut ImapSession,
+    conn: &Connection,
+    account_id: i64,
+    folder: &str,
+    self_secret: &Option<String>,
+    metas: Vec<MsgMeta>,
+    c: &mut Counters,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    // 添付なしメールの本文（BODY[TEXT]）を一括取得（UID→本文）。
+    let noatt_uids: Vec<i64> = metas
+        .iter()
+        .filter(|m| !m.has_att)
+        .filter_map(|m| m.uid)
+        .collect();
+    let mut text_by_uid: std::collections::HashMap<i64, Vec<u8>> = std::collections::HashMap::new();
+    if !noatt_uids.is_empty() {
+        let set = noatt_uids
+            .iter()
+            .map(|u| u.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let fetches = session
+            .uid_fetch(set, "(UID BODY.PEEK[TEXT])")
+            .map_err(|e| e.to_string())?;
+        for m in fetches.iter() {
+            if let (Some(uid), Some(t)) = (m.uid, m.text()) {
+                text_by_uid.insert(uid as i64, t.to_vec());
+            }
+        }
+    }
+
+    for meta in metas {
+        if is_cancelled(cancel) {
+            break;
+        }
+        let raw: Vec<u8> = if !meta.has_att {
+            // 添付なし: ヘッダ + TEXT（TEXT が取れなければヘッダのみ＝本文空）。
+            let text = meta
+                .uid
+                .and_then(|u| text_by_uid.get(&u))
+                .map(|v| v.as_slice())
+                .unwrap_or(b"");
+            crate::services::bodyfetch::reassemble_full(&meta.header, text)
+        } else {
+            // 添付あり: 本文テキスト section だけ取得して組み直す。
+            let parts = match meta.uid {
+                Some(uid) => fetch_body_parts(session, uid, &meta.body_sections)?,
+                None => Vec::new(),
+            };
+            crate::services::bodyfetch::reassemble_multipart_text(&meta.header, &parts)
+        };
+
+        if let Some(mut p) = parser::parse_message(&raw) {
+            // 添付ありで本文 section があったのに本文が空 → 取りこぼしの疑い。BODY[] で取り直す保険。
+            let empty_body = p.clean_body.as_deref().unwrap_or("").trim().is_empty()
+                && p.body_html.as_deref().unwrap_or("").trim().is_empty();
+            if meta.has_att && !meta.body_sections.is_empty() && empty_body {
+                if let Some(uid) = meta.uid {
+                    if let Some(full) = fetch_full_raw(session, uid) {
+                        if let Some(fp) = parser::parse_message(&full) {
+                            p = fp;
+                        }
+                    }
+                }
+            }
+            // 原本ヘッダを保持（合成後のヘッダで上書きしない。後の再解析・reply_to 抽出用）。
+            p.raw_headers = Some(String::from_utf8_lossy(&meta.header).into_owned());
+            let verified = is_verified_self(self_secret, &p);
+            let ne = parsed_to_new_email(
+                p,
+                account_id,
+                folder,
+                meta.seen,
+                meta.uid,
+                verified,
+                meta.attachments,
+            );
             match insert_email(conn, &ne).map_err(|e| e.to_string())? {
                 InsertOutcome::Inserted(_) => c.stored += 1,
                 InsertOutcome::Backfilled => c.backfilled += 1,
@@ -804,6 +986,38 @@ fn store_fetches<'a>(
         }
     }
     Ok(())
+}
+
+/// 軽量取得の 1 チャンク: Pass1（メタ）→ Pass2（本文だけ）。`BODY[]` を発行しない（＝添付本体を落とさない）。
+/// `by_uid=false` はシーケンス範囲取得（初回 Count 用）。`reverse=true` は新しい順に保存する。
+#[allow(clippy::too_many_arguments)]
+fn fetch_light_chunk(
+    session: &mut ImapSession,
+    conn: &Connection,
+    account_id: i64,
+    folder: &str,
+    self_secret: &Option<String>,
+    set: &str,
+    by_uid: bool,
+    reverse: bool,
+    c: &mut Counters,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    // Pass1: FLAGS/BODYSTRUCTURE/HEADER のみ（本体なし）。owned メタに写してから借用を解放。
+    let query = "(UID FLAGS BODYSTRUCTURE BODY.PEEK[HEADER])";
+    let mut metas = {
+        let fetches = if by_uid {
+            session.uid_fetch(set, query).map_err(|e| e.to_string())?
+        } else {
+            session.fetch(set, query).map_err(|e| e.to_string())?
+        };
+        collect_metas(fetches.iter(), c)
+    };
+    if reverse {
+        metas.reverse();
+    }
+    // Pass2: 本文だけ取得して保存。
+    store_bodies(session, conn, account_id, folder, self_secret, metas, c, cancel)
 }
 
 /// メタのみ行の書き込み（BODY.PEEK[HEADER] をそのまま parse_message へ）。ヘッダのみなので
@@ -1008,6 +1222,7 @@ fn backfill_folder_bodies(
         backfilled: 0,
         max_uid: 0,
     };
+    let self_secret = account_self_secret(conn, account_id);
     for chunk in uids.chunks(CHUNK) {
         if is_cancelled(cancel) {
             break;
@@ -1017,11 +1232,20 @@ fn backfill_folder_bodies(
             .map(|u| u.to_string())
             .collect::<Vec<_>>()
             .join(",");
-        // PEEK: 既読フラグを立てずに本文全体を取得する（過去メールを勝手に既読化しない）。
-        let msgs = session
-            .uid_fetch(set, "(UID FLAGS BODY.PEEK[] BODYSTRUCTURE)")
-            .map_err(|e| e.to_string())?;
-        store_fetches(conn, account_id, tag, msgs.iter(), &mut c)?;
+        // 本文だけ取得して既存の absent 行へ埋め戻す（添付本体は落とさない）。すべて PEEK なので
+        // 過去メールを勝手に既読化しない。既存行は insert_email 側で Backfilled として本文が入る。
+        fetch_light_chunk(
+            session,
+            conn,
+            account_id,
+            tag,
+            &self_secret,
+            &set,
+            true,
+            false,
+            &mut c,
+            cancel,
+        )?;
         got += chunk.len() as i32;
         progress(tag, got, total);
     }

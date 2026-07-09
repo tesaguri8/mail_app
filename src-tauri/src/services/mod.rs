@@ -1,4 +1,5 @@
 pub mod autoconfig;
+pub mod bodyfetch;
 pub mod bodystructure;
 pub mod compress;
 pub mod datadir;

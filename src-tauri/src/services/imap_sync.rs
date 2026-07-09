@@ -4,7 +4,7 @@ use crate::services::store::{
     insert_email, rederive_attachments, InsertOutcome, NewAttachment, NewEmail, NewQuote,
 };
 use chrono::{Duration, Utc};
-use mail_parser::MessageParser;
+use mail_parser::{MessageParser, MimeHeaders};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
@@ -468,7 +468,9 @@ pub fn rederive_account_attachments(
                     None => continue,
                 };
                 if let Some(bs) = m.bodystructure() {
-                    let atts = attachments_from_bodystructure(bs);
+                    // ファイル名は各添付パートの MIME ヘッダから mail_parser で復号（RFC2231/2047 対応）。
+                    let att_parts = crate::services::bodystructure::attachments(bs);
+                    let atts = resolve_attachments(session, uid, att_parts);
                     if rederive_attachments(&conn, email_id, &atts).map_err(|e| e.to_string())? {
                         updated += 1;
                     }
@@ -733,6 +735,93 @@ fn attachments_from_fetch(m: &imap::types::Fetch, p: &parser::ParsedEmail) -> Ve
     }
 }
 
+/// StructPart（BODYSTRUCTURE 由来）と、あれば取得済みのパート MIME ヘッダから、表示用のファイル名・
+/// content_type を mail_parser で復号して NewAttachment を作る。BODYSTRUCTURE の filename は日本語だと
+/// RFC2231/2047 でエンコードされ素の抽出では化ける/欠落するため、MIME ヘッダを mail_parser に通す。
+fn new_attachment_from(
+    i: usize,
+    sp: crate::services::bodystructure::StructPart,
+    mime: Option<&[u8]>,
+) -> NewAttachment {
+    let (decoded_name, decoded_ct) = mime
+        .and_then(|mh| {
+            // MIME ヘッダ＋空行だけの断片を解析し、復号済みのファイル名・型を得る。
+            let mut buf = mh.to_vec();
+            buf.extend_from_slice(b"\r\n\r\n");
+            let msg = MessageParser::default().parse(&buf)?;
+            let part = msg.parts.first()?;
+            let name = part
+                .attachment_name()
+                .map(|s| s.to_string())
+                .filter(|s| !s.trim().is_empty());
+            let ct = parser::part_content_type(part);
+            Some((name, ct))
+        })
+        .unwrap_or((None, None));
+    let filename = decoded_name
+        .or_else(|| sp.filename.clone().filter(|s| !s.trim().is_empty()))
+        .unwrap_or_else(|| format!("attachment-{}", i + 1));
+    let content_type = decoded_ct.or_else(|| Some(sp.content_type.clone()));
+    let is_image = content_type
+        .as_deref()
+        .map(|c| c.starts_with("image/"))
+        .unwrap_or(false);
+    let kind = if sp.content_id.is_some() && is_image {
+        "inline"
+    } else {
+        "attachment"
+    };
+    NewAttachment {
+        part_index: i as i64,
+        filename,
+        content_type,
+        size: sp.size,
+        kind,
+        content_id: sp.content_id,
+        section: Some(sp.section),
+    }
+}
+
+/// 添付のファイル名を正しく得るため、各添付の `[section.MIME]` を 1 回の FETCH で取得し、
+/// mail_parser で復号して NewAttachment を作る。取得に失敗しても BODYSTRUCTURE の情報で埋める。
+fn resolve_attachments(
+    session: &mut ImapSession,
+    uid: i64,
+    att_parts: Vec<crate::services::bodystructure::StructPart>,
+) -> Vec<NewAttachment> {
+    use imap_proto::types::{MessageSection, SectionPath};
+    if att_parts.is_empty() {
+        return Vec::new();
+    }
+    let items: Vec<String> = att_parts
+        .iter()
+        .map(|p| format!("BODY.PEEK[{}.MIME]", p.section))
+        .collect();
+    let query = format!("({})", items.join(" "));
+    let mut mime_by_section: std::collections::HashMap<String, Vec<u8>> =
+        std::collections::HashMap::new();
+    if let Ok(fetches) = session.uid_fetch(uid.to_string(), query) {
+        if let Some(m) = fetches.iter().next() {
+            for p in &att_parts {
+                if let Some(path) = parse_section_path(&p.section) {
+                    if let Some(mh) = m.section(&SectionPath::Part(path, Some(MessageSection::Mime)))
+                    {
+                        mime_by_section.insert(p.section.clone(), mh.to_vec());
+                    }
+                }
+            }
+        }
+    }
+    att_parts
+        .into_iter()
+        .enumerate()
+        .map(|(i, sp)| {
+            let mime = mime_by_section.get(&sp.section).map(|v| v.as_slice());
+            new_attachment_from(i, sp, mime)
+        })
+        .collect()
+}
+
 fn parsed_to_new_email(
     p: parser::ParsedEmail,
     account_id: i64,
@@ -800,8 +889,8 @@ struct MsgMeta {
     seen: bool,
     /// トップレベルヘッダ（BODY[HEADER]。末尾空行を含む）。
     header: Vec<u8>,
-    /// BODYSTRUCTURE 由来の添付メタ（section 付き）。
-    attachments: Vec<NewAttachment>,
+    /// BODYSTRUCTURE 由来の添付パート（section 付き）。ファイル名は Pass2 で MIME ヘッダから復号する。
+    att_parts: Vec<crate::services::bodystructure::StructPart>,
     /// 本文テキスト葉の section 一覧（is_body_text）。
     body_sections: Vec<String>,
     /// 実添付/inline を持つか（true なら本文だけ section 取得、false なら BODY[TEXT] で全体復元）。
@@ -829,9 +918,9 @@ fn collect_metas<'a>(
             .flags()
             .iter()
             .any(|f| matches!(f, imap::types::Flag::Seen));
-        let (attachments, body_sections, has_att) = match m.bodystructure() {
+        let (att_parts, body_sections, has_att) = match m.bodystructure() {
             Some(bs) => {
-                let atts = attachments_from_bodystructure(bs);
+                let atts = crate::services::bodystructure::attachments(bs);
                 let has = !atts.is_empty();
                 let sections = crate::services::bodystructure::body_text_sections(bs);
                 (atts, sections, has)
@@ -843,7 +932,7 @@ fn collect_metas<'a>(
             uid: m.uid.map(|u| u as i64),
             seen,
             header,
-            attachments,
+            att_parts,
             body_sections,
             has_att,
         });
@@ -956,6 +1045,14 @@ fn store_bodies(
             crate::services::bodyfetch::reassemble_multipart_text(&meta.header, &parts)
         };
 
+        // 添付メタ（ファイル名は各パートの MIME ヘッダから mail_parser で復号）。
+        let attachments = match meta.uid {
+            Some(uid) if !meta.att_parts.is_empty() => {
+                resolve_attachments(session, uid, meta.att_parts)
+            }
+            _ => Vec::new(),
+        };
+
         if let Some(mut p) = parser::parse_message(&raw) {
             // 添付ありで本文 section があったのに本文が空 → 取りこぼしの疑い。BODY[] で取り直す保険。
             let empty_body = p.clean_body.as_deref().unwrap_or("").trim().is_empty()
@@ -979,7 +1076,7 @@ fn store_bodies(
                 meta.seen,
                 meta.uid,
                 verified,
-                meta.attachments,
+                attachments,
             );
             match insert_email(conn, &ne).map_err(|e| e.to_string())? {
                 InsertOutcome::Inserted(_) => c.stored += 1,
@@ -1727,5 +1824,47 @@ mod tests {
         assert!(!server_saves_sent_copy("imap.mail.me.com"));
         assert!(!server_saves_sent_copy("sngdesign.sakura.ne.jp"));
         assert!(!server_saves_sent_copy(""));
+    }
+
+    fn struct_part(section: &str, ct: &str, cid: Option<&str>) -> crate::services::bodystructure::StructPart {
+        crate::services::bodystructure::StructPart {
+            section: section.to_string(),
+            content_type: ct.to_string(),
+            filename: None,
+            content_id: cid.map(|s| s.to_string()),
+            size: 100,
+            is_attachment: true,
+            is_body_text: false,
+        }
+    }
+
+    // RFC2231（filename*=UTF-8''…）でエンコードされた日本語名を MIME ヘッダから復号する。
+    #[test]
+    fn attachment_name_decodes_rfc2231() {
+        let mime = b"Content-Type: application/octet-stream\r\n\
+Content-Disposition: attachment; filename*=UTF-8''%E6%97%A5%E6%9C%AC%E8%AA%9E.pdf";
+        let sp = struct_part("2", "application/octet-stream", Some("cid-1"));
+        let a = new_attachment_from(0, sp, Some(mime));
+        assert_eq!(a.filename, "日本語.pdf");
+        assert_eq!(a.kind, "attachment"); // octet-stream + cid でも画像でなければ添付
+    }
+
+    // RFC2047（=?UTF-8?B?…?=）でエンコードされた name パラメータも復号する。
+    #[test]
+    fn attachment_name_decodes_rfc2047() {
+        // "図面.pdf" を UTF-8/Base64 で。
+        let mime = b"Content-Type: application/pdf; name=\"=?UTF-8?B?5Zuz6Z2iLnBkZg==?=\"\r\n\
+Content-Disposition: attachment";
+        let sp = struct_part("2", "application/pdf", None);
+        let a = new_attachment_from(0, sp, Some(mime));
+        assert_eq!(a.filename, "図面.pdf");
+    }
+
+    // MIME ヘッダが取れない場合は BODYSTRUCTURE のフォールバック名（無ければ attachment-N）。
+    #[test]
+    fn attachment_name_falls_back_without_mime() {
+        let sp = struct_part("2", "application/pdf", None);
+        let a = new_attachment_from(0, sp, None);
+        assert_eq!(a.filename, "attachment-1");
     }
 }

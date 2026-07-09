@@ -347,15 +347,40 @@ export function MailboxView({
   // 複数選択（右クリックメニュー対象）。anchor は Shift 範囲選択の基点。
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const anchorId = useRef<number | null>(null);
+  // 「フォルダ内の一致する全件」を選択したモード（表示範囲＝読み込み済みだけでなく DB 全体が対象）。
+  // matchCount は一致総数、allMatchRowsRef はその全一致行（email_ids 展開・アクション適用に使う）。
+  const [allMatching, setAllMatching] = useState(false);
+  const [matchCount, setMatchCount] = useState(0);
+  const [selectingAll, setSelectingAll] = useState(false);
+  const allMatchRowsRef = useRef<ThreadListItem[]>([]);
   // 直前のゴミ箱移動の取消情報（Ctrl+Z／トーストで復元）。ids は移動したメール id。
   const [undoTrash, setUndoTrash] = useState<{ ids: number[]; count: number } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   // 選択モード（チェックボックス表示中）。1件でも明示選択したら on。
   const [selecting, setSelecting] = useState(false);
-  // 選択が空になったら選択モードを抜ける。
+  // 選択を完全に解除（手動選択・全一致モードともにクリア）。
+  const resetSelection = () => {
+    setSelectedIds(new Set());
+    setAllMatching(false);
+    setMatchCount(0);
+    allMatchRowsRef.current = [];
+    anchorId.current = null;
+  };
+  // 選択が空になったら選択モードを抜け、全一致モードも解除する。
   useEffect(() => {
-    if (selectedIds.size === 0) setSelecting(false);
+    if (selectedIds.size === 0) {
+      setSelecting(false);
+      setAllMatching(false);
+      setMatchCount(0);
+      allMatchRowsRef.current = [];
+    }
   }, [selectedIds]);
+  // 絞り込み/検索の変更で「全一致選択」は対象集合が変わるため無効化する（手動選択は維持）。
+  // フォルダ/アカウント切替は下の読み込み effect が resetSelection で処理する。
+  useEffect(() => {
+    if (allMatching) resetSelection();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters, filterInvert, dateFilter, tagFilter, searchMode]);
 
   // Esc で複数選択を解除する。重なり UI（メニュー/タグピッカー/作成モーダル）が
   // 開いている間はそちらの Esc を優先し、入力欄フォーカス中（検索クリア等）も対象外。
@@ -590,8 +615,7 @@ export function MailboxView({
 
   useEffect(() => {
     setOpened(null);
-    setSelectedIds(new Set());
-    anchorId.current = null;
+    resetSelection();
     if (selected != null) {
       loadMails().then(() => {
         const pid = pendingOpen.current;
@@ -829,29 +853,53 @@ export function MailboxView({
   // 選択した行（＝スレッド代表）を、そのフォルダ内のスレッド全メール id へ展開する。
   // 既読/削除/迷惑はスレッド全体に効かせる（スター/タグは代表に付ける）。
   const emailIdsFor = (rowIds: number[]): number[] => {
-    const set = new Set(rowIds);
-    const rows = [...mails, ...searchResults].filter((m) => set.has(m.id));
-    const out = rows.flatMap((m) => (m.email_ids.length ? m.email_ids : [m.id]));
+    const want = new Set(rowIds);
+    // 読み込み済み一覧・検索結果・全一致行から、対象行を id 重複なく集める
+    // （全一致行は読み込み済みと重なるため、Map で 1 行につき 1 回だけ拾う）。
+    const byId = new Map<number, ThreadListItem>();
+    for (const m of mails) if (want.has(m.id)) byId.set(m.id, m);
+    for (const m of searchResults) if (want.has(m.id) && !byId.has(m.id)) byId.set(m.id, m);
+    for (const m of allMatchRowsRef.current)
+      if (want.has(m.id) && !byId.has(m.id)) byId.set(m.id, m);
+    const seen = new Set<number>();
+    const out: number[] = [];
+    for (const m of byId.values()) {
+      for (const id of m.email_ids.length ? m.email_ids : [m.id]) {
+        if (!seen.has(id)) {
+          seen.add(id);
+          out.push(id);
+        }
+      }
+    }
     return out.length ? out : rowIds;
   };
 
   const actRead = async (read: boolean) => {
+    const wasAll = allMatching;
+    const ids = emailIdsFor(targetIds()); // reset より前に対象 id を確定させる
     patchMails(selectedIds, { is_read: read, unread_count: read ? 0 : 1 });
+    if (wasAll) resetSelection();
     try {
-      await mailSetRead(emailIdsFor(targetIds()), read);
+      await mailSetRead(ids, read);
     } catch {
       /* noop */
     }
+    // DB 全体へ適用したときは、表示中の窓を DB の実状態に合わせて取り直す。
+    if (wasAll) await loadMails({ keepScroll: true });
   };
   const actStar = async (value: boolean) => {
     // スターはスレッド全体に効かせる（表示も会話単位で集約）。代表メールだけに付けると
     // 再構築で代表が入れ替わったとき印が消えて見えるため、フォルダ内の全メールへ適用する。
+    const wasAll = allMatching;
+    const ids = emailIdsFor(targetIds());
     patchMails(selectedIds, { is_starred: value });
+    if (wasAll) resetSelection();
     try {
-      await mailSetStarred(emailIdsFor(targetIds()), value);
+      await mailSetStarred(ids, value);
     } catch {
       /* noop */
     }
+    if (wasAll) await loadMails({ keepScroll: true });
   };
   // 楽観更新で一覧から外し、閲覧中なら閉じる（削除／ゴミ箱移動／復元の共通処理）。
   const dropRows = (rowIds: number[], emailIds: number[]) => {
@@ -1010,23 +1058,57 @@ export function MailboxView({
     return <div className="p-8 text-white/60">{t('mailbox.addInSettings')}</div>;
   }
 
-  // 検索モードでは FTS 結果を、通常は読み込み済み一覧を対象に、
-  // 既存の絞り込み（トグル/期間/タグ）を重ねて表示する。
-  const visibleMails = (searchMode ? searchResults : mails).filter((m) => {
+  // 一覧の絞り込み述語（トグル/期間/タグ）。表示用と「全一致選択」で同じ条件を使う。
+  const passesFilters = (m: ThreadListItem) => {
     // トグル絞り込み。反転（invert）時は「一致しない」ものを通す（条件が無ければ反転は無効）。
     const toggleBase = matchesFilters(m, filters);
     const togglePass = filterInvert && filters.size > 0 ? !toggleBase : toggleBase;
-    return (
-      togglePass && matchesDate(m.date, dateFilter) && matchesTags(m.tag_ids, tagFilter)
-    );
-  });
+    return togglePass && matchesDate(m.date, dateFilter) && matchesTags(m.tag_ids, tagFilter);
+  };
+  // 検索モードでは FTS 結果を、通常は読み込み済み一覧を対象に、絞り込みを重ねて表示する。
+  const visibleMails = (searchMode ? searchResults : mails).filter(passesFilters);
 
   // 選択モード中はチェックボックスを表示して選択を簡単にする。
   const allVisibleSelected =
     visibleMails.length > 0 && visibleMails.every((m) => selectedIds.has(m.id));
   const someVisibleSelected = selectedIds.size > 0 && !allVisibleSelected;
+  // ヘッダのチェックボックス: 1 クリックで「フォルダ内の一致する全件」を選択/解除する
+  // （表示範囲だけでなく DB 全体が対象）。すべて読み込み済み（続きなし）or 検索モードなら
+  // 表示中＝全件なので取得不要で即選択、まだ DB に続きがあるときは全代表を取得して一致する
+  // 全件を選択する。
   const toggleAllVisible = () => {
-    setSelectedIds(allVisibleSelected ? new Set() : new Set(visibleMails.map((m) => m.id)));
+    if (allVisibleSelected) {
+      resetSelection();
+      return;
+    }
+    if (searchMode || !hasMore) {
+      setSelecting(true);
+      setSelectedIds(new Set(visibleMails.map((m) => m.id)));
+      return;
+    }
+    void selectAllMatching();
+  };
+
+  // 「フォルダ内の一致する全件」を選択する（表示範囲＝読み込み済みではなく DB 全体が対象）。
+  // 現在のアカウント/フォルダの全スレッド代表を取得し、表示中と同じ絞り込みを適用して一致行を
+  // すべて選択する。email_ids も保持し、既読/削除/迷惑/タグをスレッド全体へ適用できるようにする。
+  const selectAllMatching = async () => {
+    if (searchMode || selected == null) return;
+    setSelectingAll(true);
+    try {
+      // limit は実質無制限（全代表を一括取得）。offset 0 から引く。
+      const all = await threadList(queryAccount, folder, 1_000_000, 0);
+      const matched = all.filter(passesFilters);
+      allMatchRowsRef.current = matched;
+      setSelectedIds(new Set(matched.map((m) => m.id)));
+      setMatchCount(matched.length);
+      setAllMatching(true);
+      setSelecting(true);
+    } catch {
+      /* 取得失敗時は何もしない（表示範囲の選択は維持） */
+    } finally {
+      setSelectingAll(false);
+    }
   };
 
   // 送信済・下書きは自分が差出人なので、一覧では宛先(To)を主に見せる。
@@ -1206,7 +1288,7 @@ export function MailboxView({
         </div>
       )}
       {selecting && (
-        <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2 text-xs text-white/60">
+        <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2 text-xs text-white/60">
           <input
             type="checkbox"
             checked={allVisibleSelected}
@@ -1217,8 +1299,14 @@ export function MailboxView({
             title={t('mailbox.selectAll')}
             className="h-3.5 w-3.5 shrink-0 accent-sky-400"
           />
-          <span className="flex-1">{t('ctx.selected', { count: selectedIds.size })}</span>
-          <button onClick={() => setSelectedIds(new Set())} className="hover:text-white/90">
+          <span className="flex-1">
+            {selectingAll
+              ? t('mailbox.selecting')
+              : allMatching
+                ? t('mailbox.selectedAllMatching', { count: matchCount })
+                : t('ctx.selected', { count: selectedIds.size })}
+          </span>
+          <button onClick={resetSelection} className="hover:text-white/90">
             {t('mailbox.clearSelection')}
           </button>
         </div>

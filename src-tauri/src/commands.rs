@@ -2441,6 +2441,19 @@ pub async fn attachment_open(
         .map_err(|e| e.to_string())
 }
 
+/// ローカルパスのファイルを OS の関連アプリで開く（作成画面で、添付を送信前に確認する用）。
+/// パスはユーザーが選択／ドロップした添付、または退避済みの一時ファイル。存在するファイルのみ開く。
+#[tauri::command]
+pub fn open_local_path(app: AppHandle, path: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    if !std::path::Path::new(&path).is_file() {
+        return Err("ファイルが見つかりません".to_string());
+    }
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 /// 添付をユーザー指定の場所へ保存する（ダウンロード）。未取得なら先に取得してから複製。
 /// `dest` は保存先のフルパス（フロントの保存ダイアログで決める）。
 #[tauri::command]

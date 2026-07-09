@@ -81,6 +81,9 @@ export const attachmentView = (attachmentId: number, thumb = false) =>
 export const attachmentOpen = (attachmentId: number) =>
   invoke<void>('attachment_open', { attachmentId });
 
+// ローカルパスのファイルを OS の関連アプリで開く（作成画面で添付を送信前に確認する）。
+export const openLocalPath = (path: string) => invoke<void>('open_local_path', { path });
+
 // 添付を指定の場所へ保存（ダウンロード）。dest は保存先フルパス。
 export const attachmentExport = (attachmentId: number, dest: string) =>
   invoke<void>('attachment_export', { attachmentId, dest });

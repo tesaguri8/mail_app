@@ -9,6 +9,7 @@ import type { SignatureSummary } from '@bindings/SignatureSummary';
 import {
   attachmentMeta,
   attachmentStage,
+  openLocalPath,
   mailDraftDiscard,
   mailDraftSyncRemote,
   mailSaveDraft,
@@ -622,15 +623,23 @@ export function Compose({
               {attachments.map((a) => (
                 <span
                   key={a.path}
-                  title={`${a.name}（${formatSize(a.size)}）`}
-                  className="inline-flex max-w-[16rem] items-center gap-1.5 rounded-md bg-white/10 py-1 pl-2 pr-1 text-xs"
+                  // クリックで送信前に既定アプリで内容確認（添付は実ファイルのパスを持つ）。
+                  title={`${a.name}（${formatSize(a.size)}）・${t('compose.attachOpenHint')}`}
+                  onClick={() => {
+                    openLocalPath(a.path).catch((e) => setError(String(e)));
+                  }}
+                  className="inline-flex max-w-[16rem] cursor-pointer select-none items-center gap-1.5 rounded-md bg-white/10 py-1 pl-2 pr-1 text-xs hover:bg-white/15"
                 >
                   <Paperclip size={12} className="shrink-0 text-white/50" />
                   <span className="min-w-0 flex-1 truncate">{a.name}</span>
                   <span className="shrink-0 text-white/40">{formatSize(a.size)}</span>
                   <button
                     type="button"
-                    onClick={() => removeAttachment(a.path)}
+                    // 「外す」は開く動作を巻き込まないよう伝播を止める。
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeAttachment(a.path);
+                    }}
                     title={t('compose.attachRemove')}
                     aria-label={t('compose.attachRemove')}
                     className="shrink-0 rounded p-0.5 text-white/50 hover:bg-white/15 hover:text-white"

@@ -1096,6 +1096,27 @@ mod tests {
         assert_eq!(view.messages[2].direction, "in");
     }
 
+    /// スターは会話単位で集約表示: 代表でないメールに付けてもスレッド一覧にスターが出る
+    /// （再構築で代表が入れ替わっても印が消えないための集約。docs/FILTERING.md）。
+    #[test]
+    fn thread_star_aggregates_over_conversation() {
+        let store = test_store();
+        // ids = [m2, m1, m0]（挿入順）。inbox の代表は最新の m2。m0 は inbox の非代表。
+        let ids = seed_conversation(&store);
+        let m0 = ids[2];
+        store.set_emails_starred(&[m0], true).unwrap();
+        let threads = store.list_threads(Some(1), "inbox", 50, 0).unwrap();
+        assert_eq!(threads.len(), 1);
+        assert!(
+            threads[0].is_starred,
+            "非代表メールのスターも会話に集約されて表示される"
+        );
+        // 解除すると会話からも消える（この会話で唯一のスターだったため）。
+        store.set_emails_starred(&[m0], false).unwrap();
+        let threads = store.list_threads(Some(1), "inbox", 50, 0).unwrap();
+        assert!(!threads[0].is_starred);
+    }
+
     /// References の並びが非標準（先頭が root でない・親のみ）でも、共有する Message-ID で
     /// 1 スレッドに束ねる（Spark/titan.email 等の断片化対策・union-find）。
     #[test]

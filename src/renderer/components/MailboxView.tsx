@@ -817,10 +817,11 @@ export function MailboxView({
     }
   };
   const actStar = async (value: boolean) => {
-    // スターは代表メールに付ける（メール単位のフラグ）。
+    // スターはスレッド全体に効かせる（表示も会話単位で集約）。代表メールだけに付けると
+    // 再構築で代表が入れ替わったとき印が消えて見えるため、フォルダ内の全メールへ適用する。
     patchMails(selectedIds, { is_starred: value });
     try {
-      await mailSetStarred(targetIds(), value);
+      await mailSetStarred(emailIdsFor(targetIds()), value);
     } catch {
       /* noop */
     }

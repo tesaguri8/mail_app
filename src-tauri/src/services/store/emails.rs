@@ -787,7 +787,14 @@ impl Store {
                     COALESCE(lt.title, r.subject) AS subject,
                     r.from_address, r.from_name, r.to_addresses, r.to_name, r.date,
                     substr(COALESCE(r.clean_body, r.body_plain, ''), 1, 140) AS preview,
-                    r.is_flagged, r.is_bookmarked,
+                    -- スター/ブックマークはスレッド全体で集約（どれか1通に付いていれば会話に表示）。
+                    -- 代表メールは再構築で入れ替わるため、代表のフラグだけ見ると印が消えて見える。
+                    CASE WHEN r.logical_thread_id IS NULL THEN r.is_flagged
+                         ELSE COALESCE((SELECT MAX(t.is_flagged) FROM emails t INDEXED BY idx_emails_thread_folder
+                               WHERE t.logical_thread_id = r.logical_thread_id AND {fp_sub}), 0) END AS is_flagged_agg,
+                    CASE WHEN r.logical_thread_id IS NULL THEN r.is_bookmarked
+                         ELSE COALESCE((SELECT MAX(t.is_bookmarked) FROM emails t INDEXED BY idx_emails_thread_folder
+                               WHERE t.logical_thread_id = r.logical_thread_id AND {fp_sub}), 0) END AS is_bookmarked_agg,
                     (SELECT group_concat(tag_id) FROM email_tags WHERE email_id = r.id) AS tag_ids,
                     (r.has_attachments = 1
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = r.id AND COALESCE(a.kind,'attachment') <> 'inline')) AS has_real,

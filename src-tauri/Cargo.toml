@@ -104,5 +104,12 @@ chrono = { version = "0.4", features = ["clock"] }
 # 実行時に .env が無ければ何もしない。本番配布は UI 入力＝keyring 保存が正）。
 dotenvy = "0.15"
 
+# Windows で添付を既定アプリで開くとき、日本語パスを化けさせないため ShellExecuteExW を使わせる。
+# tauri-plugin-opener は open クレート経由で開くが、既定は `cmd /c start` で非ASCIIパスが壊れる。
+# open を直接依存に足して shellexecute-on-windows を有効化すると、フィーチャ統合でプラグイン側も
+# ShellExecute 経路になる（Unicode パス対応）。docs/COMPOSE.md 添付。
+[target.'cfg(windows)'.dependencies]
+open = { version = "5", features = ["shellexecute-on-windows"] }
+
 [dev-dependencies]
 tempfile = "3"

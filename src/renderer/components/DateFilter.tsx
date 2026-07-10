@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CalendarDays } from 'lucide-react';
+import { CalendarDays, GripHorizontal, X } from 'lucide-react';
 
 export type DateMode = 'after' | 'before' | 'range';
 export type DateRange = { mode: DateMode; start: string; end: string };
@@ -56,16 +56,48 @@ export function DateFilter({
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useState<DateMode>(value?.mode ?? 'after');
   const [start, setStart] = useState(value?.start ?? '');
   const [end, setEnd] = useState(value?.end ?? '');
+  // ドラッグで移動した位置（未移動は null＝アイコン直下に表示）。開くたびに戻す。
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setPos(null);
+      return;
+    }
     setMode(value?.mode ?? 'after');
     setStart(value?.start ?? '');
     setEnd(value?.end ?? '');
   }, [open, value]);
+
+  // 見出し（グリップ）をつかんでポップオーバーを移動する。一覧に被って邪魔なときに避けられる。
+  const onDragStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const panel = panelRef.current;
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    const offX = e.clientX - rect.left;
+    const offY = e.clientY - rect.top;
+    const w = rect.width;
+    const h = rect.height;
+    const onMove = (ev: MouseEvent) => {
+      const maxX = Math.max(4, window.innerWidth - w - 4);
+      const maxY = Math.max(4, window.innerHeight - h - 4);
+      setPos({
+        x: Math.min(Math.max(4, ev.clientX - offX), maxX),
+        y: Math.min(Math.max(4, ev.clientY - offY), maxY),
+      });
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -102,24 +134,33 @@ export function DateFilter({
             : { key, start: '', end: v };
         });
 
+  // 即時反映: 必須の日付が空なら解除(null)、あれば設定。適用ボタンなしで編集がそのまま効く。
+  const applyLive = (m: DateMode, s: string, e: string) => {
+    const empty = (m === 'after' && !s) || (m === 'before' && !e) || (m === 'range' && !s && !e);
+    onChange(empty ? null : { mode: m, start: s, end: e });
+  };
   const applyPreset = (p: Preset) => {
     // クリックで即適用するが、続けて微調整できるようポップオーバーは閉じない。
     setStart(p.start);
     setEnd(p.end);
-    onChange({ mode, start: p.start, end: p.end });
+    applyLive(mode, p.start, p.end);
   };
-
-  const apply = () => {
-    if ((mode === 'after' && !start) || (mode === 'before' && !end) || (mode === 'range' && !start && !end)) {
-      onChange(null);
-    } else {
-      onChange({ mode, start, end });
-    }
-    setOpen(false);
+  const changeMode = (m: DateMode) => {
+    setMode(m);
+    applyLive(m, start, end);
+  };
+  const changeStart = (s: string) => {
+    setStart(s);
+    applyLive(mode, s, end);
+  };
+  const changeEnd = (e: string) => {
+    setEnd(e);
+    applyLive(mode, start, e);
   };
   const clear = () => {
+    setStart('');
+    setEnd('');
     onChange(null);
-    setOpen(false);
   };
 
   const MODES: DateMode[] = ['after', 'before', 'range'];
@@ -140,14 +181,40 @@ export function DateFilter({
         <CalendarDays size={15} />
       </button>
 
-      {/* アイコンの左下を起点に展開（コンテンツ側への重なりは許容。親の overflow-hidden は外してある） */}
+      {/* 既定はアイコン直下に展開。見出しをドラッグすると position:fixed で自由に移動でき、
+          一覧に被って邪魔なときに避けられる（親の overflow に切られないよう fixed にする）。 */}
       {open && (
-        <div className="absolute left-0 top-full z-30 mt-1 w-60 rounded-md border border-white/15 bg-neutral-900/65 p-3 shadow-xl backdrop-blur">
+        <div
+          ref={panelRef}
+          style={pos ? { left: pos.x, top: pos.y } : undefined}
+          className={`${
+            pos ? 'fixed' : 'absolute left-0 top-full mt-1'
+          } z-30 w-60 rounded-md border border-white/15 bg-neutral-900/65 p-3 shadow-xl backdrop-blur`}
+        >
+          {/* 見出し（ドラッグの取っ手）＋閉じる。適用ボタンは廃止し、編集は即時反映する。 */}
+          <div
+            onMouseDown={onDragStart}
+            className="mb-2 flex cursor-move select-none items-center justify-between border-b border-white/10 pb-2 text-xs text-white/60"
+          >
+            <span className="flex items-center gap-1.5">
+              <GripHorizontal size={13} className="text-white/35" />
+              {t('date.filter')}
+            </span>
+            <button
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => setOpen(false)}
+              title={t('date.close')}
+              aria-label={t('date.close')}
+              className="flex h-5 w-5 items-center justify-center rounded hover:bg-white/15 hover:text-white/90"
+            >
+              <X size={13} />
+            </button>
+          </div>
           <div className="mb-2 flex gap-1">
             {MODES.map((m) => (
               <button
                 key={m}
-                onClick={() => setMode(m)}
+                onClick={() => changeMode(m)}
                 className={`flex-1 rounded px-2 py-1 text-xs ${
                   mode === m ? 'bg-sky-500/30 text-sky-200' : 'bg-white/10 text-white/70 hover:bg-white/15'
                 }`}
@@ -179,7 +246,7 @@ export function DateFilter({
                   max={today}
                   className={inputCls}
                   value={start}
-                  onChange={(e) => setStart(e.target.value)}
+                  onChange={(e) => changeStart(e.target.value)}
                 />
               </label>
             )}
@@ -191,24 +258,18 @@ export function DateFilter({
                   max={today}
                   className={inputCls}
                   value={end}
-                  onChange={(e) => setEnd(e.target.value)}
+                  onChange={(e) => changeEnd(e.target.value)}
                 />
               </label>
             )}
           </div>
 
-          <div className="mt-3 flex justify-between">
+          <div className="mt-3 flex justify-end">
             <button
               onClick={clear}
               className="rounded px-2 py-1 text-xs text-white/55 hover:text-white/80"
             >
               {t('date.clear')}
-            </button>
-            <button
-              onClick={apply}
-              className="rounded bg-white/15 px-3 py-1 text-xs hover:bg-white/25"
-            >
-              {t('date.apply')}
             </button>
           </div>
         </div>

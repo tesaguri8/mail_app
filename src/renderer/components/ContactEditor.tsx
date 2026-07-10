@@ -374,7 +374,7 @@ export function ContactEditor({
           {/* 上部の保存（長い編集フォームの先頭でも保存できる。下部にも同じボタンあり） */}
           <button
             onClick={save}
-            disabled={draft.display_name.trim() === '' || !dirty}
+            disabled={draft.display_name.trim() === '' || (draft.id !== null && !dirty)}
             title={t('contact.save')}
             aria-label={t('contact.save')}
             className="flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-white/20 px-3.5 text-sm font-medium hover:bg-white/30 disabled:cursor-not-allowed disabled:opacity-40"
@@ -550,7 +550,7 @@ export function ContactEditor({
         <div className="mt-6 flex items-center gap-3">
           <button
             onClick={save}
-            disabled={draft.display_name.trim() === '' || !dirty}
+            disabled={draft.display_name.trim() === '' || (draft.id !== null && !dirty)}
             className="rounded-md bg-white/20 px-4 py-2 text-sm font-medium hover:bg-white/30 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {t('contact.save')}

@@ -313,7 +313,24 @@ function Bubble({
           <span className="truncate font-medium text-white/60">{senderName(m, you)}</span>
           <span className="shrink-0">{formatTime(m.date)}</span>
           {!read && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400" />}
-          {starred && <Star size={11} className="shrink-0 fill-amber-300 text-amber-300" />}
+          {/* スター: バブルを見ながら付け外しできる。付与済みは常時アンバー、未付与は
+              ホバーで薄く出す（普段はチャットのラベルを汚さない。迷惑ボタンと同じ流儀）。 */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleStar();
+            }}
+            title={t(starred ? 'ctx.unstar' : 'ctx.star')}
+            aria-label={t(starred ? 'ctx.unstar' : 'ctx.star')}
+            aria-pressed={starred}
+            className={`flex shrink-0 items-center transition-opacity ${
+              starred
+                ? 'text-amber-300'
+                : 'text-white/40 opacity-0 hover:text-amber-300 group-hover/bubble:opacity-100'
+            }`}
+          >
+            <Star size={11} className={starred ? 'fill-amber-300' : ''} />
+          </button>
           {/* 迷惑メールとしてマーク（受信のみ）。ホバーで出す（普段はチャットのラベルを汚さない）。
               迷惑フォルダ表示中は「非迷惑に戻す」に切り替える。 */}
           {!out &&

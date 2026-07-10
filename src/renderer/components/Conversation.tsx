@@ -607,13 +607,10 @@ export function Conversation({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, termsKey, expandedIds, matchEls, applyActive]);
 
+  // 全文展開はスレッド内で 1 通だけ。別のバブルを開くと、開いていた方は自動で畳む
+  // （既に開いている同じバブルをもう一度押したら閉じる）。
   const toggleExpand = (id: number) =>
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+    setExpandedIds((prev) => (prev.has(id) ? new Set() : new Set([id])));
 
   // 分割: このメール（this）以降（below）を新スレッドへ切り出し、再読込＋一覧更新。
   const doSplit = async (messageId: number, mode: 'this' | 'below') => {

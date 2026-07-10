@@ -302,8 +302,14 @@ export function Compose({
 
   // 署名が読み込めたら（およびアカウント変更時に）そのアカウントの既定署名を適用する。
   // 下書きの再編集では本文に署名が既に含まれているので自動挿入しない（二重を防ぐ）。
+  // 同じアカウントで再適用すると、本文の署名まわりを編集していた場合に旧ブロックの
+  // 剥がしに失敗して署名が二重に付くため、アカウント単位で一度だけ適用する
+  // （切替時のみ付け替え。手動のドロップダウン変更は従来どおり剥がして差し替える）。
+  const autoSigAccountRef = useRef<number | null | undefined>(undefined);
   useEffect(() => {
     if (signatures.length === 0 || target.mode === 'draft') return;
+    if (autoSigAccountRef.current === accountId) return;
+    autoSigAccountRef.current = accountId;
     const acc = accounts.find((a) => a.id === accountId);
     applySignature(acc?.signature_id ?? null);
   }, [accountId, signatures, accounts, applySignature, target.mode]);

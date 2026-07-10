@@ -76,6 +76,10 @@ function lookupEmailCached(email: string): Promise<ContactSummary[]> {
   return p;
 }
 
+/** 氏名の突き合わせ用の正規化（全半角統一・空白除去・小文字化）。 */
+const foldName = (s?: string | null) =>
+  (s ?? '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+
 /**
  * メールアドレス＋（ホバー/フォーカスで現れる）操作ボタン。
  * 住所録に未登録＝＋（追加）、登録済み＝編集アイコン。重複（複数登録）があれば件数を黄色字で表示。
@@ -108,11 +112,21 @@ function EmailAdd({
   const registered = count > 0;
   const dup = count > 1;
 
+  // 差出人名に一致する既存（共有アドレスを複数人が持つときの取り違え防止）。
+  const wantName = foldName(name);
+  const named =
+    matches && wantName
+      ? (matches.find((m) => foldName(m.display_name) === wantName) ?? null)
+      : null;
+  // クリック動作: 名前が一致する or アドレスが一意なら編集。共有アドレスで名前が
+  // 合わない（＝別人。前任からの引き継ぎ等）ときは新規追加にする。
+  const willEdit = registered && !!onEdit && (named != null || count === 1);
+
   const handle = () => {
-    if (registered && matches && matches[0] && onEdit) onEdit(matches[0].id);
+    if (willEdit && matches && onEdit) onEdit((named ?? matches[0]).id);
     else onAdd(name ?? null, email);
   };
-  const title = registered
+  const title = willEdit
     ? dup
       ? t('mailbox.editContactDup', { count })
       : t('mailbox.editContact')
@@ -138,7 +152,7 @@ function EmailAdd({
         aria-label={title}
         className="inline-flex h-4 items-center justify-center gap-0.5 rounded-full bg-white/10 px-1 text-white/60 opacity-0 transition-opacity hover:bg-sky-500/50 hover:text-white focus:opacity-100 focus:outline-none group-hover/email:opacity-100"
       >
-        {registered ? <Pencil size={11} /> : <Plus size={11} />}
+        {willEdit ? <Pencil size={11} /> : <Plus size={11} />}
         {dup && <span className="text-[9px] font-semibold leading-none text-amber-300">{count}</span>}
       </button>
     </span>

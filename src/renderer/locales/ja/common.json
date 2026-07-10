@@ -135,10 +135,11 @@
     "nextMatch": "次の一致へ"
   },
   "date": {
-    "filter": "期間で絞り込み",
+    "filter": "日付で絞り込み",
     "after": "以降",
     "before": "以前",
     "range": "期間",
+    "orBefore": "この日以前",
     "start": "開始日",
     "end": "終了日",
     "apply": "適用",

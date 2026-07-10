@@ -139,6 +139,7 @@
     "after": "On/after",
     "before": "On/before",
     "range": "Range",
+    "orBefore": "On or before",
     "start": "Start date",
     "end": "End date",
     "apply": "Apply",

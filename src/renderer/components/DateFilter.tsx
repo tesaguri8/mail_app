@@ -33,18 +33,13 @@ function daysAgo(n: number): string {
   d.setDate(d.getDate() - n);
   return fmt(d);
 }
-function monthStart(offset: number): string {
-  const t = new Date();
-  return fmt(new Date(t.getFullYear(), t.getMonth() + offset, 1));
-}
-function monthEnd(offset: number): string {
-  const t = new Date();
-  return fmt(new Date(t.getFullYear(), t.getMonth() + offset + 1, 0));
-}
 
 /**
- * 期間フィルタ（カレンダーアイコン＋ポップオーバー）。
- * 以降 / 以前 / 期間 を選び、日付を指定して絞り込む。
+ * 日付フィルタ（カレンダーアイコン＋ポップオーバー）。
+ * - 今日／昨日: その日だけ（単日）。
+ * - 「この日以前」: 選んだ日から古い方（on/before）。
+ * - 期間: 開始〜終了の範囲内。
+ * 見出しをドラッグで移動でき、編集は即時反映（適用ボタンなし）。
  */
 export function DateFilter({
   value,
@@ -57,21 +52,34 @@ export function DateFilter({
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const [mode, setMode] = useState<DateMode>(value?.mode ?? 'after');
-  const [start, setStart] = useState(value?.start ?? '');
-  const [end, setEnd] = useState(value?.end ?? '');
-  // ドラッグで移動した位置（未移動は null＝アイコン直下に表示）。開くたびに戻す。
+  // ドラッグで移動した位置（未移動は null＝アイコン直下）。開くたびに戻す。
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  // 「この日以前」の単日。
+  const [before, setBefore] = useState('');
+  // 「期間」の開始／終了。
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState('');
 
+  // 開くたびに現在値から各入力を復元する（単日＝期間 start=end もそのまま期間欄に出す）。
   useEffect(() => {
     if (!open) {
       setPos(null);
       return;
     }
-    setMode(value?.mode ?? 'after');
-    setStart(value?.start ?? '');
-    setEnd(value?.end ?? '');
+    const isRange = value?.mode === 'range';
+    setBefore(value?.mode === 'before' ? (value.end ?? '') : '');
+    setStart(isRange ? (value?.start ?? '') : '');
+    setEnd(isRange ? (value?.end ?? '') : '');
   }, [open, value]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
 
   // 見出し（グリップ）をつかんでポップオーバーを移動する。一覧に被って邪魔なときに避けられる。
   const onDragStart = (e: React.MouseEvent) => {
@@ -99,71 +107,49 @@ export function DateFilter({
     document.addEventListener('mouseup', onUp);
   };
 
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [open]);
-
   const on = value !== null;
   const today = fmt(new Date());
+  const yesterday = daysAgo(1);
+  // その日だけ（開始=終了=その日）が選ばれているか（今日／昨日ボタンのハイライト用）。
+  const isDay = (day: string) =>
+    value?.mode === 'range' && value.start === day && value.end === day;
 
-  // ワンクリックで過去日を入れるプリセット（モードに応じて start/end を決定）
-  type Preset = { key: string; start: string; end: string };
-  const presets: Preset[] =
-    mode === 'range'
-      ? [
-          { key: 'today', start: today, end: today },
-          { key: 'last7', start: daysAgo(6), end: today },
-          { key: 'last30', start: daysAgo(29), end: today },
-          { key: 'thisMonth', start: monthStart(0), end: today },
-          { key: 'lastMonth', start: monthStart(-1), end: monthEnd(-1) },
-        ]
-      : (['today', 'yesterday', 'd7', 'd30', 'd90'] as const).map((key) => {
-          const v =
-            key === 'today'
-              ? today
-              : key === 'yesterday'
-                ? daysAgo(1)
-                : daysAgo(Number(key.slice(1)));
-          return mode === 'after'
-            ? { key, start: v, end: '' }
-            : { key, start: '', end: v };
-        });
-
-  // 即時反映: 必須の日付が空なら解除(null)、あれば設定。適用ボタンなしで編集がそのまま効く。
-  const applyLive = (m: DateMode, s: string, e: string) => {
-    const empty = (m === 'after' && !s) || (m === 'before' && !e) || (m === 'range' && !s && !e);
-    onChange(empty ? null : { mode: m, start: s, end: e });
+  // 今日／昨日: その日だけ。期間欄にも反映して「開始=終了=その日」を見せる。
+  const applyDay = (day: string) => {
+    setBefore('');
+    setStart(day);
+    setEnd(day);
+    onChange({ mode: 'range', start: day, end: day });
   };
-  const applyPreset = (p: Preset) => {
-    // クリックで即適用するが、続けて微調整できるようポップオーバーは閉じない。
-    setStart(p.start);
-    setEnd(p.end);
-    applyLive(mode, p.start, p.end);
+  // この日以前（その日から古い方）。
+  const changeBefore = (d: string) => {
+    setStart('');
+    setEnd('');
+    setBefore(d);
+    onChange(d ? { mode: 'before', start: '', end: d } : null);
   };
-  const changeMode = (m: DateMode) => {
-    setMode(m);
-    applyLive(m, start, end);
-  };
+  // 期間: 開始／終了を編集（片方だけでも可）。「この日以前」とは排他なので before は消す。
   const changeStart = (s: string) => {
+    setBefore('');
     setStart(s);
-    applyLive(mode, s, end);
+    onChange(s || end ? { mode: 'range', start: s, end } : null);
   };
   const changeEnd = (e: string) => {
+    setBefore('');
     setEnd(e);
-    applyLive(mode, start, e);
+    onChange(start || e ? { mode: 'range', start, end: e } : null);
   };
   const clear = () => {
+    setBefore('');
     setStart('');
     setEnd('');
     onChange(null);
   };
 
-  const MODES: DateMode[] = ['after', 'before', 'range'];
+  const dayBtn = (active: boolean) =>
+    `flex-1 rounded px-2 py-1 text-xs ${
+      active ? 'bg-sky-500/30 text-sky-200' : 'bg-white/10 text-white/70 hover:bg-white/15'
+    }`;
 
   return (
     <div ref={ref} className="relative">
@@ -191,7 +177,7 @@ export function DateFilter({
             pos ? 'fixed' : 'absolute left-0 top-full mt-1'
           } z-30 w-60 rounded-md border border-white/15 bg-neutral-900/65 p-3 shadow-xl backdrop-blur`}
         >
-          {/* 見出し（ドラッグの取っ手）＋閉じる。適用ボタンは廃止し、編集は即時反映する。 */}
+          {/* 見出し（ドラッグの取っ手）＋閉じる。編集は即時反映（適用ボタンなし）。 */}
           <div
             onMouseDown={onDragStart}
             className="mb-2 flex cursor-move select-none items-center justify-between border-b border-white/10 pb-2 text-xs text-white/60"
@@ -210,58 +196,52 @@ export function DateFilter({
               <X size={13} />
             </button>
           </div>
-          <div className="mb-2 flex gap-1">
-            {MODES.map((m) => (
-              <button
-                key={m}
-                onClick={() => changeMode(m)}
-                className={`flex-1 rounded px-2 py-1 text-xs ${
-                  mode === m ? 'bg-sky-500/30 text-sky-200' : 'bg-white/10 text-white/70 hover:bg-white/15'
-                }`}
-              >
-                {t(`date.${m}`)}
-              </button>
-            ))}
+
+          {/* 単日クイック（その日だけ） */}
+          <div className="mb-3 flex gap-1">
+            <button onClick={() => applyDay(today)} className={dayBtn(isDay(today))}>
+              {t('date.today')}
+            </button>
+            <button onClick={() => applyDay(yesterday)} className={dayBtn(isDay(yesterday))}>
+              {t('date.yesterday')}
+            </button>
           </div>
 
-          {/* 過去日のクイック入力 */}
-          <div className="mb-2 flex flex-wrap gap-1">
-            {presets.map((p) => (
-              <button
-                key={p.key}
-                onClick={() => applyPreset(p)}
-                className="rounded bg-white/10 px-2 py-0.5 text-[11px] text-white/75 hover:bg-white/20 hover:text-white"
-              >
-                {t(`date.${p.key}`)}
-              </button>
-            ))}
-          </div>
+          {/* この日以前（その日から古い方） */}
+          <label className="mb-3 flex items-center justify-between gap-2 text-xs text-white/55">
+            <span className="shrink-0">{t('date.orBefore')}</span>
+            <input
+              type="date"
+              max={today}
+              className={inputCls}
+              value={before}
+              onChange={(e) => changeBefore(e.target.value)}
+            />
+          </label>
 
-          <div className="space-y-2">
-            {(mode === 'after' || mode === 'range') && (
-              <label className="flex items-center justify-between gap-2 text-xs text-white/55">
-                <span className="shrink-0">{t('date.start')}</span>
-                <input
-                  type="date"
-                  max={today}
-                  className={inputCls}
-                  value={start}
-                  onChange={(e) => changeStart(e.target.value)}
-                />
-              </label>
-            )}
-            {(mode === 'before' || mode === 'range') && (
-              <label className="flex items-center justify-between gap-2 text-xs text-white/55">
-                <span className="shrink-0">{t('date.end')}</span>
-                <input
-                  type="date"
-                  max={today}
-                  className={inputCls}
-                  value={end}
-                  onChange={(e) => changeEnd(e.target.value)}
-                />
-              </label>
-            )}
+          {/* 期間（開始〜終了） */}
+          <div className="space-y-1.5 border-t border-white/10 pt-2">
+            <div className="text-xs text-white/45">{t('date.range')}</div>
+            <label className="flex items-center justify-between gap-2 text-xs text-white/55">
+              <span className="shrink-0">{t('date.start')}</span>
+              <input
+                type="date"
+                max={today}
+                className={inputCls}
+                value={start}
+                onChange={(e) => changeStart(e.target.value)}
+              />
+            </label>
+            <label className="flex items-center justify-between gap-2 text-xs text-white/55">
+              <span className="shrink-0">{t('date.end')}</span>
+              <input
+                type="date"
+                max={today}
+                className={inputCls}
+                value={end}
+                onChange={(e) => changeEnd(e.target.value)}
+              />
+            </label>
           </div>
 
           <div className="mt-3 flex justify-end">

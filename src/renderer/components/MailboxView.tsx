@@ -417,6 +417,9 @@ export function MailboxView({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented) return;
+      // 押しっぱなしのオートリピートは無視する（1回押下＝1件削除）。削除後に次のメールを
+      // 自動で開くため、リピートを通すと連続削除で「次のメールが飛ばされる」ように見える。
+      if (e.repeat) return;
       const isDel = e.key === 'Delete';
       const isCtrlD =
         (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'd' || e.key === 'D');
@@ -908,14 +911,35 @@ export function MailboxView({
     if (opened && emailIds.includes(opened.id)) setOpened(null);
     setSelectedIds(new Set());
   };
+  // 削除する行の直後（無ければ直前）の生存行 id を、削除前の並び順から求める。
+  // 閲覧中のメールを消したときに「次のメール」を自動で開くために使う。
+  const nextRowAfterDelete = (rowIds: number[]): number | null => {
+    const order = visibleMails.map((m) => m.id);
+    const del = new Set(rowIds);
+    let last = -1;
+    for (let i = 0; i < order.length; i++) if (del.has(order[i])) last = i;
+    if (last === -1) return null;
+    for (let i = last + 1; i < order.length; i++) if (!del.has(order[i])) return order[i];
+    for (let i = last - 1; i >= 0; i--) if (!del.has(order[i])) return order[i];
+    return null;
+  };
   // 指定した行（スレッド代表）を削除する。既定はゴミ箱へ移動（復元可）。
   // ゴミ箱フォルダ内では完全削除（確認あり・復元不可）。
   const deleteRows = async (rowIds: number[]) => {
     if (rowIds.length === 0) return;
     const ids = emailIdsFor(rowIds);
+    // 閲覧中のメールを消す場合だけ、次のメールへ自動で送る（クリックし直し不要にする）。
+    const advanceTo = opened && rowIds.includes(opened.id) ? nextRowAfterDelete(rowIds) : null;
+    const advance = () => {
+      if (advanceTo == null) return;
+      anchorId.current = advanceTo;
+      if (folder === 'drafts') void openDraft(advanceTo);
+      else void openMail(advanceTo);
+    };
     if (folder === 'trash') {
       if (!window.confirm(t('mailbox.deletePermanentConfirm', { count: rowIds.length }))) return;
       dropRows(rowIds, ids);
+      advance();
       try {
         await mailDelete(ids);
       } catch {
@@ -924,6 +948,7 @@ export function MailboxView({
       return;
     }
     dropRows(rowIds, ids);
+    advance();
     setUndoTrash({ ids, count: rowIds.length }); // Ctrl+Z／トーストで復元できるようにする
     try {
       await mailTrash(ids);

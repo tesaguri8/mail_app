@@ -57,6 +57,12 @@ describe('parseDateTime', () => {
     });
   });
 
+  it('和暦（令和8年）を西暦へ変換する', () => {
+    expect(parseDateTime('令和8年7月13日', BASE)).toEqual({ day: '2026-07-13', allDay: true });
+    expect(parseDateTime('令和元年5月1日', BASE)).toEqual({ day: '2019-05-01', allDay: true });
+    expect(parseDateTime('平成31年4月30日', BASE)).toEqual({ day: '2019-04-30', allDay: true });
+  });
+
   it('実在しない日付（2/31）は null', () => {
     expect(parseDateTime('2月31日', BASE)).toBeNull();
   });
@@ -88,5 +94,17 @@ describe('matchDates', () => {
   it('日付らしくない数字（分数 7/10点）の後続数字は拾うが、桁続きは除外', () => {
     // 「7/10」の直後が全角の文字なら拾える（点は区切りではない）
     expect(matchDates('達成率は7/10です', BASE)).toHaveLength(1);
+  });
+
+  it('漢字表記の日付は直後が数字でも拾う（和暦・校時つき）', () => {
+    // 「令和8年7月13日（月）5.6校時」— 直後の 5 で弾かれず、和暦も西暦に変換される。
+    const hits = matchDates('日時：令和8年7月13日（月）5.6校時', BASE);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].raw).toBe('令和8年7月13日（月）');
+    expect(hits[0].parsed).toEqual({ day: '2026-07-13', allDay: true });
+  });
+
+  it('数字だけの M/D は隣接数字ガードを維持（電話番号を拾わない）', () => {
+    expect(matchDates('お電話は 03-1234-5678 まで', BASE)).toHaveLength(0);
   });
 });

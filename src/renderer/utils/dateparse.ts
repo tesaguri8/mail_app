@@ -27,8 +27,11 @@ function toHalf(s: string): string {
 // 検出用の下位パターン（全角数字も許容）。半角化前の生テキストにマッチさせる。
 const D = '[0-9０-９]';
 const SEP = '[/／\\-]';
-// 日付本体: 「YYYY年M月D日(曜)」または「(YYYY/)M/D」。
-const JP_DATE = `(?:${D}{4}\\s*年\\s*)?${D}{1,2}\\s*月\\s*${D}{1,2}\\s*日(?:\\s*[（(][日月火水木金土][）)])?`;
+// 年: 西暦4桁 or 和暦（令和8年 / 令和元年）。
+const ERA = '(?:令和|平成|昭和)';
+const JP_YEAR = `(?:${D}{4}|${ERA}\\s*(?:${D}{1,2}|元))\\s*年`;
+// 日付本体: 「(YYYY|和暦)年M月D日(曜)」または「(YYYY/)M/D」。
+const JP_DATE = `(?:${JP_YEAR}\\s*)?${D}{1,2}\\s*月\\s*${D}{1,2}\\s*日(?:\\s*[（(][日月火水木金土][）)])?`;
 const NUM_DATE = `(?:${D}{4}${SEP})?${D}{1,2}${SEP}${D}{1,2}`;
 // 時刻（日付の直後に続くときだけ拾う）: 「HH:MM」「H時MM分」「午前/午後H時」など。
 const AMPM = '(?:午前|午後|AM|PM|am|pm)';
@@ -51,9 +54,14 @@ export function matchDates(text: string, baseISO?: string): { index: number; raw
     const index = m.index ?? 0;
     const before = index > 0 ? text[index - 1] : '';
     const after = text[index + raw.length] ?? '';
-    // 「03-1234-5678」のような長い数字列の一部を拾わない。
-    if (before && DIGIT_OR_SEP.test(before)) continue;
-    if (after && DIGIT_OR_SEP.test(after)) continue;
+    // 「03-1234-5678」のような長い数字列の一部を拾わない（数字だけの M/D 日付のみ対象）。
+    // 漢字表記（M月D日）は月日で区切られ電話番号と紛れないので、隣接数字ガードを免除する
+    // （例: 「7月13日（月）5.6校時」の直後の 5 で弾かれないように）。
+    const isKanjiDate = /[年月日]/.test(raw);
+    if (!isKanjiDate) {
+      if (before && DIGIT_OR_SEP.test(before)) continue;
+      if (after && DIGIT_OR_SEP.test(after)) continue;
+    }
     const parsed = parseDateTime(raw, baseISO);
     if (parsed) out.push({ index, raw, parsed });
   }
@@ -68,9 +76,11 @@ export function parseDateTime(raw: string, baseISO?: string): ParsedDate | null 
   let day: number;
   let rest: string;
 
+  // 和暦（令和/平成/昭和、元年=1）があれば西暦へ変換して年に使う。
+  const wa = s.match(/(令和|平成|昭和)\s*(元|\d{1,2})\s*年/);
   let m = s.match(/(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
   if (m) {
-    year = m[1] ? Number(m[1]) : undefined;
+    year = m[1] ? Number(m[1]) : wa ? eraToYear(wa[1], wa[2]) : undefined;
     month = Number(m[2]);
     day = Number(m[3]);
     rest = s.slice((m.index ?? 0) + m[0].length);
@@ -93,6 +103,14 @@ export function parseDateTime(raw: string, baseISO?: string): ParsedDate | null 
   const dayStr = `${y}-${pad(month)}-${pad(day)}`;
   const time = parseTime(rest);
   return time ? { day: dayStr, time, allDay: false } : { day: dayStr, allDay: true };
+}
+
+/** 和暦（令和/平成/昭和）＋年（元=1）を西暦に変換する。 */
+function eraToYear(era: string, yStr: string): number {
+  const n = yStr === '元' ? 1 : Number(yStr);
+  if (era === '令和') return 2018 + n; // 令和1 = 2019
+  if (era === '平成') return 1988 + n; // 平成1 = 1989
+  return 1925 + n; // 昭和1 = 1926
 }
 
 /** baseISO の年（無ければ現在の年）。 */

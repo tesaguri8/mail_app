@@ -112,15 +112,20 @@ function EmailAdd({
   const registered = count > 0;
   const dup = count > 1;
 
-  // 差出人名に一致する既存（共有アドレスを複数人が持つときの取り違え防止）。
+  // 差出人名に「関連する」既存を優先（完全一致・空白差のほか、姓のみ/名のみ等の部分一致）。
+  // 同じ代表アドレスが別人（前任）に紐づくときの取り違えを防ぐ。
   const wantName = foldName(name);
   const named =
     matches && wantName
-      ? (matches.find((m) => foldName(m.display_name) === wantName) ?? null)
+      ? (matches.find((m) => {
+          const dn = foldName(m.display_name);
+          return dn === wantName || dn.includes(wantName) || wantName.includes(dn);
+        }) ?? null)
       : null;
-  // クリック動作: 名前が一致する or アドレスが一意なら編集。共有アドレスで名前が
-  // 合わない（＝別人。前任からの引き継ぎ等）ときは新規追加にする。
-  const willEdit = registered && !!onEdit && (named != null || count === 1);
+  // クリック動作: 名前が関連する既存があれば編集。差出人名が無ければ（判別できないので）
+  // 従来どおり編集。差出人名があるのに関連する既存が無い＝別人とみなして新規追加にする
+  // （アドレスが 1 件だけ一致でも、名前が違えば開かず新規登録にする）。
+  const willEdit = registered && !!onEdit && (named != null || !wantName);
 
   const handle = () => {
     if (willEdit && matches && onEdit) onEdit((named ?? matches[0]).id);

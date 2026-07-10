@@ -281,7 +281,10 @@ export function ContactEditor({
   // 赤字判定用の集合（バックエンドは渡した文字列をそのまま返す）。
   const emailConflicts = useMemo(() => new Set(matches.flatMap((m) => m.matched_emails)), [matches]);
   const phoneConflicts = useMemo(() => new Set(matches.flatMap((m) => m.matched_phones)), [matches]);
-  const nameConflict = matches.some((m) => m.matched_name);
+  // 「同名」の一致だけを本当の重複候補とみなす。共有メール/電話だけの一致（＝名前が違う）は
+  // 別人（役所の代表アドレスの引き継ぎ等）の可能性が高いので、統合を強制しない。
+  const nameMatches = useMemo(() => matches.filter((m) => m.matched_name), [matches]);
+  const nameConflict = nameMatches.length > 0;
 
   const patch = (p: Partial<ContactInput>) => {
     setDraft((d) => (d ? { ...d, ...p } : d));
@@ -305,10 +308,11 @@ export function ContactEditor({
     }
   };
 
-  // 新規（id:null）で重複候補があれば、保存前に確認ダイアログを出す。
+  // 新規（id:null）で「同名の」既存があるときだけ、保存前に統合の確認ダイアログを出す。
+  // メール/電話だけの一致（名前が違う＝別人の可能性が高い）は、そのまま別の連絡先として登録する。
   const save = () => {
     if (!draft || draft.display_name.trim() === '') return;
-    if (draft.id === null && matches.length > 0) {
+    if (draft.id === null && nameMatches.length > 0) {
       setConfirmDup(true);
       return;
     }
@@ -570,10 +574,10 @@ export function ContactEditor({
               <h3 className="text-base font-semibold">{t('contact.dupDialogTitle')}</h3>
             </div>
             <p className="mb-3 text-sm text-white/60">
-              {t('contact.dupDialogBody', { count: matches.length })}
+              {t('contact.dupDialogBody', { count: nameMatches.length })}
             </p>
             <ul className="mb-4 max-h-48 space-y-1 overflow-y-auto">
-              {matches.map((m) => (
+              {nameMatches.map((m) => (
                 <li key={m.id}>
                   <button
                     onClick={() => {

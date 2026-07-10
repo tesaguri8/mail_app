@@ -455,13 +455,13 @@ impl Store {
         let want_name = display_name.map(fold_remove_ws).filter(|s| !s.is_empty());
 
         // 共有指定された値の集合（どの連絡先ででも共有なら手掛かりから除外）。
-        let shared_emails: HashSet<String> = {
+        let mut shared_emails: HashSet<String> = {
             let mut stmt =
                 conn.prepare("SELECT DISTINCT lower(value) FROM contact_emails WHERE is_shared = 1")?;
             let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
             rows.collect::<rusqlite::Result<_>>()?
         };
-        let shared_phones: HashSet<String> = {
+        let mut shared_phones: HashSet<String> = {
             let mut stmt = conn.prepare("SELECT value FROM contact_phones WHERE is_shared = 1")?;
             let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
             let mut set = HashSet::new();
@@ -470,6 +470,44 @@ impl Store {
             }
             set
         };
+
+        // 多数の連絡先で使い回されている値（会社/役所の代表メール・代表電話など）は、
+        // is_shared 未設定でも共有とみなして手掛かりから除外する。前任からの引き継ぎ等で
+        // 同じ代表アドレス/電話を持つ「別人」を重複扱いしないため。この人数以上で共有扱い。
+        const SHARED_MIN_CONTACTS: i64 = 3;
+        {
+            let mut stmt = conn.prepare(
+                "SELECT lower(ce.value) FROM contact_emails ce \
+                 JOIN contacts c ON c.id = ce.contact_id WHERE c.deleted_at IS NULL \
+                 GROUP BY lower(ce.value) HAVING COUNT(DISTINCT ce.contact_id) >= ?1",
+            )?;
+            let rows = stmt.query_map(params![SHARED_MIN_CONTACTS], |r| r.get::<_, String>(0))?;
+            for v in rows {
+                shared_emails.insert(v?);
+            }
+        }
+        {
+            // 電話は Rust 側で正規化するため SQL 集計せず、正規化後に人数を数える。
+            let mut stmt = conn.prepare(
+                "SELECT cp.value, cp.contact_id FROM contact_phones cp \
+                 JOIN contacts c ON c.id = cp.contact_id WHERE c.deleted_at IS NULL",
+            )?;
+            let rows =
+                stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+            let mut by_norm: HashMap<String, HashSet<i64>> = HashMap::new();
+            for row in rows {
+                let (val, cid) = row?;
+                let d = normalize_phone_for_match(&val);
+                if !d.is_empty() {
+                    by_norm.entry(d).or_default().insert(cid);
+                }
+            }
+            for (d, ids) in by_norm {
+                if ids.len() as i64 >= SHARED_MIN_CONTACTS {
+                    shared_phones.insert(d);
+                }
+            }
+        }
 
         // contact_id -> (一致メール, 一致電話, 氏名一致)
         let mut hits: HashMap<i64, (Vec<String>, Vec<String>, bool)> = HashMap::new();
@@ -1776,6 +1814,46 @@ mod tests {
             .find_contact_matches(&["taro@a.jp".into()], &[], None, Some(a))
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn find_matches_auto_excludes_role_email_and_phone_shared_by_many() {
+        let s = store();
+        // 役所の代表メール/電話を、名前が違う 3 名が共有（is_shared は未設定）。
+        let office_email = "gkki06@city.example.lg.jp";
+        let office_phone = "0980-53-1234";
+        for name in ["山城千香子", "五十嵐梨花", "伊波裕樹"] {
+            s.upsert_contact(&ContactInput {
+                display_name: name.into(),
+                emails: vec![ContactValueInput {
+                    label: None,
+                    value: office_email.into(),
+                    is_shared: false,
+                }],
+                phones: vec![ContactValueInput {
+                    label: None,
+                    value: office_phone.into(),
+                    is_shared: false,
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        // 3 名以上で使い回されている代表メール/電話は共有扱い → 重複候補にしない。
+        assert!(s
+            .find_contact_matches(&[office_email.into()], &[], None, None)
+            .unwrap()
+            .is_empty());
+        assert!(s
+            .find_contact_matches(&[], &[office_phone.into()], None, None)
+            .unwrap()
+            .is_empty());
+        // 氏名一致はこれまで通り検出（同名は本当の重複候補）。
+        let mn = s
+            .find_contact_matches(&[office_email.into()], &[], Some("山城千香子"), None)
+            .unwrap();
+        assert_eq!(mn.len(), 1);
+        assert!(mn[0].matched_name);
     }
 
     #[test]

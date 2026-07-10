@@ -197,6 +197,8 @@
     "draft": "Edit draft"
   },
   "ctx": {
+    "searchSender": "Search this sender's mail",
+    "searchRecipient": "Search this recipient's mail",
     "markRead": "Mark as read",
     "markUnread": "Mark as unread",
     "star": "Add to favorites",

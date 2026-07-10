@@ -355,7 +355,7 @@ export function MailboxView({
   const allMatchRowsRef = useRef<ThreadListItem[]>([]);
   // 直前のゴミ箱移動の取消情報（Ctrl+Z／トーストで復元）。ids は移動したメール id。
   const [undoTrash, setUndoTrash] = useState<{ ids: number[]; count: number } | null>(null);
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; rowId: number } | null>(null);
   // 選択モード（チェックボックス表示中）。1件でも明示選択したら on。
   const [selecting, setSelecting] = useState(false);
   // 選択を完全に解除（手動選択・全一致モードともにクリア）。
@@ -830,7 +830,7 @@ export function MailboxView({
       setSelectedIds(new Set([id]));
       anchorId.current = id;
     }
-    setMenu({ x: e.clientX, y: e.clientY });
+    setMenu({ x: e.clientX, y: e.clientY, rowId: id });
   };
 
   // チェックボックスでの単純トグル（開かない）。選択モードに入る。
@@ -1018,12 +1018,37 @@ export function MailboxView({
     }
   };
 
+  // 差出人（送信済/下書きは宛先）のアドレスで検索して、その相手のメールだけを絞り込む。
+  // 既存の全文検索（FTS: 件名/差出人/本文）を流用し、検索窓にアドレスを入れるだけ。
+  const searchBySender = (email: string) => {
+    if (!email) return;
+    sugPicked.current = true; // 候補ドロップダウンは出さない
+    setSelectedIds(new Set());
+    setSugOpen(false);
+    setQuery(email);
+  };
+
   // 選択集合の状態に応じてメニュー項目（トグルラベル）を組み立てる
   const buildMenuItems = (): MenuItem[] => {
     const sel = mails.filter((m) => selectedIds.has(m.id));
     const allStarred = sel.length > 0 && sel.every((m) => m.is_starred);
     const inTrash = folder === 'trash';
+    // 右クリックした 1 通の相手（差出人／送信箱は宛先）のアドレス。空なら検索項目を出さない。
+    const row = menu ? findMail(menu.rowId) : undefined;
+    const corrEmail = row
+      ? parseAddress(outgoing ? row.to_addresses : row.from_address).email
+      : '';
     return [
+      ...(corrEmail
+        ? [
+            {
+              key: 'searchSender',
+              label: outgoing ? t('ctx.searchRecipient') : t('ctx.searchSender'),
+              Icon: Search,
+              onClick: () => searchBySender(corrEmail),
+            } as MenuItem,
+          ]
+        : []),
       { key: 'read', label: t('ctx.markRead'), Icon: MailOpen, onClick: () => actRead(true) },
       { key: 'unread', label: t('ctx.markUnread'), Icon: Mail, onClick: () => actRead(false) },
       allStarred

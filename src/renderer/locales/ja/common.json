@@ -197,6 +197,8 @@
     "draft": "下書きの編集"
   },
   "ctx": {
+    "searchSender": "この差出人のメールを検索",
+    "searchRecipient": "この宛先のメールを検索",
     "markRead": "既読にする",
     "markUnread": "未読にする",
     "star": "お気に入りに追加",

@@ -957,6 +957,30 @@ export function MailboxView({
     }
   };
   const actDelete = () => deleteRows(targetIds());
+  // 一覧の行ホバー用: 選択状態を変えずに、その行（スレッド）単体へ効かせる。
+  const rowEmailIds = (m: ThreadListItem) => (m.email_ids.length ? m.email_ids : [m.id]);
+  // スターはスレッド全体に効かせる（代表が入れ替わっても印が消えて見えないように）。
+  const rowToggleStar = async (m: ThreadListItem) => {
+    const value = !m.is_starred;
+    patchMails(new Set([m.id]), { is_starred: value });
+    try {
+      await mailSetStarred(rowEmailIds(m), value);
+    } catch {
+      /* noop */
+    }
+  };
+  // 迷惑としてマーク / 非迷惑に戻す（1 行分）。楽観的に一覧から外し、サーバー反映後に取り直す。
+  const rowSpam = async (m: ThreadListItem, spam: boolean) => {
+    const ids = rowEmailIds(m);
+    updateLists((prev) => prev.filter((x) => x.id !== m.id));
+    if (opened && ids.includes(opened.id)) setOpened(null);
+    try {
+      await (spam ? mailMarkSpam(ids) : mailMarkNotSpam(ids));
+    } catch {
+      /* noop */
+    }
+    await loadMails();
+  };
   // ゴミ箱の選択メールを元のフォルダへ復元する（メニュー「復元」／復元ボタン）。
   const actRestore = async () => {
     const rowIds = targetIds();
@@ -1391,10 +1415,64 @@ export function MailboxView({
                 id={`mail-li-${m.id}`}
                 onClick={(e) => onRowClick(e, m.id)}
                 onContextMenu={(e) => onRowContextMenu(e, m.id)}
-                className={`group flex cursor-pointer select-none gap-2 rounded-md px-3 py-2 hover:bg-white/10 ${
+                className={`group relative flex cursor-pointer select-none gap-2 rounded-md px-3 py-2 hover:bg-white/10 ${
                   selectedIds.has(m.id) ? 'bg-white/15' : ''
                 } ${opened?.id === m.id ? 'ring-1 ring-sky-300/40' : ''}`}
               >
+                {/* ホバーで出る行アクション（スター／迷惑／削除）。行の展開に伝播させない。
+                    右上（日時の上）に重ねる。星は付与済みなら常時アンバー。 */}
+                <div className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 rounded-md border border-white/10 bg-neutral-900/85 px-1 py-0.5 opacity-0 shadow-sm backdrop-blur transition-opacity group-hover:opacity-100">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void rowToggleStar(m);
+                    }}
+                    title={t(m.is_starred ? 'ctx.unstar' : 'ctx.star')}
+                    aria-label={t(m.is_starred ? 'ctx.unstar' : 'ctx.star')}
+                    className="flex h-6 w-6 items-center justify-center rounded hover:bg-white/15"
+                  >
+                    <Star
+                      size={14}
+                      className={m.is_starred ? 'fill-amber-300 text-amber-300' : 'text-white/70'}
+                    />
+                  </button>
+                  {folder === 'spam' ? (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void rowSpam(m, false);
+                      }}
+                      title={t('ctx.notSpam')}
+                      aria-label={t('ctx.notSpam')}
+                      className="flex h-6 w-6 items-center justify-center rounded text-white/70 hover:bg-white/15 hover:text-emerald-300"
+                    >
+                      <ThumbsUp size={14} />
+                    </button>
+                  ) : folder !== 'sent' && folder !== 'drafts' && folder !== 'trash' ? (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void rowSpam(m, true);
+                      }}
+                      title={t('ctx.markSpam')}
+                      aria-label={t('ctx.markSpam')}
+                      className="flex h-6 w-6 items-center justify-center rounded text-white/70 hover:bg-white/15 hover:text-rose-300"
+                    >
+                      <ThumbsDown size={14} />
+                    </button>
+                  ) : null}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void deleteRows([m.id]);
+                    }}
+                    title={t(folder === 'trash' ? 'ctx.deletePermanent' : 'ctx.delete')}
+                    aria-label={t(folder === 'trash' ? 'ctx.deletePermanent' : 'ctx.delete')}
+                    className="flex h-6 w-6 items-center justify-center rounded text-white/70 hover:bg-white/15 hover:text-rose-300"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
                 <input
                   type="checkbox"
                   checked={selectedIds.has(m.id)}

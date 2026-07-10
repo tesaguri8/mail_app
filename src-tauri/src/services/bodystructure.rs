@@ -28,10 +28,15 @@ pub struct StructPart {
 }
 
 /// BodyParams（`Option<Vec<(key, value)>>`）から key（大小無視）の値を取り出す。
+/// 完全一致に加え、RFC2231 の継続/拡張形（`filename*0` `filename*` `filename*0*` 等）も拾う。
+/// 長い/非ASCII のファイル名は素の `filename`/`name` ではなくこれらの形で入るため、
+/// これを見ないと添付を取りこぼす（正しい復号名は取得側 [resolve_attachments] が別途行う）。
 fn param<'a>(params: &BodyParams<'a>, key: &str) -> Option<&'a str> {
     let list = params.as_ref()?;
     for &(k, v) in list.iter() {
-        if k.eq_ignore_ascii_case(key) {
+        let is_continuation =
+            k.len() > key.len() && k.as_bytes()[key.len()] == b'*' && k[..key.len()].eq_ignore_ascii_case(key);
+        if k.eq_ignore_ascii_case(key) || is_continuation {
             return Some(v);
         }
     }
@@ -94,7 +99,13 @@ fn walk(bs: &BodyStructure, prefix: &str, out: &mut Vec<StructPart>) {
                 .map(|s| s.trim_matches(|c| c == '<' || c == '>').trim().to_string())
                 .filter(|s| !s.is_empty());
             let is_text = ct.ty.eq_ignore_ascii_case("text");
-            let is_attachment = filename.is_some() || content_id.is_some();
+            // Content-Disposition: attachment は（ファイル名が取り出せなくても）添付とみなす。
+            let disp_is_attachment = common
+                .disposition
+                .as_ref()
+                .map(|d| d.ty.eq_ignore_ascii_case("attachment"))
+                .unwrap_or(false);
+            let is_attachment = filename.is_some() || content_id.is_some() || disp_is_attachment;
             out.push(StructPart {
                 section,
                 content_type: format!("{}/{}", ct.ty, ct.subtype).to_lowercase(),
@@ -326,5 +337,75 @@ mod tests {
         assert_eq!(atts.len(), 1);
         assert_eq!(atts[0].section, "2");
         assert_eq!(atts[0].filename.as_deref(), Some("転送.eml"));
+    }
+
+    #[test]
+    fn attachment_with_rfc2231_filename_continuation_is_detected() {
+        // 実サーバー準拠: video/quicktime で Content-Type に name 無し、ファイル名は
+        // Content-Disposition の RFC2231 継続形 `filename*0` のみ。以前はこれを取りこぼし、
+        // 添付として拾えず送信済コピーから添付が消えていた（回帰防止）。
+        let video = BodyStructure::Basic {
+            common: BodyContentCommon {
+                ty: ContentType {
+                    ty: "video",
+                    subtype: "quicktime",
+                    params: None,
+                },
+                disposition: Some(ContentDisposition {
+                    ty: "attachment",
+                    params: Some(vec![(
+                        "filename*0",
+                        "eYRU7XRtAzXFJKA-34vn808Yv5weNSBvXR7Sle3H1I8.MOV",
+                    )]),
+                }),
+                language: None,
+                location: None,
+            },
+            other: single(None, 6_898_328),
+            extension: None,
+        };
+        let bs = multipart(
+            "mixed",
+            vec![
+                multipart("alternative", vec![text_part(), html_part()]),
+                video,
+            ],
+        );
+        let atts = attachments(&bs);
+        assert_eq!(atts.len(), 1);
+        assert_eq!(atts[0].section, "2");
+        assert_eq!(atts[0].content_type, "video/quicktime");
+        assert!(atts[0].content_id.is_none());
+        assert_eq!(
+            atts[0].filename.as_deref(),
+            Some("eYRU7XRtAzXFJKA-34vn808Yv5weNSBvXR7Sle3H1I8.MOV")
+        );
+    }
+
+    #[test]
+    fn disposition_attachment_without_filename_is_detected() {
+        // Content-Disposition: attachment ならファイル名を取り出せなくても添付とみなす。
+        let blob = BodyStructure::Basic {
+            common: BodyContentCommon {
+                ty: ContentType {
+                    ty: "application",
+                    subtype: "octet-stream",
+                    params: None,
+                },
+                disposition: Some(ContentDisposition {
+                    ty: "attachment",
+                    params: None,
+                }),
+                language: None,
+                location: None,
+            },
+            other: single(None, 1_234),
+            extension: None,
+        };
+        let bs = multipart("mixed", vec![text_part(), blob]);
+        let atts = attachments(&bs);
+        assert_eq!(atts.len(), 1);
+        assert!(atts[0].is_attachment);
+        assert!(atts[0].filename.is_none());
     }
 }

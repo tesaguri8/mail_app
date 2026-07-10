@@ -420,7 +420,11 @@ export function MailBody({
     setAttachmentsLoaded(false);
     setRefreshed(null);
     setGreenOverride(null);
-    if (detail.has_attachments) {
+    // インライン画像（cid:）は has_attachments に数えないため（例: 本文が画像 1 枚だけの
+    // multipart/related）、本文が cid: を参照するときも添付メタを読み込む。読まないと
+    // 本文中のインライン画像を解決できず、プレースホルダのまま何も表示されない。
+    const needsInline = (detail.body_html ?? '').toLowerCase().includes('cid:');
+    if (detail.has_attachments || needsInline) {
       mailAttachments(detail.id)
         .then((a) => {
           if (active) {
@@ -435,7 +439,7 @@ export function MailBody({
     return () => {
       active = false;
     };
-  }, [detail.id, detail.has_attachments]);
+  }, [detail.id, detail.has_attachments, detail.body_html]);
 
   const hasHtmlBody = (d.body_html?.trim()?.length ?? 0) > 0;
 

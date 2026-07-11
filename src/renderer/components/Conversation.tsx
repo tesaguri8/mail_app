@@ -397,11 +397,12 @@ function Bubble({
             />
           </div>
         ) : (
-          // 通常バブル: clean_body（新規部分）だけを chat 風に。クリックで全文展開する
-          // （文字選択中は展開しない。内部のボタンは stopPropagation で独立動作）。
+          // 通常バブル: clean_body（新規部分）だけを chat 風に。ダブルクリックで全文展開する
+          // （シングルクリックは文字選択のまま。ダブルクリックで選ばれる単語は消してから開く。
+          // 「全文を開く」ボタンからも展開できる。内部のボタンは stopPropagation で独立動作）。
           <div
-            onClick={() => {
-              if (window.getSelection()?.toString()) return;
+            onDoubleClick={() => {
+              window.getSelection()?.removeAllRanges();
               onToggleExpand();
             }}
             className={`group relative cursor-pointer rounded-2xl px-3.5 py-2 text-sm leading-relaxed shadow-sm ${

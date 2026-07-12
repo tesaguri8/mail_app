@@ -843,6 +843,19 @@ pub struct SpamVerdict {
     pub top_tokens: Vec<String>,
 }
 
+/// 迷惑差出人として登録済みだが、信頼シグナル（住所録/グリーン）と矛盾する差出人。
+/// ユーザーへ注意喚起する情報リスト用（docs/SPAM.md）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct SpamSenderConflict {
+    /// 正規化済みの差出人アドレス。
+    pub address: String,
+    /// 住所録の表示名（連絡先の場合。無ければ null）。
+    pub display_name: Option<String>,
+    /// 矛盾の理由: "contact" | "green" | "contact_green"。
+    pub reason: String,
+}
+
 /// 迷惑メール判定のユーザー設定（docs/SPAM.md §9）。既定値は spam モジュールの定数。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

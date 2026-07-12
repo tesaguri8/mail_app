@@ -63,6 +63,7 @@ import { FolderIcons } from './FolderIcons';
 import { MAIL_FILTERS, matchesFilters } from './mailFilters';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { DateFilter, matchesDate, type DateRange } from './DateFilter';
+import { SpamConflictAlert } from './SpamConflictAlert';
 import { TagFilter, matchesTags } from './TagFilter';
 import { TagPicker } from './TagPicker';
 
@@ -1264,6 +1265,8 @@ export function MailboxView({
           ))}
         </select>
         <FolderIcons value={folder} onChange={setFolder} />
+        {/* 迷惑登録の矛盾（住所録/グリーンなのに迷惑）を知らせる情報アイコン。矛盾が無ければ非表示。 */}
+        <SpamConflictAlert onResolved={() => loadMails({ keepScroll: true })} />
       </div>
       {/* 絞り込みツールバー: 一覧を絞る操作はリスト直上に置く（トグル/期間/タグ）。アイコンは中央寄せ */}
       <div className="flex shrink-0 flex-wrap items-center justify-center gap-1 border-b border-white/10 px-2 py-1">

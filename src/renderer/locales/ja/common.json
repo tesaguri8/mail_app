@@ -155,6 +155,14 @@
     "thisMonth": "今月",
     "lastMonth": "先月"
   },
+  "spamAlert": {
+    "title": "確認が必要な差出人が {{count}} 件",
+    "banner": "住所録／グリーン指定なのに迷惑登録されている差出人が {{count}} 件あります。誤登録の可能性があります。",
+    "reasonContact": "住所録",
+    "reasonGreen": "グリーン",
+    "reasonContactGreen": "住所録・グリーン",
+    "forgive": "迷惑解除"
+  },
   "compose": {
     "new": "新規作成",
     "reply": "返信",

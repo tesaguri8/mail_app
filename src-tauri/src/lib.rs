@@ -112,6 +112,8 @@ pub fn run() {
             commands::mail_mark_spam,
             commands::mail_mark_not_spam,
             commands::spam_score,
+            commands::spam_find_conflicts,
+            commands::spam_forgive_sender,
             commands::spam_settings_get,
             commands::spam_settings_set,
             commands::contact_list,

@@ -6,7 +6,8 @@ use crate::models::{
     IcsImportReport, ImportReport, MailDetail,
     MailSummary, OrgDuplicateGroup, OrganizationDetail, OrganizationSummary, RebuildAction,
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
-    ServerAccountSummary, SignatureSummary, SpamSettings, SpamVerdict, StorageInfo, SyncProgress,
+    ServerAccountSummary, SignatureSummary, SpamSenderConflict, SpamSettings, SpamVerdict,
+    StorageInfo, SyncProgress,
     SyncResult, TagSummary, ThreadListItem, ThreadView,
 };
 use crate::services::autoconfig;
@@ -1319,6 +1320,25 @@ pub fn mail_mark_not_spam(store: State<Store>, ids: Vec<i64>) -> Result<(), Stri
             .set_sender_junk(&addr, false)
             .map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+/// 迷惑差出人リストと信頼シグナル（住所録/グリーン）の矛盾を列挙する（注意喚起用）。
+/// 「グリーン/連絡先なのに迷惑登録されている」誤登録をユーザーに気付かせる。
+#[tauri::command]
+pub fn spam_find_conflicts(store: State<Store>) -> Result<Vec<SpamSenderConflict>, String> {
+    store.find_spam_sender_conflicts().map_err(|e| e.to_string())
+}
+
+/// 指定アドレスを迷惑差出人から外し、同アドレスの隔離済みメールを受信箱へ戻す（矛盾の解消）。
+#[tauri::command]
+pub fn spam_forgive_sender(store: State<Store>, address: String) -> Result<(), String> {
+    store
+        .remove_spam_sender(&address)
+        .map_err(|e| e.to_string())?;
+    store
+        .set_sender_junk(&address, false)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 

@@ -328,6 +328,55 @@ impl Store {
         Ok(())
     }
 
+    /// 迷惑差出人リストと信頼シグナル（住所録/グリーン）の矛盾を列挙する（注意喚起用）。
+    /// 誤登録に気付けるよう、迷惑登録済みなのに住所録に居る／グリーン認定の差出人を返す。
+    pub fn find_spam_sender_conflicts(
+        &self,
+    ) -> rusqlite::Result<Vec<crate::models::SpamSenderConflict>> {
+        let conn = self.conn.lock().unwrap();
+        let addrs: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT address FROM spam_senders ORDER BY address")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let mut out = Vec::new();
+        for addr in addrs {
+            let name: Option<String> = conn
+                .query_row(
+                    "SELECT c.display_name FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id \
+                     WHERE lower(ce.value) = ?1 AND c.deleted_at IS NULL LIMIT 1",
+                    params![addr],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let is_contact = name.is_some();
+            let is_green = match addr.rsplit('@').next().filter(|d| d.contains('.')) {
+                Some(domain) => {
+                    let n: i64 = conn.query_row(
+                        "SELECT COUNT(*) FROM green_domains WHERE domain = ?1",
+                        params![domain],
+                        |r| r.get(0),
+                    )?;
+                    n > 0
+                }
+                None => false,
+            };
+            if is_contact || is_green {
+                let reason = match (is_contact, is_green) {
+                    (true, true) => "contact_green",
+                    (true, false) => "contact",
+                    _ => "green",
+                };
+                out.push(crate::models::SpamSenderConflict {
+                    address: addr,
+                    display_name: name,
+                    reason: reason.to_string(),
+                });
+            }
+        }
+        Ok(out)
+    }
+
     /// 差出人アドレス一致のメールを一括で隔離/復帰する（大文字小文字は無視）。
     /// `value=true`: 受信箱にある同アドレスのメールを迷惑へ（is_junk=1）。
     /// `value=false`: 隔離済み（is_junk=1）の同アドレスを受信箱へ戻す。戻り値は更新件数。

@@ -155,6 +155,14 @@
     "thisMonth": "This month",
     "lastMonth": "Last month"
   },
+  "spamAlert": {
+    "title": "{{count}} sender(s) need review",
+    "banner": "{{count}} sender(s) are in your contacts/green list but marked as spam — this may be a mistake.",
+    "reasonContact": "Contact",
+    "reasonGreen": "Green",
+    "reasonContactGreen": "Contact & Green",
+    "forgive": "Unmark spam"
+  },
   "compose": {
     "new": "Compose",
     "reply": "Reply",

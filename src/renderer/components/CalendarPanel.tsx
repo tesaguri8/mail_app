@@ -5,6 +5,7 @@ import type { EventSummary } from '@bindings/EventSummary';
 import type { CalendarSummary } from '@bindings/CalendarSummary';
 import { calendarList, eventList } from '../services/calendar';
 import { expandEvents } from '../utils/recurrence';
+import { CALENDAR_SYNCED_EVENT } from '../hooks/useAutoSync';
 import {
   MiniMonth,
   AgendaPanel,
@@ -79,6 +80,16 @@ export function CalendarPanel({ initial }: { initial?: CalendarPanelInitial }) {
 
   useEffect(() => {
     reload();
+  }, [reload]);
+
+  // バックグラウンド自動同期が Google 側の変更を取り込んだら、一覧と予定を再読み込みする。
+  useEffect(() => {
+    const onSynced = () => {
+      calendarList().then(setCalendars).catch(() => undefined);
+      reload();
+    };
+    window.addEventListener(CALENDAR_SYNCED_EVENT, onSynced);
+    return () => window.removeEventListener(CALENDAR_SYNCED_EVENT, onSynced);
   }, [reload]);
 
   // パネルを開いたまま別の日付＋を押したとき（initial が差し替わる）に、その日時で開き直す。

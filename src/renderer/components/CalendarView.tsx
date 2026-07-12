@@ -42,6 +42,7 @@ import {
 import { expandEvents, presetToRule, ruleToPreset, RECUR_PRESETS, type RecurPreset } from '../utils/recurrence';
 import { isHoliday, holidayName } from '../utils/holidays';
 import { getDefaultCalendarId, setDefaultCalendarId } from '../config/prefs';
+import { CALENDAR_SYNCED_EVENT } from '../hooks/useAutoSync';
 import { Dropdown } from './Dropdown';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -329,6 +330,16 @@ export function CalendarView() {
     calendarList().then(setCalendars).catch(() => setCalendars([]));
   }, []);
   useEffect(loadCalendars, [loadCalendars]);
+
+  // バックグラウンド自動同期が Google 側の変更を取り込んだら、一覧と予定を再読み込みする。
+  useEffect(() => {
+    const onSynced = () => {
+      loadCalendars();
+      reload();
+    };
+    window.addEventListener(CALENDAR_SYNCED_EVENT, onSynced);
+    return () => window.removeEventListener(CALENDAR_SYNCED_EVENT, onSynced);
+  }, [loadCalendars, reload]);
   // カレンダーの表示切替・追加・削除の後は、カレンダー一覧と予定（表示フィルタ）を両方更新。
   const onCalendarsChanged = () => {
     loadCalendars();

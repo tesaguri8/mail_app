@@ -40,6 +40,8 @@ pub async fn sync_account(
     }
 
     // 2) 同期対象カレンダーごとに push → pull。
+    //    1 カレンダーの失敗で残り全カレンダーの同期を止めないよう、各カレンダーの
+    //    push/pull はエラーをログして次へ進む（push_calendar 内の per-event と同じ方針）。
     let synced = store
         .list_synced_google_calendars(account_id)
         .map_err(|e| e.to_string())?;
@@ -47,9 +49,13 @@ pub async fn sync_account(
     for (local_id, ext_id, sync_token, access_role) in synced {
         // 書き込み可能なカレンダーのみローカル変更を送信する。
         if matches!(access_role.as_str(), "owner" | "writer") {
-            push_calendar(store, &client, access_token, local_id, &ext_id, &mut result).await?;
+            if let Err(e) =
+                push_calendar(store, &client, access_token, local_id, &ext_id, &mut result).await
+            {
+                log::warn!("sync_account: push 失敗 cal {local_id} (ext {ext_id})（スキップ）: {e}");
+            }
         }
-        pull_calendar(
+        if let Err(e) = pull_calendar(
             store,
             &client,
             access_token,
@@ -58,7 +64,10 @@ pub async fn sync_account(
             sync_token.as_deref(),
             &mut result,
         )
-        .await?;
+        .await
+        {
+            log::warn!("sync_account: pull 失敗 cal {local_id} (ext {ext_id})（スキップ）: {e}");
+        }
     }
 
     store

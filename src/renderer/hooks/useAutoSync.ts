@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import { mailSync } from '../services/mail';
+import { gcalAccounts, gcalSync } from '../services/gcal';
 import { getAutoSyncInterval, PREFS_EVENT } from '../config/prefs';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 /** 自動同期が 1 巡完了したら発火する（一覧・件数の再読み込み合図）。 */
 export const MAIL_SYNCED_EVENT = 'rondine:mail-synced';
+
+/** 自動同期で Google カレンダーに変更を取り込んだら発火する（カレンダー表示の再読み込み合図）。 */
+export const CALENDAR_SYNCED_EVENT = 'rondine:calendar-synced';
 
 /**
  * 自動同期（docs 仕様: ホーム/メールボタン押下時＋ホーム・メールモード滞在中の定期同期）。
@@ -28,7 +32,6 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
   const syncNow = useCallback(() => {
     if (!isTauri || busy.current) return;
     const ids = idsKey ? idsKey.split(',').map(Number) : [];
-    if (ids.length === 0) return;
     busy.current = true;
     (async () => {
       let synced = false;
@@ -44,8 +47,25 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
           failed = true;
         }
       }
+      // Google カレンダーも同じ間隔で取り込む（メールの成否とは独立）。連携済みアカウントごとに
+      // 双方向同期し、Google 側の追加/更新/削除を取り込んだらカレンダー表示へ再読み込みを促す。
+      try {
+        let calChanged = false;
+        for (const g of await gcalAccounts()) {
+          try {
+            const r = await gcalSync(g.id);
+            if (r.pulled + r.deleted_in > 0) calChanged = true;
+          } catch {
+            // アカウント単位の失敗は無視して次へ。
+          }
+        }
+        if (calChanged) window.dispatchEvent(new Event(CALENDAR_SYNCED_EVENT));
+      } catch {
+        // 連携アカウント一覧の取得失敗は無視（未連携なら送受信するものは無い）。
+      }
       busy.current = false;
-      // 1件も成功せず全滅＝接続不可の可能性大 → しばらく自動再試行を止める（手動は可）。
+      // メールが1件も成功せず全滅＝接続不可の可能性大 → しばらく自動再試行を止める（手動は可）。
+      // カレンダーの成否はクールダウンの判定には含めない。
       cooldownUntil.current = failed && !synced ? Date.now() + AUTOSYNC_COOLDOWN_MS : 0;
       // 新着件数を載せて通知（購読側は新着ゼロなら一覧の再取得を省ける）。
       if (synced) window.dispatchEvent(new CustomEvent(MAIL_SYNCED_EVENT, { detail: { stored } }));

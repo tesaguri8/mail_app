@@ -252,6 +252,140 @@ MAX_ATTACHMENT_SIZE=25MB  # 添付上限
 
 開発に関する質問やサポートが必要な場合は、プロジェクトのIssueを作成してください。
 
+## コード修正
+
+コーディング・アーキテクチャは、Tauriらしい理想形を目指すこと。
+
+具体的には:
+
+- 非Tauri的な設計（プロセス分離を前提とした過剰なIPC設計、Web/Node 由来の旧来パス処理等）を持ち込まず、Tauriの作法（`#[tauri::command]` + `invoke`、`Emitter`/`listen`、`AppHandle`引き回し）に揃える
+- Rust側コマンドは薄く保ち、ロジックは`src-tauri/src/services/`に集約する（`commands.rs` にビジネスロジックを溜めない）
+- 「動けばよい」ではなく、責務分離・命名・型安全性を優先する（TypeScript側は`any`型を避け、境界型は `src/bindings/` の ts-rs 生成型を使う）
+- 同じ目的のコードが複数箇所に散らないようDRY原則を徹底する（**ただし将来のモバイル版との関係は例外**: 下記参照）
+
+### モバイル版（`mobile/`）の構造的方針（着手時の指針）
+
+> **現状 `mobile/` と `packages/`（`.gitkeep` のみ）は未作成・計画段階。** モバイル版の全体計画は [docs/CROSS_PLATFORM.md](docs/CROSS_PLATFORM.md) を参照。本節は**モバイル版に着手する時点での指針**であり、現時点のコードには対象が存在しない。
+
+Rondine のモバイル版は **Expo / React Native** で、デスクトップとは別アプリとして構築する予定である。技術スタック節では「TS ロジックを `packages/` で共有」を掲げているが、**着手時には次の Primadoc の教訓を踏まえて共有方式を再評価すること**:
+
+- Expo + React Native + npm workspaces を素朴に組み合わせると、root と mobile の React バージョン重複で起動時 TurboModule init が SIGABRT する
+- Metro の `extraNodeModules` / `blockList` による React 二重ロード抑止は綿密な回避策が必要で破綻しやすい
+- babel-preset-expo / Metro の hoisting が非対称になり Codegen の前提が崩れる
+
+このため Primadoc では最終的に **mobile/ を自己完結型 Expo プロジェクトとし、共有ロジックはワークスペース参照ではなく意図的に複製**する方針に落ち着いた。Rondine でモバイル版を立ち上げる際は、`packages/` によるワークスペース共有を採用するか、Primadoc 方式（自己完結型＋複製）を採るかを、上記リスクを踏まえて**最初に確定**させ、確定後は本節と技術スタック節の記述を実態に合わせて更新すること。
+
+**着手時の運用ルール（Primadoc 方式を採る場合の想定）:**
+
+- 共有ロジックを複製する場合は、複製元を編集したら対応する `mobile/` 側も**手動で同期**する（同期漏れを防ぐため対応表を README 化する）
+- mobile に `@rondine/*` 等のワークスペース import や `../../../../../src/...` 形式の相対パス参照を**追加しない**（コードレビューで弾く）
+- mobile 側の tsconfig / metro.config に monorepo 配線（`../packages/*`、`extraNodeModules`、`watchFolders` でリポジトリルートを指す等）を安易に**復活させない**
+
+### Rustコードの作法（厳格）
+
+Rust側コード（`src-tauri/`配下）は、以下を**例外なく**遵守すること。「動けばよい」コードは Rust では長期メンテナンス時に必ず破綻するため、最初から Rust らしく書く。
+
+**エラー処理:**
+
+- `unwrap()` / `expect()` を本番経路で使わない。テストコードと、論理的に絶対に失敗しないことが証明できる箇所のみ許容（`expect()`の場合はメッセージに理由を明記）
+- エラーは `thiserror` で**型付きエラー列挙型**として定義する。`String`エラーで握り潰さない
+- `?` 演算子でエラーを伝播させる。`match` で都度ハンドリングするのは境界・分岐が必要な場面のみ
+- `Result<T, String>` への変換は **`#[tauri::command]` 境界でのみ** 行う（フロントエンドに渡す最後の段階）。サービス層は型付きエラーのまま受け渡す
+- `panic!()` / `unreachable!()` / `todo!()` を残さない。残す場合は理由をコメントで明記
+
+**所有権・型:**
+
+- `.clone()` を安易に使わない。借用（`&T` / `&mut T`）で済むなら借用、所有権移動で済むなら move。clone は本当に必要な箇所のみ
+- `String` と `&str`、`Vec<T>` と `&[T]`、`PathBuf` と `&Path` を使い分ける。引数は基本 borrowed 型を取る
+- `Option`/`Result` を `if let` / `match` / コンビネータ（`map`/`and_then`/`ok_or`等）で扱う。`is_some()` → `unwrap()` の連鎖は禁止
+- 型エイリアスやnewtypeで意味を持たせる（例: `pub type Guid = String;` ではなく `pub struct Guid(String);`）
+
+**並行性:**
+
+- `Arc<Mutex<T>>` と `Arc<RwLock<T>>` を読み書きパターンで使い分ける（読み多数なら RwLock）
+- ロックのスコープは最小限に。`MutexGuard` を保持したまま `.await` しない（デッドロック原因）
+- `tokio::spawn` で投げたタスクの `JoinHandle` は適切に管理（fire-and-forget の場合はコメントで明示）
+- IMAP はブロッキング実装のため、同期処理は `spawn_blocking` で実行し、非同期ランタイムを塞がない
+
+**スタイル・構成:**
+
+- イテレータと関数型スタイルを優先（手書き `for` ループより `iter().map().filter().collect()`）
+- 命名規約: モジュール・関数・変数は `snake_case`、型・トレイト・列挙子は `UpperCamelCase`、定数は `SCREAMING_SNAKE_CASE`
+- モジュール構成は `mod.rs` ではなく**ファイル名一致**（Rust 2018+ 推奨形式: `services/imap_sync.rs` のように `services/<module>.rs` + `services/<module>/<sub>.rs`）
+- 1ファイル500行を超えたら責務分割を検討。1関数50行を超えたら抽出を検討（`commands.rs` は単一ファイルで肥大化しやすいので特に注意）
+
+**lint・警告:**
+
+- `cargo clippy --all-targets -- -D warnings` がゼロ警告で通ること
+- `#[allow(...)]` を使う場合は**直上に理由コメント必須**。`#[allow(dead_code)]` で未使用コードを温存しない（消すか、`#[cfg(test)]` 等で意味づけする）
+- `cargo fmt` 準拠（rustfmt のデフォルト設定）。ただし本リポジトリはローカル rustfmt でクリーンではないため、**クレート全体への `cargo fmt` は実行しない**（無関係な巨大差分が出る）。整形は編集した範囲に限定する
+
+**ドキュメンテーション:**
+
+- 公開関数（`pub fn`）には `///` doc コメントで「何をするか・引数・戻り値・エラー条件」を記載
+- `unsafe` ブロックは原則禁止。やむを得ず使う場合は `// SAFETY:` コメントで安全性の根拠を明記
+
+### 編集
+
+- 会話、コード内コメント記載は、日本語とする。
+
+### 新しいセッション作成時
+
+以下のドキュメントを熟読してから作業を行うこと（作業領域に応じて）
+
+- [docs/SYNC.md](docs/SYNC.md) / [docs/CALENDAR_SYNC.md](docs/CALENDAR_SYNC.md)（メール・カレンダー同期関連の作業時）
+- [docs/AI_FEATURES.md](docs/AI_FEATURES.md)（AI 機能関連の作業時）
+- [docs/THREADING.md](docs/THREADING.md)（スレッド再構築・会話ビュー関連の作業時）
+- [docs/SPAM.md](docs/SPAM.md) / [docs/GREEN_DOMAINS.md](docs/GREEN_DOMAINS.md)（迷惑メール判定関連の作業時）
+
+### 修正後
+
+- 開発中は、`npm run dev`（= `tauri dev`）で開発サーバーを起動しているので、ビルド確認は不要。`tauri dev` 実行中に `cargo check` / `cargo build` を回さない（`target` のロックを奪い合い、dev サーバーが停止・ハングする原因になる）。
+- ブランチのマージ作業は、ユーザーからの指示がある場合のみ行う。
+- `dev` ブランチにマージする前に、必ず、不要となったコードを調査し、整理を行う（モバイル版着手後に `mobile-dev` 相当のブランチを設けた場合も同様）。
+- ブランチのマージ時は、ブランチを削除せずに、残しながらマージしてください。
+
+### Git Worktree 運用ルール
+
+Tauri のビルド成果物（`target/`、`node_modules/`、Rust 依存解決）の再構築には時間がかかるため、複数ブランチでの並行作業には **git worktree** を用いる。**worktree 自体は削除せず、ブランチを切り替えながら使い回す**ことで、ビルドキャッシュを維持する。
+
+**worktree 構成:**
+
+| パス | 役割 | 許可するブランチ |
+|------|------|------------------|
+| `C:\Users\shingo\dev\rondine` | メイン worktree（dev 専用・マージ作業用） | `dev` のみ |
+| `C:\Users\shingo\dev\rondine-wt-1` | 作業用 worktree #1 | 作業ブランチ、または待機時は `wt-1` |
+| `C:\Users\shingo\dev\rondine-wt-2` | 作業用 worktree #2 | 作業ブランチ、または待機時は `wt-2` |
+
+**運用ルール:**
+
+1. **メイン worktree は dev 専用** — `rondine/` では **`dev` ブランチ以外をチェックアウトしない**。`dev` へのマージ作業は必ずこのメイン worktree で実施する。
+2. **作業ブランチは wt-1 / wt-2 worktree で展開** — `feature/xxx` 等の作業ブランチは `rondine-wt-1/` または `rondine-wt-2/` でチェックアウトして作業する。メイン worktree では作業ブランチをチェックアウトしない。
+3. **作業終了後は待機ブランチに戻す** — 作業ブランチがマージ済み等で不要になったら、各作業 worktree は対応する待機ブランチ（`wt-1` / `wt-2`）にチェックアウトを戻す。**worktree 自体は `git worktree remove` で削除しない**。
+4. **待機ブランチ（wt-1 / wt-2）は常に最新 dev と同期** — 次の作業着手をスムーズにするため、待機状態の `wt-1` / `wt-2` ブランチは最新の `dev` を取り込んで同期した状態を維持する（Tauri 依存解決の再利用率を高めるため）。
+5. **dev へのマージ手順:**
+   1. 作業 worktree（`rondine-wt-1/` または `rondine-wt-2/`）で作業ブランチを最新化・コミット
+   2. メイン worktree（`rondine/`）に移動し、`dev` ブランチであることを確認
+   3. メイン worktree 上で `git merge <作業ブランチ>` を実行（ブランチは削除せず残す — 「修正後」のルールに従う）
+
+**禁止事項:**
+
+- メイン worktree（`rondine/`）で `dev` 以外のブランチをチェックアウトすること
+- 作業 worktree（`rondine-wt-1/` / `rondine-wt-2/`）で `dev` ブランチをチェックアウトすること
+- worktree 自体を削除すること（Tauri 再ビルドコスト回避のため、必ず維持する）
+
+**現在の worktree 一覧の確認:**
+
+```bash
+git worktree list
+```
+
+### プロジェクト関連レポジトリ
+
+- Rondine アプリ（メイン worktree）："C:\Users\shingo\dev\rondine"
+- Rondine website："C:\Users\shingo\dev\www\sites\rondine-website"（現状プレースホルダ・未整備。整備後に frontend/backend 構成へ）
+- ローカルのユーザー設定フォルダー：TSG One 配下に Rondine 用は未作成。作成時は "C:\Users\shingo\Nextcloud\shingo-Cloud\tsg-one\rondine" を想定
+
 ---
 
 最終更新日: 2026年7月（Tauri 2 + Rust スタック）

@@ -265,9 +265,12 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
     insert_quotes(conn, id, &e.quotes)?;
     // 迷惑差出人に登録済みのアドレスからの新着（受信箱）は、受信時に自動で迷惑へ隔離する
     // （「このアドレスを迷惑にしたら今後の同アドレスも迷惑へ」。docs/SPAM.md）。
+    // ただし住所録・グリーン・本人検証などの信頼シグナルがあれば隔離しない（誤登録での取りこぼし防止）。
     if e.folder == "inbox" {
         if let Some(addr) = e.from_address.as_deref() {
-            if super::spam::is_spam_sender_conn(conn, addr)? {
+            if super::spam::is_spam_sender_conn(conn, addr)?
+                && !super::spam::is_allowlisted_sender_conn(conn, addr, e.verified_self)?
+            {
                 conn.execute("UPDATE emails SET is_junk = 1 WHERE id = ?1", params![id])?;
             }
         }

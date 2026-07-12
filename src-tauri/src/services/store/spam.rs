@@ -41,6 +41,49 @@ pub fn is_spam_sender_conn(conn: &Connection, address: &str) -> rusqlite::Result
     Ok(n > 0)
 }
 
+/// 差出人が「許可リスト」に該当するか（住所録に登録済み / グリーン認定ドメイン / 本人検証）。
+/// 該当すれば、迷惑差出人として登録済みでも受信時に自動隔離しない（誤登録・共有アドレスの
+/// 取り違え等での取りこぼしを防ぐ。信頼シグナルは迷惑差出人ブロックより優先。docs/SPAM.md）。
+pub fn is_allowlisted_sender_conn(
+    conn: &Connection,
+    address: &str,
+    verified_self: bool,
+) -> rusqlite::Result<bool> {
+    if verified_self {
+        return Ok(true);
+    }
+    let norm = normalize_sender_address(address);
+    if norm.is_empty() {
+        return Ok(false);
+    }
+    // 住所録に登録済みの差出人は信頼する。
+    let contact: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id \
+         WHERE lower(ce.value) = ?1 AND c.deleted_at IS NULL",
+        params![norm],
+        |r| r.get(0),
+    )?;
+    if contact > 0 {
+        return Ok(true);
+    }
+    // グリーン認定ドメインは信頼する（差出人ドメインが一致）。
+    if let Some(domain) = norm
+        .rsplit('@')
+        .next()
+        .filter(|d| !d.is_empty() && d.contains('.'))
+    {
+        let green: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM green_domains WHERE domain = ?1",
+            params![domain],
+            |r| r.get(0),
+        )?;
+        if green > 0 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// 迷惑判定・学習に使うメールの素性（保存済み emails 行から取り出す）。
 pub struct SpamFeatures {
     pub from_address: Option<String>,
@@ -426,5 +469,29 @@ mod tests {
             let conn = store.conn.lock().unwrap();
             assert!(!is_spam_sender_conn(&conn, "spam@bad.example").unwrap());
         }
+    }
+
+    #[test]
+    fn allowlisted_sender_contact_green_and_self() {
+        let store = Store::open_in_memory_for_test();
+        let conn = store.conn.lock().unwrap();
+        conn.execute("INSERT INTO contacts (id, display_name) VALUES (1, '野崎')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO contact_emails (contact_id, value) VALUES (1, 'nozapi333@icloud.com')",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO green_domains (domain) VALUES ('example.co.jp')", [])
+            .unwrap();
+
+        // 住所録に登録済みの差出人は許可（表示名つき・大文字でも一致）。
+        assert!(is_allowlisted_sender_conn(&conn, "野崎 <NOZAPI333@icloud.com>", false).unwrap());
+        // グリーン認定ドメインの差出人は許可。
+        assert!(is_allowlisted_sender_conn(&conn, "who@example.co.jp", false).unwrap());
+        // 本人検証は無条件で許可。
+        assert!(is_allowlisted_sender_conn(&conn, "anyone@nowhere.example", true).unwrap());
+        // どれにも該当しない差出人は非許可。
+        assert!(!is_allowlisted_sender_conn(&conn, "stranger@bad.example", false).unwrap());
     }
 }

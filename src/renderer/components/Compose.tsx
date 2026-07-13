@@ -111,6 +111,17 @@ function splitAddresses(s: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * 事前入力の宛先を「確定済み」として RecipientInput に渡すため末尾を ", " で止める。
+ * RecipientInput は「最後のカンマ以降＝編集中の下書き」とみなすので、カンマ止めにすると
+ * 事前入力が全件チップ表示になる（空はそのまま空）。送信/保存時は splitAddresses が末尾の
+ * 空要素を落とすため影響しない。
+ */
+function committed(list: string): string {
+  const s = list.trim();
+  return s ? `${s}, ` : '';
+}
+
 /** "名前 <addr>" / "addr" からメールアドレス部分だけを取り出す（小文字化はしない）。 */
 function extractEmail(token: string): string {
   const m = token.match(/<([^>]+)>/);
@@ -161,7 +172,7 @@ export function Compose({
   const init = useMemo(() => {
     if (target.mode === 'new') {
       return {
-        to: target.to ?? '',
+        to: committed(target.to ?? ''),
         cc: '',
         bcc: '',
         subject: '',
@@ -175,9 +186,9 @@ export function Compose({
       // ので、送信時に足す引用(quoted)は無し。返信下書きは In-Reply-To を、手入力 Bcc も復元する。
       const d = target.draft;
       return {
-        to: d.to,
-        cc: d.cc,
-        bcc: d.bcc,
+        to: committed(d.to),
+        cc: committed(d.cc),
+        bcc: committed(d.bcc),
         subject: d.subject,
         quoted: '',
         quotedHtml: null as string | null,
@@ -230,8 +241,8 @@ export function Compose({
           )
         : '';
     return {
-      to: replyTarget,
-      cc,
+      to: committed(replyTarget),
+      cc: committed(cc),
       bcc: '',
       subject: withPrefix(s.subject, 'Re'),
       quoted: `\n\n${attribution}\n${quote(body)}`,

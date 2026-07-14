@@ -42,6 +42,9 @@ import { AutoLinkText, HtmlText } from './HtmlText';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import type { CalendarPanelInitial } from './CalendarPanel';
 
+/** 全文展開時、本文カードの先頭を表示域の上端から少しだけ下げて置くための余白（px）。 */
+const EXPAND_TOP_GAP = 8;
+
 /** 選択テキストを引用文に整形する（各行の先頭に「> 」を付与。空行は「>」のみ）。 */
 const toQuoted = (text: string): string =>
   text
@@ -179,6 +182,19 @@ function Bubble({
     return () => {
       alive = false;
     };
+  }, [expanded, detail, m.id]);
+
+  // 全文を開いたら（本文カードが描画されたら）、その先頭から読めるよう、バブルをスクロール域の
+  // 上側へ寄せる（できるだけ上に。末尾付近では届く範囲まで＝scrollTop はブラウザが頭打ちにする）。
+  // 畳むときは親側の効果で位置を保つため、ここでは何もしない。
+  useLayoutEffect(() => {
+    if (!expanded || !detail) return;
+    const el = document.getElementById(`bubble-${m.id}`);
+    const container = el?.closest('[data-conversation-scroll]');
+    if (!el || !(container instanceof HTMLElement)) return;
+    const top =
+      el.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop;
+    container.scrollTop = Math.max(0, top - EXPAND_TOP_GAP);
   }, [expanded, detail, m.id]);
 
   // 折りたたみバブルのまま、添付アイコンから直接開く。クリック時に一覧を遅延取得し、
@@ -484,12 +500,46 @@ function Bubble({
               <span className="text-white/40">{t('mailbox.noBody')}</span>
             )}
 
-            {/* 操作行（フッター）: 引用トグル・添付・全文・メニュー */}
+            {/* 操作行（フッター）: 返信・転送・引用トグル・添付・全文・メニュー */}
             <div
               className={`mt-1 flex items-center gap-2 text-[10px] text-white/45 ${
                 out ? 'justify-end' : 'justify-start'
               }`}
             >
+              {/* 折りたたみバブルのまま返信・転送を押せるようにする（「…」メニューにも同じ操作あり）。 */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handlers.onReply('reply', m.id);
+                }}
+                title={t('compose.reply')}
+                aria-label={t('compose.reply')}
+                className="inline-flex items-center gap-0.5 hover:text-sky-300"
+              >
+                <Reply size={12} />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handlers.onReply('replyAll', m.id);
+                }}
+                title={t('compose.replyAll')}
+                aria-label={t('compose.replyAll')}
+                className="inline-flex items-center gap-0.5 hover:text-sky-300"
+              >
+                <ReplyAll size={12} />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handlers.onReply('forward', m.id);
+                }}
+                title={t('compose.forward')}
+                aria-label={t('compose.forward')}
+                className="inline-flex items-center gap-0.5 hover:text-sky-300"
+              >
+                <Forward size={12} />
+              </button>
               {!renderHtml && m.has_quotes && (
                 <button
                   onClick={(e) => {
@@ -741,10 +791,11 @@ export function Conversation({
   }, [expandedIds]);
 
   // 全文展開はスレッド内で 1 通だけ。別のバブルを開くと、開いていた方は自動で畳む
-  // （既に開いている同じバブルをもう一度押したら閉じる）。展開/折りたたみ時は基準バブルの
-  // 表示位置を控えておき、伸縮後も同じ位置に留める。
+  // （既に開いている同じバブルをもう一度押したら閉じる）。
+  // 畳むときは基準バブルの表示位置を控えて版面が飛ばないようにする。開くときは、その本文を
+  // 先頭から読めるよう、バブル側の効果でスクロール域の上側へ寄せるため、ここでは控えない。
   const toggleExpand = (id: number) => {
-    captureExpandAnchor(id);
+    if (expandedIds.has(id)) captureExpandAnchor(id);
     setExpandedIds((prev) => (prev.has(id) ? new Set() : new Set([id])));
   };
 
@@ -897,6 +948,7 @@ export function Conversation({
         )}
         <div
           ref={scrollRef}
+          data-conversation-scroll
           className="h-full space-y-3 overflow-y-auto px-4 py-4"
           onClick={(e) => {
             // 全文展開中に「バブル/カードの外＝余白」をクリックしたら畳んでバブルに戻す。

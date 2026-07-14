@@ -11,6 +11,7 @@ import type { DraftInput } from '@bindings/DraftInput';
 import type { DraftContent } from '@bindings/DraftContent';
 import type { RemoteImage } from '@bindings/RemoteImage';
 import type { RebuildPlan } from '@bindings/RebuildPlan';
+import type { HomeUnreadCounts } from '@bindings/HomeUnreadCounts';
 
 // Tauri v2 は camelCase の引数キーを snake_case の Rust 引数へ自動変換する。
 export const mailSync = (accountId: number) => invoke<SyncResult>('mail_sync', { accountId });
@@ -50,6 +51,9 @@ export const mailDraftDiscard = (id: number) => invoke<void>('mail_draft_discard
 // accountId が null なら全アカウント横断（「全て」表示）。offset でページング（無限スクロール用）。
 export const mailList = (accountId: number | null, folder: string, limit: number, offset = 0) =>
   invoke<MailSummary[]>('mail_list', { accountId: accountId ?? null, folder, limit, offset });
+
+// ホームのアカウント別バッジ用: inbox の未読数をカテゴリ別（全体/グリーン/住所録/お気に入り）に取得する。
+export const homeUnreadCounts = () => invoke<HomeUnreadCounts[]>('home_unread_counts');
 
 // 件名・差出人・本文の全文検索（FTS5）。指定アカウント/フォルダ内を絞り込む。
 // accountId が null なら全アカウント横断で検索。

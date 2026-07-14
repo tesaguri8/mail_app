@@ -10,7 +10,7 @@ const POSTAL_AUTOFORMAT_KEY = 'rondine.postalAutoformat';
 const AUTO_SYNC_ON_KEY = 'rondine.autoSyncOn';
 const AUTO_SYNC_SEC_KEY = 'rondine.autoSyncSec';
 const HOME_COUNT_SHOW_KEY = 'rondine.homeCountShow';
-const HOME_COUNT_MODE_KEY = 'rondine.homeCountMode';
+const HOME_COUNT_FILTER_KEY = 'rondine.homeCountFilter';
 const PHONE_AUTOFORMAT_KEY = 'rondine.phoneAutoformat';
 export const PREFS_EVENT = 'rondine:prefs';
 
@@ -128,15 +128,17 @@ export function setHomeCountShow(value: boolean): void {
   window.dispatchEvent(new Event(PREFS_EVENT));
 }
 
-/** ホームのバッジに出す件数の種類。'unread'=未読数 / 'total'=全数。既定: unread。 */
-export type HomeCountMode = 'unread' | 'total';
+/** ホームのバッジに出す未読数の対象カテゴリ。
+ *  'all'=全体 / 'green'=グリーン / 'known'=住所録 / 'vip'=お気に入り。既定: green。 */
+export type HomeCountFilter = 'all' | 'green' | 'known' | 'vip';
 
-export function getHomeCountMode(): HomeCountMode {
-  return localStorage.getItem(HOME_COUNT_MODE_KEY) === 'total' ? 'total' : 'unread';
+export function getHomeCountFilter(): HomeCountFilter {
+  const v = localStorage.getItem(HOME_COUNT_FILTER_KEY);
+  return v === 'all' || v === 'known' || v === 'vip' ? v : 'green';
 }
 
-export function setHomeCountMode(mode: HomeCountMode): void {
-  localStorage.setItem(HOME_COUNT_MODE_KEY, mode);
+export function setHomeCountFilter(value: HomeCountFilter): void {
+  localStorage.setItem(HOME_COUNT_FILTER_KEY, value);
   window.dispatchEvent(new Event(PREFS_EVENT));
 }
 

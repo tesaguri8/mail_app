@@ -197,6 +197,52 @@ impl Store {
         rows.collect()
     }
 
+    /// ホームのアカウント別バッジ用: inbox（is_junk=0）の未読メールを、対象カテゴリ別に数える。
+    /// all=全体 / known=住所録一致 / vip=お気に入り一致 / green=住所録本人 または ドメインが
+    /// グリーン集合（手動グリーン ∪ 住所録由来ドメイン − フリーメール − 警告）に属する。
+    /// read_conn は query_only（書き込み不可）のため、グリーン集合はパラメータ化した IN リスト
+    /// でドメイン一致を判定する（一時表は使わない）。
+    pub fn home_unread_counts(&self) -> rusqlite::Result<Vec<crate::models::HomeUnreadCounts>> {
+        let conn = self.read_conn.lock().unwrap();
+        let green: Vec<String> = super::greendomain::green_domain_set(&conn)?
+            .into_iter()
+            .collect();
+        // 住所録一致（known）／お気に入り一致（vip）の EXISTS 断片（emails.rs の known_vip_cols と同義）。
+        let known = "(EXISTS(SELECT 1 FROM contacts c WHERE c.deleted_at IS NULL AND lower(c.email)=lower(e.from_address)) \
+                      OR EXISTS(SELECT 1 FROM contact_emails ce JOIN contacts c3 ON c3.id=ce.contact_id \
+                                WHERE c3.deleted_at IS NULL AND lower(ce.value)=lower(e.from_address)))";
+        let vip = "(EXISTS(SELECT 1 FROM contacts c WHERE c.deleted_at IS NULL AND c.is_favorite=1 AND lower(c.email)=lower(e.from_address)) \
+                    OR EXISTS(SELECT 1 FROM contact_emails ce JOIN contacts c2 ON c2.id=ce.contact_id \
+                              WHERE c2.deleted_at IS NULL AND c2.is_favorite=1 AND lower(ce.value)=lower(e.from_address)))";
+        // グリーンドメイン一致: 差出人ドメインが集合に含まれるか（空集合なら住所録本人のみ green）。
+        let green_domain = if green.is_empty() {
+            "1=0".to_string()
+        } else {
+            let ph = vec!["?"; green.len()].join(",");
+            format!("lower(substr(e.from_address, instr(e.from_address,'@')+1)) IN ({ph})")
+        };
+        let sql = format!(
+            "SELECT e.account_id, COUNT(*), \
+                    SUM(CASE WHEN {known} OR {green_domain} THEN 1 ELSE 0 END), \
+                    SUM(CASE WHEN {known} THEN 1 ELSE 0 END), \
+                    SUM(CASE WHEN {vip} THEN 1 ELSE 0 END) \
+             FROM emails e \
+             WHERE COALESCE(e.folder,'inbox')='inbox' AND e.is_junk=0 AND e.is_read=0 \
+             GROUP BY e.account_id"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(green.iter()), |r| {
+            Ok(crate::models::HomeUnreadCounts {
+                account_id: r.get::<_, i64>(0)? as i32,
+                all: r.get::<_, i64>(1)? as i32,
+                green: r.get::<_, i64>(2)? as i32,
+                known: r.get::<_, i64>(3)? as i32,
+                vip: r.get::<_, i64>(4)? as i32,
+            })
+        })?;
+        rows.collect()
+    }
+
     /// アカウントの並び順を設定する（渡された ID 順に sort_order を 0,1,2... で振る）。
     pub fn reorder_accounts(&self, ids: &[i64]) -> rusqlite::Result<()> {
         let mut conn = self.conn.lock().unwrap();

@@ -28,11 +28,11 @@ import {
   setAutoSyncSeconds,
   getHomeCountShow,
   setHomeCountShow,
-  getHomeCountMode,
-  setHomeCountMode,
+  getHomeCountFilter,
+  setHomeCountFilter,
   getPhoneAutoformat,
   setPhoneAutoformat,
-  type HomeCountMode,
+  type HomeCountFilter,
 } from '../config/prefs';
 import { countryOptions } from '../utils/phone';
 import { spamSettingsGet, spamSettingsSet } from '../services/spam';
@@ -212,9 +212,9 @@ function DisplaySettings() {
   // 自動同期: オン/オフのトグル＋間隔（秒・最短10）。入力は文字列で保持し確定時に保存。
   const [syncOn, setSyncOn] = useState(getAutoSyncOn());
   const [syncSec, setSyncSec] = useState(String(getAutoSyncSeconds()));
-  // ホームのバッジ: 表示トグル＋種類（未読数/全数）。
+  // ホームのバッジ: 表示トグル＋対象カテゴリ（全体/グリーン/住所録/お気に入り）の未読数。
   const [countShow, setCountShow] = useState(getHomeCountShow());
-  const [countMode, setCountMode] = useState<HomeCountMode>(getHomeCountMode());
+  const [countFilter, setCountFilter] = useState<HomeCountFilter>(getHomeCountFilter());
   const [phoneFmt, setPhoneFmt] = useState(getPhoneAutoformat());
   const countries = useMemo(() => countryOptions(i18n.language), [i18n.language]);
 
@@ -269,19 +269,25 @@ function DisplaySettings() {
         />
         {countShow && (
           <select
-            value={countMode}
+            value={countFilter}
             onChange={(e) => {
-              const m = e.target.value as HomeCountMode;
-              setCountMode(m);
-              setHomeCountMode(m);
+              const f = e.target.value as HomeCountFilter;
+              setCountFilter(f);
+              setHomeCountFilter(f);
             }}
             className="mt-2 w-48 rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
           >
-            <option value="unread" className="text-black">
-              {t('settings.homeCountUnread')}
+            <option value="all" className="text-black">
+              {t('settings.homeCountAll')}
             </option>
-            <option value="total" className="text-black">
-              {t('settings.homeCountTotal')}
+            <option value="green" className="text-black">
+              {t('settings.homeCountGreen')}
+            </option>
+            <option value="known" className="text-black">
+              {t('settings.homeCountKnown')}
+            </option>
+            <option value="vip" className="text-black">
+              {t('settings.homeCountVip')}
             </option>
           </select>
         )}

@@ -73,6 +73,17 @@ pub struct AccountSummary {
     pub server_total_count: i32,
 }
 
+/// ホームのアカウント別バッジ用: inbox の未読数をカテゴリ別（all/green/known/vip）に数えたもの。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct HomeUnreadCounts {
+    pub account_id: i32,
+    pub all: i32,
+    pub green: i32,
+    pub known: i32,
+    pub vip: i32,
+}
+
 /// 署名（差出人ごとに使い回せる本文）。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

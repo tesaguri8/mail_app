@@ -51,6 +51,7 @@ pub fn run() {
             commands::account_autoconfig,
             commands::account_add,
             commands::account_list,
+            commands::home_unread_counts,
             commands::server_account_list,
             commands::account_test_connection,
             commands::account_test_login,

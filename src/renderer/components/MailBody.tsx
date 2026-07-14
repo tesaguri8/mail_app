@@ -880,7 +880,7 @@ export function MailBody({
                 aria-label={t('thread.collapse')}
                 className="flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80"
               >
-                <ChevronDown size={16} className="rotate-180" />
+                <X size={16} />
               </button>
             )}
             {note && <span className="ml-1 text-[10px] text-white/45">{note}</span>}

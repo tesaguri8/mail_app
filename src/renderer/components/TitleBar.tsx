@@ -75,6 +75,8 @@ export function TitleBar({
     >
       <span data-tauri-drag-region className="text-sm font-semibold tracking-wide">
         {APP.productName}
+        {/* 開発モード（tauri dev / vite dev）では ( Dev ) を併記して本番と区別する。 */}
+        {import.meta.env.DEV && ' ( Dev )'}
       </span>
       <div className="flex items-center gap-1">
         <button

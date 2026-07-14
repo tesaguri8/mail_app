@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailSummary } from '@bindings/MailSummary';
-import { mailList } from '../services/mail';
-import { getHomeCountMode, getHomeCountShow, PREFS_EVENT } from '../config/prefs';
+import type { HomeUnreadCounts } from '@bindings/HomeUnreadCounts';
+import { mailList, homeUnreadCounts } from '../services/mail';
+import { getHomeCountFilter, getHomeCountShow, PREFS_EVENT } from '../config/prefs';
 import { MAIL_FILTERS, matchesFilters } from './mailFilters';
 
 /**
@@ -29,17 +30,34 @@ export function AccountsOverview({
       else next.add(key);
       return next;
     });
-  // バッジの件数表示（表示トグル＋未読数/全数。設定で変更可）。
+  // バッジの件数表示（表示トグル＋対象カテゴリ。設定で変更可）。カテゴリ別の未読数はバック
+  // エンドから取得し、選択カテゴリの値を出す（全体/グリーン/住所録/お気に入り）。
   const [countShow, setCountShow] = useState(getHomeCountShow());
-  const [countMode, setCountMode] = useState(getHomeCountMode());
+  const [countFilter, setCountFilter] = useState(getHomeCountFilter());
   useEffect(() => {
     const onPrefs = () => {
       setCountShow(getHomeCountShow());
-      setCountMode(getHomeCountMode());
+      setCountFilter(getHomeCountFilter());
     };
     window.addEventListener(PREFS_EVENT, onPrefs);
     return () => window.removeEventListener(PREFS_EVENT, onPrefs);
   }, []);
+
+  // アカウント別・カテゴリ別の未読数（account_id → 件数）。アカウント一覧が変わるたび取り直す
+  // （同期・既読化で親が accounts を更新したら最新化される）。
+  const [counts, setCounts] = useState<Record<number, HomeUnreadCounts>>({});
+  useEffect(() => {
+    let alive = true;
+    homeUnreadCounts()
+      .then((rows) => {
+        if (!alive) return;
+        setCounts(Object.fromEntries(rows.map((r) => [r.account_id, r])));
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [accounts]);
 
   const toggle = (id: number) => {
     if (expanded === id) {
@@ -76,7 +94,7 @@ export function AccountsOverview({
             <span className="truncate">{a.email}</span>
             {countShow && (
               <span className="shrink-0 tabular-nums">
-                {countMode === 'total' ? a.total_count : a.unread_count}
+                {counts[a.id]?.[countFilter] ?? (countFilter === 'all' ? a.unread_count : 0)}
               </span>
             )}
           </button>

@@ -3,7 +3,7 @@ use crate::models::{
     AttendeeInput, CalendarInput, CalendarSummary, ContactGroupSummary, ContactInput, ContactMatch,
     ContactSummary, DataLocation, DbInfo, DraftContent, DraftInput, DuplicateGroup, EventAttendee,
     EventInput, EventSummary, GcalCredentialsStatus, GcalSyncResult, GoogleAccount, GreenDomainEntry,
-    IcsImportReport, ImportReport, MailDetail,
+    HomeUnreadCounts, IcsImportReport, ImportReport, MailDetail,
     MailSummary, OrgDuplicateGroup, OrganizationDetail, OrganizationSummary, RebuildAction,
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSenderConflict, SpamSettings, SpamVerdict,
@@ -194,6 +194,12 @@ pub fn account_add(
 #[tauri::command]
 pub fn account_list(store: State<Store>) -> Result<Vec<AccountSummary>, String> {
     store.list_accounts().map_err(|e| e.to_string())
+}
+
+/// ホームのアカウント別バッジ用: inbox の未読数をカテゴリ別（全体/グリーン/住所録/お気に入り）に返す。
+#[tauri::command]
+pub fn home_unread_counts(store: State<Store>) -> Result<Vec<HomeUnreadCounts>, String> {
+    store.home_unread_counts().map_err(|e| e.to_string())
 }
 
 /// 登録済みのメールサーバーアカウント設定一覧（再利用の選択肢）。

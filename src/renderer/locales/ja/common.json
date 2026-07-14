@@ -6,7 +6,13 @@
     "welcome": "ようこそ",
     "unread": "未読メール",
     "today": "今日の新着",
-    "placeholder": "ここに概要ダッシュボードが表示されます"
+    "placeholder": "ここに概要ダッシュボードが表示されます",
+    "scheduleTitle": "本日の日程",
+    "range_today": "本日",
+    "range_2": "2日",
+    "range_3": "3日",
+    "range_7": "7日",
+    "tomorrow": "明日"
   },
   "titlebar": {
     "alwaysOnTop": "最前面に固定",

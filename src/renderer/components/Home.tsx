@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import { AccountsOverview } from './AccountsOverview';
+import { HomeSchedule } from './HomeSchedule';
 
 /** 時間帯に応じたあいさつキー（将来は各国の今日のメッセージ等に拡張）。 */
 function greetingKey(hour: number): string {
@@ -26,9 +27,11 @@ function useClock() {
 export function Home({
   accounts,
   onOpenMail,
+  onOpenCalendar,
 }: {
   accounts: AccountSummary[];
   onOpenMail: (accountId: number) => void;
+  onOpenCalendar?: () => void;
 }) {
   const { t } = useTranslation();
   const now = useClock();
@@ -50,9 +53,12 @@ export function Home({
         <p className="mt-8 text-lg text-white/85 drop-shadow">{t(greetingKey(now.getHours()))}</p>
       </div>
 
-      {/* 右: 最新メール（ゴースト）。展開時はバー間いっぱいに伸びる */}
-      <div className="flex min-h-0 flex-col py-6">
-        <AccountsOverview accounts={accounts} onOpenMail={onOpenMail} />
+      {/* 右: 最新メール（ゴースト）＋本日の日程。メールは展開時にバー間いっぱいに伸びる */}
+      <div className="flex min-h-0 flex-col gap-4 py-6">
+        <div className="flex min-h-0 flex-1 flex-col">
+          <AccountsOverview accounts={accounts} onOpenMail={onOpenMail} />
+        </div>
+        <HomeSchedule onOpenCalendar={onOpenCalendar} />
       </div>
     </div>
   );

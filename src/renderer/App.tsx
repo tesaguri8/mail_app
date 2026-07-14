@@ -135,7 +135,13 @@ export default function App() {
         <TitleBar onNavigate={navigate} onCycleBackground={cycleBackground} />
 
         <main className="min-h-0 flex-1 overflow-hidden">
-          {view === 'home' && <Home accounts={accounts} onOpenMail={openMail} />}
+          {view === 'home' && (
+            <Home
+              accounts={accounts}
+              onOpenMail={openMail}
+              onOpenCalendar={() => navigate('calendar')}
+            />
+          )}
           {view === 'mail' && (
             <MailboxView
               accounts={accounts}

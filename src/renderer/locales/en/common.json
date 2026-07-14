@@ -6,7 +6,13 @@
     "welcome": "Welcome",
     "unread": "Unread",
     "today": "New today",
-    "placeholder": "Your overview dashboard appears here"
+    "placeholder": "Your overview dashboard appears here",
+    "scheduleTitle": "Today's schedule",
+    "range_today": "Today",
+    "range_2": "2 days",
+    "range_3": "3 days",
+    "range_7": "7 days",
+    "tomorrow": "Tomorrow"
   },
   "titlebar": {
     "alwaysOnTop": "Always on top",

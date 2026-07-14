@@ -2131,7 +2131,8 @@ pub fn mail_get(store: State<Store>, id: i64) -> Result<MailDetail, String> {
         .get_email(id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "メールが見つかりません".to_string())?;
-    let _ = store.mark_read(id);
+    // 開いた時点では既読にしない。既読化はフロントが「アクティブが外れた」タイミングで
+    // mail_set_read で行う（読書中は未読のまま＝未読フィルタから消えない）。
     Ok(detail)
 }
 

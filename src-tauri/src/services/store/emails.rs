@@ -1425,13 +1425,6 @@ impl Store {
         Ok(Some(chain))
     }
 
-    /// 既読にする。
-    pub fn mark_read(&self, id: i64) -> rusqlite::Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute("UPDATE emails SET is_read = 1 WHERE id = ?1", params![id])?;
-        Ok(())
-    }
-
     /// 旧 TEXT 列に残る body_html を一度だけ zstd 圧縮して body_html_z へ移す。
     /// 起動時に呼ぶ。処理済み（body_html IS NULL）の行は対象外なので2回目以降は no-op。
     /// 圧縮した件数を返す。

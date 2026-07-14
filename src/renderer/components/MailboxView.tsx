@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   CalendarPlus,
@@ -638,6 +638,27 @@ export function MailboxView({
     setSearchResults(fn);
   };
 
+  // 「アクティブ（開いている未読スレッド）」は、そこから離れるまで未読のまま保つ。別スレッドを
+  // 開く/閉じる/画面を離れるときに flushActiveRead() で既読化する（読書中は未読フィルタから
+  // 消えない）。手動で既読/未読を切り替えたらこの予約は取り消す（下の onSetRead / actRead）。
+  const activeReadRef = useRef<{ rowId: number; ids: number[] } | null>(null);
+  const flushActiveRead = useCallback(() => {
+    const t = activeReadRef.current;
+    if (!t) return;
+    activeReadRef.current = null;
+    const mark = (prev: ThreadListItem[]) =>
+      prev.map((m) => (m.id === t.rowId ? { ...m, is_read: true, unread_count: 0 } : m));
+    setMails(mark);
+    setSearchResults(mark);
+    mailSetRead(t.ids, true).catch(() => undefined);
+  }, []);
+  // スレッドを閉じた（opened=null）ら既読化。別スレッドへの切替は openMail 側で処理する。
+  useEffect(() => {
+    if (opened == null) flushActiveRead();
+  }, [opened, flushActiveRead]);
+  // 画面を離れる（アンマウント）ときも、開いていた未読スレッドを既読化する。
+  useEffect(() => () => flushActiveRead(), [flushActiveRead]);
+
   // 自動同期の完了で一覧を再読み込み（手動同期中は onSync 側が再読込するのでスキップ）。
   useEffect(() => {
     const onSynced = (e: Event) => {
@@ -776,16 +797,16 @@ export function MailboxView({
   const openMail = async (id: number) => {
     try {
       const d = await mailGet(id);
-      setOpened(d);
-      // スレッドを開いたら、そのスレッド（フォルダ内）全メールを既読にする（会話を見た＝既読）。
-      const row = mails.find((m) => m.id === id) ?? searchResults.find((m) => m.id === id);
-      const ids = row && row.email_ids.length ? row.email_ids : [id];
-      updateLists((prev) =>
-        prev.map((m) => (m.id === id ? { ...m, is_read: true, unread_count: 0 } : m))
-      );
-      if (ids.length > 1) {
-        mailSetRead(ids, true).catch(() => undefined);
+      // 別スレッドへ移るときだけ、前にアクティブだった未読スレッドを既読化する。
+      // 開いたスレッドはアクティブな間は未読のまま（会話を見ている＝まだ読書中）。抜けたとき
+      // （別を開く／閉じる／画面を離れる）に既読化するよう予約する。
+      if (activeReadRef.current?.rowId !== id) {
+        flushActiveRead();
+        const row = mails.find((m) => m.id === id) ?? searchResults.find((m) => m.id === id);
+        const ids = row && row.email_ids.length ? row.email_ids : [id];
+        activeReadRef.current = row && !row.is_read ? { rowId: id, ids } : null;
       }
+      setOpened(d);
     } catch {
       /* noop */
     }
@@ -881,6 +902,10 @@ export function MailboxView({
   const actRead = async (read: boolean) => {
     const wasAll = allMatching;
     const ids = emailIdsFor(targetIds()); // reset より前に対象 id を確定させる
+    // 手動の既読/未読切替がアクティブ予約と重なるなら、離脱時の自動既読を取り消す（手動を優先）。
+    if (activeReadRef.current && (wasAll || selectedIds.has(activeReadRef.current.rowId))) {
+      activeReadRef.current = null;
+    }
     patchMails(selectedIds, { is_read: read, unread_count: read ? 0 : 1 });
     if (wasAll) resetSelection();
     try {
@@ -1592,6 +1617,10 @@ export function MailboxView({
     // 単一メールの既読/未読。所属スレッド行の未読数もその場で増減する
     // （行の email_ids は現フォルダ内の id 群＝未読数の母集合と一致）。
     onSetRead: async (id, read) => {
+      // 会話内で手動に既読/未読を切り替えたら、離脱時の自動既読の予約を取り消す（手動を優先）。
+      if (activeReadRef.current && activeReadRef.current.ids.includes(id)) {
+        activeReadRef.current = null;
+      }
       updateLists((prev) =>
         prev.map((row) => {
           if (!row.email_ids.includes(id)) return row;

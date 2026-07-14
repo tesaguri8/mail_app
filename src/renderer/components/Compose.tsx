@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
-import { Paperclip, Save, Send, X } from 'lucide-react';
+import { Copy, Paperclip, Quote, Save, Scissors, Send, X } from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { DraftContent } from '@bindings/DraftContent';
@@ -19,6 +19,8 @@ import { signatureList } from '../services/signatures';
 import { getFlyAnimation } from '../config/prefs';
 import { playFlySound } from '../utils/flySound';
 import { RecipientInput } from './RecipientInput';
+import { ContextMenu } from './ContextMenu';
+import { copyText } from '../utils/clipboard';
 import { FlySwallow, type FlySwallowHandle } from './FlySwallow';
 import swallowUrl from '../assets/swallow.png';
 
@@ -281,6 +283,16 @@ export function Compose({
   // 下書き保存に使う「プレーン全文」＝編集した本文（＋署名）＋プレーン引用。
   const composedBody = useCallback(() => body + quotedRef.current, [body]);
 
+  // 本文テキストエリアと、選択テキストの右クリックメニュー（引用文にする/コピー/切り取り）。
+  // 選択があるときだけネイティブメニューを差し替え、無いときは貼り付け等のネイティブを残す。
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const [bodyMenu, setBodyMenu] = useState<{
+    x: number;
+    y: number;
+    start: number;
+    end: number;
+  } | null>(null);
+
   // 署名（差出人ごとに使い回せる本文）。一覧を読み込み、ドロップダウンで切り替える。
   // 既定はアカウントの signature_id。切替時は本文中の署名ブロックだけを置換する。
   const [signatures, setSignatures] = useState<SignatureSummary[]>([]);
@@ -342,6 +354,34 @@ export function Compose({
       dirtyRef.current = true;
       setDirty(true);
     }
+  };
+
+  // 選択範囲を引用（各行 "> "）に置き換え、置き換えた範囲を選択し直してフォーカスを戻す。
+  const quoteSelection = (start: number, end: number) => {
+    const src = bodyRef.current?.value ?? body;
+    const q = quote(src.slice(start, end));
+    setBody(src.slice(0, start) + q + src.slice(end));
+    markDirty();
+    requestAnimationFrame(() => {
+      const ta = bodyRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(start, start + q.length);
+    });
+  };
+
+  // 選択範囲を切り取る（クリップボードへコピーしてから本文から除く）。
+  const cutSelection = (start: number, end: number) => {
+    const src = bodyRef.current?.value ?? body;
+    void copyText(src.slice(start, end));
+    setBody(src.slice(0, start) + src.slice(end));
+    markDirty();
+    requestAnimationFrame(() => {
+      const ta = bodyRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(start, start);
+    });
   };
 
   // 送信中フラグ（ref）。送信直前に立て、保留中の自動保存が送信後に下書きを作らないようにする。
@@ -723,13 +763,25 @@ export function Compose({
           </div>
         )}
 
-        {/* 本文（引用は編集欄に入れず、送信時に付ける）。ペインの残り高さいっぱいに広げる。 */}
+        {/* 本文（引用は編集欄に入れず、送信時に付ける）。ペインの残り高さいっぱいに広げる。
+            文字選択中の右クリックは「引用文にする」等の小メニューに差し替える（選択が無ければ
+            貼り付け等のネイティブメニューを残す）。 */}
         <textarea
+          ref={bodyRef}
           className="min-h-[10rem] w-full flex-1 resize-none rounded-md bg-white/10 px-3 py-2 text-sm leading-relaxed outline-none placeholder:text-white/30 focus:bg-white/15"
           value={body}
           onChange={(e) => {
             setBody(e.target.value);
             markDirty();
+          }}
+          onContextMenu={(e) => {
+            const ta = e.currentTarget;
+            const start = ta.selectionStart;
+            const end = ta.selectionEnd;
+            if (end > start) {
+              e.preventDefault();
+              setBodyMenu({ x: e.clientX, y: e.clientY, start, end });
+            }
           }}
           placeholder={t('compose.bodyPlaceholder')}
         />
@@ -799,6 +851,35 @@ export function Compose({
       )}
 
       {flyOn && <FlySwallow ref={flyRef} />}
+
+      {bodyMenu && (
+        <ContextMenu
+          x={bodyMenu.x}
+          y={bodyMenu.y}
+          items={[
+            {
+              key: 'quote',
+              label: t('compose.makeQuote'),
+              Icon: Quote,
+              onClick: () => quoteSelection(bodyMenu.start, bodyMenu.end),
+            },
+            {
+              key: 'copy',
+              label: t('ctx.copy'),
+              Icon: Copy,
+              onClick: () =>
+                void copyText((bodyRef.current?.value ?? body).slice(bodyMenu.start, bodyMenu.end)),
+            },
+            {
+              key: 'cut',
+              label: t('ctx.cut'),
+              Icon: Scissors,
+              onClick: () => cutSelection(bodyMenu.start, bodyMenu.end),
+            },
+          ]}
+          onClose={() => setBodyMenu(null)}
+        />
+      )}
     </div>
   );
 }

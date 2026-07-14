@@ -206,11 +206,15 @@
     "unsavedDiscard": "Discard",
     "unsavedCancel": "Keep editing",
     "quoteAppendNote": "The original message on the right will be quoted below your text when sent.",
+    "makeQuote": "Make into quote",
     "draft": "Edit draft"
   },
   "ctx": {
     "searchSender": "Search this sender's mail",
     "searchRecipient": "Search this recipient's mail",
+    "copy": "Copy",
+    "copyQuote": "Copy as quote",
+    "cut": "Cut",
     "markRead": "Mark as read",
     "markUnread": "Mark as unread",
     "star": "Add to favorites",
@@ -593,6 +597,7 @@
     "selectMailCheckbox": "Select this email",
     "noBody": "No body",
     "attachments": "Attachments",
+    "openAttachment": "Open attachment",
     "attachmentDownload": "Download",
     "attachmentOpen": "Open",
     "attachmentPreview": "Preview",

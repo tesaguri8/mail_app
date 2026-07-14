@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   BadgeCheck,
   Check,
   ChevronDown,
   ChevronUp,
+  Copy,
   Forward,
   Gem,
   LeafyGreen,
@@ -13,6 +14,7 @@ import {
   MoreHorizontal,
   Paperclip,
   Pencil,
+  Quote,
   Reply,
   ReplyAll,
   Scissors,
@@ -28,15 +30,26 @@ import type { ThreadView } from '@bindings/ThreadView';
 import type { ThreadMessage } from '@bindings/ThreadMessage';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { TagSummary } from '@bindings/TagSummary';
-import { mailGet } from '../services/mail';
+import type { AttachmentSummary } from '@bindings/AttachmentSummary';
+import { mailGet, mailAttachments, attachmentOpen } from '../services/mail';
 import { greenDomainAdd, greenDomainWarn } from '../services/green';
 import { threadRename, threadSplit, threadView } from '../services/threads';
 import { parseAddress } from '../utils/address';
+import { copyText } from '../utils/clipboard';
 import { getBubbleHtml, PREFS_EVENT } from '../config/prefs';
 import { MailBody, makeRenderDate } from './MailBody';
 import { AutoLinkText, HtmlText } from './HtmlText';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import type { CalendarPanelInitial } from './CalendarPanel';
+
+/** 選択テキストを引用文に整形する（各行の先頭に「> 」を付与。空行は「>」のみ）。 */
+const toQuoted = (text: string): string =>
+  text
+    .replace(/\r\n?/g, '\n')
+    .replace(/\s+$/, '')
+    .split('\n')
+    .map((line) => (line.length > 0 ? `> ${line}` : '>'))
+    .join('\n');
 
 /** 端末ローカルの今日（'YYYY-MM-DD'）。ヘッダの「カレンダーに追加」の既定日に使う。 */
 const todayLocalDay = (): string => {
@@ -118,6 +131,8 @@ function Bubble({
   const out = m.direction === 'out';
   const [showQuotes, setShowQuotes] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // 文字選択中の右クリックで出す「コピー／引用としてコピー」メニュー（選択テキストを保持）。
+  const [selMenu, setSelMenu] = useState<{ x: number; y: number; text: string } | null>(null);
   // スター・既読はメッセージ単位の真値を初期値に、トグルを即時反映する。
   const [starred, setStarred] = useState(m.is_starred);
   useEffect(() => setStarred(m.is_starred), [m.id, m.is_starred]);
@@ -165,6 +180,33 @@ function Bubble({
       alive = false;
     };
   }, [expanded, detail, m.id]);
+
+  // 折りたたみバブルのまま、添付アイコンから直接開く。クリック時に一覧を遅延取得し、
+  // 1 件ならそのまま OS の関連アプリで開き、複数ならファイル名の小メニューを出す
+  // （未取得の添付は Rust 側が取得してから開く）。
+  const [atts, setAtts] = useState<AttachmentSummary[] | null>(null);
+  const [attMenu, setAttMenu] = useState<{ x: number; y: number } | null>(null);
+  const [attBusy, setAttBusy] = useState(false);
+  const openAttachments = async (clientX: number, clientY: number) => {
+    setAttBusy(true);
+    try {
+      let list = atts;
+      if (!list) {
+        list = (await mailAttachments(m.id)).filter((a) => a.kind !== 'inline');
+        setAtts(list);
+      }
+      if (list.length === 0) return;
+      if (list.length === 1) {
+        await attachmentOpen(list[0].id);
+        return;
+      }
+      setAttMenu({ x: clientX, y: clientY });
+    } catch {
+      /* noop（開けないときは無反応。全文を展開すれば MailBody で詳細に扱える） */
+    } finally {
+      setAttBusy(false);
+    }
+  };
 
   const clean = (m.clean_body ?? '').trim();
   const full = (m.body_plain ?? '').trim();
@@ -269,8 +311,13 @@ function Bubble({
         data-msg-content
         className={`group/bubble min-w-0 ${expanded ? 'w-full' : 'max-w-[82%]'}`}
         onContextMenu={(e) => {
-          // 文字選択中はコピー等のネイティブメニューを優先する。
-          if (window.getSelection()?.toString()) return;
+          // 文字選択中は「コピー／引用としてコピー」の独自メニューを出す（ネイティブの差し替え）。
+          const sel = window.getSelection()?.toString() ?? '';
+          if (sel.trim().length > 0) {
+            e.preventDefault();
+            setSelMenu({ x: e.clientX, y: e.clientY, text: sel });
+            return;
+          }
           e.preventDefault();
           setMenu({ x: e.clientX, y: e.clientY });
         }}
@@ -455,9 +502,18 @@ function Bubble({
                 </button>
               )}
               {m.has_attachments && (
-                <span className="inline-flex items-center gap-0.5">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void openAttachments(e.clientX, e.clientY);
+                  }}
+                  disabled={attBusy}
+                  title={t('mailbox.openAttachment')}
+                  aria-label={t('mailbox.openAttachment')}
+                  className="inline-flex items-center gap-0.5 hover:text-sky-300 disabled:opacity-50"
+                >
                   <Paperclip size={11} />
-                </span>
+                </button>
               )}
               <button
                 onClick={(e) => {
@@ -488,6 +544,43 @@ function Bubble({
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
       )}
+
+      {selMenu && (
+        <ContextMenu
+          x={selMenu.x}
+          y={selMenu.y}
+          items={[
+            {
+              key: 'copy',
+              label: t('ctx.copy'),
+              Icon: Copy,
+              onClick: () => void copyText(selMenu.text),
+            },
+            {
+              key: 'copyQuote',
+              label: t('ctx.copyQuote'),
+              Icon: Quote,
+              onClick: () => void copyText(toQuoted(selMenu.text)),
+            },
+          ]}
+          onClose={() => setSelMenu(null)}
+        />
+      )}
+
+      {attMenu && atts && atts.length > 1 && (
+        <ContextMenu
+          x={attMenu.x}
+          y={attMenu.y}
+          header={t('mailbox.attachments')}
+          items={atts.map((a) => ({
+            key: `att-${a.id}`,
+            label: a.filename,
+            Icon: Paperclip,
+            onClick: () => void attachmentOpen(a.id),
+          }))}
+          onClose={() => setAttMenu(null)}
+        />
+      )}
     </div>
   );
 }
@@ -517,6 +610,9 @@ export function Conversation({
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
+  // 展開/折りたたみで版面が伸縮しても、基準にしたバブルの表示位置を保つためのアンカー。
+  // toggleExpand の直前に控え、expandedIds 変化後の useLayoutEffect で同じ位置へ戻す。
+  const expandAnchor = useRef<{ id: number; top: number } | null>(null);
 
   // 検索語（空白区切り・全半角）。会話内ハイライトと <>移動に使う。
   const terms = useMemo(
@@ -579,13 +675,24 @@ export function Conversation({
     return () => window.removeEventListener(PREFS_EVENT, onPrefs);
   }, []);
 
-  // メール切替後、開いたメッセージの見出し（ラベル）を読書域の先頭にそろえてスクロールする
-  // （検索語が無いときのみ。検索中は下の効果で最初の一致へ移動する）。
-  // block:'center' だと長いメールで見出しが上に隠れ、毎回上へスクロールが要るため 'start' で先頭に。
-  useEffect(() => {
+  // メール切替後、一番新しい（最後の）バブルが見えるようにスクロールする（チャット流儀）。
+  // 一覧の代表はフォルダ内で最新のメールだが、会話には送信メールも時系列で並ぶため、代表
+  // （openedId）を先頭合わせすると自分の最新返信などが下に隠れてしまう。最後のバブルの先頭を
+  // 表示域の上端にそろえ、ただし最大スクロール量で頭打ちにする。こうすると、短いバブルは下端側
+  // に収まって全体が見え、画面より長いバブルは先頭から読める（検索語があるときは下の効果で最初
+  // の一致へ移動する）。
+  useLayoutEffect(() => {
     if (!view || terms.length > 0) return;
-    const el = document.getElementById(`bubble-${openedId}`);
-    el?.scrollIntoView({ block: 'start' });
+    const el = scrollRef.current;
+    if (!el) return;
+    const bubbles = el.querySelectorAll<HTMLElement>('[id^="bubble-"]');
+    const last = bubbles[bubbles.length - 1];
+    if (!last) {
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
+    const top = last.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
+    el.scrollTop = Math.min(top, el.scrollHeight - el.clientHeight);
   }, [view, openedId, terms.length]);
 
   // 会話の描画後に検索一致を数え、最初の一致へ移動する（展開・語句変更にも追従）。
@@ -608,10 +715,38 @@ export function Conversation({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, termsKey, expandedIds, matchEls, applyActive]);
 
+  // 展開/折りたたみの直前に、基準バブルの現在の表示位置（コンテナ上端からの距離）を控える。
+  const captureExpandAnchor = (id: number) => {
+    const container = scrollRef.current;
+    const el = document.getElementById(`bubble-${id}`);
+    if (container && el) {
+      expandAnchor.current = {
+        id,
+        top: el.getBoundingClientRect().top - container.getBoundingClientRect().top,
+      };
+    }
+  };
+
+  // 展開状態が変わった後、控えておいた基準バブルを同じ表示位置へ戻す
+  // （中に入っても外に出ても、そのバブルはその場に留まり、版面が飛ばない）。
+  useLayoutEffect(() => {
+    const anchor = expandAnchor.current;
+    const container = scrollRef.current;
+    if (!anchor || !container) return;
+    expandAnchor.current = null;
+    const el = document.getElementById(`bubble-${anchor.id}`);
+    if (!el) return;
+    const now = el.getBoundingClientRect().top - container.getBoundingClientRect().top;
+    container.scrollTop += now - anchor.top;
+  }, [expandedIds]);
+
   // 全文展開はスレッド内で 1 通だけ。別のバブルを開くと、開いていた方は自動で畳む
-  // （既に開いている同じバブルをもう一度押したら閉じる）。
-  const toggleExpand = (id: number) =>
+  // （既に開いている同じバブルをもう一度押したら閉じる）。展開/折りたたみ時は基準バブルの
+  // 表示位置を控えておき、伸縮後も同じ位置に留める。
+  const toggleExpand = (id: number) => {
+    captureExpandAnchor(id);
     setExpandedIds((prev) => (prev.has(id) ? new Set() : new Set([id])));
+  };
 
   // 分割: このメール（this）以降（below）を新スレッドへ切り出し、再読込＋一覧更新。
   const doSplit = async (messageId: number, mode: 'this' | 'below') => {
@@ -769,6 +904,8 @@ export function Conversation({
             if (expandedIds.size === 0) return;
             if ((e.target as HTMLElement).closest('[data-msg-content]')) return;
             if (window.getSelection()?.toString()) return; // 文字選択の終端が余白でも畳まない
+            const [openId] = expandedIds; // 展開中は 1 通のみ
+            if (openId != null) captureExpandAnchor(openId);
             setExpandedIds(new Set());
           }}
         >

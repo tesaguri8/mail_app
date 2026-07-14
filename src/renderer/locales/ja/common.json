@@ -206,11 +206,15 @@
     "unsavedDiscard": "保存せず破棄",
     "unsavedCancel": "編集に戻る",
     "quoteAppendNote": "送信時に、右の元メールを引用として本文の下に付けます。",
+    "makeQuote": "引用文にする",
     "draft": "下書きの編集"
   },
   "ctx": {
     "searchSender": "この差出人のメールを検索",
     "searchRecipient": "この宛先のメールを検索",
+    "copy": "コピー",
+    "copyQuote": "引用としてコピー",
+    "cut": "切り取り",
     "markRead": "既読にする",
     "markUnread": "未読にする",
     "star": "お気に入りに追加",
@@ -593,6 +597,7 @@
     "selectMailCheckbox": "このメールを選択",
     "noBody": "本文がありません",
     "attachments": "添付ファイル",
+    "openAttachment": "添付を開く",
     "attachmentDownload": "ダウンロード",
     "attachmentOpen": "開く",
     "attachmentPreview": "プレビュー",

@@ -1420,7 +1420,7 @@ export function MailboxView({
                 onContextMenu={(e) => onRowContextMenu(e, m.id)}
                 className={`group relative flex cursor-pointer select-none gap-2 rounded-md px-3 py-2 hover:bg-white/10 ${
                   selectedIds.has(m.id) ? 'bg-white/15' : ''
-                } ${opened?.id === m.id ? 'ring-1 ring-sky-300/40' : ''}`}
+                } ${opened?.id === m.id ? 'ring-2 ring-sky-400/70' : ''}`}
               >
                 {/* ホバーで出る行アクション（スター／迷惑／削除）。行の展開に伝播させない。
                     右上（日時の上）に重ねる。星は付与済みなら常時アンバー。 */}

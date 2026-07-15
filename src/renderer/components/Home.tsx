@@ -33,11 +33,16 @@ export function Home({
   onOpenMail: (accountId: number) => void;
   onOpenCalendar?: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const now = useClock();
   const hh = String(now.getHours()).padStart(2, '0');
   const mm = String(now.getMinutes()).padStart(2, '0');
-  const dateStr = now.toLocaleDateString();
+  const dateStr = new Intl.DateTimeFormat(i18n.language, {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    weekday: 'long',
+  }).format(now);
 
   return (
     <div className="grid h-full grid-cols-3 gap-6 px-8 py-6 text-white">

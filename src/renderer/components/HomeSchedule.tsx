@@ -65,8 +65,17 @@ export function HomeSchedule({ onOpenCalendar }: { onOpenCalendar?: () => void }
   }, [range]);
 
   const [events, setEvents] = useState<EventSummary[]>([]);
-  const todayStr = ymd(new Date());
+  // 現在時刻（30 秒ごとに更新し、「今」ラインと進行中判定を最新に保つ）。
+  const [now, setNow] = useState<Date>(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  const todayStr = ymd(now);
   const tomorrowStr = ymd(addDays(new Date(`${todayStr}T00:00`), 1));
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+  const nowHM = `${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+  const nowIso = `${todayStr}T${nowHM}`;
 
   // 期間 [今日, 今日+range) に掛かる予定を取得（繰り返しは出現へ展開）。
   const reload = useCallback(() => {
@@ -109,6 +118,63 @@ export function HomeSchedule({ onOpenCalendar }: { onOpenCalendar?: () => void }
     }).format(new Date(`${ds}T00:00`));
   };
 
+  /** その予定が今まさに進行中か（本日の時刻指定予定で、開始〜終了に現在時刻が入る）。 */
+  const isOngoing = (e: EventSummary, day: string): boolean =>
+    day === todayStr && !e.all_day && e.start_at <= nowIso && nowIso <= (e.end_at ?? e.start_at);
+
+  /** 予定 1 行。進行中は左マージンに予定色の縦ラインを添える。 */
+  const row = (e: EventSummary, day: string) => (
+    <button
+      key={`${e.id}-${e.start_at}`}
+      onClick={onOpenCalendar}
+      className="relative flex w-full items-baseline gap-2 pl-2.5 text-left text-white/85 hover:text-white"
+    >
+      {isOngoing(e, day) && (
+        <span
+          className="absolute bottom-0.5 left-0 top-0.5 w-[3px] rounded-full"
+          style={{ backgroundColor: e.color ?? DEFAULT_COLOR }}
+          aria-hidden="true"
+        />
+      )}
+      <span className="w-14 shrink-0 whitespace-nowrap text-[11px] tabular-nums text-white/55">
+        {e.all_day ? t('cal.allDay') : timeOf(e.start_at)}
+      </span>
+      <span className="flex min-w-0 items-center gap-1.5">
+        <span
+          className="h-1.5 w-1.5 shrink-0 rounded-full"
+          style={{ backgroundColor: e.color ?? DEFAULT_COLOR }}
+        />
+        <span className="truncate text-sm">{e.title}</span>
+      </span>
+    </button>
+  );
+
+  /** 「今」を示す横ライン（本日グループの、時刻指定予定の間に差し込む）。 */
+  const nowLine = (
+    <div className="flex items-center gap-2 pl-2.5" aria-hidden="true">
+      <span className="w-14 shrink-0 text-[11px] font-medium tabular-nums text-red-300">{nowHM}</span>
+      <span className="relative h-px flex-1 bg-red-400/70">
+        <span className="absolute left-0 top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-red-400" />
+      </span>
+    </div>
+  );
+
+  /** 1 グループ（1 日）の本文。本日は現在時刻の位置に nowLine を差し込む。 */
+  const groupBody = (g: { day: string; list: EventSummary[] }) => {
+    if (g.day !== todayStr) return g.list.map((e) => row(e, g.day));
+    // 現在より後に始まる最初の時刻指定予定の直前に「今」ラインを置く。
+    const idx = g.list.findIndex((e) => !e.all_day && e.start_at > nowIso);
+    const at = idx === -1 ? g.list.length : idx;
+    const showNow = g.list.some((e) => !e.all_day);
+    return (
+      <>
+        {g.list.slice(0, at).map((e) => row(e, g.day))}
+        {showNow && nowLine}
+        {g.list.slice(at).map((e) => row(e, g.day))}
+      </>
+    );
+  };
+
   return (
     <div className="shrink-0 border-t border-white/15 pt-3 drop-shadow">
       <div className="mb-2 flex items-center justify-between gap-2">
@@ -141,30 +207,11 @@ export function HomeSchedule({ onOpenCalendar }: { onOpenCalendar?: () => void }
           {groups.map((g) => (
             <div key={g.day}>
               {range > 1 && (
-                <div className={`mb-1 text-[11px] font-medium ${dayTone(g.day)}`}>
+                <div className={`mb-1 pl-2.5 text-[11px] font-medium ${dayTone(g.day)}`}>
                   {dayLabel(g.day)}
                 </div>
               )}
-              <div className="space-y-1">
-                {g.list.map((e) => (
-                  <button
-                    key={`${e.id}-${e.start_at}`}
-                    onClick={onOpenCalendar}
-                    className="flex w-full items-baseline gap-2 text-left text-white/85 hover:text-white"
-                  >
-                    <span className="w-14 shrink-0 whitespace-nowrap text-[11px] tabular-nums text-white/55">
-                      {e.all_day ? t('cal.allDay') : timeOf(e.start_at)}
-                    </span>
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      <span
-                        className="h-1.5 w-1.5 shrink-0 rounded-full"
-                        style={{ backgroundColor: e.color ?? DEFAULT_COLOR }}
-                      />
-                      <span className="truncate text-sm">{e.title}</span>
-                    </span>
-                  </button>
-                ))}
-              </div>
+              <div className="space-y-1">{groupBody(g)}</div>
             </div>
           ))}
         </div>

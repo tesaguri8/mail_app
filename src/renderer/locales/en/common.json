@@ -98,7 +98,12 @@
     "removeGuest": "Remove",
     "importIcs": "Import ICS",
     "exportIcs": "Export ICS",
-    "importResult": "Imported {{imported}}, skipped {{skipped}}"
+    "importResult": "Imported {{imported}}, skipped {{skipped}}",
+    "search": "Search events",
+    "searchPlaceholder": "Search events…",
+    "searchClear": "Clear search",
+    "searchResults": "Results for “{{query}}”: {{count}}",
+    "searchEmpty": "No matching events"
   },
   "comingSoon": "Coming soon",
   "filter": {

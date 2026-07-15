@@ -16,6 +16,7 @@ import {
   Upload,
   Download,
   Lock,
+  Search,
 } from 'lucide-react';
 import type { EventSummary } from '@bindings/EventSummary';
 import type { EventInput } from '@bindings/EventInput';
@@ -38,12 +39,16 @@ import {
   eventAttendeeSet,
   icsImport,
   icsExport,
+  eventSearch,
+  eventLocationSuggest,
+  eventTitleSuggest,
 } from '../services/calendar';
 import { expandEvents, presetToRule, ruleToPreset, RECUR_PRESETS, type RecurPreset } from '../utils/recurrence';
 import { isHoliday, holidayName } from '../utils/holidays';
 import { getDefaultCalendarId, setDefaultCalendarId } from '../config/prefs';
 import { CALENDAR_SYNCED_EVENT } from '../hooks/useAutoSync';
 import { Dropdown } from './Dropdown';
+import { SuggestInput } from './SuggestInput';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -287,6 +292,10 @@ export function CalendarView() {
   const [events, setEvents] = useState<EventSummary[]>([]);
   const [trashed, setTrashed] = useState<EventSummary[]>([]);
   const [showTrash, setShowTrash] = useState(false);
+  // 全期間横断の予定検索（空なら通常のカレンダー表示）。
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<EventSummary[]>([]);
+  const searching = query.trim().length > 0;
   const [editing, setEditing] = useState<EditTarget | null>(null);
   const [calendars, setCalendars] = useState<CalendarSummary[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => localStorage.getItem('rondine.cal.sidebar') !== '0');
@@ -331,6 +340,26 @@ export function CalendarView() {
   }, []);
   useEffect(loadCalendars, [loadCalendars]);
 
+  // 検索（入力を軽くデバウンス。空なら結果をクリアして通常表示へ戻す）。
+  useEffect(() => {
+    if (!isTauri) return;
+    const q = query.trim();
+    if (!q) {
+      setResults([]);
+      return;
+    }
+    let alive = true;
+    const h = setTimeout(() => {
+      eventSearch(q)
+        .then((r) => alive && setResults(r))
+        .catch(() => alive && setResults([]));
+    }, 200);
+    return () => {
+      alive = false;
+      clearTimeout(h);
+    };
+  }, [query]);
+
   // バックグラウンド自動同期が Google 側の変更を取り込んだら、一覧と予定を再読み込みする。
   useEffect(() => {
     const onSynced = () => {
@@ -365,13 +394,18 @@ export function CalendarView() {
   const eventDays = useMemo(() => new Set(events.flatMap(coveredDays)), [events]);
   // 表示色はカレンダーの色で解決する（予定ごとの色は持たない＝iCloud 風）。
   const calColor = useMemo(() => new Map(calendars.map((c) => [c.id, c.color])), [calendars]);
+  const colorOf = useCallback(
+    (e: EventSummary): string | null =>
+      (e.calendar_id != null ? calColor.get(e.calendar_id) ?? null : null) ?? e.color ?? null,
+    [calColor],
+  );
   const coloredEvents = useMemo(
-    () =>
-      events.map((e) => ({
-        ...e,
-        color: (e.calendar_id != null ? calColor.get(e.calendar_id) ?? null : null) ?? e.color ?? null,
-      })),
-    [events, calColor],
+    () => events.map((e) => ({ ...e, color: colorOf(e) })),
+    [events, colorOf],
+  );
+  const coloredResults = useMemo(
+    () => results.map((e) => ({ ...e, color: colorOf(e) })),
+    [results, colorOf],
   );
   const weekdayShort = useMemo(() => weekdayLabels(i18n.language, 'short'), [i18n.language]);
   const weekdayNarrow = useMemo(() => weekdayLabels(i18n.language, 'narrow'), [i18n.language]);
@@ -396,6 +430,14 @@ export function CalendarView() {
     } else {
       setEditing({ mode: 'edit', event });
     }
+  };
+  // 検索結果を開く: その日付へカレンダーを移動し、検索を閉じてエディタを開く。
+  const openSearchResult = (event: EventSummary) => {
+    const day = dayOf(event.start_at);
+    setAnchor(new Date(`${day}T00:00`));
+    setSelected(day);
+    setQuery('');
+    openEvent(event);
   };
   // D&D 移動: 掴んだ予定を ref に保持し、ドロップ先の日/時刻で開始（＋所要時間）を差し替える。
   // 繰り返しは曖昧さを避けるためドラッグ不可（チップ側で draggable を切る）。
@@ -479,6 +521,28 @@ export function CalendarView() {
             </div>
           </>
         )}
+        {!showTrash && (
+          <div className="relative flex items-center">
+            <Search size={14} className="pointer-events-none absolute left-2 text-white/40" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Escape' && setQuery('')}
+              placeholder={t('cal.searchPlaceholder')}
+              aria-label={t('cal.search')}
+              className="w-40 rounded-lg bg-white/10 py-1.5 pl-7 pr-7 text-sm outline-none ring-1 ring-white/10 placeholder:text-white/40 focus:w-52 focus:ring-white/30"
+            />
+            {query && (
+              <button
+                onClick={() => setQuery('')}
+                title={t('cal.searchClear')}
+                className="absolute right-1.5 rounded p-0.5 text-white/40 hover:text-white/70"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        )}
         <div className="flex-1" />
         <button onClick={importIcs} title={t('cal.importIcs')} className="rounded p-1.5 hover:bg-white/20">
           <Upload size={16} />
@@ -506,6 +570,8 @@ export function CalendarView() {
 
       {showTrash ? (
         <TrashList items={trashed} onRestore={(id) => eventRestore(id).then(reload)} i18nLang={i18n.language} />
+      ) : searching ? (
+        <SearchResultsPanel query={query.trim()} results={coloredResults} locale={i18n.language} onOpen={openSearchResult} />
       ) : (
         <div className="flex min-h-0 flex-1 gap-3">
           {/* 左サイドバー: ミニ月ナビ＋カレンダー一覧（表示オン/オフ） */}
@@ -1138,6 +1204,67 @@ export function AgendaPanel({
   );
 }
 
+/** 検索結果の一覧（全期間横断・開始日時の新しい順）。クリックでその日付へ移動して開く。 */
+function SearchResultsPanel({
+  query,
+  results,
+  locale,
+  onOpen,
+}: {
+  query: string;
+  results: EventSummary[];
+  locale: string;
+  onOpen: (e: EventSummary) => void;
+}) {
+  const { t } = useTranslation();
+  const fmt = new Intl.DateTimeFormat(locale, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    weekday: 'short',
+  });
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl bg-white/5 ring-1 ring-white/10">
+      <div className="border-b border-white/10 px-3 py-2 text-sm text-white/60">
+        {t('cal.searchResults', { count: results.length, query })}
+      </div>
+      <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-2">
+        {results.length === 0 ? (
+          <p className="px-1 py-10 text-center text-sm text-white/45">{t('cal.searchEmpty')}</p>
+        ) : (
+          results.map((e) => (
+            <button
+              key={e.id}
+              onClick={() => onOpen(e)}
+              className="flex w-full items-start gap-2 rounded-lg p-2 text-left hover:bg-white/10"
+            >
+              <span className="mt-1 h-3 w-1 shrink-0 rounded-full" style={{ backgroundColor: e.color ?? DEFAULT_COLOR }} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">{e.title}</span>
+                <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-white/55">
+                  <span className="flex items-center gap-1">
+                    <Clock size={11} />
+                    {fmt.format(new Date(`${dayOf(e.start_at)}T00:00`))}
+                    {!e.all_day && <span>{timeRange(e)}</span>}
+                    {e.recurrence && <Repeat size={11} className="text-white/45" />}
+                    {e.reminder_minutes != null && <Bell size={11} className="text-white/45" />}
+                  </span>
+                </span>
+                {e.location && (
+                  <span className="mt-0.5 flex items-center gap-1 truncate text-xs text-white/55">
+                    <MapPin size={11} />
+                    {e.location}
+                  </span>
+                )}
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** 時間指定予定の時刻レンジ表示（'10:00 – 11:00' / 終了なしは開始のみ）。 */
 function timeRange(e: EventSummary): string {
   const s = timeOf(e.start_at);
@@ -1541,12 +1668,14 @@ export function EventEditor({
       </div>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
-        <input
+        <SuggestInput
           autoFocus
           value={title}
-          onChange={(e) => setTitle(e.target.value)}
+          onChange={setTitle}
+          suggest={eventTitleSuggest}
           placeholder={t('cal.fTitle')}
           className={field}
+          ariaLabel={t('cal.fTitle')}
         />
 
         <label className="flex items-center gap-2 text-sm">
@@ -1578,7 +1707,15 @@ export function EventEditor({
         </div>
 
         <div className="flex items-center gap-2">
-          <input value={location} onChange={(e) => setLocation(e.target.value)} placeholder={t('cal.fLocation')} className={`flex-1 ${field.replace('w-full ', '')}`} />
+          <SuggestInput
+            value={location}
+            onChange={setLocation}
+            suggest={eventLocationSuggest}
+            placeholder={t('cal.fLocation')}
+            className={field}
+            ariaLabel={t('cal.fLocation')}
+            icon={<MapPin size={13} className="shrink-0 text-white/40" />}
+          />
           {location.trim() && (
             <button
               type="button"

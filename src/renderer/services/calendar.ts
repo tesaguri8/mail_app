@@ -16,6 +16,18 @@ export const eventList = (from: string, to: string, includeDeleted = false) =>
 /** 論理削除済みの予定のみ（ゴミ箱一覧）。 */
 export const eventListTrashed = () => invoke<EventSummary[]>('event_list_trashed');
 
+/** タイトル・メモ・場所を横断して予定を検索（部分一致・期間非依存）。 */
+export const eventSearch = (query: string, limit?: number) =>
+  invoke<EventSummary[]>('event_search', { query, limit });
+
+/** 場所欄のオートコンプリート候補（過去入力を頻度順）。 */
+export const eventLocationSuggest = (query: string, limit?: number) =>
+  invoke<string[]>('event_location_suggest', { query, limit });
+
+/** タイトル欄のオートコンプリート候補（過去入力を頻度順）。 */
+export const eventTitleSuggest = (query: string, limit?: number) =>
+  invoke<string[]>('event_title_suggest', { query, limit });
+
 /** 単一の予定を取得。 */
 export const eventGet = (id: number) => invoke<EventSummary>('event_get', { id });
 

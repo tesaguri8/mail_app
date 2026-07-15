@@ -1679,6 +1679,43 @@ pub fn event_list_trashed(store: State<Store>) -> Result<Vec<EventSummary>, Stri
     store.list_trashed_events().map_err(|e| e.to_string())
 }
 
+/// タイトル・メモ・場所を横断して予定を検索する（部分一致・大文字小文字無視）。
+/// 期間に依らず全予定を対象にし、開始日時の新しい順に最大 `limit` 件（既定 200）返す。
+#[tauri::command]
+pub fn event_search(
+    store: State<Store>,
+    query: String,
+    limit: Option<i64>,
+) -> Result<Vec<EventSummary>, String> {
+    store
+        .search_events(&query, limit.unwrap_or(200))
+        .map_err(|e| e.to_string())
+}
+
+/// 場所欄のオートコンプリート候補（過去に入力した場所を頻度順）。
+#[tauri::command]
+pub fn event_location_suggest(
+    store: State<Store>,
+    query: String,
+    limit: Option<i64>,
+) -> Result<Vec<String>, String> {
+    store
+        .suggest_event_locations(&query, limit.unwrap_or(8))
+        .map_err(|e| e.to_string())
+}
+
+/// タイトル欄のオートコンプリート候補（過去に入力したタイトルを頻度順）。
+#[tauri::command]
+pub fn event_title_suggest(
+    store: State<Store>,
+    query: String,
+    limit: Option<i64>,
+) -> Result<Vec<String>, String> {
+    store
+        .suggest_event_titles(&query, limit.unwrap_or(8))
+        .map_err(|e| e.to_string())
+}
+
 /// 単一の予定を取得。
 #[tauri::command]
 pub fn event_get(store: State<Store>, id: i64) -> Result<EventSummary, String> {

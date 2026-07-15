@@ -33,6 +33,22 @@ fn trimmed(s: &Option<String>) -> Option<&str> {
     s.as_deref().map(str::trim).filter(|v| !v.is_empty())
 }
 
+/// query を LIKE 用にエスケープし、部分一致パターン（`%query%`）へ包む。
+/// バックスラッシュを `ESCAPE '\'` に使うため、`\ % _` を `\` で退避する。
+/// 空 query は `%%`＝任意一致になり、候補の「頻度順の既定リスト」に使える。
+fn like_pattern(query: &str) -> String {
+    let mut pattern = String::with_capacity(query.len() + 2);
+    pattern.push('%');
+    for ch in query.chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            pattern.push('\\');
+        }
+        pattern.push(ch);
+    }
+    pattern.push('%');
+    pattern
+}
+
 impl Store {
     /// 期間 [from, to)（'YYYY-MM-DD' 等の ISO 文字列）に重なる予定を開始順で返す。
     /// 単発は overlap: start_at < to AND coalesce(end_at, start_at) >= from で抽出。
@@ -75,6 +91,70 @@ impl Store {
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map([], row_to_event)?;
+        rows.collect()
+    }
+
+    /// タイトル・メモ・場所を横断して予定を検索する（部分一致・大文字小文字無視）。
+    /// 非表示カレンダーとゴミ箱は除外。開始日時の新しい順（未来→過去）に最大 `limit` 件返す。
+    /// 繰り返しは基準日の 1 件のみ返す（展開はしない。開けばシリーズ全体を編集できる）。
+    pub fn search_events(&self, query: &str, limit: i64) -> rusqlite::Result<Vec<EventSummary>> {
+        let q = query.trim();
+        if q.is_empty() {
+            return Ok(Vec::new());
+        }
+        let pattern = like_pattern(q);
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT {EVENT_COLS} FROM events \
+             WHERE deleted_at IS NULL \
+               AND (calendar_id IS NULL \
+                    OR calendar_id IN (SELECT id FROM calendars WHERE visible = 1)) \
+               AND (title LIKE ?1 ESCAPE '\\' \
+                    OR IFNULL(location, '') LIKE ?1 ESCAPE '\\' \
+                    OR IFNULL(description, '') LIKE ?1 ESCAPE '\\') \
+             ORDER BY start_at DESC, title COLLATE NOCASE \
+             LIMIT ?2"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![pattern, limit], row_to_event)?;
+        rows.collect()
+    }
+
+    /// 過去に入力した「場所」の候補を頻度順（同数なら直近入力順）で返す。オートコンプリート用。
+    pub fn suggest_event_locations(
+        &self,
+        query: &str,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<String>> {
+        self.suggest_event_field("location", query, limit)
+    }
+
+    /// 過去に入力した「タイトル」の候補を頻度順（同数なら直近入力順）で返す。オートコンプリート用。
+    pub fn suggest_event_titles(&self, query: &str, limit: i64) -> rusqlite::Result<Vec<String>> {
+        self.suggest_event_field("title", query, limit)
+    }
+
+    /// title / location の過去入力を重複排除して頻度順に返す共通実装。
+    /// `column` は呼び出し側の固定文字列のみ（ユーザー入力を渡さない＝SQL 埋め込み安全）。
+    /// 空 query なら `%%` で全件を対象にし、よく使う値を上位に出す（フォーカス時の初期候補）。
+    fn suggest_event_field(
+        &self,
+        column: &str,
+        query: &str,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<String>> {
+        let pattern = like_pattern(query.trim());
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT {column} FROM events \
+             WHERE deleted_at IS NULL AND {column} IS NOT NULL AND TRIM({column}) <> '' \
+               AND {column} LIKE ?1 ESCAPE '\\' \
+             GROUP BY {column} COLLATE NOCASE \
+             ORDER BY COUNT(*) DESC, MAX(start_at) DESC \
+             LIMIT ?2"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![pattern, limit], |r| r.get::<_, String>(0))?;
         rows.collect()
     }
 
@@ -376,5 +456,69 @@ mod tests {
         assert_eq!(a.title, "確定");
         assert_eq!(a.start_at, "2026-07-06T11:00");
         assert_eq!(a.location.as_deref(), Some("会議室A"));
+    }
+
+    /// 場所付きの予定を作るヘルパ。
+    fn ev_loc(title: &str, start: &str, location: &str) -> EventInput {
+        EventInput {
+            title: title.into(),
+            start_at: start.into(),
+            location: Some(location.into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn search_matches_title_location_and_description() {
+        let s = mem_store();
+        s.upsert_event(&ev_loc("歯医者", "2026-07-06T09:00", "みなと歯科クリニック"))
+            .unwrap();
+        s.upsert_event(&ev("ランチ", "2026-07-07T12:00", None, false)).unwrap();
+        // タイトル一致
+        assert_eq!(s.search_events("歯医者", 50).unwrap().len(), 1);
+        // 場所の部分一致（大文字小文字・部分文字列）
+        assert_eq!(s.search_events("歯科", 50).unwrap().len(), 1);
+        // 非該当
+        assert_eq!(s.search_events("会議", 50).unwrap().len(), 0);
+        // 空クエリは 0 件（呼び出し側の無駄打ち抑止）
+        assert_eq!(s.search_events("  ", 50).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn search_excludes_trashed() {
+        let s = mem_store();
+        let a = s.upsert_event(&ev("面談", "2026-07-06T09:00", None, false)).unwrap();
+        assert_eq!(s.search_events("面談", 50).unwrap().len(), 1);
+        s.delete_event(a.id as i64).unwrap();
+        assert_eq!(s.search_events("面談", 50).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn location_suggestions_rank_by_frequency() {
+        let s = mem_store();
+        // 「本社」を 2 回、「支社」を 1 回使う → 本社が上位。
+        s.upsert_event(&ev_loc("A", "2026-07-01T09:00", "本社ビル")).unwrap();
+        s.upsert_event(&ev_loc("B", "2026-07-02T09:00", "本社ビル")).unwrap();
+        s.upsert_event(&ev_loc("C", "2026-07-03T09:00", "支社ビル")).unwrap();
+        let all = s.suggest_event_locations("", 8).unwrap();
+        assert_eq!(all.first().map(String::as_str), Some("本社ビル"));
+        assert_eq!(all.len(), 2);
+        // 部分一致で絞り込み
+        let hit = s.suggest_event_locations("支社", 8).unwrap();
+        assert_eq!(hit, vec!["支社ビル".to_string()]);
+    }
+
+    #[test]
+    fn title_suggestions_dedupe_and_filter() {
+        let s = mem_store();
+        s.upsert_event(&ev("定例ミーティング", "2026-07-01T09:00", None, false)).unwrap();
+        s.upsert_event(&ev("定例ミーティング", "2026-07-08T09:00", None, false)).unwrap();
+        s.upsert_event(&ev("ランチ", "2026-07-02T12:00", None, false)).unwrap();
+        // 重複タイトルは 1 件に集約
+        let all = s.suggest_event_titles("", 8).unwrap();
+        assert_eq!(all.iter().filter(|t| *t == "定例ミーティング").count(), 1);
+        // 前方の部分一致
+        let hit = s.suggest_event_titles("定例", 8).unwrap();
+        assert_eq!(hit, vec!["定例ミーティング".to_string()]);
     }
 }

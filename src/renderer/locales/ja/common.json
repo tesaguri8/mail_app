@@ -98,7 +98,12 @@
     "removeGuest": "削除",
     "importIcs": "ICS を取り込む",
     "exportIcs": "ICS で書き出す",
-    "importResult": "取り込み {{imported}} 件・スキップ {{skipped}} 件"
+    "importResult": "取り込み {{imported}} 件・スキップ {{skipped}} 件",
+    "search": "予定を検索",
+    "searchPlaceholder": "予定を検索…",
+    "searchClear": "検索をクリア",
+    "searchResults": "「{{query}}」の検索結果：{{count}} 件",
+    "searchEmpty": "一致する予定はありません"
   },
   "comingSoon": "準備中です",
   "filter": {

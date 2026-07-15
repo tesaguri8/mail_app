@@ -19,7 +19,8 @@
     "minimize": "最小化",
     "maximize": "最大化",
     "close": "閉じる",
-    "cycleBackground": "背景を切り替え"
+    "cycleBackground": "背景を切り替え",
+    "showVersion": "バージョンを表示"
   },
   "nav": {
     "home": "ホーム",

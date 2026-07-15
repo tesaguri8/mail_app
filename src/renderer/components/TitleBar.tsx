@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getVersion } from '@tauri-apps/api/app';
 import {
   Contact,
   House,
@@ -38,6 +39,9 @@ export function TitleBar({
 }) {
   const { t, i18n } = useTranslation();
   const [pinned, setPinned] = useState(false);
+  // 「Rondine」ラベルのクリックでバージョン名（tauri.conf.json 由来）をトグル表示する。
+  const [version, setVersion] = useState<string | null>(null);
+  const [showVersion, setShowVersion] = useState(false);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -45,7 +49,17 @@ export function TitleBar({
       .isAlwaysOnTop()
       .then(setPinned)
       .catch(() => undefined);
+    getVersion()
+      .then(setVersion)
+      .catch(() => undefined);
   }, []);
+
+  // バージョン表示は 2 秒後に自動的に消す（再クリックで即座に非表示）。
+  useEffect(() => {
+    if (!showVersion) return;
+    const id = setTimeout(() => setShowVersion(false), 2000);
+    return () => clearTimeout(id);
+  }, [showVersion]);
 
   const win = () => getCurrentWindow();
 
@@ -73,11 +87,19 @@ export function TitleBar({
       data-tauri-drag-region
       className="flex h-9 select-none items-center justify-between px-3 text-white/90"
     >
-      <span data-tauri-drag-region className="text-sm font-semibold tracking-wide">
+      <button
+        type="button"
+        onClick={() => setShowVersion((v) => !v)}
+        title={t('titlebar.showVersion')}
+        className="rounded px-1 text-sm font-semibold tracking-wide hover:bg-white/10"
+      >
         {APP.productName}
         {/* 開発モード（tauri dev / vite dev）では ( Dev ) を併記して本番と区別する。 */}
         {import.meta.env.DEV && ' ( Dev )'}
-      </span>
+        {showVersion && version && (
+          <span className="ml-2 font-normal text-white/60">v{version}</span>
+        )}
+      </button>
       <div className="flex items-center gap-1">
         <button
           onClick={(e) => {

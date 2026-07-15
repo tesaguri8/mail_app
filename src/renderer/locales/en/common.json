@@ -19,7 +19,8 @@
     "minimize": "Minimize",
     "maximize": "Maximize",
     "close": "Close",
-    "cycleBackground": "Change background"
+    "cycleBackground": "Change background",
+    "showVersion": "Show version"
   },
   "nav": {
     "home": "Home",

@@ -100,6 +100,10 @@ hickory-resolver = "0.24"
 # 日時（同期ウィンドウの SINCE 日付計算）
 chrono = { version = "0.4", features = ["clock"] }
 
+# 非同期ロック（Google への push を直列化して二重 INSERT を防ぐ）。tokio は Tauri/reqwest 経由で
+# 依存ツリーに既に入っているため、sync フィーチャのみを明示有効化する（追加コストは小さい）。
+tokio = { version = "1", features = ["sync"] }
+
 # 開発時のみ: .env から環境変数を読み込む（Google OAuth の Client ID/Secret を dev で渡す用途。
 # 実行時に .env が無ければ何もしない。本番配布は UI 入力＝keyring 保存が正）。
 dotenvy = "0.15"

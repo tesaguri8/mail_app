@@ -8,6 +8,21 @@ use super::convert;
 use crate::models::GcalSyncResult;
 use crate::services::store::{ApplyOutcome, Store};
 use chrono::{Duration, Local};
+use std::sync::OnceLock;
+use tokio::sync::Mutex;
+
+/// Google への push（INSERT/PATCH/DELETE）をプロセス全体で直列化するロック。
+///
+/// 保存直後の即時 push（`gcal_try_autopush` → `push_calendar_only`）と、定期自動同期
+/// （`sync_account`）の push が同時に走ると、同一の未送信予定（dirty=1）を Google へ二重に
+/// INSERT してしまい、pull で取り込んだ結果 Google 上・ローカル双方に予定が複製される。
+/// push をここで直列化すると、先の push が `mark_event_pushed` で dirty を落としてから後続が
+/// `list_local_changes` を読むため、二重送信が起きない。pull はロック対象外なので、取り込み中
+/// でも即時 push は待たされない（push 同士だけが直列化される）。
+fn push_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 /// 1 アカウントぶんの Google カレンダーを同期する。access_token は呼び出し側で更新済みのものを渡す。
 pub async fn sync_account(
@@ -107,6 +122,10 @@ async fn push_calendar(
     ext_id: &str,
     result: &mut GcalSyncResult,
 ) -> Result<(), String> {
+    // 即時 push と定期同期 push の二重 INSERT を防ぐため直列化する（push_lock のコメント参照）。
+    // ガードは関数終了まで保持し、この間の list_local_changes → 送信 → mark_event_pushed を
+    // 他の push と重ならせない。
+    let _push_guard = push_lock().lock().await;
     let changes = store.list_local_changes(local_id).map_err(|e| e.to_string())?;
     log::info!(
         "push_calendar: cal {local_id} (ext {ext_id}) 未送信 {} 件",

@@ -19,6 +19,7 @@ export function SuggestInput({
   ariaLabel,
   onEnter,
   max = 8,
+  multiline = false,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -34,11 +35,28 @@ export function SuggestInput({
   /** 候補未選択のまま Enter を押したときの処理（任意）。 */
   onEnter?: () => void;
   max?: number;
+  /**
+   * 折り返し・内容に合わせた自動伸長を有効にする（場所など長くなりうる欄向け）。
+   * `<textarea>` で描画し、改行は入れさせず横幅を超えたら折り返す。
+   */
+  multiline?: boolean;
 }) {
   const [results, setResults] = useState<string[]>([]);
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(-1);
   const boxRef = useRef<HTMLDivElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // multiline のとき、内容に合わせて高さを詰める（全文が見えるように）。
+  const fit = () => {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  };
+  useEffect(() => {
+    if (multiline) fit();
+  }, [value, multiline]);
 
   // 開いている間、入力に応じて候補を取得（軽いデバウンス）。現在値と同一の候補は除く。
   useEffect(() => {
@@ -93,6 +111,8 @@ export function SuggestInput({
         e.preventDefault();
         pick(results[highlight]);
       } else {
+        // multiline でも 1 値の入力欄なので改行は入れさせない。
+        if (multiline) e.preventDefault();
         onEnter?.();
       }
     } else if (e.key === 'Escape') {
@@ -104,25 +124,45 @@ export function SuggestInput({
     }
   };
 
+  const onEdit = (v: string) => {
+    onChange(v);
+    setOpen(true);
+    setHighlight(-1);
+  };
+
   return (
     <div ref={boxRef} className="relative flex-1">
-      <input
-        autoFocus={autoFocus}
-        className={className}
-        value={value}
-        placeholder={placeholder}
-        aria-label={ariaLabel}
-        role="combobox"
-        aria-expanded={open}
-        aria-autocomplete="list"
-        onChange={(e) => {
-          onChange(e.target.value);
-          setOpen(true);
-          setHighlight(-1);
-        }}
-        onFocus={() => setOpen(true)}
-        onKeyDown={onKeyDown}
-      />
+      {multiline ? (
+        <textarea
+          ref={taRef}
+          autoFocus={autoFocus}
+          rows={1}
+          className={`${className} resize-none overflow-hidden`}
+          value={value}
+          placeholder={placeholder}
+          aria-label={ariaLabel}
+          role="combobox"
+          aria-expanded={open}
+          aria-autocomplete="list"
+          onChange={(e) => onEdit(e.target.value)}
+          onFocus={() => setOpen(true)}
+          onKeyDown={onKeyDown}
+        />
+      ) : (
+        <input
+          autoFocus={autoFocus}
+          className={className}
+          value={value}
+          placeholder={placeholder}
+          aria-label={ariaLabel}
+          role="combobox"
+          aria-expanded={open}
+          aria-autocomplete="list"
+          onChange={(e) => onEdit(e.target.value)}
+          onFocus={() => setOpen(true)}
+          onKeyDown={onKeyDown}
+        />
+      )}
       {open && results.length > 0 && (
         <ul className="absolute left-0 right-0 top-full z-30 mt-1 max-h-56 overflow-y-auto rounded-md border border-white/15 bg-[#141a2e] py-1 shadow-xl">
           {results.map((s, i) => (

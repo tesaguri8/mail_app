@@ -44,11 +44,13 @@ import {
   eventTitleSuggest,
 } from '../services/calendar';
 import { expandEvents, presetToRule, ruleToPreset, RECUR_PRESETS, type RecurPreset } from '../utils/recurrence';
+import { htmlToText } from '../utils/htmlToText';
 import { isHoliday, holidayName } from '../utils/holidays';
 import { getDefaultCalendarId, setDefaultCalendarId } from '../config/prefs';
 import { CALENDAR_SYNCED_EVENT } from '../hooks/useAutoSync';
 import { Dropdown } from './Dropdown';
 import { SuggestInput } from './SuggestInput';
+import { AutoLinkText } from './HtmlText';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -1510,6 +1512,73 @@ function CalendarSidebar({
   );
 }
 
+/**
+ * メモ（説明）欄。未編集時は URL をクリックできるテキストとして全文表示（折り返し）し、
+ * クリック/フォーカスで内容に合わせて自動伸長する編集用テキストエリアに切り替える。
+ * テキストエリアにはリンクを張れないため、この「読み ⇄ 編集」の切替で両立させる。
+ */
+function NotesField({
+  value,
+  onChange,
+  placeholder,
+  className,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  className: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  // 内容に合わせて高さを詰める（全文が見えるように）。
+  const fit = () => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  };
+  useEffect(() => {
+    if (!editing) return;
+    fit();
+    const el = ref.current;
+    if (el) {
+      el.focus();
+      el.selectionStart = el.selectionEnd = el.value.length;
+    }
+  }, [editing]);
+
+  // 値が空、または編集中はテキストエリア。値があり非編集ならリンク可能な読み取り表示。
+  if (editing || !value.trim()) {
+    return (
+      <textarea
+        ref={ref}
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value);
+          fit();
+        }}
+        onFocus={() => setEditing(true)}
+        onBlur={() => setEditing(false)}
+        placeholder={placeholder}
+        rows={2}
+        className={`min-h-[3.5rem] resize-none overflow-hidden ${className}`}
+      />
+    );
+  }
+  return (
+    <div
+      role="textbox"
+      tabIndex={0}
+      onClick={() => setEditing(true)}
+      onFocus={() => setEditing(true)}
+      className={`cursor-text ${className}`}
+    >
+      <AutoLinkText text={value} className="text-sm" />
+    </div>
+  );
+}
+
 /** 予定の作成/編集パネル（右サイドに常設。2週表示の右サイドと同じ場所・見た目）。 */
 export function EventEditor({
   target,
@@ -1550,7 +1619,9 @@ export function EventEditor({
     event?.end_at ? timeOf(event.end_at) || '10:00' : addOneHour(prefTime || '09:00'),
   );
   const [location, setLocation] = useState(event?.location ?? prefLocation);
-  const [description, setDescription] = useState(event?.description ?? '');
+  // Google カレンダー由来の説明文は HTML（Zoom 招待の <br>/<a> 等）を含むことがあるので、
+  // 素のテキストへ整形して表示・編集する（保存時にそのまま plain text で書き戻る）。
+  const [description, setDescription] = useState(() => htmlToText(event?.description ?? ''));
   const initialRecur = ruleToPreset(event?.recurrence ?? null);
   const [recur, setRecur] = useState<RecurPreset>(initialRecur.preset);
   const [until, setUntil] = useState<string>(initialRecur.until ?? '');
@@ -1706,7 +1777,7 @@ export function EventEditor({
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-start gap-2">
           <SuggestInput
             value={location}
             onChange={setLocation}
@@ -1715,6 +1786,7 @@ export function EventEditor({
             className={field}
             ariaLabel={t('cal.fLocation')}
             icon={<MapPin size={13} className="shrink-0 text-white/40" />}
+            multiline
           />
           {location.trim() && (
             <button
@@ -1729,12 +1801,11 @@ export function EventEditor({
           )}
         </div>
 
-        <textarea
+        <NotesField
           value={description}
-          onChange={(e) => setDescription(e.target.value)}
+          onChange={setDescription}
           placeholder={t('cal.fDescription')}
-          rows={2}
-          className={`resize-none ${field}`}
+          className={field}
         />
 
         {/* 繰り返し */}

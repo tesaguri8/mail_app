@@ -5,6 +5,7 @@ use crate::models::{
     OrgDuplicateGroup, OrgSharedValue, OrganizationDetail, OrganizationSummary,
 };
 use crate::services::dedupe::{digits, fold, fold_remove_ws, mobile_number};
+use crate::services::name_norm::match_rank;
 use crate::services::vcard::{ImportedContact, ParseResult};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
@@ -43,11 +44,46 @@ const CONTACT_COLS: &str = "id, display_name, family_name, given_name, phonetic_
      phonetic_given, name_kana, email, phone, organization, org_title, org_department, \
      address, birthday, note, is_favorite, is_business, allow_remote_images, org_id, deleted_at";
 
+/// あいまいヒットとして拾う最大件数（誤ヒットが末尾に大量に並ぶのを防ぐ上限）。
+const FUZZY_LIMIT: usize = 30;
+
+/// 事前に SQL で絞り込み・整列済みの `rows` を、検索語 `query` でさらに絞る。
+///
+/// 二段構え:
+/// 1. **正規化部分一致**（[`search_fold`]）で名前/よみ/メール/組織を照合。異体字・カタカナ/
+///    ひらがな・全角/半角・空白の違いを吸収するので、銘苅↔銘刈 のような字形違いはここで拾える。
+///    入力順（お気に入り→よみ→表示名）を保つ。
+/// 2. 直接ヒットしなかった連絡先のうち、名前/よみが検索語に**編集距離で近い**ものを補助的に拾い、
+///    近い順に 1. の後ろへ付ける（斎藤↔斉藤 のような異体字でない紛らわしい別字・打ち間違い向け）。
+fn filter_contacts_by_query(rows: Vec<ContactSummary>, query: &str) -> Vec<ContactSummary> {
+    let mut direct: Vec<ContactSummary> = Vec::new();
+    let mut fuzzy: Vec<(usize, ContactSummary)> = Vec::new();
+    for c in rows {
+        let name = c.display_name.as_str();
+        let kana = c.name_kana.as_deref().unwrap_or_default();
+        let email = c.email.as_deref().unwrap_or_default();
+        let org = c.organization.as_deref().unwrap_or_default();
+        // 名前・よみ・メール・組織で正規化部分一致。あいまい照合は名前・よみのみ対象。
+        match match_rank(query, &[name, kana, email, org], &[name, kana]) {
+            Some(0) => direct.push(c),
+            Some(d) => fuzzy.push((d, c)),
+            None => {}
+        }
+    }
+    // あいまいヒットは近い順（同距離なら元の整列＝よみ順を保つ安定ソート）に上限まで採る。
+    fuzzy.sort_by_key(|(d, _)| *d);
+    direct.extend(fuzzy.into_iter().take(FUZZY_LIMIT).map(|(_, c)| c));
+    direct
+}
+
 impl Store {
-    /// 連絡先一覧。`query` があれば名前/よみ/メール/組織を部分一致で絞り込む。
+    /// 連絡先一覧。`query` があれば名前/よみ/メール/組織で絞り込む。
+    /// テキスト照合は SQL の LIKE ではなく Rust 側で行い、異体字・表記ゆれ（例: 銘苅↔銘刈、
+    /// カタカナ↔ひらがな）を正規化して部分一致させ、拾えない打ち間違いは編集距離で補助的に拾う
+    /// （[`filter_contacts_by_query`] 参照）。住所録は件数が小さいので全件正規化でも十分速い。
     /// `groups` が非空なら、いずれかのタグを持つ連絡先に絞る（OR。メール側と同じ挙動）。
     /// `include_deleted` が false なら論理削除済みを除く（既定の一覧）。true なら削除済みも含める。
-    /// お気に入りを先頭に、次いで よみ→表示名 で並べる。
+    /// お気に入りを先頭に、次いで よみ→表示名 で並べる（あいまいヒットはその後ろ）。
     pub fn list_contacts(
         &self,
         query: Option<&str>,
@@ -57,25 +93,13 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let order = "ORDER BY is_favorite DESC, \
              name_kana COLLATE NOCASE, display_name COLLATE NOCASE";
-        let like = query
-            .map(str::trim)
-            .filter(|q| !q.is_empty())
-            .map(|q| format!("%{}%", q.replace('%', "\\%").replace('_', "\\_")));
 
-        // 条件を動的に組む（テキスト検索・タグ絞り込み）。プレースホルダは順に採番。
+        // SQL では削除・タグの絞り込みと並び替えだけ行い、テキスト照合は Rust 側で行う。
         let mut conds: Vec<String> = Vec::new();
         let mut binds: Vec<&dyn rusqlite::ToSql> = Vec::new();
         let mut n = 0;
         if !include_deleted {
             conds.push("deleted_at IS NULL".to_string());
-        }
-        if let Some(l) = &like {
-            n += 1;
-            conds.push(format!(
-                "(display_name LIKE ?{n} ESCAPE '\\' OR name_kana LIKE ?{n} ESCAPE '\\' \
-                  OR email LIKE ?{n} ESCAPE '\\' OR organization LIKE ?{n} ESCAPE '\\')"
-            ));
-            binds.push(l);
         }
         if !groups.is_empty() {
             // tag_id IN (?, ?, ...) を選択タグ数ぶん採番して組み立てる。
@@ -100,8 +124,16 @@ impl Store {
         };
         let sql = format!("SELECT {CONTACT_COLS} FROM contacts {where_sql} {order}");
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(binds), row_to_contact)?;
-        rows.collect()
+        let rows: Vec<ContactSummary> = stmt
+            .query_map(rusqlite::params_from_iter(binds), row_to_contact)?
+            .collect::<rusqlite::Result<_>>()?;
+        drop(stmt);
+        drop(conn);
+
+        match query.map(str::trim).filter(|q| !q.is_empty()) {
+            Some(q) => Ok(filter_contacts_by_query(rows, q)),
+            None => Ok(rows),
+        }
     }
 
     /// 単一の連絡先を取得（メール/電話/住所の複数値も充填する）。
@@ -2203,6 +2235,40 @@ mod tests {
         let all = s.list_contacts(None, &[], false).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].email.as_deref(), Some("new@x.jp"));
+    }
+
+    #[test]
+    fn search_matches_variant_kanji_and_typos() {
+        let s = store();
+        for name in ["銘刈太郎", "斎藤花子", "渡辺三郎"] {
+            s.upsert_contact(&ContactInput {
+                display_name: name.into(),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+
+        // 異体字（苅↔刈）でも正規化部分一致で拾える。
+        let hit = s.list_contacts(Some("銘苅"), &[], false).unwrap();
+        assert_eq!(hit.len(), 1);
+        assert_eq!(hit[0].display_name, "銘刈太郎");
+
+        // 旧字体（邊）でも拾える。
+        assert_eq!(
+            s.list_contacts(Some("渡邊"), &[], false).unwrap().len(),
+            1,
+            "渡邊 で 渡辺 が引ける"
+        );
+
+        // 異体字でない紛らわしい別字（斉↔斎）は、あいまい照合で拾う。
+        let fuzzy = s.list_contacts(Some("斉藤"), &[], false).unwrap();
+        assert!(
+            fuzzy.iter().any(|c| c.display_name == "斎藤花子"),
+            "斉藤 で 斎藤 があいまい照合で拾える"
+        );
+
+        // 無関係な語は当たらない。
+        assert!(s.list_contacts(Some("山田"), &[], false).unwrap().is_empty());
     }
 }
 

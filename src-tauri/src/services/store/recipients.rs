@@ -1,5 +1,6 @@
 use super::Store;
 use crate::models::RecipientSuggestion;
+use crate::services::name_norm::match_rank;
 use rusqlite::params;
 use std::collections::HashMap;
 
@@ -46,14 +47,18 @@ struct Cand {
     contact_id: Option<i32>,
     /// 履歴での登場回数（住所録由来は 0）。並びの補助に使う。
     freq: i64,
+    /// 照合の近さ。0=正規化部分一致（確実）、>=1=あいまい一致の編集距離。直接一致を上位に出す。
+    fuzzy: usize,
 }
 
 impl Store {
     /// 宛先オートコンプリート候補を返す（docs/RECIPIENT_AUTOCOMPLETE.md）。
-    /// 住所録（名前・よみ・メール・組織で部分一致）と、過去のやり取り相手
+    /// 住所録（名前・よみ・メール・組織）と、過去のやり取り相手
     /// （emails.from_address / to_addresses をパース）を統合し、メールアドレス
     /// （小文字化）で重複排除して住所録を優先する。空クエリは空配列。
-    /// 並び: お気に入り > 住所録 > 履歴頻度 > 名前/メール。
+    /// 照合は住所録の一覧検索と同じく異体字・カナ/かな・全角半角・空白差を正規化して行い、
+    /// 拾えない打ち間違いは編集距離で補助的に拾う（[`match_rank`]）。
+    /// 並び: お気に入り > 住所録 > 直接一致 > 履歴頻度 > 名前/メール。
     pub fn suggest_recipients(
         &self,
         query: &str,
@@ -68,25 +73,32 @@ impl Store {
         let mut by_email: HashMap<String, Cand> = HashMap::new();
         let conn = self.conn.lock().unwrap();
 
-        // 1) 住所録: 主メールアドレスを持つ連絡先を名前・よみ・メール・組織で検索。
+        // 1) 住所録: 主メールを持つ連絡先を全件取り、正規化＋あいまいで照合する
+        //    （異体字・カナ差を吸収するため SQL の LIKE ではなく Rust 側で判定）。
         {
             let mut stmt = conn.prepare(
-                "SELECT id, display_name, email, is_favorite
+                "SELECT id, display_name, name_kana, email, organization, is_favorite
                  FROM contacts
-                 WHERE email IS NOT NULL AND email <> '' AND deleted_at IS NULL
-                   AND (display_name LIKE ?1 ESCAPE '\\' OR name_kana LIKE ?1 ESCAPE '\\'
-                        OR email LIKE ?1 ESCAPE '\\' OR organization LIKE ?1 ESCAPE '\\')",
+                 WHERE email IS NOT NULL AND email <> '' AND deleted_at IS NULL",
             )?;
-            let rows = stmt.query_map(params![like], |r| {
+            let rows = stmt.query_map([], |r| {
                 Ok((
                     r.get::<_, i64>(0)? as i32,
                     r.get::<_, Option<String>>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, i64>(3)? != 0,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, i64>(5)? != 0,
                 ))
             })?;
             for row in rows {
-                let (id, display_name, email, is_favorite) = row?;
+                let (id, display_name, name_kana, email, organization, is_favorite) = row?;
+                let name = display_name.as_deref().unwrap_or_default();
+                let kana = name_kana.as_deref().unwrap_or_default();
+                let org = organization.as_deref().unwrap_or_default();
+                let Some(rank) = match_rank(q, &[name, kana, &email, org], &[name, kana]) else {
+                    continue;
+                };
                 let key = email.to_lowercase();
                 by_email.entry(key).or_insert(Cand {
                     email,
@@ -95,11 +107,13 @@ impl Store {
                     is_favorite,
                     contact_id: Some(id),
                     freq: 0,
+                    fuzzy: rank,
                 });
             }
         }
 
         // 2) 履歴: 差出人/宛先ヘッダから、クエリに一致するアドレスを収集。
+        //    件数が多いので SQL の LIKE で粗く絞ってから、各アドレスを正規化して確定照合する。
         {
             let mut stmt = conn.prepare(
                 "SELECT from_address, to_addresses FROM emails
@@ -111,7 +125,6 @@ impl Store {
                     r.get::<_, Option<String>>(1)?,
                 ))
             })?;
-            let needle = q.to_lowercase();
             for row in rows {
                 let (from, to) = row?;
                 let mut addrs = Vec::new();
@@ -123,11 +136,9 @@ impl Store {
                 }
                 for (name, email) in addrs {
                     // ヘッダ全体が LIKE に当たっても、個々のアドレス/名前が一致しない
-                    // 同乗者は除外する（例: 複数宛先の1人だけがクエリに一致）。
-                    let hit = email.to_lowercase().contains(&needle)
-                        || name
-                            .as_deref()
-                            .is_some_and(|n| n.to_lowercase().contains(&needle));
+                    // 同乗者は除外する（例: 複数宛先の1人だけがクエリに一致）。正規化して照合。
+                    let hit =
+                        match_rank(q, &[&email, name.as_deref().unwrap_or_default()], &[]).is_some();
                     if !hit {
                         continue;
                     }
@@ -145,6 +156,7 @@ impl Store {
                                     is_favorite: false,
                                     contact_id: None,
                                     freq: 1,
+                                    fuzzy: 0,
                                 },
                             );
                         }
@@ -153,12 +165,13 @@ impl Store {
             }
         }
 
-        // 並び替え: お気に入り DESC → 住所録優先 → 履歴頻度 DESC → 名前(なければメール)。
+        // 並び替え: お気に入り DESC → 住所録優先 → 直接一致優先 → 履歴頻度 DESC → 名前(なければメール)。
         let mut cands: Vec<Cand> = by_email.into_values().collect();
         cands.sort_by(|a, b| {
             b.is_favorite
                 .cmp(&a.is_favorite)
                 .then(b.is_contact.cmp(&a.is_contact))
+                .then(a.fuzzy.cmp(&b.fuzzy))
                 .then(b.freq.cmp(&a.freq))
                 .then_with(|| {
                     let an = a.name.as_deref().unwrap_or(&a.email).to_lowercase();
@@ -272,6 +285,23 @@ mod tests {
 
         // 空クエリは空。
         assert!(store.suggest_recipients("  ", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn suggest_matches_variant_kanji_and_typos() {
+        let store = test_store();
+        add_contact(&store, "銘刈太郎", "mekaru@x.jp", false);
+        add_contact(&store, "斎藤花子", "saito@x.jp", false);
+
+        // 異体字（苅↔刈）でも住所録候補として拾える。
+        let r = store.suggest_recipients("銘苅", 10).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].email, "mekaru@x.jp");
+        assert_eq!(r[0].source, "contact");
+
+        // 異体字でない紛らわしい別字（斉↔斎）はあいまい照合で拾う。
+        let r = store.suggest_recipients("斉藤", 10).unwrap();
+        assert!(r.iter().any(|c| c.email == "saito@x.jp"));
     }
 
     #[test]

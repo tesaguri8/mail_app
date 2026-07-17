@@ -576,7 +576,6 @@
     "cancelled": "中断しました"
   },
   "activity": {
-    "syncing": "メールを更新中…",
     "receiving": "{{name}} の新着を受信中…",
     "openingAttachment": "添付を開いています…",
     "downloadingAttachment": "添付をダウンロード中…"

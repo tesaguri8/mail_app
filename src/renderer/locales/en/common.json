@@ -576,7 +576,6 @@
     "cancelled": "Cancelled"
   },
   "activity": {
-    "syncing": "Updating mail…",
     "receiving": "Receiving new mail — {{name}}…",
     "openingAttachment": "Opening attachment…",
     "downloadingAttachment": "Downloading attachment…"

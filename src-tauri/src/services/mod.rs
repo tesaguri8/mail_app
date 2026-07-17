@@ -10,6 +10,7 @@ pub mod gcsv;
 pub mod ics;
 pub mod imap_sync;
 pub mod media;
+pub mod name_norm;
 pub mod parser;
 pub mod quotes;
 pub mod selfmark;

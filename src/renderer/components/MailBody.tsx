@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ask, open, save } from '@tauri-apps/plugin-dialog';
+import { ask, open } from '@tauri-apps/plugin-dialog';
 import { downloadDir, join } from '@tauri-apps/api/path';
 import {
   BadgeCheck,
@@ -45,12 +45,9 @@ import { AutoLinkText, HtmlText, remoteImageUrls } from './HtmlText';
 import { ContextMenu } from './ContextMenu';
 import type { CalendarPanelInitial } from './CalendarPanel';
 import { parseDateTime, type ParsedDate } from '../utils/dateparse';
-
-function formatDate(d: string | null): string {
-  if (!d) return '';
-  const dt = new Date(d);
-  return isNaN(dt.getTime()) ? d : dt.toLocaleString();
-}
+import { formatDateTime } from '../utils/datetime';
+import { saveAttachment } from '../utils/attachmentSave';
+import { withActivity } from '../stores/activity';
 
 /** 「表示名 <メール>」に整形。表示名が無ければアドレスのみ。 */
 function formatAddress(name: string | null, address: string | null): string {
@@ -597,7 +594,8 @@ export function MailBody({
     setBusyId(a.id);
     setNote('');
     try {
-      await attachmentOpen(a.id);
+      // 取得に時間がかかることがあるのでフッターに進捗（不確定）を出す。
+      await withActivity(t('activity.openingAttachment'), () => attachmentOpen(a.id));
       setAttachments((list) =>
         list.map((x) => (x.id === a.id ? { ...x, is_downloaded: true } : x)),
       );
@@ -609,24 +607,19 @@ export function MailBody({
   };
 
   // 「ダウンロード」: 保存先を選び（既定はダウンロードフォルダ）、その場所へ保存する。
+  // 保存ダイアログ＋書き出し＋フッター進捗は共通ヘルパ（saveAttachment）に集約している。
   const handleSave = async (a: AttachmentSummary) => {
     setNote('');
-    let defaultPath = a.filename;
-    try {
-      defaultPath = await join(await downloadDir(), a.filename);
-    } catch {
-      /* ダウンロードフォルダを解決できなければファイル名だけ既定にする */
-    }
-    const dest = await save({ defaultPath }).catch(() => null);
-    if (!dest) return;
     setBusyId(a.id);
     try {
-      await attachmentExport(a.id, dest);
-      // 保存時にローカルへも取得済みになる（開く/DLアイコンの表示を揃える）。
-      setAttachments((list) =>
-        list.map((x) => (x.id === a.id ? { ...x, is_downloaded: true } : x)),
-      );
-      setNote(t('mailbox.attachmentSaved'));
+      const saved = await saveAttachment(a.id, a.filename, t('activity.downloadingAttachment'));
+      if (saved) {
+        // 保存時にローカルへも取得済みになる（開く/DLアイコンの表示を揃える）。
+        setAttachments((list) =>
+          list.map((x) => (x.id === a.id ? { ...x, is_downloaded: true } : x)),
+        );
+        setNote(t('mailbox.attachmentSaved'));
+      }
     } catch (e) {
       setNote(String(e));
     } finally {
@@ -662,18 +655,22 @@ export function MailBody({
       dir = null;
     }
     if (!dir) return;
+    const folder = dir;
     setSavingAll(true);
     setNote('');
     const targets = fileAttachments.filter((a) => selected.has(a.id));
     let ok = 0;
-    for (const a of targets) {
-      try {
-        await attachmentExport(a.id, await join(dir, a.filename));
-        ok += 1;
-      } catch {
-        /* 個別の失敗はスキップ */
+    // まとめ保存中もフッターに進捗（不確定）を出す。
+    await withActivity(t('activity.downloadingAttachment'), async () => {
+      for (const a of targets) {
+        try {
+          await attachmentExport(a.id, await join(folder, a.filename));
+          ok += 1;
+        } catch {
+          /* 個別の失敗はスキップ */
+        }
       }
-    }
+    });
     setNote(t('mailbox.attachmentSavedN', { count: ok }));
     setSavingAll(false);
   };
@@ -920,7 +917,7 @@ export function MailBody({
                 onCompose={onComposeTo}
               />
             </span>
-            <span className="shrink-0">{formatDate(d.date)}</span>
+            <span className="shrink-0">{formatDateTime(d.date)}</span>
           </div>
           {showReplyTo && (
             <div className="break-words text-sky-300/80">

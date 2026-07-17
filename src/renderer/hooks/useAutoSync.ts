@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { listen } from '@tauri-apps/api/event';
 import type { AccountSummary } from '@bindings/AccountSummary';
+import type { SyncProgress } from '@bindings/SyncProgress';
 import { mailSync } from '../services/mail';
 import { gcalAccounts, gcalSync } from '../services/gcal';
 import { getAutoSyncInterval, PREFS_EVENT } from '../config/prefs';
+import { activityStart, activityStop, activityUpdate } from '../stores/activity';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -23,9 +27,13 @@ export const CALENDAR_SYNCED_EVENT = 'rondine:calendar-synced';
 const AUTOSYNC_COOLDOWN_MS = 5 * 60 * 1000;
 
 export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => void {
+  const { t } = useTranslation();
   const busy = useRef(false);
   // 直近の一括失敗でクールダウン中なら、この時刻まで自動（定期）同期を止める。
   const cooldownUntil = useRef(0);
+  // フッター表示のアカウント名解決用に最新の一覧を保持（syncNow を作り直さずに参照する）。
+  const accountsRef = useRef(accounts);
+  accountsRef.current = accounts;
   // アカウント増減にだけ追従（unread_count 等の変化で作り直さない）。
   const idsKey = accounts.map((a) => a.id).join(',');
 
@@ -34,43 +42,70 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
     const ids = idsKey ? idsKey.split(',').map(Number) : [];
     busy.current = true;
     (async () => {
+      // フッターの作業表示は「実際に新着をダウンロードしている時だけ」出す。定期チェックで新着が
+      // 無ければ何も出さない（確認のみの巡回で頻繁に点滅させない）。判定は sync:progress の
+      // total>0（＝取得予定あり＝新着あり）で行い、増分同期が空振り（total=0）なら無表示。
+      // アカウントは順に 1 件ずつ同期し、ダウンロード中はそのアカウント名を出す。
+      let act: number | null = null; // ダウンロード表示中の作業 ID（無ければ未表示）。
+      let currentLabel = ''; // いま同期中のアカウントの表示ラベル。
+      const showProgress = (current: number, total: number) => {
+        if (total <= 0) return; // 新着なし（確認のみ）は表示しない。
+        if (act == null) act = activityStart(currentLabel);
+        activityUpdate(act, { label: currentLabel, current, total });
+      };
+      const unlistenP =
+        ids.length > 0
+          ? listen<SyncProgress>('sync:progress', (e) =>
+              showProgress(e.payload.current, e.payload.total),
+            )
+          : null;
       let synced = false;
       let failed = false;
       let stored = 0; // この巡回で新規保存されたメール総数（新着有無の判定に使う）。
-      for (const id of ids) {
-        try {
-          const r = await mailSync(id);
-          synced = true;
-          stored += r?.stored ?? 0;
-        } catch {
-          // アカウント単位の失敗は無視して次へ（ただし全滅ならクールダウン）。
-          failed = true;
-        }
-      }
-      // Google カレンダーも同じ間隔で取り込む（メールの成否とは独立）。連携済みアカウントごとに
-      // 双方向同期し、Google 側の追加/更新/削除を取り込んだらカレンダー表示へ再読み込みを促す。
       try {
-        let calChanged = false;
-        for (const g of await gcalAccounts()) {
+        for (const id of ids) {
+          // ダウンロードが始まった時に出す名前（表示名 → メール → id の順で解決）。
+          const a = accountsRef.current.find((x) => x.id === id);
+          currentLabel = t('activity.receiving', {
+            name: a?.display_name?.trim() || a?.email || String(id),
+          });
           try {
-            const r = await gcalSync(g.id);
-            if (r.pulled + r.deleted_in > 0) calChanged = true;
+            const r = await mailSync(id);
+            synced = true;
+            stored += r?.stored ?? 0;
           } catch {
-            // アカウント単位の失敗は無視して次へ。
+            // アカウント単位の失敗は無視して次へ（ただし全滅ならクールダウン）。
+            failed = true;
           }
         }
-        if (calChanged) window.dispatchEvent(new Event(CALENDAR_SYNCED_EVENT));
-      } catch {
-        // 連携アカウント一覧の取得失敗は無視（未連携なら送受信するものは無い）。
+        // Google カレンダーも同じ間隔で取り込む（メールの成否とは独立）。連携済みアカウントごとに
+        // 双方向同期し、Google 側の追加/更新/削除を取り込んだらカレンダー表示へ再読み込みを促す。
+        try {
+          let calChanged = false;
+          for (const g of await gcalAccounts()) {
+            try {
+              const r = await gcalSync(g.id);
+              if (r.pulled + r.deleted_in > 0) calChanged = true;
+            } catch {
+              // アカウント単位の失敗は無視して次へ。
+            }
+          }
+          if (calChanged) window.dispatchEvent(new Event(CALENDAR_SYNCED_EVENT));
+        } catch {
+          // 連携アカウント一覧の取得失敗は無視（未連携なら送受信するものは無い）。
+        }
+      } finally {
+        if (unlistenP) (await unlistenP)();
+        if (act != null) activityStop(act);
+        busy.current = false;
       }
-      busy.current = false;
       // メールが1件も成功せず全滅＝接続不可の可能性大 → しばらく自動再試行を止める（手動は可）。
       // カレンダーの成否はクールダウンの判定には含めない。
       cooldownUntil.current = failed && !synced ? Date.now() + AUTOSYNC_COOLDOWN_MS : 0;
       // 新着件数を載せて通知（購読側は新着ゼロなら一覧の再取得を省ける）。
       if (synced) window.dispatchEvent(new CustomEvent(MAIL_SYNCED_EVENT, { detail: { stored } }));
     })();
-  }, [idsKey]);
+  }, [idsKey, t]);
 
   // 設定変更（間隔）に追従する。
   const [intervalSec, setIntervalSec] = useState(getAutoSyncInterval());

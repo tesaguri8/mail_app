@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
-import { Image, Type } from 'lucide-react';
+import { Image, RefreshCw, Type } from 'lucide-react';
 import { BAR_MAX } from '../App';
+import { useActivities } from '../stores/activity';
 
 /**
  * 全ビュー共通のボトムバー（常設）。右側の 1 本のスライダーで、背景の濃さ（image）と
@@ -32,6 +33,13 @@ export function BottomBar({
   mailServerTotal?: number | null;
 }) {
   const { t } = useTranslation();
+  // バックグラウンド作業（メール更新・添付ダウンロード等）。あればフッター左に代表 1 件を出す。
+  const activities = useActivities();
+  const activity = activities[0] ?? null;
+  const actPct =
+    activity && activity.total && activity.total > 0
+      ? Math.min(100, Math.round(((activity.current ?? 0) / activity.total) * 100))
+      : null;
   const value = mode === 'ink' ? ink : dim;
   const setValue = mode === 'ink' ? onInkChange : onDimChange;
   const pct = Math.round((value / BAR_MAX) * 100);
@@ -43,17 +51,38 @@ export function BottomBar({
 
   return (
     <div className="flex h-8 shrink-0 items-center gap-3 border-t border-white/10 px-4 text-xs text-white/55">
-      {/* 左: 表示中アカウントのメール総数（メールモード時） */}
-      <div className="flex-1">
-        {mailTotal != null && (
-          <span className="tabular-nums text-white/45">
-            {mailServerTotal != null && mailServerTotal > 0
-              ? t('mailbox.accountTotalOf', {
-                  shown: mailTotal.toLocaleString(),
-                  total: mailServerTotal.toLocaleString(),
-                })
-              : t('mailbox.accountTotal', { total: mailTotal.toLocaleString() })}
-          </span>
+      {/* 左: 作業中はその進捗、無ければ表示中アカウントのメール総数（メールモード時） */}
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        {activity ? (
+          <>
+            <RefreshCw size={12} className="shrink-0 animate-spin text-sky-300" />
+            <span className="min-w-0 truncate text-white/70">{activity.label}</span>
+            {actPct != null && (
+              <>
+                {/* 新着の受信件数（例: 1/3）。%表示より件数の方が分かりやすい。 */}
+                <span className="shrink-0 tabular-nums text-white/45">
+                  {activity.current ?? 0}/{activity.total}
+                </span>
+                <span className="hidden h-1 w-24 shrink-0 overflow-hidden rounded-full bg-white/10 sm:block">
+                  <span
+                    className="block h-full rounded-full bg-sky-400 transition-[width]"
+                    style={{ width: `${actPct}%` }}
+                  />
+                </span>
+              </>
+            )}
+          </>
+        ) : (
+          mailTotal != null && (
+            <span className="tabular-nums text-white/45">
+              {mailServerTotal != null && mailServerTotal > 0
+                ? t('mailbox.accountTotalOf', {
+                    shown: mailTotal.toLocaleString(),
+                    total: mailServerTotal.toLocaleString(),
+                  })
+                : t('mailbox.accountTotal', { total: mailTotal.toLocaleString() })}
+            </span>
+          )
         )}
       </div>
       {/* 右: モード切替アイコン（背景の濃さ / 文字色）＋兼用スライダー */}

@@ -417,6 +417,9 @@
     "autoSync": "Auto-sync",
     "autoSyncHint": "While on Home, Mail, or Calendar, mail and Google Calendar are synced automatically at the set interval (opening any of them always syncs). Minimum 10 seconds.",
     "autoSyncUnit": "seconds",
+    "autoSyncSecs": "Every {{count}} sec",
+    "autoSyncMins": "Every {{count}} min",
+    "autoSyncCustom": "Custom (sec)",
     "homeCount": "Home count badge",
     "homeCountHint": "Show the unread count of the selected category next to each account on Home (inbox only).",
     "homeCountAll": "All",
@@ -571,6 +574,12 @@
   "sync": {
     "cancel": "Cancel",
     "cancelled": "Cancelled"
+  },
+  "activity": {
+    "syncing": "Updating mail…",
+    "receiving": "Receiving new mail — {{name}}…",
+    "openingAttachment": "Opening attachment…",
+    "downloadingAttachment": "Downloading attachment…"
   },
   "mailbox": {
     "title": "Inbox",

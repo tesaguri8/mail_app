@@ -61,10 +61,32 @@ impl lettre::message::header::Header for XRondineSelf {
 }
 
 /// "名前 <addr>" / "addr" のどちらでも Mailbox に解釈する。
+///
+/// lettre の `Mailbox` パーサは表示名（phrase）に `@` や `.` などの特殊文字が裸で
+/// 含まれると RFC 5322 違反として弾く（例: 表示名がアドレスそのものの
+/// `foo@example.com <foo@example.com>`）。そうしたトークンでも送れるよう、直接パースに
+/// 失敗したら `<...>` 内をアドレス、その手前を表示名として組み直す。`Mailbox::new` は
+/// 表示名を保持し、出力時に必要な引用・エンコードを自前で行うため安全に送れる。
 fn parse_mailbox(s: &str) -> Result<Mailbox, String> {
-    s.trim()
-        .parse::<Mailbox>()
-        .map_err(|e| format!("宛先を解釈できません（{s}）: {e}"))
+    let trimmed = s.trim();
+    let direct_err = match trimmed.parse::<Mailbox>() {
+        Ok(mb) => return Ok(mb),
+        Err(e) => e,
+    };
+    // フォールバック: "表示名 <addr>" を手動分解し、アドレス部だけ厳密に検証する。
+    // アドレス部が妥当なら表示名を（特殊文字を含んでも）そのまま Mailbox に持たせる。
+    if let (Some(open), Some(close)) = (trimmed.rfind('<'), trimmed.rfind('>')) {
+        if open < close {
+            let addr_part = trimmed[open + 1..close].trim();
+            let name_part = trimmed[..open].trim().trim_matches('"').trim();
+            if let Ok(addr) = addr_part.parse::<lettre::Address>() {
+                let name = (!name_part.is_empty()).then(|| name_part.to_string());
+                return Ok(Mailbox::new(name, addr));
+            }
+        }
+    }
+    // フォールバックでも解決できないときは元の解釈エラーで通知する。
+    Err(format!("宛先を解釈できません（{s}）: {direct_err}"))
 }
 
 /// Message-ID を山括弧つきの形（<id@host>）へ正規化する。
@@ -192,4 +214,38 @@ pub fn send(config: &SmtpConfig, email: &Message) -> Result<(), String> {
         .send(email)
         .map(|_| ())
         .map_err(|e| format!("送信に失敗しました: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 素のアドレスを解釈できる() {
+        let mb = parse_mailbox("foo@example.com").expect("素のアドレスは解釈できる");
+        assert_eq!(mb.email.to_string(), "foo@example.com");
+        assert!(mb.name.is_none());
+    }
+
+    #[test]
+    fn 通常の表示名つきを解釈できる() {
+        let mb = parse_mailbox("山田 太郎 <taro@example.com>").expect("表示名つきは解釈できる");
+        assert_eq!(mb.email.to_string(), "taro@example.com");
+        assert_eq!(mb.name.as_deref(), Some("山田 太郎"));
+    }
+
+    #[test]
+    fn 表示名がアドレスそのものでも解釈できる() {
+        // lettre の直接パースは弾くが、フォールバックでアドレス部を取り出して組み直す。
+        let mb =
+            parse_mailbox("foo@example.com <foo@example.com>").expect("フォールバックで解釈できる");
+        assert_eq!(mb.email.to_string(), "foo@example.com");
+        assert_eq!(mb.name.as_deref(), Some("foo@example.com"));
+    }
+
+    #[test]
+    fn アドレス部が不正なら元のエラーを返す() {
+        let err = parse_mailbox("名前 <not-an-address>").expect_err("不正アドレスはエラー");
+        assert!(err.contains("宛先を解釈できません"));
+    }
 }

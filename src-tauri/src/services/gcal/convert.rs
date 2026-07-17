@@ -92,13 +92,20 @@ pub fn remote_from_gevent(ev: &GEvent) -> Option<RemoteEvent> {
         _ => "default",
     }
     .to_string();
-    let reminder_minutes = ev
+    // Google の override をすべて取り込む（分単位・昇順・重複除去）。
+    // 代表値 reminder_minutes は最小（最も早い通知）。useDefault のみ（override 無し）は空。
+    let reminders: Vec<i32> = ev
         .reminders
         .as_ref()
         .and_then(|r| r.overrides.as_ref())
-        .and_then(|o| o.first())
-        .and_then(|o| o.minutes)
-        .map(|m| m as i32);
+        .map(|o| {
+            let mut v: Vec<i32> = o.iter().filter_map(|x| x.minutes).map(|m| m as i32).collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        })
+        .unwrap_or_default();
+    let reminder_minutes = reminders.first().copied();
 
     Some(RemoteEvent {
         external_id,
@@ -112,6 +119,7 @@ pub fn remote_from_gevent(ev: &GEvent) -> Option<RemoteEvent> {
         all_day,
         recurrence,
         reminder_minutes,
+        reminders,
         availability,
         visibility,
         color: None,
@@ -191,11 +199,17 @@ pub fn gevent_write_from_local(c: &LocalChange) -> Value {
     };
     m.insert("visibility".into(), json!(vis));
 
-    // リマインダー（分指定があればポップアップで上書き）
-    if let Some(min) = c.reminder_minutes {
+    // リマインダー（全通知をポップアップの override として送る）。空のときは reminders を
+    // 付けない＝Google 側の設定（既定通知など）に触れない（従来の単一通知時と同じ方針）。
+    if !c.reminders.is_empty() {
+        let overrides: Vec<Value> = c
+            .reminders
+            .iter()
+            .map(|min| json!({ "method": "popup", "minutes": min }))
+            .collect();
         m.insert(
             "reminders".into(),
-            json!({ "useDefault": false, "overrides": [{ "method": "popup", "minutes": min }] }),
+            json!({ "useDefault": false, "overrides": overrides }),
         );
     }
 

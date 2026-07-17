@@ -1,6 +1,25 @@
 use super::Store;
 use crate::models::GoogleAccount;
-use rusqlite::{params, OptionalExtension, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
+
+/// 予定のリマインダーを与えられた集合へ全置き換えする（同期の取り込み用。dirty は触らない）。
+fn replace_event_reminders(
+    conn: &Connection,
+    event_id: i64,
+    minutes: &[i32],
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM event_reminders WHERE event_id = ?1",
+        params![event_id],
+    )?;
+    for m in minutes {
+        conn.execute(
+            "INSERT OR IGNORE INTO event_reminders (event_id, minutes) VALUES (?1, ?2)",
+            params![event_id, m],
+        )?;
+    }
+    Ok(())
+}
 
 /// 同期エンジン（services/gcal）が Store へ渡す「Google 側の予定」1件。
 /// 日時などは既にローカル表現（'YYYY-MM-DD' / 'YYYY-MM-DDTHH:MM'）へ変換済み。
@@ -18,7 +37,10 @@ pub struct RemoteEvent {
     pub end_at: Option<String>,
     pub all_day: bool,
     pub recurrence: Option<String>,
+    /// 互換の代表値（最も早い通知＝最小の分。無ければ None）。列 events.reminder_minutes 用。
     pub reminder_minutes: Option<i32>,
+    /// 全リマインダー（開始何分前）。event_reminders テーブルへ反映する。
+    pub reminders: Vec<i32>,
     pub availability: String,
     pub visibility: String,
     pub color: Option<String>,
@@ -40,6 +62,8 @@ pub struct LocalChange {
     pub all_day: bool,
     pub recurrence: Option<String>,
     pub reminder_minutes: Option<i32>,
+    /// 全リマインダー（開始何分前）。Google へ全通知を送るのに使う。
+    pub reminders: Vec<i32>,
     pub availability: String,
     pub visibility: String,
 }
@@ -278,7 +302,7 @@ impl Store {
             };
         }
 
-        match existing {
+        let event_id = match existing {
             Some((id, _)) => {
                 conn.execute(
                     "UPDATE events SET \
@@ -305,6 +329,7 @@ impl Store {
                         id,
                     ],
                 )?;
+                id
             }
             None => {
                 conn.execute(
@@ -332,8 +357,11 @@ impl Store {
                         ev.etag,
                     ],
                 )?;
+                conn.last_insert_rowid()
             }
-        }
+        };
+        // Google 側の全リマインダーを反映する（全置き換え）。
+        replace_event_reminders(&conn, event_id, &ev.reminders)?;
         Ok(ApplyOutcome::Upserted)
     }
 
@@ -345,24 +373,35 @@ impl Store {
                     all_day, recurrence, reminder_minutes, availability, visibility \
              FROM events WHERE calendar_id = ?1 AND dirty = 1",
         )?;
-        let rows = stmt.query_map(params![calendar_local_id], |r| {
-            Ok(LocalChange {
-                id: r.get::<_, i64>(0)?,
-                external_id: r.get::<_, Option<String>>(1)?,
-                deleted: r.get::<_, Option<String>>(2)?.is_some(),
-                title: r.get(3)?,
-                description: r.get(4)?,
-                location: r.get(5)?,
-                start_at: r.get(6)?,
-                end_at: r.get(7)?,
-                all_day: r.get::<_, i64>(8)? != 0,
-                recurrence: r.get(9)?,
-                reminder_minutes: r.get::<_, Option<i64>>(10)?.map(|v| v as i32),
-                availability: r.get::<_, Option<String>>(11)?.unwrap_or_else(|| "busy".into()),
-                visibility: r.get::<_, Option<String>>(12)?.unwrap_or_else(|| "default".into()),
-            })
-        })?;
-        rows.collect()
+        let mut changes: Vec<LocalChange> = stmt
+            .query_map(params![calendar_local_id], |r| {
+                Ok(LocalChange {
+                    id: r.get::<_, i64>(0)?,
+                    external_id: r.get::<_, Option<String>>(1)?,
+                    deleted: r.get::<_, Option<String>>(2)?.is_some(),
+                    title: r.get(3)?,
+                    description: r.get(4)?,
+                    location: r.get(5)?,
+                    start_at: r.get(6)?,
+                    end_at: r.get(7)?,
+                    all_day: r.get::<_, i64>(8)? != 0,
+                    recurrence: r.get(9)?,
+                    reminder_minutes: r.get::<_, Option<i64>>(10)?.map(|v| v as i32),
+                    availability: r.get::<_, Option<String>>(11)?.unwrap_or_else(|| "busy".into()),
+                    visibility: r.get::<_, Option<String>>(12)?.unwrap_or_else(|| "default".into()),
+                    reminders: Vec::new(),
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        // 各予定の全リマインダーを詰める（Google へ全通知を送るため）。
+        let mut rstmt =
+            conn.prepare("SELECT minutes FROM event_reminders WHERE event_id = ?1 ORDER BY minutes")?;
+        for ch in &mut changes {
+            ch.reminders = rstmt
+                .query_map(params![ch.id], |r| r.get::<_, i64>(0).map(|v| v as i32))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+        }
+        Ok(changes)
     }
 
     /// 送信成功した予定を連携済みにする（external_id/etag を保存し dirty を落とす）。

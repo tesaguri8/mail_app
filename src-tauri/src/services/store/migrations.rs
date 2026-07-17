@@ -204,6 +204,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 47,
         sql: include_str!("migrations/0047_attachment_section.sql"),
     },
+    Migration {
+        // 48 は予定の通知（リマインダー）を複数持てるよう event_reminders テーブルへ切り出す。
+        version: 48,
+        sql: include_str!("migrations/0048_event_reminders.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

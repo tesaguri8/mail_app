@@ -66,6 +66,14 @@ export const eventAttendeeList = (eventId: number) =>
 export const eventAttendeeSet = (eventId: number, attendees: AttendeeInput[]) =>
   invoke<void>('event_attendee_set', { eventId, attendees });
 
+/** 予定のリマインダー（開始何分前に通知するか）の一覧を昇順で取得する。 */
+export const eventReminderList = (eventId: number) =>
+  invoke<number[]>('event_reminder_list', { eventId });
+
+/** 予定のリマインダーを一括で置き換える（Google 連携なら送信される）。 */
+export const eventReminderSet = (eventId: number, minutes: number[]) =>
+  invoke<void>('event_reminder_set', { eventId, minutes });
+
 // ── ICS 取込/書出（Google 互換） ──
 
 /** .ics ファイルを取り込む。 */

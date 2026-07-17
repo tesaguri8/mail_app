@@ -314,6 +314,42 @@ impl Store {
         Ok(())
     }
 
+    /// 予定のリマインダー（開始何分前に通知するか）の一覧を昇順で返す。
+    pub fn list_event_reminders(&self, event_id: i64) -> rusqlite::Result<Vec<i32>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT minutes FROM event_reminders WHERE event_id = ?1 ORDER BY minutes")?;
+        let rows = stmt.query_map(params![event_id], |r| r.get::<_, i64>(0).map(|v| v as i32))?;
+        rows.collect()
+    }
+
+    /// 予定のリマインダーを入力の集合に一致させる（全置き換え）。重複は除き昇順に正規化する。
+    /// 互換列 events.reminder_minutes は最小値（最も早い通知。無ければ NULL）に更新し、ユーザー
+    /// 編集として dirty=1 を立てる（Google カレンダー所属なら次の push で全通知を送る）。
+    pub fn set_event_reminders(&self, event_id: i64, minutes: &[i32]) -> rusqlite::Result<()> {
+        let mut mins: Vec<i32> = minutes.iter().copied().filter(|m| *m >= 0).collect();
+        mins.sort_unstable();
+        mins.dedup();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM event_reminders WHERE event_id = ?1",
+            params![event_id],
+        )?;
+        for m in &mins {
+            conn.execute(
+                "INSERT OR IGNORE INTO event_reminders (event_id, minutes) VALUES (?1, ?2)",
+                params![event_id, m],
+            )?;
+        }
+        let earliest: Option<i32> = mins.first().copied();
+        conn.execute(
+            "UPDATE events SET reminder_minutes = ?1, dirty = 1, \
+                updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            params![earliest, event_id],
+        )?;
+        Ok(())
+    }
+
     /// ICS テキストを取り込む（各 VEVENT を予定として追加。既定カレンダーへ）。
     pub fn import_ics(&self, text: &str) -> rusqlite::Result<IcsImportReport> {
         let parsed = ics::parse(text);

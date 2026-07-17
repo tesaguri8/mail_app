@@ -162,6 +162,8 @@ pub fn run() {
             commands::calendar_delete,
             commands::event_attendee_list,
             commands::event_attendee_set,
+            commands::event_reminder_list,
+            commands::event_reminder_set,
             commands::ics_import,
             commands::ics_export,
             commands::gcal_set_credentials,

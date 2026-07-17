@@ -1829,6 +1829,35 @@ pub fn event_attendee_set(
         .map_err(|e| e.to_string())
 }
 
+/// 予定のリマインダー（開始何分前に通知するか）の一覧を昇順で返す。
+#[tauri::command]
+pub fn event_reminder_list(store: State<Store>, event_id: i64) -> Result<Vec<i32>, String> {
+    store
+        .list_event_reminders(event_id)
+        .map_err(|e| e.to_string())
+}
+
+/// 予定のリマインダーを入力の集合に一致させる（全置き換え）。
+/// Google カレンダー（書き込み可）所属なら、保存後にその予定を即 Google へ送る（全通知を反映）。
+#[tauri::command]
+pub async fn event_reminder_set(
+    app: AppHandle,
+    store: State<'_, Store>,
+    event_id: i64,
+    minutes: Vec<i32>,
+) -> Result<(), String> {
+    store
+        .set_event_reminders(event_id, &minutes)
+        .map_err(|e| e.to_string())?;
+    let cal_id = store
+        .get_event(event_id)
+        .ok()
+        .and_then(|e| e.calendar_id)
+        .map(|v| v as i64);
+    gcal_try_autopush(&app, store.inner(), cal_id).await;
+    Ok(())
+}
+
 /// .ics ファイルを取り込む（各 VEVENT を予定として追加）。
 #[tauri::command]
 pub fn ics_import(store: State<Store>, path: String) -> Result<IcsImportReport, String> {

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
-import { eventList } from '../services/calendar';
+import { eventList, eventReminderList } from '../services/calendar';
 import { expandEvents } from '../utils/recurrence';
 import type { EventSummary } from '@bindings/EventSummary';
 
@@ -56,20 +56,35 @@ export function useReminders() {
       } catch {
         return;
       }
+      // reminder_minutes（互換列＝最も早い通知）が付く予定＝通知が1件以上ある予定。
       const occurrences = expandEvents(rows, from, to).filter((e) => e.reminder_minutes != null);
+      // 同一予定(id)の全通知はキャッシュして繰り返しの各出現で使い回す（IPC を減らす）。
+      const listCache = new Map<number, number[]>();
       for (const e of occurrences) {
-        const fireAt = startDate(e).getTime() - (e.reminder_minutes as number) * 60_000;
-        const delta = now.getTime() - fireAt;
-        if (delta < 0 || delta >= GRACE_MS) continue; // まだ先 / 古すぎ
-        const key = `${e.id}|${e.start_at}`;
-        if (firedRef.current.has(key)) continue;
-        firedRef.current.add(key);
-        const time = e.all_day ? '' : e.start_at.slice(11, 16);
-        const body = [time, e.location ?? ''].filter(Boolean).join(' · ');
-        try {
-          sendNotification(body ? { title: e.title, body } : { title: e.title });
-        } catch {
-          /* 通知失敗は無視（次の点検で dedup 済み） */
+        let mins = listCache.get(e.id);
+        if (!mins) {
+          try {
+            mins = await eventReminderList(e.id);
+          } catch {
+            // 取得失敗時は互換列の単一通知でフォールバック。
+            mins = e.reminder_minutes != null ? [e.reminder_minutes] : [];
+          }
+          listCache.set(e.id, mins);
+        }
+        for (const m of mins) {
+          const fireAt = startDate(e).getTime() - m * 60_000;
+          const delta = now.getTime() - fireAt;
+          if (delta < 0 || delta >= GRACE_MS) continue; // まだ先 / 古すぎ
+          const key = `${e.id}|${e.start_at}|${m}`;
+          if (firedRef.current.has(key)) continue;
+          firedRef.current.add(key);
+          const time = e.all_day ? '' : e.start_at.slice(11, 16);
+          const body = [time, e.location ?? ''].filter(Boolean).join(' · ');
+          try {
+            sendNotification(body ? { title: e.title, body } : { title: e.title });
+          } catch {
+            /* 通知失敗は無視（次の点検で dedup 済み） */
+          }
         }
       }
     };

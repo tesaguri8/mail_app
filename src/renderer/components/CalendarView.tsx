@@ -37,6 +37,8 @@ import {
   calendarDelete,
   eventAttendeeList,
   eventAttendeeSet,
+  eventReminderList,
+  eventReminderSet,
   icsImport,
   icsExport,
   eventSearch,
@@ -88,9 +90,30 @@ function isWritableCalendar(c: CalendarSummary): boolean {
 const COLORS = ['#64b5f6', '#e57373', '#f6bf50', '#81c784', '#ba91e0', '#4db6ac', '#f06292'];
 const DEFAULT_COLOR = COLORS[0];
 
-/** リマインダーの選択肢（開始何分前。null=なし / 0=開始時刻）。 */
-const REMINDERS: (number | null)[] = [null, 0, 5, 10, 30, 60, 1440];
-const reminderKey = (m: number | null) => (m === null ? 'cal.rem_none' : `cal.rem_${m}`);
+/** リマインダーのプリセット（開始何分前）。ドロップダウンの選択肢＋「カスタム」。 */
+const REMINDER_PRESETS = [15, 30, 60, 90, 120];
+/** カスタム入力の単位（分/時間/日）→ 分への係数。 */
+const REMINDER_UNIT_MIN = { min: 1, hour: 60, day: 1440 } as const;
+type ReminderUnit = keyof typeof REMINDER_UNIT_MIN;
+/** 通知 1 件の編集行。minutes が正本、custom はカスタム入力表示にするかの UI 状態。 */
+type ReminderRow = { key: number; minutes: number; custom: boolean };
+/** 行の一意キー（React の key 用。追加・読み込みで衝突しない連番）。 */
+let reminderKeySeq = 0;
+const nextReminderKey = () => (reminderKeySeq += 1);
+const makeReminderRow = (minutes: number): ReminderRow => ({
+  key: nextReminderKey(),
+  minutes,
+  custom: !REMINDER_PRESETS.includes(minutes),
+});
+/** 分を「値＋単位」に分解する（カスタム入力の初期表示用。割り切れる大きい単位を優先）。 */
+function splitMinutes(m: number): { value: number; unit: ReminderUnit } {
+  if (m > 0 && m % 1440 === 0) return { value: m / 1440, unit: 'day' };
+  if (m > 0 && m % 60 === 0) return { value: m / 60, unit: 'hour' };
+  return { value: m, unit: 'min' };
+}
+/** Google の上限（4週間＝40320分）に収め、0 以上の整数へ丸める。 */
+const clampMinutes = (m: number) => Math.max(0, Math.min(40320, Math.round(m || 0)));
+
 /** 予定あり/なし（Google の Busy/Free）。 */
 const AVAILABILITY = ['busy', 'free'];
 /** 公開設定。 */
@@ -1579,6 +1602,124 @@ function NotesField({
   );
 }
 
+/**
+ * 通知（リマインダー）欄。複数の通知を「開始何分前」で持てる。各行はプリセット
+ *（15分/30分/1時間/1時間半/2時間）またはカスタム（値＋分/時間/日）から選ぶ。
+ * 追加ボタンで行が増え、× で削除。行が増えるとエディタ（縦スクロール）内で伸びる。
+ */
+function RemindersField({
+  rows,
+  setRows,
+  small,
+}: {
+  rows: ReminderRow[];
+  setRows: (rows: ReminderRow[]) => void;
+  small: string;
+}) {
+  const { t } = useTranslation();
+  const add = () => setRows([...rows, { key: nextReminderKey(), minutes: 30, custom: false }]);
+  const remove = (key: number) => setRows(rows.filter((r) => r.key !== key));
+  const patch = (key: number, p: Partial<ReminderRow>) =>
+    setRows(rows.map((r) => (r.key === key ? { ...r, ...p } : r)));
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2 text-xs text-white/55">
+        <Bell size={14} className="shrink-0" />
+        <span>{t('cal.reminders')}</span>
+      </div>
+      {rows.map((r) => (
+        <ReminderRowEditor
+          key={r.key}
+          row={r}
+          small={small}
+          onPatch={(p) => patch(r.key, p)}
+          onRemove={() => remove(r.key)}
+        />
+      ))}
+      <button
+        type="button"
+        onClick={add}
+        className="flex items-center gap-1.5 rounded-lg border border-dashed border-white/20 px-2.5 py-1.5 text-xs text-white/70 hover:bg-white/10"
+      >
+        <Plus size={13} />
+        {t('cal.addReminder')}
+      </button>
+    </div>
+  );
+}
+
+/** 通知 1 行（プリセット/カスタムの選択＋カスタム時の値・単位＋削除）。 */
+function ReminderRowEditor({
+  row,
+  small,
+  onPatch,
+  onRemove,
+}: {
+  row: ReminderRow;
+  small: string;
+  onPatch: (p: Partial<ReminderRow>) => void;
+  onRemove: () => void;
+}) {
+  const { t } = useTranslation();
+  const { value, unit } = splitMinutes(row.minutes);
+  const selValue = row.custom ? 'custom' : String(row.minutes);
+  const onSelect = (v: string) => {
+    if (v === 'custom') onPatch({ custom: true });
+    else onPatch({ custom: false, minutes: Number(v) });
+  };
+  return (
+    <div className="flex items-center gap-2">
+      <Bell size={14} className="shrink-0 text-white/30" />
+      <select value={selValue} onChange={(e) => onSelect(e.target.value)} className={`flex-1 ${small}`}>
+        {REMINDER_PRESETS.map((m) => (
+          <option key={m} value={m} className="bg-neutral-800">
+            {t(`cal.rem_preset_${m}`)}
+          </option>
+        ))}
+        <option value="custom" className="bg-neutral-800">
+          {t('cal.rem_custom')}
+        </option>
+      </select>
+      {row.custom && (
+        <>
+          <input
+            type="number"
+            min={0}
+            value={value}
+            onChange={(e) => onPatch({ minutes: clampMinutes(Number(e.target.value) * REMINDER_UNIT_MIN[unit]) })}
+            aria-label={t('cal.rem_custom')}
+            className={`w-16 ${small}`}
+          />
+          <select
+            value={unit}
+            onChange={(e) => onPatch({ minutes: clampMinutes(value * REMINDER_UNIT_MIN[e.target.value as ReminderUnit]) })}
+            className={small}
+          >
+            <option value="min" className="bg-neutral-800">
+              {t('cal.unit_min')}
+            </option>
+            <option value="hour" className="bg-neutral-800">
+              {t('cal.unit_hour')}
+            </option>
+            <option value="day" className="bg-neutral-800">
+              {t('cal.unit_day')}
+            </option>
+          </select>
+        </>
+      )}
+      <button
+        type="button"
+        onClick={onRemove}
+        title={t('cal.removeReminder')}
+        className="shrink-0 rounded p-1 text-white/50 hover:bg-white/15 hover:text-white"
+      >
+        <X size={14} />
+      </button>
+    </div>
+  );
+}
+
 /** 予定の作成/編集パネル（右サイドに常設。2週表示の右サイドと同じ場所・見た目）。 */
 export function EventEditor({
   target,
@@ -1625,7 +1766,11 @@ export function EventEditor({
   const initialRecur = ruleToPreset(event?.recurrence ?? null);
   const [recur, setRecur] = useState<RecurPreset>(initialRecur.preset);
   const [until, setUntil] = useState<string>(initialRecur.until ?? '');
-  const [reminder, setReminder] = useState<number | null>(event?.reminder_minutes ?? null);
+  // 通知（リマインダー）は複数持てる。まず互換列（最も早い通知）で仮表示し、下の effect で
+  // 全リマインダーを読み込んで置き換える。新規は空。
+  const [reminders, setReminders] = useState<ReminderRow[]>(() =>
+    event?.reminder_minutes != null ? [makeReminderRow(event.reminder_minutes)] : [],
+  );
   const [calendarId, setCalendarId] = useState<number | null>(initialCalId);
   const [availability, setAvailability] = useState(event?.availability ?? 'busy');
   const [visibility, setVisibility] = useState(event?.visibility ?? 'default');
@@ -1647,6 +1792,14 @@ export function EventEditor({
       .then((rows) =>
         setAttendees(rows.map((r) => ({ contact_id: r.contact_id, email: r.email, name: r.name, response: r.response }))),
       )
+      .catch(() => undefined);
+  }, [eventId]);
+
+  // 既存予定の全リマインダーを読み込む（仮表示を置き換える）。
+  useEffect(() => {
+    if (eventId == null) return;
+    eventReminderList(eventId)
+      .then((mins) => setReminders(mins.map(makeReminderRow)))
       .catch(() => undefined);
   }, [eventId]);
 
@@ -1685,6 +1838,8 @@ export function EventEditor({
       const ed = endDate || startDate;
       end_at = endTime ? `${ed}T${endTime}` : null;
     }
+    // 通知は重複を除いた分の配列。互換列 reminder_minutes は最小（最も早い通知。無ければ null）。
+    const reminderMins = [...new Set(reminders.map((r) => clampMinutes(r.minutes)))].sort((a, b) => a - b);
     const input: EventInput = {
       id: event?.id ?? null,
       title: title.trim(),
@@ -1695,7 +1850,7 @@ export function EventEditor({
       all_day: allDay,
       color: null, // 色はカレンダーの属性（サイドバーで設定）。予定ごとには持たせない
       recurrence: presetToRule(recur, until || null),
-      reminder_minutes: reminder,
+      reminder_minutes: reminderMins.length ? reminderMins[0] : null,
       related_email_id: event?.related_email_id ?? prefRelatedEmailId,
       calendar_id: calendarId,
       availability,
@@ -1704,6 +1859,8 @@ export function EventEditor({
     try {
       const saved = await eventUpsert(input);
       await eventAttendeeSet(saved.id, attendees).catch(() => undefined);
+      // 通知は別テーブル管理。保存後に全リマインダーを反映する（Google 連携なら送信される）。
+      await eventReminderSet(saved.id, reminderMins).catch(() => undefined);
       // 新規作成で使ったカレンダーを次回の既定として覚える。
       if (!event && calendarId != null) setDefaultCalendarId(calendarId);
       onSaved();
@@ -1832,21 +1989,8 @@ export function EventEditor({
         )}
         {event && event.recurrence && <p className="text-xs text-white/45">{t('cal.seriesNote')}</p>}
 
-        {/* リマインダー（開始何分前に通知） */}
-        <div className="flex items-center gap-2">
-          <Bell size={14} className="shrink-0 text-white/55" />
-          <select
-            value={reminder === null ? '' : String(reminder)}
-            onChange={(e) => setReminder(e.target.value === '' ? null : Number(e.target.value))}
-            className={`flex-1 ${small}`}
-          >
-            {REMINDERS.map((m) => (
-              <option key={String(m)} value={m === null ? '' : String(m)} className="bg-neutral-800">
-                {t(reminderKey(m))}
-              </option>
-            ))}
-          </select>
-        </div>
+        {/* リマインダー（開始何分前に通知。複数可） */}
+        <RemindersField rows={reminders} setRows={setReminders} small={small} />
 
         {/* カレンダー（色はカレンダーの属性。サイドバーで設定） */}
         {calendars.length > 0 && (

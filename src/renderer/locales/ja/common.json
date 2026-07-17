@@ -417,6 +417,9 @@
     "autoSync": "自動同期",
     "autoSyncHint": "ホーム・メール・カレンダーを開いている間、設定した間隔でメールと Google カレンダーを自動同期します（開いた時は常に同期）。最短 10 秒。",
     "autoSyncUnit": "秒ごと",
+    "autoSyncSecs": "{{count}} 秒ごと",
+    "autoSyncMins": "{{count}} 分ごと",
+    "autoSyncCustom": "カスタム（秒）",
     "homeCount": "ホームの件数バッジ",
     "homeCountHint": "ホームのアカウント名の横に、選んだカテゴリの未読数を表示します（受信箱が対象）。",
     "homeCountAll": "全体",
@@ -571,6 +574,11 @@
   "sync": {
     "cancel": "中断",
     "cancelled": "中断しました"
+  },
+  "activity": {
+    "receiving": "{{name}} の新着を受信中…",
+    "openingAttachment": "添付を開いています…",
+    "downloadingAttachment": "添付をダウンロード中…"
   },
   "mailbox": {
     "title": "受信箱",

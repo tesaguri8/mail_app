@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
+  Download,
   Forward,
   Gem,
   LeafyGreen,
@@ -37,6 +38,9 @@ import { threadRename, threadSplit, threadView } from '../services/threads';
 import { parseAddress } from '../utils/address';
 import { copyText } from '../utils/clipboard';
 import { getBubbleHtml, PREFS_EVENT } from '../config/prefs';
+import { formatDateTime } from '../utils/datetime';
+import { saveAttachment } from '../utils/attachmentSave';
+import { withActivity } from '../stores/activity';
 import { MailBody, makeRenderDate } from './MailBody';
 import { AutoLinkText, HtmlText } from './HtmlText';
 import { ContextMenu, type MenuItem } from './ContextMenu';
@@ -94,12 +98,6 @@ export interface ConversationHandlers {
   onThreadChangedSplit?: (messageId: number, mode: 'this' | 'below') => void;
 }
 
-function formatTime(d: string | null): string {
-  if (!d) return '';
-  const dt = new Date(d);
-  return isNaN(dt.getTime()) ? d : dt.toLocaleString();
-}
-
 /** 差出人の表示名（ヘッダ名 → 住所録名 → アドレス）。 */
 function senderName(m: ThreadMessage, you: string): string {
   if (m.direction === 'out') return you;
@@ -132,6 +130,27 @@ function Bubble({
 }) {
   const { t } = useTranslation();
   const out = m.direction === 'out';
+  // 見出し（ラベル）の上端固定用。会話スクロール枠の上端に貼り付いている間だけ true にして、
+  // その時だけラベル背景を不透明にする（普段はチャットを汚さない）。固定検出はラベル直前に置いた
+  // 高さ0のセンチネルが枠上端より上へ抜けたかどうかで判定する（IntersectionObserver）。
+  const [stuck, setStuck] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const root = sentinel?.closest('[data-conversation-scroll]');
+    if (!sentinel || !(root instanceof HTMLElement)) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        const e = entries[0];
+        if (!e) return;
+        // センチネルが枠上端より上へ抜けた（=見えない）＝ラベルが固定中。下（未到達）は固定でない。
+        setStuck(!e.isIntersecting && e.boundingClientRect.top <= (e.rootBounds?.top ?? 0));
+      },
+      { root },
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, []);
   const [showQuotes, setShowQuotes] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   // 文字選択中の右クリックで出す「コピー／引用としてコピー」メニュー（選択テキストを保持）。
@@ -197,13 +216,15 @@ function Bubble({
     container.scrollTop = Math.max(0, top - EXPAND_TOP_GAP);
   }, [expanded, detail, m.id]);
 
-  // 折りたたみバブルのまま、添付アイコンから直接開く。クリック時に一覧を遅延取得し、
-  // 1 件ならそのまま OS の関連アプリで開き、複数ならファイル名の小メニューを出す
-  // （未取得の添付は Rust 側が取得してから開く）。
+  // 折りたたみバブルのまま、添付アイコンから直接「開く」／「ダウンロード」する。クリック時に
+  // 一覧を遅延取得し、1 件ならそのまま実行、複数ならファイル名の小メニューを出す（mode で分岐）。
+  // 未取得の添付は Rust 側が取得してから開く。取得に時間がかかるのでフッターに進捗を出す。
   const [atts, setAtts] = useState<AttachmentSummary[] | null>(null);
-  const [attMenu, setAttMenu] = useState<{ x: number; y: number } | null>(null);
+  const [attMenu, setAttMenu] = useState<{ x: number; y: number; mode: 'open' | 'save' } | null>(
+    null,
+  );
   const [attBusy, setAttBusy] = useState(false);
-  const openAttachments = async (clientX: number, clientY: number) => {
+  const runAttachments = async (clientX: number, clientY: number, mode: 'open' | 'save') => {
     setAttBusy(true);
     try {
       let list = atts;
@@ -213,10 +234,12 @@ function Bubble({
       }
       if (list.length === 0) return;
       if (list.length === 1) {
-        await attachmentOpen(list[0].id);
+        const a = list[0];
+        if (mode === 'save') await saveAttachment(a.id, a.filename, t('activity.downloadingAttachment'));
+        else await withActivity(t('activity.openingAttachment'), () => attachmentOpen(a.id));
         return;
       }
-      setAttMenu({ x: clientX, y: clientY });
+      setAttMenu({ x: clientX, y: clientY, mode });
     } catch {
       /* noop（開けないときは無反応。全文を展開すれば MailBody で詳細に扱える） */
     } finally {
@@ -323,9 +346,11 @@ function Bubble({
 
   return (
     <div className={`flex ${out ? 'justify-end' : 'justify-start'}`}>
+      {/* 全文表示中は幅いっぱいだが、右端に少し余白（pr-6）を残す。ここは会話スクロールの
+          掴みしろで、全文カードの内部スクロールと分けてスレッド自体を送れるようにする。 */}
       <div
         data-msg-content
-        className={`group/bubble min-w-0 ${expanded ? 'w-full' : 'max-w-[82%]'}`}
+        className={`group/bubble min-w-0 ${expanded ? 'w-full pr-6' : 'max-w-[82%]'}`}
         onContextMenu={(e) => {
           // 文字選択中は「コピー／引用としてコピー」の独自メニューを出す（ネイティブの差し替え）。
           const sel = window.getSelection()?.toString() ?? '';
@@ -338,11 +363,29 @@ function Bubble({
           setMenu({ x: e.clientX, y: e.clientY });
         }}
       >
-        {/* 差出人＋時刻（相手は左、自分は右にそろえる） */}
+        {/* 上端固定の検出用センチネル（高さ0）。これが枠上端より上へ抜けるとラベルが固定中になる。 */}
+        <div ref={sentinelRef} aria-hidden className="pointer-events-none h-0" />
+        {/* 差出人＋時刻（相手は左、自分は右にそろえる）。スレッドヘッダのすぐ下に貼り付き（sticky）、
+            固定中は「アプリと同じ背景を同じ位置に」貼る（bg-fixed でビューポート基準に合わせる）。
+            写真は不透明なので下から潜り込む本文はラベル下端でスパッと隠れ、かつ周囲と一体で透明に
+            見える。バブルが尽きるとラベルも一緒に上へ流れて次のラベルと交代する。 */}
         <div
-          className={`mb-0.5 flex items-center gap-1.5 px-1 text-[10px] text-white/45 ${
+          className={`sticky top-0 z-10 mb-0.5 flex items-center gap-1.5 px-1 py-0.5 text-[10px] text-white/45 ${
             out ? 'justify-end' : 'justify-start'
-          }`}
+          } ${stuck ? 'rounded-b-md shadow-sm shadow-black/20' : ''}`}
+          // 固定中だけ、アプリと同じ背景を同じ位置（bg-fixed=ビューポート基準）で貼る。写真は不透明
+          // なので本文を隠しつつ、周囲の背景と一体化して透明に見える。任意クラスの JIT 検出に頼らず
+          // インラインで指定する。
+          style={
+            stuck
+              ? {
+                  backgroundImage: 'var(--app-backdrop)',
+                  backgroundSize: 'cover',
+                  backgroundPosition: 'center',
+                  backgroundAttachment: 'fixed',
+                }
+              : undefined
+          }
         >
           {m.verified_self && (
             <span
@@ -374,7 +417,7 @@ function Bubble({
             </button>
           )}
           <span className="truncate font-medium text-white/60">{senderName(m, you)}</span>
-          <span className="shrink-0">{formatTime(m.date)}</span>
+          <span className="shrink-0">{formatDateTime(m.date)}</span>
           {!read && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400" />}
           {/* スター: バブルを見ながら付け外しできる。付与済みは常時アンバー、未付与は
               ホバーで薄く出す（普段はチャットのラベルを汚さない。迷惑ボタンと同じ流儀）。 */}
@@ -552,18 +595,34 @@ function Bubble({
                 </button>
               )}
               {m.has_attachments && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void openAttachments(e.clientX, e.clientY);
-                  }}
-                  disabled={attBusy}
-                  title={t('mailbox.openAttachment')}
-                  aria-label={t('mailbox.openAttachment')}
-                  className="inline-flex items-center gap-0.5 hover:text-sky-300 disabled:opacity-50"
-                >
-                  <Paperclip size={11} />
-                </button>
+                <>
+                  {/* 添付をそのまま既定アプリで開く（従来どおり）。 */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void runAttachments(e.clientX, e.clientY, 'open');
+                    }}
+                    disabled={attBusy}
+                    title={t('mailbox.openAttachment')}
+                    aria-label={t('mailbox.openAttachment')}
+                    className="inline-flex items-center gap-0.5 hover:text-sky-300 disabled:opacity-50"
+                  >
+                    <Paperclip size={11} />
+                  </button>
+                  {/* 添付を保存（ダウンロード）。開く動作は残しつつ、保存も選べるようにする。 */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void runAttachments(e.clientX, e.clientY, 'save');
+                    }}
+                    disabled={attBusy}
+                    title={t('mailbox.attachmentDownload')}
+                    aria-label={t('mailbox.attachmentDownload')}
+                    className="inline-flex items-center gap-0.5 hover:text-sky-300 disabled:opacity-50"
+                  >
+                    <Download size={11} />
+                  </button>
+                </>
               )}
               <button
                 onClick={(e) => {
@@ -621,12 +680,15 @@ function Bubble({
         <ContextMenu
           x={attMenu.x}
           y={attMenu.y}
-          header={t('mailbox.attachments')}
+          header={t(attMenu.mode === 'save' ? 'mailbox.attachmentDownload' : 'mailbox.attachments')}
           items={atts.map((a) => ({
             key: `att-${a.id}`,
             label: a.filename,
-            Icon: Paperclip,
-            onClick: () => void attachmentOpen(a.id),
+            Icon: attMenu.mode === 'save' ? Download : Paperclip,
+            onClick: () =>
+              attMenu.mode === 'save'
+                ? void saveAttachment(a.id, a.filename, t('activity.downloadingAttachment'))
+                : void withActivity(t('activity.openingAttachment'), () => attachmentOpen(a.id)),
           }))}
           onClose={() => setAttMenu(null)}
         />
@@ -949,7 +1011,9 @@ export function Conversation({
         <div
           ref={scrollRef}
           data-conversation-scroll
-          className="h-full space-y-3 overflow-y-auto px-4 py-4"
+          // 上パディングは付けない: 固定ラベルをスレッドヘッダ直下にピタッと貼り付け、ラベルより上に
+          // 本文が漏れないようにする（先頭の余白は最初のバブルの mt で付ける）。
+          className="h-full space-y-3 overflow-y-auto px-4 pb-4 pt-0 [&>*:first-child]:mt-3"
           onClick={(e) => {
             // 全文展開中に「バブル/カードの外＝余白」をクリックしたら畳んでバブルに戻す。
             // コンテンツ列（data-msg-content）の内側なら何もしない（展開・メール操作・閉じるボタンは従来どおり）。

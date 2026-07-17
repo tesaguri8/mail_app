@@ -199,6 +199,9 @@ function Toggle({
   );
 }
 
+/** 自動同期の間隔プリセット（秒）。30秒/1分/2分/5分/10分/30分。カスタムは別途秒入力。 */
+const AUTO_SYNC_PRESETS = [30, 60, 120, 300, 600, 1800];
+
 /** 表示設定: インライン画像の自動取得・送信アニメーション・電話/郵便番号の整形など。 */
 function DisplaySettings() {
   const { t, i18n } = useTranslation();
@@ -239,19 +242,45 @@ function DisplaySettings() {
           hint={t('settings.autoSyncHint')}
         />
         {syncOn && (
-          <label className="mt-2 flex items-center gap-2">
-            <input
-              type="number"
-              min={10}
-              step={5}
-              value={syncSec}
-              onChange={(e) => setSyncSec(e.target.value)}
-              onBlur={commitSyncSec}
-              onKeyDown={(e) => e.key === 'Enter' && commitSyncSec()}
-              className="w-24 rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
-            />
-            <span className="text-xs text-white/50">{t('settings.autoSyncUnit')}</span>
-          </label>
+          <div className="mt-2 space-y-2">
+            {/* よく使う間隔はプリセットから選べる。細かく指定したい時だけ「カスタム」で秒入力。 */}
+            <select
+              value={AUTO_SYNC_PRESETS.includes(Number(syncSec)) ? syncSec : 'custom'}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === 'custom') return; // カスタムは下の入力欄で指定
+                setSyncSec(v);
+                setAutoSyncSeconds(Number(v));
+              }}
+              className="w-44 rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
+            >
+              {AUTO_SYNC_PRESETS.map((s) => (
+                <option key={s} value={String(s)} className="bg-neutral-800">
+                  {s < 60
+                    ? t('settings.autoSyncSecs', { count: s })
+                    : t('settings.autoSyncMins', { count: s / 60 })}
+                </option>
+              ))}
+              <option value="custom" className="bg-neutral-800">
+                {t('settings.autoSyncCustom')}
+              </option>
+            </select>
+            {!AUTO_SYNC_PRESETS.includes(Number(syncSec)) && (
+              <label className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={10}
+                  step={5}
+                  value={syncSec}
+                  onChange={(e) => setSyncSec(e.target.value)}
+                  onBlur={commitSyncSec}
+                  onKeyDown={(e) => e.key === 'Enter' && commitSyncSec()}
+                  className="w-24 rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
+                />
+                <span className="text-xs text-white/50">{t('settings.autoSyncUnit')}</span>
+              </label>
+            )}
+          </div>
         )}
       </div>
 

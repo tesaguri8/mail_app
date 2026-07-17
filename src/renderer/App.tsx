@@ -59,6 +59,9 @@ export default function App() {
     setBackgroundIndex(next);
   };
   const backgroundUrl = BACKGROUNDS[bgIndex] ?? BACKGROUNDS[0] ?? '';
+  // 背景（かぶせグラデ＋写真）。会話の固定見出しラベル等が「同じ背景を同じ位置で」貼って
+  // 透明に見せられるよう、同じ文字列を CSS 変数 --app-backdrop としても配る（bg-fixed で位置合わせ）。
+  const backdrop = `linear-gradient(160deg, rgba(10,14,28,${(0.35 + dim * 0.6).toFixed(2)}) 0%, rgba(6,9,20,${(0.55 + dim * 0.5).toFixed(2)}) 100%), url(${backgroundUrl})`;
 
   const refreshAccounts = useCallback(() => {
     if (!isTauri) return;
@@ -126,7 +129,9 @@ export default function App() {
           {
             // 背景オーバーレイ: 既定でも白文字が読める最低限の暗さを土台にし、スライダー(dim)で
             // さらに濃くする。0% でも明るい写真＋白文字が真っ白にならないようにする。
-            backgroundImage: `linear-gradient(160deg, rgba(10,14,28,${(0.35 + dim * 0.6).toFixed(2)}) 0%, rgba(6,9,20,${(0.55 + dim * 0.5).toFixed(2)}) 100%), url(${backgroundUrl})`,
+            backgroundImage: backdrop,
+            // 固定見出しラベルが同じ背景を貼れるよう、同じ文字列を配る（bg-fixed で位置を合わせる）。
+            '--app-backdrop': backdrop,
             // 文字色スライダー: Tailwind の白を差し替えて UI 全体を白⇄黒でトーン反転。
             '--color-white': inkColor(ink),
           } as CSSProperties

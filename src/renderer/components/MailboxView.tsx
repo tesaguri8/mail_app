@@ -53,6 +53,7 @@ import { RecipientSuggestList } from './RecipientSuggestList';
 import { mailAddTag, mailRemoveTag, tagCreate, tagList } from '../services/tags';
 import { pickTagColor, DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import { parseAddress } from '../utils/address';
+import { formatDateTime } from '../utils/datetime';
 import { MailBody } from './MailBody';
 import { ContactEditor, type EditorRequest } from './ContactEditor';
 import { CalendarPanel, type CalendarPanelInitial } from './CalendarPanel';
@@ -81,12 +82,6 @@ export const DEFAULT_SIDEBAR_WIDTH = 380;
 const MIN_CONTACT_PANEL_WIDTH = 320;
 const MAX_CONTACT_PANEL_WIDTH = 560;
 const DEFAULT_CONTACT_PANEL_WIDTH = 400;
-
-function formatDate(d: string | null): string {
-  if (!d) return '';
-  const dt = new Date(d);
-  return isNaN(dt.getTime()) ? d : dt.toLocaleString();
-}
 
 /** スクロール位置インジケータ用の日付ラベル（例: 2026/7/2）。 */
 function formatScrollDate(d: string | null): string {
@@ -1555,7 +1550,7 @@ export function MailboxView({
                             {m.is_starred && (
                               <Star size={12} className="fill-amber-300 text-amber-300" />
                             )}
-                            {formatDate(m.date)}
+                            {formatDateTime(m.date)}
                           </span>
                         </div>
                         {/* 件名（スレッド複数通なら「N通」バッジを先頭に） */}

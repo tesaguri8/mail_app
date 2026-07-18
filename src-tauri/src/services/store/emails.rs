@@ -1180,15 +1180,19 @@ impl Store {
             )?;
             return Ok(id);
         }
-        // 新規: フォルダ接頭辞つきの一意キー（UNIQUE(account_id, canonical_key) を満たす）。
+        // 新規: サーバー Drafts 上で自分の下書きを一意に特定するための Message-ID を採番する。
         let nanos = now.timestamp_nanos_opt().unwrap_or(ts);
-        let key = format!("drafts:draft-{}-{}", d.account_id, nanos);
-        // サーバー Drafts 上で自分の下書きを一意に特定するための Message-ID を採番する。
         let domain = from
             .as_deref()
             .and_then(|e| e.split('@').nth(1))
             .unwrap_or("rondine.local");
-        let message_id = format!("<draft-{}-{}@{}>", d.account_id, nanos, domain);
+        // Message-ID の中身（山括弧なし）と canonical_key を一致させる。これにより、この下書きを
+        // サーバー Drafts へ APPEND したあと同期で取り戻しても、インバウンド取込が付ける
+        // canonical_key（＝Message-ID・folder_key で "drafts:" 接頭辞）と一致し、重複行にならず
+        // 既存の下書き行へ uid だけがバックフィルされる（INSERT OR IGNORE）。
+        let inner = format!("draft-{}-{}@{}", d.account_id, nanos, domain);
+        let message_id = format!("<{inner}>");
+        let key = format!("drafts:{inner}");
         conn.execute(
             "INSERT INTO emails \
                (account_id, canonical_key, message_id, subject, from_address, to_addresses, cc_addresses, \

@@ -32,6 +32,8 @@ import {
   setHomeCountFilter,
   getPhoneAutoformat,
   setPhoneAutoformat,
+  getComposeAutoSave,
+  setComposeAutoSave,
   type HomeCountFilter,
 } from '../config/prefs';
 import { countryOptions } from '../utils/phone';
@@ -219,6 +221,8 @@ function DisplaySettings() {
   const [countShow, setCountShow] = useState(getHomeCountShow());
   const [countFilter, setCountFilter] = useState<HomeCountFilter>(getHomeCountFilter());
   const [phoneFmt, setPhoneFmt] = useState(getPhoneAutoformat());
+  // 下書きの自動保存（メール作成中に入力を止めると自動でローカル下書きへ保存）。
+  const [composeAutoSave, setComposeAutoSaveState] = useState(getComposeAutoSave());
   const countries = useMemo(() => countryOptions(i18n.language), [i18n.language]);
 
   const commitSyncSec = () => {
@@ -282,6 +286,20 @@ function DisplaySettings() {
             )}
           </div>
         )}
+      </div>
+
+      {/* 下書きの自動保存: メール作成中に入力を止めると自動でローカル下書きへ保存する */}
+      <div className="border-t border-white/10 pt-4">
+        <Toggle
+          checked={composeAutoSave}
+          onChange={() => {
+            const next = !composeAutoSave;
+            setComposeAutoSaveState(next);
+            setComposeAutoSave(next);
+          }}
+          title={t('settings.composeAutoSave')}
+          hint={t('settings.composeAutoSaveHint')}
+        />
       </div>
 
       {/* ホームのアカウント別バッジ: 表示トグル＋種類（未読数/全数） */}

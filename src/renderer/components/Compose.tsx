@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
-import { Copy, Paperclip, Quote, Save, Scissors, Send, X } from 'lucide-react';
+import { Copy, Paperclip, Quote, Save, Scissors, Send, Trash2, X } from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { DraftContent } from '@bindings/DraftContent';
@@ -16,7 +16,7 @@ import {
   mailSend,
 } from '../services/mail';
 import { signatureList } from '../services/signatures';
-import { getFlyAnimation } from '../config/prefs';
+import { getComposeAutoSave, getFlyAnimation } from '../config/prefs';
 import { playFlySound } from '../utils/flySound';
 import { RecipientInput } from './RecipientInput';
 import { ContextMenu } from './ContextMenu';
@@ -348,6 +348,9 @@ export function Compose({
   const [unsaved, setUnsaved] = useState(false);
   // 閉じる確認ダイアログ（未保存の変更があるとき表示）。
   const [confirmClose, setConfirmClose] = useState(false);
+  // 下書きの自動保存を使うか（設定・既定オン）。開いた時点の値を採用する。
+  // オフのときは入力中に自動保存せず、閉じる時の確認ダイアログでのみ保存を促す。
+  const [autoSave] = useState(getComposeAutoSave);
   const markDirty = () => {
     setUnsaved(true); // 毎回: 未保存の変更あり（保存で false に戻す）
     if (!dirtyRef.current) {
@@ -355,6 +358,19 @@ export function Compose({
       setDirty(true);
     }
   };
+
+  // 実際に「書いたもの」があるか（宛先・件名・本文のいずれか）。署名や引用だけでは空とみなす。
+  // 空の新規は下書きを作らず、閉じる確認も出さない（意図しない下書きの量産を防ぐ）。
+  const hasContent = useCallback(() => {
+    if (splitAddresses(to).length > 0) return true;
+    if (splitAddresses(cc).length > 0) return true;
+    if (splitAddresses(bcc).length > 0) return true;
+    if (subject.trim().length > 0) return true;
+    // 本文から自動挿入の署名ブロックを除いた「書いた本文」で判定する。
+    const sig = sigBlockRef.current;
+    const written = sig && body.includes(sig) ? body.replace(sig, '') : body;
+    return written.trim().length > 0;
+  }, [to, cc, bcc, subject, body]);
 
   // 選択範囲を引用（各行 "> "）に置き換え、置き換えた範囲を選択し直してフォーカスを戻す。
   const quoteSelection = (start: number, end: number) => {
@@ -387,39 +403,85 @@ export function Compose({
   // 送信中フラグ（ref）。送信直前に立て、保留中の自動保存が送信後に下書きを作らないようにする。
   const sendingRef = useRef(false);
 
-  // 現在の内容で下書きを保存/更新する（自動保存と、閉じる時の確定保存で共有）。
-  const saveDraft = useCallback(async () => {
-    if (accountId == null || sendingRef.current) return;
-    try {
-      const id = await mailSaveDraft({
-        draft_id: draftIdRef.current,
-        account_id: accountId,
-        to: splitAddresses(to),
-        cc: splitAddresses(cc),
-        bcc: splitAddresses(bcc),
-        subject,
-        body: composedBody(),
-        in_reply_to: init.inReplyTo,
-      });
-      draftIdRef.current = id;
-      setSaved(true);
-      setUnsaved(false);
-    } catch {
-      // 自動保存の失敗は致命的でないので黙って無視（次の入力で再試行）。
-    }
-  }, [accountId, to, cc, bcc, subject, composedBody, init.inReplyTo]);
+  // サーバー Drafts への同期状態（フッターに表示）。'idle' は非表示。
+  const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle');
+  const syncErrRef = useRef<string>('');
+  // ローカル保存が成功するたびに増やし、サーバー同期のデバウンスを起動するトリガ。
+  const [saveTick, setSaveTick] = useState(0);
 
-  // 入力のたびにデバウンス（1s）して自動保存。dirty になって初めて走る。
+  // サーバーの Drafts フォルダへ同期する（成功/失敗をフッターに反映）。best-effort。
+  const syncRemote = useCallback(async (id: number) => {
+    setSyncState('syncing');
+    try {
+      await mailDraftSyncRemote(id);
+      setSyncState('done');
+    } catch (e) {
+      syncErrRef.current = String(e);
+      setSyncState('error');
+    }
+  }, []);
+
+  // 現在の内容で下書きを保存/更新する（自動保存と、閉じる時の確定保存で共有）。
+  // `syncNow` が真なら保存後すぐサーバー Drafts へ同期する（明示保存ボタン用）。
+  // 偽（自動保存）のときは saveTick を進め、下のデバウンスで落ち着いてから同期する。
+  // 何も書いていない新規は下書きを作らない（空の下書きがフォルダに溜まるのを防ぐ）。
+  const saveDraft = useCallback(
+    async (syncNow = false) => {
+      if (accountId == null || sendingRef.current) return;
+      if (draftIdRef.current == null && !hasContent()) return;
+      try {
+        const id = await mailSaveDraft({
+          draft_id: draftIdRef.current,
+          account_id: accountId,
+          to: splitAddresses(to),
+          cc: splitAddresses(cc),
+          bcc: splitAddresses(bcc),
+          subject,
+          body: composedBody(),
+          in_reply_to: init.inReplyTo,
+        });
+        draftIdRef.current = id;
+        setSaved(true);
+        setUnsaved(false);
+        if (syncNow) {
+          void syncRemote(id); // 明示保存: 即サーバー同期
+        } else {
+          setSaveTick((n) => n + 1); // 自動保存: 下のデバウンスで同期を予約
+        }
+      } catch {
+        // 自動保存の失敗は致命的でないので黙って無視（次の入力で再試行）。
+      }
+    },
+    [accountId, to, cc, bcc, subject, composedBody, init.inReplyTo, hasContent, syncRemote]
+  );
+
+  // 入力のたびにデバウンス（1s）して自動保存（ローカル）。dirty になって初めて走る。
+  // 自動保存がオフのときは走らせない（閉じる確認ダイアログでのみ保存する）。
   useEffect(() => {
-    if (!dirty) return;
+    if (!dirty || !autoSave) return;
     const h = setTimeout(() => void saveDraft(), 1000);
     return () => clearTimeout(h);
-  }, [dirty, saveDraft]);
+  }, [dirty, autoSave, saveDraft]);
+
+  // ローカル保存が済んだら、少し落ち着いてから（2.5s）サーバー Drafts へ同期する。
+  // 入力のたびに APPEND を打たないよう、ローカル保存より長めのデバウンスでまとめる。
+  useEffect(() => {
+    if (saveTick === 0 || !autoSave) return;
+    const id = draftIdRef.current;
+    if (id == null) return;
+    const h = setTimeout(() => void syncRemote(id), 2500);
+    return () => clearTimeout(h);
+  }, [saveTick, autoSave, syncRemote]);
 
   // 閉じる時、未保存の変更があれば確認ダイアログを出す（保存して閉じる / 破棄 / 編集に戻る）。
   // 未保存が無く自動保存済みの下書きがあれば、サーバー Drafts へ背景同期してそのまま閉じる。
   const closeGuarded = () => {
     if (unsaved) {
+      // 何も書いておらず、まだ下書きも作っていないなら、確認せずそのまま閉じる。
+      if (!hasContent() && draftIdRef.current == null) {
+        onClose();
+        return;
+      }
       setConfirmClose(true);
       return;
     }
@@ -594,14 +656,38 @@ export function Compose({
       )}
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
         <h2 className="text-sm font-semibold">{t(`compose.${target.mode}`)}</h2>
-        <button
-          onClick={closeGuarded}
-          disabled={sending}
-          className="flex h-7 w-7 items-center justify-center rounded-md text-white/55 hover:text-white/85 disabled:opacity-40"
-          aria-label={t('account.cancel')}
-        >
-          <X size={16} />
-        </button>
+        <div className="flex items-center gap-1">
+          {/* 下書きを今すぐ保存＋サーバーの Drafts へも同期（本文等があるときに有効）。 */}
+          <button
+            type="button"
+            onClick={() => void saveDraft(true)}
+            disabled={sending || accountId == null || !hasContent() || syncState === 'syncing'}
+            title={t('compose.saveDraft')}
+            aria-label={t('compose.saveDraft')}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-white/55 hover:bg-white/10 hover:text-white/85 disabled:opacity-40"
+          >
+            <Save size={16} />
+          </button>
+          {/* 下書きを破棄（ローカル＋サーバーから削除）して閉じる。 */}
+          <button
+            type="button"
+            onClick={() => void discardAndClose()}
+            disabled={sending}
+            title={t('compose.discard')}
+            aria-label={t('compose.discard')}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-white/55 hover:bg-rose-500/20 hover:text-rose-300 disabled:opacity-40"
+          >
+            <Trash2 size={16} />
+          </button>
+          <button
+            onClick={closeGuarded}
+            disabled={sending}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-white/55 hover:bg-white/10 hover:text-white/85 disabled:opacity-40"
+            aria-label={t('account.cancel')}
+          >
+            <X size={16} />
+          </button>
+        </div>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-4">
@@ -800,22 +886,25 @@ export function Compose({
           {flyOn ? <img src={swallowUrl} alt="" className="h-4 w-auto" /> : <Send size={14} />}
           {sending ? t('compose.sending') : flyOn ? t('compose.fly') : t('compose.send')}
         </button>
-        {/* 下書きを今すぐ保存（自動保存に加えて明示保存）。未保存の変更が無いときは無効。 */}
-        <button
-          type="button"
-          onClick={() => void saveDraft()}
-          disabled={sending || accountId == null || !unsaved}
-          title={t('compose.saveDraft')}
-          className="flex items-center gap-1.5 rounded-md bg-white/10 px-3 py-1.5 text-sm text-white/80 hover:bg-white/15 disabled:opacity-40"
-        >
-          <Save size={14} />
-          {t('compose.saveDraft')}
-        </button>
+        {/* 下書き保存/破棄はヘッダのアイコンボタンへ集約（重複を避ける）。
+            状態表示: 送信エラー > サーバー同期失敗 > 未保存 > 同期中/同期済み > 保存済み。 */}
         {error ? (
           <span className="flex-1 truncate text-xs text-rose-300">{error}</span>
+        ) : syncState === 'error' ? (
+          <span className="flex-1 truncate text-xs text-rose-300" title={syncErrRef.current}>
+            {t('compose.draftSyncFailed')}
+          </span>
         ) : (
           <span className="flex-1 truncate text-xs text-white/40">
-            {unsaved ? t('compose.unsavedShort') : saved ? t('compose.draftSaved') : ''}
+            {unsaved
+              ? t('compose.unsavedShort')
+              : syncState === 'syncing'
+                ? t('compose.draftSyncing')
+                : syncState === 'done'
+                  ? t('compose.draftSynced')
+                  : saved
+                    ? t('compose.draftSaved')
+                    : ''}
           </span>
         )}
       </div>

@@ -12,6 +12,7 @@ const AUTO_SYNC_SEC_KEY = 'rondine.autoSyncSec';
 const HOME_COUNT_SHOW_KEY = 'rondine.homeCountShow';
 const HOME_COUNT_FILTER_KEY = 'rondine.homeCountFilter';
 const PHONE_AUTOFORMAT_KEY = 'rondine.phoneAutoformat';
+const COMPOSE_AUTOSAVE_KEY = 'rondine.composeAutosave';
 export const PREFS_EVENT = 'rondine:prefs';
 
 /** 本文埋め込み画像（inline asset）を自動取得して表示するか。既定: オン。 */
@@ -166,6 +167,20 @@ export function getDefaultCalendarId(): number | null {
 export function setDefaultCalendarId(id: number | null): void {
   if (id == null) localStorage.removeItem(DEFAULT_CALENDAR_KEY);
   else localStorage.setItem(DEFAULT_CALENDAR_KEY, String(id));
+  window.dispatchEvent(new Event(PREFS_EVENT));
+}
+
+/**
+ * メール作成中の下書き自動保存を使うか。既定: オン。
+ * オフのときは、書きかけを閉じようとしたときに保存を促すダイアログだけを出し、
+ * 入力中に自動でローカルの下書きへ保存することはしない（意図しない下書きの量産を防ぐ）。
+ */
+export function getComposeAutoSave(): boolean {
+  return localStorage.getItem(COMPOSE_AUTOSAVE_KEY) !== '0';
+}
+
+export function setComposeAutoSave(value: boolean): void {
+  localStorage.setItem(COMPOSE_AUTOSAVE_KEY, value ? '1' : '0');
   window.dispatchEvent(new Event(PREFS_EVENT));
 }
 

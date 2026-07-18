@@ -353,18 +353,22 @@ impl Store {
     /// 指定メールが属する論理スレッドの会話（時系列）を返す。
     /// スレッド未割当のメール（旧データ）はここで遅延割当する。
     pub fn thread_view(&self, email_id: i64) -> rusqlite::Result<Option<ThreadView>> {
-        // まず参照専用接続で thread_id を引く（会話を開く操作は読み取りが主。書き込みに待たされない）。
-        let tid: Option<i64> = {
+        // まず参照専用接続で thread_id と、開いたメール自身のフォルダを引く
+        // （会話を開く操作は読み取りが主。書き込みに待たされない）。
+        let row: Option<(Option<i64>, String)> = {
             let rconn = self.read_conn.lock().unwrap();
             rconn
                 .query_row(
-                    "SELECT logical_thread_id FROM emails WHERE id = ?1",
+                    "SELECT logical_thread_id, folder FROM emails WHERE id = ?1",
                     params![email_id],
-                    |r| r.get(0),
+                    |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()?
-                .flatten()
         };
+        // 開いたメールがゴミ箱の行なら、その会話ではゴミ箱の行も見せる（Trash フォルダ閲覧）。
+        // それ以外（受信箱等から開く）はゴミ箱に入れた行を会話へ出さない。
+        let include_trash = matches!(&row, Some((_, folder)) if folder == "trash");
+        let tid = row.and_then(|(t, _)| t);
         // 未割当（process_pending 待ちの行を開いた稀なケース）だけ、書き込み接続で割り当てる。
         let tid = match tid {
             Some(t) => t,
@@ -378,13 +382,18 @@ impl Store {
         };
         // 会話本体の組み立ては参照専用接続で（書き込みに待たされない）。
         let rconn = self.read_conn.lock().unwrap();
-        Self::load_thread_view(&rconn, tid)
+        Self::load_thread_view(&rconn, tid, include_trash)
     }
 
     /// スレッド id から会話を組み立てる（内部）。
     /// 集計（件数・未読・参加者・既定タイトル）は保存値に頼らず、読み込んだメッセージから算出する
     /// （取り込み時の再計算コストを無くすため）。ユーザー名（title/rename フラグ）だけ保存値を使う。
-    fn load_thread_view(conn: &Connection, tid: i64) -> rusqlite::Result<Option<ThreadView>> {
+    /// `include_trash` が偽なら、ゴミ箱（folder='trash'）の行は会話に含めない。
+    fn load_thread_view(
+        conn: &Connection,
+        tid: i64,
+        include_trash: bool,
+    ) -> rusqlite::Result<Option<ThreadView>> {
         let head: Option<(Option<String>, bool)> = conn
             .query_row(
                 "SELECT title, is_user_renamed FROM logical_threads WHERE id = ?1",
@@ -395,7 +404,16 @@ impl Store {
         let Some((title, is_user_renamed)) = head else {
             return Ok(None);
         };
-        let sql = "SELECT e.id, e.account_id, e.message_id, e.from_address, e.from_name,
+        // 下書きは会話バブルに出さない（編集は Drafts フォルダ→Compose で行う）。
+        // 送信控えと同じ論理スレッドに属するため、除外しないと「送信済み＋下書き」の重複バブルに
+        // 見えてしまう。ゴミ箱の行も、Trash フォルダから開いたとき（include_trash）以外は隠す。
+        let trash_filter = if include_trash {
+            ""
+        } else {
+            "AND e.folder <> 'trash'"
+        };
+        let sql = format!(
+            "SELECT e.id, e.account_id, e.message_id, e.from_address, e.from_name,
                           e.to_addresses, e.subject, e.date,
                           CASE WHEN e.folder IN ('sent','drafts') THEN 'out'
                                WHEN EXISTS(SELECT 1 FROM accounts a
@@ -409,12 +427,11 @@ impl Store {
                           COALESCE(e.verified_self,0)
                    FROM emails e
                    WHERE e.logical_thread_id = ?1
-                     -- 下書きは会話バブルに出さない（編集は Drafts フォルダ→Compose で行う）。
-                     -- 送信控えと同じ論理スレッドに属するため、除外しないと「送信済み＋下書き」の
-                     -- 重複バブルに見えてしまう。
                      AND e.folder <> 'drafts'
-                   ORDER BY e.date_ts ASC, e.id ASC";
-        let mut stmt = conn.prepare(sql)?;
+                     {trash_filter}
+                   ORDER BY e.date_ts ASC, e.id ASC"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let mut messages: Vec<ThreadMessage> = stmt
             .query_map(params![tid], map_thread_message)?
             .collect::<rusqlite::Result<_>>()?;
@@ -1221,6 +1238,55 @@ mod tests {
             .unwrap();
         assert_eq!(child.clean_body.as_deref(), Some("承知しました。"));
         assert!(child.has_quotes);
+    }
+
+    /// 会話ビューは下書きを常に隠し、ゴミ箱の行は Trash フォルダから開いたときだけ見せる。
+    #[test]
+    fn thread_view_hides_drafts_and_conditionally_trash() {
+        let store = test_store();
+        let mut inbox_id = 0;
+        let mut trash_id = 0;
+        {
+            let conn = store.conn.lock().unwrap();
+            // 同一スレッド: 受信(root) → 送信(返信) → 下書き → ゴミ箱行。
+            let root = mk("m0@x", "見積もりの件", "you@corp.com", "inbox", 1, None, None);
+            let sent = mk("m1@x", "Re: 見積もりの件", "me@example.com", "sent", 2, Some("m0@x"), Some("m0@x"));
+            let draft = mk("d0@x", "Re: 見積もりの件", "me@example.com", "drafts", 3, Some("m1@x"), Some("m0@x m1@x"));
+            let trashed = mk("t0@x", "Re: 見積もりの件", "you@corp.com", "trash", 4, Some("m1@x"), Some("m0@x m1@x"));
+            for e in [root, sent, draft, trashed] {
+                let id = match insert_email(&conn, &e).unwrap() {
+                    crate::services::store::InsertOutcome::Inserted(id) => id,
+                    _ => panic!("expected insert"),
+                };
+                match e.message_id.as_deref() {
+                    Some("m0@x") => inbox_id = id,
+                    Some("t0@x") => trash_id = id,
+                    _ => {}
+                }
+            }
+            process_pending_conn(&conn, 1).unwrap();
+        }
+        // 受信箱から開く: 下書き・ゴミ箱は出ない（root + sent の 2 通）。
+        let from_inbox = store.thread_view(inbox_id).unwrap().unwrap();
+        let mids: Vec<&str> = from_inbox
+            .messages
+            .iter()
+            .filter_map(|m| m.message_id.as_deref())
+            .collect();
+        assert_eq!(from_inbox.messages.len(), 2, "下書き・ゴミ箱は会話に出さない");
+        assert_eq!(from_inbox.thread.message_count, 2);
+        assert!(mids.contains(&"m0@x") && mids.contains(&"m1@x"));
+        assert!(!mids.contains(&"d0@x") && !mids.contains(&"t0@x"));
+        // Trash フォルダの行から開く: ゴミ箱行は見えるが下書きは出ない（root + sent + trash の 3 通）。
+        let from_trash = store.thread_view(trash_id).unwrap().unwrap();
+        let mids2: Vec<&str> = from_trash
+            .messages
+            .iter()
+            .filter_map(|m| m.message_id.as_deref())
+            .collect();
+        assert_eq!(from_trash.messages.len(), 3);
+        assert!(mids2.contains(&"t0@x"), "Trash から開けばゴミ箱行は見える");
+        assert!(!mids2.contains(&"d0@x"), "下書きはどこから開いても出さない");
     }
 
     #[test]

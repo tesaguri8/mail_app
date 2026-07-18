@@ -803,7 +803,8 @@ impl Store {
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = r.id AND COALESCE(a.kind,'attachment') <> 'inline')) AS has_real,
                     {known_vip},
                     CASE WHEN r.logical_thread_id IS NULL THEN 1
-                         ELSE (SELECT count(*) FROM emails t WHERE t.logical_thread_id = r.logical_thread_id) END AS msg_count,
+                         ELSE (SELECT count(*) FROM emails t
+                               WHERE t.logical_thread_id = r.logical_thread_id {mc_filter}) END AS msg_count,
                     CASE WHEN r.logical_thread_id IS NULL THEN (CASE WHEN r.is_read = 0 THEN 1 ELSE 0 END)
                          ELSE (SELECT count(*) FROM emails t INDEXED BY idx_emails_thread_folder
                                WHERE t.logical_thread_id = r.logical_thread_id AND {fp_sub} AND t.is_read = 0) END AS unread_cnt,
@@ -816,6 +817,13 @@ impl Store {
             known_vip = known_vip_cols("r.from_address"),
             fp_page = folder_predicate(folder, "", "?1"),
             fp_sub = folder_predicate(folder, "t.", "?1"),
+            // 件数バッジ（msg_count）は会話ビューの表示内容に合わせる。下書きは常に数えない。
+            // ゴミ箱は Trash フォルダ閲覧時のみ数える（それ以外の一覧では除外）。
+            mc_filter = if folder == "trash" {
+                "AND t.folder <> 'drafts'"
+            } else {
+                "AND t.folder NOT IN ('drafts','trash')"
+            },
         );
         let mut stmt = conn.prepare(&sql)?;
         let map = |row: &rusqlite::Row| -> rusqlite::Result<ThreadListItem> {

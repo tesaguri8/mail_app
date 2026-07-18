@@ -134,6 +134,21 @@ pub fn build_message(msg: &OutgoingMessage) -> Result<Message, String> {
         builder = builder.bcc(parse_mailbox(a)?);
     }
 
+    // 宛先が 1 件も無いと lettre の build() は Envelope を導出できず MissingTo で失敗する。
+    // 下書きのサーバー保存（IMAP APPEND）では宛先ゼロも正当なので、その場合だけ差出人を
+    // 封筒の宛先に用いた明示 envelope を与えて組み立てを通す。封筒は .formatted() の生バイトに
+    // は現れず（To ヘッダは空のまま）、下書きは SMTP 送信もしないため無害。
+    if msg.to.is_empty() && msg.cc.is_empty() && msg.bcc.is_empty() {
+        let from_addr = msg
+            .from_email
+            .trim()
+            .parse::<lettre::Address>()
+            .map_err(|e| format!("差出人アドレスが不正です（{}）: {e}", msg.from_email))?;
+        let envelope = lettre::address::Envelope::new(Some(from_addr.clone()), vec![from_addr])
+            .map_err(|e| format!("下書きの封筒を作成できませんでした: {e}"))?;
+        builder = builder.envelope(envelope);
+    }
+
     // 返信のスレッド化:
     // - In-Reply-To は直近の親 1 件。
     // - References は祖先チェーン全部（古い順）。相手メーラーで正しく連なる。

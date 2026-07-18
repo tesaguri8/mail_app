@@ -411,6 +411,12 @@ export function Compose({
 
   // サーバーの Drafts フォルダへ同期する（成功/失敗をフッターに反映）。best-effort。
   const syncRemote = useCallback(async (id: number) => {
+    // 送信中／送信後は Drafts へ APPEND しない。ここで APPEND すると、送信完了時の
+    // 下書き削除（mail_draft_discard → delete_draft_remote）と競合し、「削除の後に
+    // APPEND が勝つ」とサーバー Drafts に下書きが残ってしまう。すると次回同期で会話に
+    // 「添付なしの重複メール」として復活する。2.5s デバウンスの予約分がちょうど送信の
+    // 瞬間に発火し得るため、呼び出し時点で sendingRef を見て握り潰す。
+    if (sendingRef.current) return;
     setSyncState('syncing');
     try {
       await mailDraftSyncRemote(id);

@@ -1025,9 +1025,61 @@ fn spawn_remote_purge(app: &AppHandle, store: &Store, refs: Vec<PurgeRef>) {
 }
 
 /// 複数メールをゴミ箱（trash フォルダ）へ移動する（既定の削除操作）。復元可能。
+/// 下書き（drafts）だけは、サーバーの Drafts フォルダのコピーも背景で削除する。
+/// 下書きは「破棄＝サーバーからも消える」が自然で、ローカルのゴミ箱に残したまま
+/// サーバー Drafts に居残ると、別端末や Webメールでゴミのままになるため避ける。
+/// （ゴミ箱から復元した場合は、次回の保存でサーバーへ再同期される。）
 #[tauri::command]
-pub fn mail_trash(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
-    store.move_emails_to_trash(&ids).map_err(|e| e.to_string())
+pub async fn mail_trash(
+    app: AppHandle,
+    store: State<'_, Store>,
+    ids: Vec<i64>,
+) -> Result<(), String> {
+    // 移動前に下書きのサーバー参照（account_id, Message-ID）を控える（移動後は folder が変わるため）。
+    let draft_refs: Vec<PurgeRef> = store
+        .purge_refs(&ids)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|r| r.source_tag == "drafts")
+        .collect();
+    store.move_emails_to_trash(&ids).map_err(|e| e.to_string())?;
+    spawn_remote_draft_delete(&app, &store, draft_refs);
+    Ok(())
+}
+
+/// ローカルでゴミ箱へ移した/破棄した下書きについて、サーバーの Drafts フォルダのコピーを
+/// バックグラウンドで削除する（best-effort・非同期。UI は待たせない）。
+fn spawn_remote_draft_delete(app: &AppHandle, store: &Store, refs: Vec<PurgeRef>) {
+    if refs.is_empty() {
+        return;
+    }
+    let identifier = app.config().identifier.clone();
+    for r in refs {
+        let inner = r
+            .message_id
+            .trim()
+            .trim_start_matches('<')
+            .trim_end_matches('>')
+            .to_string();
+        if inner.is_empty() {
+            continue;
+        }
+        let Some((email, login, host, port)) = store.get_account_imap(r.account_id).ok().flatten()
+        else {
+            continue;
+        };
+        let identifier = identifier.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Ok(password) =
+                keyring::Entry::new(&identifier, &email).and_then(|e| e.get_password())
+            {
+                let _ = tauri::async_runtime::spawn_blocking(move || {
+                    imap_sync::delete_draft_remote(&host, port, &login, &password, &inner)
+                })
+                .await;
+            }
+        });
+    }
 }
 
 /// ゴミ箱の複数メールを元のフォルダ（prev_folder、無ければ inbox）へ復元する。

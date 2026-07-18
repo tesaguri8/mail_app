@@ -409,6 +409,10 @@ impl Store {
                           COALESCE(e.verified_self,0)
                    FROM emails e
                    WHERE e.logical_thread_id = ?1
+                     -- 下書きは会話バブルに出さない（編集は Drafts フォルダ→Compose で行う）。
+                     -- 送信控えと同じ論理スレッドに属するため、除外しないと「送信済み＋下書き」の
+                     -- 重複バブルに見えてしまう。
+                     AND e.folder <> 'drafts'
                    ORDER BY e.date_ts ASC, e.id ASC";
         let mut stmt = conn.prepare(sql)?;
         let mut messages: Vec<ThreadMessage> = stmt

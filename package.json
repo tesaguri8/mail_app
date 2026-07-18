@@ -1,7 +1,7 @@
 {
   "name": "rondine",
   "private": true,
-  "version": "0.1.0-alpha.4",
+  "version": "0.1.0-alpha.5",
   "description": "Rondine — 軽くて美しく、AIに勝手に中身を渡さない、所有したくなるメール",
   "workspaces": [
     "packages/*"

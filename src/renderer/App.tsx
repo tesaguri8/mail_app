@@ -3,6 +3,7 @@ import { TitleBar, type AppView } from './components/TitleBar';
 import { BottomBar } from './components/BottomBar';
 import { Home } from './components/Home';
 import { MailboxView } from './components/MailboxView';
+import type { ComposeTarget } from './components/Compose';
 import { AddressBook } from './components/AddressBook';
 import { CalendarView } from './components/CalendarView';
 import { Settings } from './components/Settings';
@@ -33,6 +34,12 @@ export default function App() {
   const [mailOpenId, setMailOpenId] = useState<number | null>(null);
   // メール画面で現在表示中のアカウント選択（'all'=全て）。フッターの件数表示に使う。
   const [mailSel, setMailSel] = useState<number | 'all' | null>(null);
+  // 作成セッション（新規/返信/転送/下書き再編集）。メール画面はビュー離脱でアンマウント
+  // されるため、作成中の状態が消えないよう App 側で保持する。カレンダー等へ移動して戻ると
+  // 未編集の返信もそのまま再表示される。
+  const [compose, setCompose] = useState<ComposeTarget | null>(null);
+  // 編集中の下書き id。書きかけて自動保存された内容を、戻った時に本文込みで復元するのに使う。
+  const [composeDraftId, setComposeDraftId] = useState<number | null>(null);
   // 背景のかぶせ（暗さ）。写真によって文字が見づらい時に上げる。
   const [dim, setDim] = useState<number>(() => Number(localStorage.getItem('rondine.dim') ?? 0));
   useEffect(() => {
@@ -93,6 +100,12 @@ export default function App() {
   }, [refreshAccounts]);
 
   const openMail = (accountId: number, mailId?: number) => {
+    // 特定メールを開く操作（ホームの新着クリック等）では、保持していた作成セッションは畳む
+    // （書きかけて保存済みの下書きは drafts に残る）。別のメールを見たい意図を優先する。
+    if (mailId != null) {
+      setCompose(null);
+      setComposeDraftId(null);
+    }
     setMailAccountId(accountId);
     setMailOpenId(mailId ?? null);
     setView('mail');
@@ -153,6 +166,10 @@ export default function App() {
               initialAccountId={mailAccountId}
               initialMailId={mailOpenId}
               onAccountChange={setMailSel}
+              compose={compose}
+              setCompose={setCompose}
+              restoreDraftId={composeDraftId}
+              onComposeDraftChange={setComposeDraftId}
             />
           )}
           {view === 'contacts' && <AddressBook />}

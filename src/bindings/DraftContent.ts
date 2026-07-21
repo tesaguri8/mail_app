@@ -23,4 +23,9 @@ body: string,
 /**
  * 返信元の Message-ID（返信の下書きのみ。無ければ None）。
  */
-in_reply_to: string | null, };
+in_reply_to: string | null, 
+/**
+ * 返信元メール（in_reply_to で紐づく元メール）の emails.id。作成画面で右ペインに
+ * 元メールを並べて表示するのに使う（返信時と同じ 2 分割）。見つからなければ None。
+ */
+source_id: number | null, };

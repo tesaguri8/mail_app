@@ -964,6 +964,9 @@ pub struct DraftContent {
     pub body: String,
     /// 返信元の Message-ID（返信の下書きのみ。無ければ None）。
     pub in_reply_to: Option<String>,
+    /// 返信元メール（in_reply_to で紐づく元メール）の emails.id。作成画面で右ペインに
+    /// 元メールを並べて表示するのに使う（返信時と同じ 2 分割）。見つからなければ None。
+    pub source_id: Option<i32>,
 }
 
 /// 同期の進捗（Tauri イベント "sync:progress" のペイロード）。

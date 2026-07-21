@@ -1247,10 +1247,16 @@ impl Store {
     pub fn get_draft(&self, id: i64) -> rusqlite::Result<Option<crate::models::DraftContent>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, account_id, COALESCE(to_addresses, ''), COALESCE(cc_addresses, ''), \
-                    COALESCE(bcc_addresses, ''), COALESCE(subject, ''), COALESCE(body_plain, ''), \
-                    in_reply_to \
-             FROM emails WHERE id = ?1 AND folder = 'drafts'",
+            // 返信元メール（in_reply_to と Message-ID が一致し、下書き自身ではない同一アカウントの
+            // 実メール）の id を相関サブクエリで一緒に引く。右ペインに元メールを並べて表示する用。
+            "SELECT d.id, d.account_id, COALESCE(d.to_addresses, ''), COALESCE(d.cc_addresses, ''), \
+                    COALESCE(d.bcc_addresses, ''), COALESCE(d.subject, ''), COALESCE(d.body_plain, ''), \
+                    d.in_reply_to, \
+                    (SELECT s.id FROM emails s \
+                       WHERE s.message_id = d.in_reply_to AND s.account_id = d.account_id \
+                         AND s.folder != 'drafts' \
+                       ORDER BY s.id LIMIT 1) \
+             FROM emails d WHERE d.id = ?1 AND d.folder = 'drafts'",
             params![id],
             |r| {
                 Ok(crate::models::DraftContent {
@@ -1262,6 +1268,7 @@ impl Store {
                     subject: r.get(5)?,
                     body: r.get(6)?,
                     in_reply_to: r.get(7)?,
+                    source_id: r.get::<_, Option<i64>>(8)?.map(|v| v as i32),
                 })
             },
         )

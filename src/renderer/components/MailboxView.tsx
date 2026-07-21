@@ -125,12 +125,24 @@ export function MailboxView({
   initialAccountId,
   initialMailId,
   onAccountChange,
+  compose,
+  setCompose,
+  restoreDraftId,
+  onComposeDraftChange,
 }: {
   accounts: AccountSummary[];
   initialAccountId: number | null;
   initialMailId: number | null;
   /** 表示中アカウントの変化を親へ通知（フッターの件数表示用）。'all'=全アカウント。 */
   onAccountChange?: (id: number | 'all' | null) => void;
+  /** 作成セッション（新規/返信/転送/下書き再編集）。App が保持し、ビュー切替で
+   * メール画面がアンマウントされても消えないようにする（未編集の返信も戻せる）。 */
+  compose: ComposeTarget | null;
+  setCompose: (c: ComposeTarget | null) => void;
+  /** 直前まで編集していた下書き id（別ビューから戻った時に本文込みで復元する）。 */
+  restoreDraftId?: number | null;
+  /** 編集中の下書き id の変化を親へ通知（未編集/破棄後は null）。 */
+  onComposeDraftChange?: (id: number | null) => void;
 }) {
   const { t } = useTranslation();
   // 'all' = 全アカウント横断表示 / number = 特定アカウント / null = 未選択。
@@ -296,8 +308,8 @@ export function MailboxView({
     document.addEventListener('mouseup', onUp);
   };
 
-  // メール作成モーダル（新規／返信／転送）。null なら閉じている。
-  const [compose, setCompose] = useState<ComposeTarget | null>(null);
+  // 作成セッション（compose）は App 側で保持する（上の props）。メール画面はビュー切替で
+  // アンマウントされるが、compose は App にあるため未編集の返信/新規もそのまま残り、戻ると再表示される。
   // 作成画面に入ったら編集/カレンダーパネルは閉じる（全幅で作成に集中）。
   useEffect(() => {
     if (compose) {
@@ -307,6 +319,21 @@ export function MailboxView({
     // close* は毎回同じ挙動。compose の変化だけをトリガにする。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compose]);
+  // 別ビュー（カレンダー等）から戻った時（＝このマウント時）、書きかけて自動保存された下書きが
+  // あれば本文込みで開き直す。未編集の返信/新規は compose が保持されているのでそのまま表示され、
+  // 編集済みは保持していたセッションを本文付きの下書きへ差し替える。マウント時に一度だけ実行し、
+  // 編集中に自動保存で id が付いても（同一マウント中は再実行しない）ライブ編集を巻き戻さない。
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    if (restoreDraftId == null) return; // 書きかけの保存済み下書きは無い（未編集は compose 保持で足りる）
+    // 既に同じ下書きを本文込みで表示中なら再取得しない（下書き再編集セッションの保持時）。
+    if (compose?.mode === 'draft' && compose.draft.id === restoreDraftId) return;
+    void openDraft(restoreDraftId);
+    // マウント時に一度だけ。openDraft/compose/restoreDraftId は初期値で十分。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // 表示するフォルダ/グループ（受信箱以外は後続実装）
   const [folder, setFolder] = useState('inbox');
   // リスト絞り込みトグル
@@ -808,10 +835,13 @@ export function MailboxView({
   };
 
   // 下書きフォルダのクリックは、閲覧ではなく作成画面で再編集を開く。
+  // 返信の下書き（source_id あり）は元メールも読み込み、返信時と同じく右ペインに並べる。
   const openDraft = async (id: number) => {
     try {
       const draft = await mailGetDraft(id);
-      setCompose({ mode: 'draft', draft });
+      const source =
+        draft.source_id != null ? await mailGet(draft.source_id).catch(() => null) : null;
+      setCompose({ mode: 'draft', draft, source: source ?? undefined });
     } catch {
       /* noop */
     }
@@ -1705,20 +1735,25 @@ export function MailboxView({
     </div>
   );
 
+  // 作成画面の右ペインに並べて表示する元メール（返信/転送、または返信下書きの再編集）。
+  // 返信下書きでも元メールを解決できなかった場合は null（全幅表示になる）。
+  const composeSource: MailDetail | null =
+    compose && 'source' in compose ? (compose.source ?? null) : null;
+
   // メール作成はページとして表示（別ウィンドウにしない）。
   const composeEl = compose ? (
     <Compose
       accounts={accounts}
       // 返信/転送は元メールを受信したアカウントを既定に。新規は選択中（全ての時は先頭）。
       defaultAccountId={
-        ('source' in compose ? compose.source.account_id : null) ??
-        queryAccount ??
-        accounts[0]?.id ??
-        null
+        (composeSource?.account_id ?? null) ?? queryAccount ?? accounts[0]?.id ?? null
       }
       target={compose}
+      onDraftId={onComposeDraftChange}
       onClose={() => {
         setCompose(null);
+        // 作成画面を閉じたら復元対象もクリア（次にメールへ戻っても勝手に開かない）。
+        onComposeDraftChange?.(null);
         // 送信・下書き保存の結果を一覧へ反映（下書きフォルダ表示中でも見えるように）。
         void loadMails();
       }}
@@ -1834,16 +1869,16 @@ export function MailboxView({
       </div>
 
       {compose ? (
-        // メール作成はページとして表示（サイドバーは閉じる）。返信/転送は
-        // 左=下書き・右=元メールの2分割で、並べて作成できる。
-        'source' in compose ? (
+        // メール作成はページとして表示（サイドバーは閉じる）。返信/転送や返信下書きの
+        // 再編集は、左=下書き・右=元メールの2分割で並べて作成できる。
+        composeSource ? (
           <div
             className="grid grid-rows-1 min-h-0 flex-1 overflow-hidden"
             style={{ gridTemplateColumns: '1fr 1fr' }}
           >
             <div className="min-h-0 overflow-hidden">{composeEl}</div>
             <div className="flex min-h-0 flex-col overflow-hidden border-l border-white/10">
-              <MailBody detail={compose.source} />
+              <MailBody detail={composeSource} />
             </div>
           </div>
         ) : (

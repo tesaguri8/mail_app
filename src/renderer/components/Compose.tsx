@@ -29,7 +29,9 @@ import swallowUrl from '../assets/swallow.png';
 export type ComposeTarget =
   | { mode: 'new'; to?: string }
   | { mode: 'reply' | 'replyAll' | 'forward'; source: MailDetail }
-  | { mode: 'draft'; draft: DraftContent };
+  // draft の再編集。source は返信下書きの元メール（右ペイン表示用・任意）。
+  // 本文は保存済み全文をそのまま編集するので、source は表示専用（再引用はしない）。
+  | { mode: 'draft'; draft: DraftContent; source?: MailDetail };
 
 /** "Re: " / "Fwd: " を二重に付けない。 */
 /** 添付の合計サイズ上限（Rust 側の MAX_ATTACHMENT_TOTAL と揃える）。 */
@@ -161,11 +163,15 @@ export function Compose({
   defaultAccountId,
   target,
   onClose,
+  onDraftId,
 }: {
   accounts: AccountSummary[];
   defaultAccountId: number | null;
   target: ComposeTarget;
   onClose: () => void;
+  /** 現在編集中の下書き id を親へ通知する（未保存/破棄後は null）。
+   * ビュー切替で作成画面が閉じても、戻った時に同じ下書きを復元するために使う。 */
+  onDraftId?: (id: number | null) => void;
 }) {
   const { t } = useTranslation();
 
@@ -402,6 +408,9 @@ export function Compose({
 
   // 送信中フラグ（ref）。送信直前に立て、保留中の自動保存が送信後に下書きを作らないようにする。
   const sendingRef = useRef(false);
+  // 明示的に閉じた（保存/破棄/送信/通常クローズ）か。アンマウント時の確定保存を抑止し、
+  // 破棄済みの下書きを復活させないために使う。
+  const closedRef = useRef(false);
 
   // サーバー Drafts への同期状態（フッターに表示）。'idle' は非表示。
   const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle');
@@ -447,6 +456,7 @@ export function Compose({
           in_reply_to: init.inReplyTo,
         });
         draftIdRef.current = id;
+        onDraftId?.(id); // 復元用: 現在編集中の下書き id を親へ通知
         setSaved(true);
         setUnsaved(false);
         if (syncNow) {
@@ -458,8 +468,26 @@ export function Compose({
         // 自動保存の失敗は致命的でないので黙って無視（次の入力で再試行）。
       }
     },
-    [accountId, to, cc, bcc, subject, composedBody, init.inReplyTo, hasContent, syncRemote]
+    [
+      accountId,
+      to,
+      cc,
+      bcc,
+      subject,
+      composedBody,
+      init.inReplyTo,
+      hasContent,
+      syncRemote,
+      onDraftId,
+    ]
   );
+
+  // 再編集で開いた下書きは、開いた時点でその id を親へ通知しておく（ビュー切替後に復元できるよう）。
+  useEffect(() => {
+    if (target.mode === 'draft') onDraftId?.(target.draft.id);
+    // 開いた対象が変わった時だけ通知する。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
 
   // 入力のたびにデバウンス（1s）して自動保存（ローカル）。dirty になって初めて走る。
   // 自動保存がオフのときは走らせない（閉じる確認ダイアログでのみ保存する）。
@@ -479,13 +507,33 @@ export function Compose({
     return () => clearTimeout(h);
   }, [saveTick, autoSave, syncRemote]);
 
+  // 最新の saveDraft を参照する箱（アンマウント時の確定保存に使う。ref なので常に最新を指す）。
+  const saveDraftRef = useRef(saveDraft);
+  saveDraftRef.current = saveDraft;
+  // 明示的に閉じる。アンマウント時の確定保存フラグを立ててから親へ通知する。
+  const close = useCallback(() => {
+    closedRef.current = true;
+    onClose();
+  }, [onClose]);
+  // 作成画面がビュー切替（カレンダー等）で畳まれてアンマウントされる時、保留中の自動保存
+  // （1s デバウンス）が破棄されて書きかけが消えるのを防ぐため、最後にもう一度保存する。
+  // これで「返信を書きかけのままカレンダーへ移動→戻る」でも下書き id が確定して復元できる。
+  // 明示的に閉じた/破棄した場合（closedRef）はここでは保存しない。
+  useEffect(() => {
+    return () => {
+      if (closedRef.current) return; // 明示的に閉じた/破棄した
+      if (!dirtyRef.current) return; // ユーザーが何も編集していない（未タッチの返信・StrictMode の疑似アンマウント）
+      void saveDraftRef.current();
+    };
+  }, []);
+
   // 閉じる時、未保存の変更があれば確認ダイアログを出す（保存して閉じる / 破棄 / 編集に戻る）。
   // 未保存が無く自動保存済みの下書きがあれば、サーバー Drafts へ背景同期してそのまま閉じる。
   const closeGuarded = () => {
     if (unsaved) {
       // 何も書いておらず、まだ下書きも作っていないなら、確認せずそのまま閉じる。
       if (!hasContent() && draftIdRef.current == null) {
-        onClose();
+        close();
         return;
       }
       setConfirmClose(true);
@@ -494,7 +542,7 @@ export function Compose({
     if (draftIdRef.current != null) {
       void mailDraftSyncRemote(draftIdRef.current).catch(() => undefined);
     }
-    onClose();
+    close();
   };
   // ダイアログ「保存して閉じる」: 最新を確定保存し、サーバー Drafts へ背景同期して閉じる。
   const saveAndClose = async () => {
@@ -504,10 +552,11 @@ export function Compose({
       void mailDraftSyncRemote(draftIdRef.current).catch(() => undefined);
     }
     setConfirmClose(false);
-    onClose();
+    close();
   };
   // ダイアログ「破棄」: 自動保存済みの下書きがあれば削除して閉じる（未保存の入力は捨てる）。
   const discardAndClose = async () => {
+    closedRef.current = true; // 破棄後にアンマウント保存で復活させない
     if (draftIdRef.current != null) {
       try {
         await mailDraftDiscard(draftIdRef.current); // ローカルは即時・サーバーは背景で削除
@@ -516,7 +565,7 @@ export function Compose({
       }
     }
     setConfirmClose(false);
-    onClose();
+    close();
   };
   // 確認ダイアログ表示中は Esc で「編集に戻る」（キャンセル）。
   useEffect(() => {
@@ -627,7 +676,7 @@ export function Compose({
         }
         draftIdRef.current = null;
       }
-      onClose();
+      close();
     } catch (e) {
       setError(String(e));
       sendingRef.current = false; // 送信失敗: 自動保存を再開できるように戻す

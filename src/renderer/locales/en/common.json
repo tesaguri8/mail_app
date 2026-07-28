@@ -285,6 +285,7 @@
     "noSelection": "Select a contact, or add a new one.",
     "untitled": "(Untitled)",
     "namePlaceholder": "Name",
+    "nameRequired": "Enter a name to save",
     "nameLabel": "Last / First",
     "familyName": "Last",
     "givenName": "First",

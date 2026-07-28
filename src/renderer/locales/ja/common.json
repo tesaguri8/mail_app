@@ -285,6 +285,7 @@
     "noSelection": "連絡先を選択するか、追加してください。",
     "untitled": "（名称未設定）",
     "namePlaceholder": "名前",
+    "nameRequired": "名前を入力すると保存できます",
     "nameLabel": "姓・名",
     "familyName": "姓",
     "givenName": "名",

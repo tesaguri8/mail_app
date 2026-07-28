@@ -41,6 +41,19 @@ export function splitPersonName(display: string): {
   };
 }
 
+/**
+ * 姓・名から表示名を組み立てる（splitPersonName の逆）。
+ * 日本語（CJK を含む）は「姓 名」、ラテン文字は「given family」の順に並べる。
+ * 片方だけのときはその値をそのまま返し、両方空なら空文字を返す。
+ */
+export function joinPersonName(family: string | null, given: string | null): string {
+  const f = family?.trim() ?? '';
+  const g = given?.trim() ?? '';
+  if (!f) return g;
+  if (!g) return f;
+  return hasCjk(`${f}${g}`) ? `${f} ${g}` : `${g} ${f}`;
+}
+
 /** 前後の引用符（"" '' 「」 “” 等）や空白を取り除く。 */
 function stripQuotes(s: string): string {
   return s.replace(/^[\s\u3000"'“”「」『』]+|[\s\u3000"'“”「」『』]+$/g, '');

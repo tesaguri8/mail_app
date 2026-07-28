@@ -34,7 +34,7 @@ import { OrgCombobox } from './OrgCombobox';
 import { toE164 } from '../utils/phone';
 import { formatPostal } from '../utils/postal';
 import { getPhoneRegion, getPostalAutoformat } from '../config/prefs';
-import { splitPersonName } from '../utils/name';
+import { joinPersonName, splitPersonName } from '../utils/name';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -291,6 +291,21 @@ export function ContactEditor({
     setSaved(false);
   };
 
+  // 姓・名の入力に表示名を追従させる。保存には表示名が要るので、姓・名だけ埋めた
+  // 状態で保存できなくなるのを防ぐ。表示名を手で書き換えた後は追従しない。
+  const patchName = (p: Pick<Partial<ContactInput>, 'family_name' | 'given_name'>) => {
+    setDraft((d) => {
+      if (!d) return d;
+      const next = { ...d, ...p };
+      const auto = joinPersonName(d.family_name, d.given_name);
+      if (d.display_name.trim() === '' || d.display_name === auto) {
+        next.display_name = joinPersonName(next.family_name, next.given_name);
+      }
+      return next;
+    });
+    setSaved(false);
+  };
+
   // 空文字は NULL に寄せてから送る（検索・並び替えの一貫性のため）。
   const nullify = (s: string) => (s.trim() === '' ? null : s);
 
@@ -375,7 +390,7 @@ export function ContactEditor({
           <button
             onClick={save}
             disabled={draft.display_name.trim() === '' || (draft.id !== null && !dirty)}
-            title={t('contact.save')}
+            title={draft.display_name.trim() === '' ? t('contact.nameRequired') : t('contact.save')}
             aria-label={t('contact.save')}
             className="flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-white/20 px-3.5 text-sm font-medium hover:bg-white/30 disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -437,13 +452,13 @@ export function ContactEditor({
                 className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
                 placeholder={t('contact.familyName')}
                 value={draft.family_name ?? ''}
-                onChange={(e) => patch({ family_name: nullify(e.target.value) })}
+                onChange={(e) => patchName({ family_name: nullify(e.target.value) })}
               />
               <input
                 className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
                 placeholder={t('contact.givenName')}
                 value={draft.given_name ?? ''}
-                onChange={(e) => patch({ given_name: nullify(e.target.value) })}
+                onChange={(e) => patchName({ given_name: nullify(e.target.value) })}
               />
             </div>
           </Field>
@@ -555,6 +570,10 @@ export function ContactEditor({
           >
             {t('contact.save')}
           </button>
+          {/* 保存できない理由を明示する（名前が空だと保存ボタンは無効） */}
+          {draft.display_name.trim() === '' && (
+            <span className="text-sm text-white/45">{t('contact.nameRequired')}</span>
+          )}
           {saved && !dirty && <span className="text-sm text-emerald-300">{t('contact.saved')}</span>}
         </div>
       </div>

@@ -17,6 +17,7 @@ import {
   serverAccountList,
 } from '../services/accounts';
 import { signatureList } from '../services/signatures';
+import { setLastSignature } from '../config/prefs';
 import {
   accountSetBodyWindow,
   accountSetFullWindow,
@@ -248,6 +249,9 @@ export function AccountSetup({
   const saveEdit = async (id: number) => {
     try {
       await accountUpdate(id, editName.trim() || null, editSig);
+      // 作成画面は「最後に使った署名」を優先するので、ここで既定を変えたらそれも更新する
+      // （設定で選び直したのに次の作成画面へ反映されない、を防ぐ）。
+      setLastSignature(id, editSig);
       setEditStatus('✓ ' + t('account.saved'));
       onChanged();
     } catch (e) {

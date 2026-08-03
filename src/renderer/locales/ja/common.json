@@ -218,6 +218,7 @@
     "forwardSep": "-------- 転送メッセージ --------",
     "signature": "署名",
     "noSignature": "（署名なし）",
+    "signatureRemembered": "ここで選んだ署名は、このアカウントの次回の作成時にも使われます",
     "saveDraft": "下書き保存",
     "discard": "下書きを破棄",
     "draftSaved": "下書きを保存しました",

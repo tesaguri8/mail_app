@@ -177,12 +177,15 @@ function Bubble({
     !out && (m.from_address ?? '').includes('@')
       ? (m.from_address ?? '').split('@').pop()?.trim().toLowerCase() || ''
       : '';
+  // フリーメール（gmail.com 等）はドメイン単位で信頼できないため認定は拒否される（false）。
+  // その場合はバッジを変えない（理由の提示は本文ビュー側で行う）。
   const toggleGreen = async () => {
     if (!senderDomain) return;
     const next = !isGreen;
     try {
-      if (next) await greenDomainAdd(senderDomain);
-      else await greenDomainWarn(senderDomain);
+      if (next) {
+        if (!(await greenDomainAdd(senderDomain))) return;
+      } else await greenDomainWarn(senderDomain);
       setGreenOverride(next);
       handlers.onGreenChange?.();
     } catch {

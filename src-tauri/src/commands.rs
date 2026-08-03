@@ -1400,6 +1400,19 @@ pub fn spam_forgive_sender(store: State<Store>, address: String) -> Result<(), S
     Ok(())
 }
 
+/// 指定アドレスの迷惑登録を「このまま迷惑（強制適用）」にして矛盾を解消する（§8.5）。
+/// 住所録／グリーンより迷惑登録を優先し、受信箱に残っている同アドレスのメールも迷惑へ移す。
+#[tauri::command]
+pub fn spam_enforce_sender(store: State<Store>, address: String) -> Result<(), String> {
+    store
+        .enforce_spam_sender(&address)
+        .map_err(|e| e.to_string())?;
+    store
+        .set_sender_junk(&address, true)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// メールの迷惑スコアを算出して保存し、判定（バンド・根拠）を返す（§7.5）。
 /// 迷惑判定が無効（spam.enabled=false）なら中立を返す。しきい値はユーザー設定から読む（§9）。
 /// 隔離（is_junk）は自動では変えず、手動マークを優先する（§8.3）。
@@ -2173,12 +2186,14 @@ pub fn green_domain_list(store: State<Store>) -> Result<Vec<GreenDomainEntry>, S
 }
 
 /// ドメインをグリーンに認定（警告から外し、手動グリーンに登録）。
+/// 戻り値は認定したか。フリーメール（gmail.com 等）はドメイン単位で信頼できないため `false`
+/// （呼び出し側は「住所録に登録して本人を信頼する」よう案内する。docs/GREEN_DOMAINS.md）。
 #[tauri::command]
 pub fn green_domain_add(
     store: State<Store>,
     domain: String,
     note: Option<String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     store
         .add_green_domain(&domain, note.as_deref())
         .map_err(|e| e.to_string())

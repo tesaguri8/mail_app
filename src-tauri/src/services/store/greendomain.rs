@@ -3,8 +3,12 @@
 //! is_green の判定材料:
 //!  1) 差出人が住所録の本人（アドレス完全一致＝is_known 相当）
 //!  2) 差出人ドメインがグリーン集合に含まれる
-//!     グリーン集合 =（手動認定 green_domains ∪ 住所録由来ドメイン・フリーメール除く）− 警告 warning_domains
+//!     グリーン集合 =（手動認定 green_domains ∪ 住所録由来ドメイン）− フリーメール − 警告 warning_domains
 //! 「解除」は警告 warning_domains へ移し、住所録由来の自動グリーンが再登録されないようにする。
+//!
+//! フリーメール（gmail.com 等）は**ドメイン単位では信頼しない**（誰でも取得できるため、
+//! 1 人を信頼するとドメイン全体が信頼されてしまう）。手動認定も拒否し、本人一致だけを
+//! グリーンとする。
 
 use super::Store;
 use crate::models::GreenDomainEntry;
@@ -89,16 +93,32 @@ pub(crate) fn is_freemail(domain: &str) -> bool {
     FREEMAIL_DOMAINS.contains(&d.as_str())
 }
 
-/// グリーンとみなすドメイン集合（手動 ∪ 住所録由来[フリーメール除く] − 警告）。
+/// 旧バージョンで手動グリーンに登録されたフリーメールドメイン（gmail.com 等）を取り除く。
+/// ドメイン単位の信頼はフリーメールでは成立しない（誰でも取得できる）ため、起動時に掃除する。
+/// 冪等（該当が無ければ 0 件）。戻り値は削除した行数。
+pub(crate) fn purge_freemail_green_domains(conn: &Connection) -> rusqlite::Result<usize> {
+    let placeholders = FREEMAIL_DOMAINS
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!("DELETE FROM green_domains WHERE domain IN ({placeholders})");
+    conn.execute(&sql, rusqlite::params_from_iter(FREEMAIL_DOMAINS.iter()))
+}
+
+/// グリーンとみなすドメイン集合（手動 ∪ 住所録由来 − フリーメール − 警告）。
 /// 一覧・詳細の is_green 判定で使う（呼び出し側の接続を借りる＝再ロックしない）。
 pub(crate) fn green_domain_set(conn: &Connection) -> rusqlite::Result<HashSet<String>> {
     let mut set: HashSet<String> = HashSet::new();
-    // 手動認定。
+    // 手動認定（フリーメールはドメイン単位で信頼しない。旧バージョンで登録された行への防御）。
     {
         let mut stmt = conn.prepare("SELECT domain FROM green_domains")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         for d in rows {
-            set.insert(d?.to_lowercase());
+            let dom = d?.to_lowercase();
+            if !is_freemail(&dom) {
+                set.insert(dom);
+            }
         }
     }
     // 住所録由来（削除済み連絡先は除く。フリーメールは除外）。
@@ -208,7 +228,11 @@ impl Store {
                 stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?;
             for row in rows {
                 let (d, n) = row?;
-                m.insert(d.to_lowercase(), n);
+                let dom = d.to_lowercase();
+                // フリーメールはドメイン単位で信頼しない（掃除前の旧行が残っていても出さない）。
+                if !is_freemail(&dom) {
+                    m.insert(dom, n);
+                }
             }
             m
         };
@@ -263,10 +287,20 @@ impl Store {
     }
 
     /// ドメインをグリーンに認定（警告から外し、手動グリーンに登録）。
-    pub fn add_green_domain(&self, domain: &str, note: Option<&str>) -> rusqlite::Result<()> {
+    ///
+    /// * `domain` - 認定するドメイン（大文字小文字は無視）
+    /// * `note` - 任意のメモ
+    ///
+    /// 戻り値は認定したか。**フリーメール（gmail.com 等）は認定しない**（`Ok(false)`）。
+    /// 誰でも取得できるドメインをまとめて信頼すると、無関係な差出人まで信頼扱いになるため。
+    /// この場合は差出人を住所録に登録して「本人」として信頼する。
+    pub fn add_green_domain(&self, domain: &str, note: Option<&str>) -> rusqlite::Result<bool> {
         let dom = domain.trim().to_lowercase();
         if dom.is_empty() {
-            return Ok(());
+            return Ok(false);
+        }
+        if is_freemail(&dom) {
+            return Ok(false);
         }
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM warning_domains WHERE domain = ?1", params![dom])?;
@@ -275,7 +309,7 @@ impl Store {
              ON CONFLICT(domain) DO UPDATE SET note = ?2",
             params![dom, note],
         )?;
-        Ok(())
+        Ok(true)
     }
 
     /// ドメインを警告（グリーン解除）に。手動グリーンから外し、警告へ登録（自動再登録を防ぐ）。
@@ -353,8 +387,12 @@ mod tests {
         assert!(!s.address_green("x@unknown.co.jp").unwrap());
 
         // 手動認定。
-        s.add_green_domain("newsletter.example.com", None).unwrap();
+        assert!(s.add_green_domain("newsletter.example.com", None).unwrap());
         assert!(s.address_green("hi@newsletter.example.com").unwrap());
+
+        // フリーメールは手動でもドメイン単位で認定しない（本人＝住所録一致だけを信頼する）。
+        assert!(!s.add_green_domain("gmail.com", None).unwrap());
+        assert!(!s.address_green("stranger@gmail.com").unwrap());
 
         // 解除（警告）→ 住所録由来でもグリーンでなくなる（自動再登録されない）。
         s.warn_green_domain("acme.co.jp", None).unwrap();
@@ -371,5 +409,28 @@ mod tests {
         assert!(list.iter().any(|e| e.domain == "acme.co.jp" && e.kind == "green" && e.auto));
         assert!(list.iter().any(|e| e.domain == "spam.example.com" && e.kind == "warning"));
         assert!(!list.iter().any(|e| e.domain == "gmail.com"));
+    }
+
+    #[test]
+    fn purge_removes_legacy_freemail_green_rows() {
+        let s = store();
+        {
+            // 旧バージョンで登録されたフリーメールの手動グリーンを模す。
+            let conn = s.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO green_domains (domain) VALUES ('gmail.com'), ('acme.co.jp')",
+                [],
+            )
+            .unwrap();
+            // 掃除前でも、ドメイン単位の信頼としては効かせない。
+            let set = green_domain_set(&conn).unwrap();
+            assert!(!address_is_green(&conn, &set, Some("x@gmail.com")).unwrap());
+            assert_eq!(purge_freemail_green_domains(&conn).unwrap(), 1);
+            let left: i64 = conn
+                .query_row("SELECT COUNT(*) FROM green_domains", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(left, 1, "フリーメールだけ消え、通常ドメインは残る");
+        }
+        assert!(s.address_green("info@acme.co.jp").unwrap());
     }
 }

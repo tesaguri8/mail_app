@@ -265,7 +265,8 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
     insert_quotes(conn, id, &e.quotes)?;
     // 迷惑差出人に登録済みのアドレスからの新着（受信箱）は、受信時に自動で迷惑へ隔離する
     // （「このアドレスを迷惑にしたら今後の同アドレスも迷惑へ」。docs/SPAM.md）。
-    // ただし住所録・グリーン・本人検証などの信頼シグナルがあれば隔離しない（誤登録での取りこぼし防止）。
+    // ただし本人検証・住所録の本人一致があれば隔離しない（誤登録での取りこぼし防止）。
+    // グリーンは「ドメイン単位の緩い信頼」なのでアドレス単位の迷惑登録には勝たせない（§8.5 の優先順位）。
     if e.folder == "inbox" {
         if let Some(addr) = e.from_address.as_deref() {
             if super::spam::is_spam_sender_conn(conn, addr)?

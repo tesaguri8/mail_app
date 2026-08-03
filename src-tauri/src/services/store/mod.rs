@@ -53,6 +53,13 @@ impl Store {
             "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
         )?;
         migrations::run(&conn)?;
+        // 旧バージョンで手動グリーンに入れられたフリーメール（gmail.com 等）を掃除する。
+        // ドメイン単位の信頼はフリーメールでは成立しないため（冪等・通常 0 件）。
+        match greendomain::purge_freemail_green_domains(&conn) {
+            Ok(n) if n > 0 => log::info!("purged {n} freemail green domains"),
+            Ok(_) => {}
+            Err(e) => log::warn!("freemail green domain purge skipped: {e}"),
+        }
         // 参照専用の別接続。WAL の読み取りは書き込みと並行できるので、UI の読み取りが
         // 背景の書き込みに待たされない。query_only で誤って書き込まないよう保護する。
         let read_conn = Connection::open(path)?;

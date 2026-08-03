@@ -700,12 +700,18 @@ export function MailBody({
   }, [detail.id, detail.body_state]);
 
   // 差出人ドメインをグリーン認定/解除（一覧のバッジは onGreenChange で更新）。
+  // フリーメール（gmail.com 等）はドメイン単位で信頼できないため認定は拒否され、理由を出す。
   const toggleGreen = async () => {
     if (!senderDomain) return;
     const next = !isGreen;
+    setNote('');
     try {
-      if (next) await greenDomainAdd(senderDomain);
-      else await greenDomainWarn(senderDomain);
+      if (next) {
+        if (!(await greenDomainAdd(senderDomain))) {
+          setNote(t('green.freemail', { domain: senderDomain }));
+          return;
+        }
+      } else await greenDomainWarn(senderDomain);
       setGreenOverride(next);
       onGreenChange?.();
     } catch {
@@ -880,7 +886,12 @@ export function MailBody({
                 <X size={16} />
               </button>
             )}
-            {note && <span className="ml-1 text-[10px] text-white/45">{note}</span>}
+            {note && (
+              // 長い理由（フリーメールは認定不可 等）でも操作列を崩さないよう省略し、全文は title で。
+              <span className="ml-1 max-w-[16rem] truncate text-[10px] text-white/45" title={note}>
+                {note}
+              </span>
+            )}
           </div>
         </div>
         <div className="mt-1 text-xs text-white/50">

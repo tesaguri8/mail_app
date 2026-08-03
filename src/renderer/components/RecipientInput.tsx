@@ -1,9 +1,11 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { Copy, Pencil, Trash2, User, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { RecipientSuggestion } from '@bindings/RecipientSuggestion';
 import { recipientSuggest } from '../services/recipients';
 import { RecipientSuggestList } from './RecipientSuggestList';
+import { ContextMenu, type MenuItem } from './ContextMenu';
+import { copyText } from '../utils/clipboard';
 
 /**
  * value（カンマ区切り文字列）を「確定済みチップ」＋「編集中の下書き」に分ける。
@@ -90,6 +92,8 @@ export function RecipientInput({
   const [suggestions, setSuggestions] = useState<RecipientSuggestion[]>([]);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  // チップの右クリックメニュー（アドレスのコピー・編集・削除）。index は対象チップ。
+  const [chipMenu, setChipMenu] = useState<{ x: number; y: number; index: number } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   // 直前に確定挿入したことを示すフラグ（挿入直後の再クエリを抑止）。
   const justPicked = useRef(false);
@@ -147,6 +151,46 @@ export function RecipientInput({
   const removeChip = (i: number) => {
     onChange(composeValue(chips.filter((_, idx) => idx !== i), draft));
     inputRef.current?.focus();
+  };
+
+  // チップの右クリックメニュー。アドレスだけのコピーを主目的にしつつ、左クリック/× と同じ
+  // 操作（編集・削除）もここから行えるようにする。
+  const chipMenuItems = (i: number): MenuItem[] => {
+    const chip = chips[i];
+    const { email, label } = parseChip(chip);
+    const items: MenuItem[] = [
+      {
+        key: 'copy',
+        label: t('compose.recipientCopyAddress'),
+        Icon: Copy,
+        onClick: () => void copyText(email),
+      },
+    ];
+    // 表示名つきの宛先だけ「名前 <addr>」のコピーも出す（素のアドレスなら重複するので出さない）。
+    if (label !== email) {
+      items.push({
+        key: 'copyWithName',
+        label: t('compose.recipientCopyWithName'),
+        Icon: User,
+        onClick: () => void copyText(chip),
+      });
+    }
+    items.push(
+      {
+        key: 'edit',
+        label: t('compose.recipientEdit'),
+        Icon: Pencil,
+        onClick: () => editChip(i),
+      },
+      {
+        key: 'remove',
+        label: t('compose.recipientRemove'),
+        Icon: Trash2,
+        danger: true,
+        onClick: () => removeChip(i),
+      },
+    );
+    return items;
   };
 
   // 指定チップを入力欄へ戻して編集する。編集中の下書きがあれば失わないようチップ化しておく。
@@ -211,9 +255,9 @@ export function RecipientInput({
     <div className="relative flex-1">
       <div
         className={`${className ?? ''} flex flex-wrap items-center gap-1.5 cursor-text focus-within:bg-white/15`}
-        // 余白クリックで入力欄へフォーカス（チップ/ボタンのクリックは巻き込まない）。
+        // 余白の左クリックで入力欄へフォーカス（チップ/ボタンのクリックは巻き込まない）。
         onMouseDown={(e) => {
-          if (e.target === e.currentTarget) {
+          if (e.button === 0 && e.target === e.currentTarget) {
             e.preventDefault();
             inputRef.current?.focus();
           }
@@ -225,10 +269,18 @@ export function RecipientInput({
             <span
               key={`${i}:${chip}`}
               title={valid ? chip : `${t('compose.recipientInvalid')} — ${chip}`}
-              // クリックで入力欄へ戻して編集（× は伝播を止めて削除のみ）。
+              // 左クリックで入力欄へ戻して編集（× は伝播を止めて削除のみ）。
+              // 右クリックはメニュー（下の onContextMenu）に任せ、編集に落とさない。
               onMouseDown={(e) => {
+                if (e.button !== 0) return;
                 e.preventDefault();
                 editChip(i);
+              }}
+              // 右クリック: アドレスのコピー・編集・削除。
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setChipMenu({ x: e.clientX, y: e.clientY, index: i });
               }}
               className={`inline-flex max-w-full items-center gap-1 rounded py-0.5 pl-2 pr-1 text-xs ${
                 valid
@@ -240,6 +292,7 @@ export function RecipientInput({
               <button
                 type="button"
                 onMouseDown={(e) => {
+                  if (e.button !== 0) return;
                   e.preventDefault();
                   e.stopPropagation();
                   removeChip(i);
@@ -282,6 +335,15 @@ export function RecipientInput({
           onHover={setActive}
           listId={listId}
           className="absolute left-0 top-full mt-1 w-full"
+        />
+      )}
+      {chipMenu && chips[chipMenu.index] !== undefined && (
+        <ContextMenu
+          x={chipMenu.x}
+          y={chipMenu.y}
+          header={chips[chipMenu.index]}
+          items={chipMenuItems(chipMenu.index)}
+          onClose={() => setChipMenu(null)}
         />
       )}
     </div>

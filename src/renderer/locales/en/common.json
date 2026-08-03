@@ -667,6 +667,7 @@
     "deletePermanentConfirm": "Permanently delete {{count}} message(s)? This cannot be undone.",
     "trashedToast": "Moved {{count}} to Trash",
     "undo": "Undo",
+    "opFailed": "Operation failed:",
     "noMatch": "No matching mail.",
     "w_n50": "Latest 50",
     "w_n200": "Latest 200",

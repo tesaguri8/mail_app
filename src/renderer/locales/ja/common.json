@@ -667,6 +667,7 @@
     "deletePermanentConfirm": "{{count}} 件を完全に削除します。元に戻せません。よろしいですか？",
     "trashedToast": "{{count}} 件をゴミ箱に移動しました",
     "undo": "元に戻す",
+    "opFailed": "操作に失敗しました:",
     "noMatch": "一致するメールはありません。",
     "w_n50": "最新50件",
     "w_n200": "最新200件",

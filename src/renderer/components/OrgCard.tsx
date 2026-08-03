@@ -26,7 +26,7 @@ import { getPhoneRegion, getPhoneStyle, getPostalAutoformat } from '../config/pr
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 /** 空の所在地。 */
-export const emptyOrgAddress = (): OrgAddress => ({
+const emptyOrgAddress = (): OrgAddress => ({
   postal: null,
   region: null,
   city: null,
@@ -62,7 +62,7 @@ export const orgDraft = (org?: OrganizationSummary | null): OrganizationInput =>
       };
 
 /** 所在地を 1 行の文字列へ（郵便番号は設定に応じて整形。連絡先の住所と同じ並び）。 */
-export function orgAddressToFlat(a: OrgAddress): string {
+function orgAddressToFlat(a: OrgAddress): string {
   const postalRegion = getPostalAutoformat() ? getPhoneRegion() : '';
   const postal = formatPostal(a.postal ?? '', postalRegion);
   return [postal, a.region, a.city, a.street, a.extended, a.country]
@@ -72,7 +72,7 @@ export function orgAddressToFlat(a: OrgAddress): string {
 }
 
 /** 組織カードに代表連絡先が 1 つでも入っているか（ラベル表示の有無を決める）。 */
-export function hasOrgCardInfo(org: OrganizationSummary): boolean {
+function hasOrgCardInfo(org: OrganizationSummary): boolean {
   return Boolean(
     (org.phone ?? '').trim() ||
     (org.fax ?? '').trim() ||

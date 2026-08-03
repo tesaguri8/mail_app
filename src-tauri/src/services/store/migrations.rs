@@ -214,6 +214,10 @@ const MIGRATIONS: &[Migration] = &[
         version: 49,
         sql: include_str!("migrations/0049_spam_sender_enforced.sql"),
     },
+    Migration {
+        version: 50,
+        sql: include_str!("migrations/0050_deleted_keys.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

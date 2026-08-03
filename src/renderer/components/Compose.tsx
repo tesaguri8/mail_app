@@ -415,16 +415,13 @@ export function Compose({
   // サーバー Drafts への同期状態（フッターに表示）。'idle' は非表示。
   const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle');
   const syncErrRef = useRef<string>('');
-  // ローカル保存が成功するたびに増やし、サーバー同期のデバウンスを起動するトリガ。
-  const [saveTick, setSaveTick] = useState(0);
 
   // サーバーの Drafts フォルダへ同期する（成功/失敗をフッターに反映）。best-effort。
   const syncRemote = useCallback(async (id: number) => {
     // 送信中／送信後は Drafts へ APPEND しない。ここで APPEND すると、送信完了時の
     // 下書き削除（mail_draft_discard → delete_draft_remote）と競合し、「削除の後に
     // APPEND が勝つ」とサーバー Drafts に下書きが残ってしまう。すると次回同期で会話に
-    // 「添付なしの重複メール」として復活する。2.5s デバウンスの予約分がちょうど送信の
-    // 瞬間に発火し得るため、呼び出し時点で sendingRef を見て握り潰す。
+    // 「添付なしの重複メール」として復活する。
     if (sendingRef.current) return;
     setSyncState('syncing');
     try {
@@ -438,7 +435,9 @@ export function Compose({
 
   // 現在の内容で下書きを保存/更新する（自動保存と、閉じる時の確定保存で共有）。
   // `syncNow` が真なら保存後すぐサーバー Drafts へ同期する（明示保存ボタン用）。
-  // 偽（自動保存）のときは saveTick を進め、下のデバウンスで落ち着いてから同期する。
+  // 自動保存はローカルのみに留める（サーバー Drafts へは「明示保存」と「閉じる時」だけ
+  // APPEND する）。入力のたびに APPEND すると、書いている間ずっとサーバー上に下書きの
+  // 入れ替え（削除→APPEND）が走り、送信時の後片付けと競合してゴミが残りやすくなるため。
   // 何も書いていない新規は下書きを作らない（空の下書きがフォルダに溜まるのを防ぐ）。
   const saveDraft = useCallback(
     async (syncNow = false) => {
@@ -460,9 +459,7 @@ export function Compose({
         setSaved(true);
         setUnsaved(false);
         if (syncNow) {
-          void syncRemote(id); // 明示保存: 即サーバー同期
-        } else {
-          setSaveTick((n) => n + 1); // 自動保存: 下のデバウンスで同期を予約
+          void syncRemote(id); // 明示保存: 即サーバー同期（自動保存はローカルのみ）
         }
       } catch {
         // 自動保存の失敗は致命的でないので黙って無視（次の入力で再試行）。
@@ -496,16 +493,6 @@ export function Compose({
     const h = setTimeout(() => void saveDraft(), 1000);
     return () => clearTimeout(h);
   }, [dirty, autoSave, saveDraft]);
-
-  // ローカル保存が済んだら、少し落ち着いてから（2.5s）サーバー Drafts へ同期する。
-  // 入力のたびに APPEND を打たないよう、ローカル保存より長めのデバウンスでまとめる。
-  useEffect(() => {
-    if (saveTick === 0 || !autoSave) return;
-    const id = draftIdRef.current;
-    if (id == null) return;
-    const h = setTimeout(() => void syncRemote(id), 2500);
-    return () => clearTimeout(h);
-  }, [saveTick, autoSave, syncRemote]);
 
   // 最新の saveDraft を参照する箱（アンマウント時の確定保存に使う。ref なので常に最新を指す）。
   const saveDraftRef = useRef(saveDraft);

@@ -1,7 +1,8 @@
 use crate::models::SyncResult;
 use crate::services::parser;
 use crate::services::store::{
-    insert_email, rederive_attachments, InsertOutcome, NewAttachment, NewEmail, NewQuote,
+    insert_email, mark_remote_deleted, pending_remote_deletes, purge_old_tombstones,
+    rederive_attachments, InsertOutcome, NewAttachment, NewEmail, NewQuote,
 };
 use chrono::{Duration, Utc};
 use mail_parser::{MessageParser, MimeHeaders};
@@ -269,6 +270,16 @@ fn run_sync(
         }
         Err(e) => log::warn!("フォルダ一覧の取得に失敗（受信箱のみ同期）: {e}"),
     }
+
+    // Pass 0: 破棄済み下書き（墓標）のうち、サーバー側コピーの削除が済んでいないものを片付ける。
+    // 取り込み（Pass 1）より先に済ませることで、同じ同期の中で下書きが復活しないようにする。
+    if let Some((mbox, _)) = folders.iter().find(|(_, tag)| *tag == "drafts") {
+        if let Err(e) = retry_pending_draft_deletes(session, conn, account_id, mbox) {
+            log::warn!("破棄済み下書きのサーバー削除に失敗（次回同期で再試行）: {e}");
+        }
+    }
+    // 役目を終えた墓標を掃除する（失敗しても同期は続ける）。
+    let _ = purge_old_tombstones(conn);
 
     // Pass 1: 新着（増分/初回）を全フォルダ分。新しいものを最優先で取り込む（docs/SYNC.md §3.6）。
     for (mbox, tag) in &folders {
@@ -1497,6 +1508,38 @@ pub fn delete_draft_remote(
     let r = expunge_draft_by_message_id(&mut session, message_id_inner);
     let _ = session.logout();
     r
+}
+
+/// 破棄済み下書き（墓標）のうち、サーバー側コピーの削除が済んでいないものを片付ける。
+/// 同期中のセッションをそのまま使い、消せたものから墓標の再試行予約を下ろす。
+/// 破棄時の背景削除が失敗していても、次の同期でここが拾って消すため下書きは残り続けない。
+fn retry_pending_draft_deletes(
+    session: &mut ImapSession,
+    conn: &Connection,
+    account_id: i64,
+    drafts_mailbox: &str,
+) -> Result<(), String> {
+    let pending = pending_remote_deletes(conn, account_id).map_err(|e| e.to_string())?;
+    if pending.is_empty() {
+        return Ok(());
+    }
+    session.select(drafts_mailbox).map_err(|e| e.to_string())?;
+    for p in &pending {
+        match expunge_draft_by_message_id(session, &p.message_id_inner) {
+            Ok(()) => {
+                let _ = mark_remote_deleted(conn, account_id, &p.canonical_key);
+            }
+            Err(e) => log::warn!(
+                "破棄済み下書き {} のサーバー削除に失敗（次回同期で再試行）: {e}",
+                p.message_id_inner
+            ),
+        }
+    }
+    log::info!(
+        "破棄済み下書きのサーバー側後片付け: {} 件を処理しました",
+        pending.len()
+    );
+    Ok(())
 }
 
 /// 完全削除する 1 通の指定（サーバー上の元フォルダのローカルタグ＋Message-ID の中身）。

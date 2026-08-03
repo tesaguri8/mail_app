@@ -975,6 +975,10 @@ pub async fn mail_delete(
 ) -> Result<(), String> {
     // サーバー反映に要る情報は、ローカル削除で消える前に読み出しておく。
     let refs = store.purge_refs(&ids).map_err(|e| e.to_string())?;
+    // 下書きは墓標を残してから消す（サーバーにコピーが残っていても同期で復活させない）。
+    if let Err(e) = store.tombstone_drafts(&ids) {
+        log::warn!("下書きの墓標を残せませんでした（同期で復活する可能性があります）: {e}");
+    }
     store.delete_emails(&ids).map_err(|e| e.to_string())?;
     spawn_remote_purge(&app, &store, refs);
     Ok(())
@@ -1103,6 +1107,10 @@ pub async fn mail_empty_folder(
     let refs = store
         .purge_refs_for_folder(account_id, &folder)
         .map_err(|e| e.to_string())?;
+    // 中に下書き（ゴミ箱へ移した下書きを含む）があれば墓標を残してから消す。
+    if let Err(e) = store.tombstone_drafts_in_folder(account_id, &folder) {
+        log::warn!("下書きの墓標を残せませんでした（同期で復活する可能性があります）: {e}");
+    }
     let n = store
         .empty_folder(account_id, &folder)
         .map_err(|e| e.to_string())?;
@@ -1200,9 +1208,83 @@ pub async fn mail_draft_sync_remote(
     .map_err(|e| e.to_string())?
 }
 
+/// 下書きのサーバー側コピーを消すのに要る情報（ローカル削除で消える前に集める）。
+struct DraftRemoteTarget {
+    account_id: i64,
+    /// keyring から資格情報を引くためのアカウントのメールアドレス。
+    imap_email: String,
+    login: String,
+    host: String,
+    port: u16,
+    /// Message-ID の中身（山括弧なし）。サーバー上の該当下書きを HEADER 検索で引く。
+    message_id_inner: String,
+}
+
+/// 下書き 1 件について、サーバー側コピーの削除に要る情報を集める。
+/// Message-ID が無い（古い下書き等）／アカウント設定が引けない場合は None。
+fn draft_remote_target(store: &Store, id: i64) -> Option<DraftRemoteTarget> {
+    let (account_id, message_id) = store.draft_remote_ref(id).ok().flatten()?;
+    let inner = message_id
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .to_string();
+    if inner.is_empty() {
+        return None;
+    }
+    let (imap_email, login, host, port) = store.get_account_imap(account_id).ok().flatten()?;
+    Some(DraftRemoteTarget {
+        account_id,
+        imap_email,
+        login,
+        host,
+        port,
+        message_id_inner: inner,
+    })
+}
+
+/// サーバー Drafts のコピーをバックグラウンドで削除し、成功したら墓標の再試行予約を下ろす。
+/// 失敗しても UI には影響させない（予約が残るので次回同期で再試行される）。
+fn spawn_draft_remote_delete(app: &AppHandle, target: DraftRemoteTarget) {
+    let service = app.config().identifier.clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let Ok(password) =
+            keyring::Entry::new(&service, &target.imap_email).and_then(|e| e.get_password())
+        else {
+            log::warn!("下書きのサーバー削除: 資格情報を取得できません（次回同期で再試行）");
+            return;
+        };
+        let DraftRemoteTarget {
+            account_id,
+            login,
+            host,
+            port,
+            message_id_inner,
+            ..
+        } = target;
+        let mid = message_id_inner.clone();
+        let done = tauri::async_runtime::spawn_blocking(move || {
+            imap_sync::delete_draft_remote(&host, port, &login, &password, &mid)
+        })
+        .await;
+        match done {
+            Ok(Ok(())) => {
+                let store = app.state::<Store>();
+                let _ = store.clear_tombstone_remote(account_id, &message_id_inner);
+            }
+            // 失敗しても墓標の予約（remote_pending=1）は残るので、次回の同期が拾って消す。
+            Ok(Err(e)) => log::warn!("下書きのサーバー削除に失敗（次回同期で再試行）: {e}"),
+            Err(e) => log::warn!("下書きのサーバー削除を実行できません: {e}"),
+        }
+    });
+}
+
 /// 下書きをサーバーとローカルの両方から削除する（破棄・送信後の後片付け）。
 /// ローカルは即削除して返し、サーバーのコピー削除はバックグラウンドで行う（best-effort。
 /// サーバー設定が無い/失敗しても UI は待たせない）。
+/// 削除の直前に墓標（deleted_keys）を残すので、サーバー削除が失敗しても・実行中の同期に
+/// 拾われても、下書きが復活することはない（services/store/tombstones.rs）。
 #[tauri::command]
 pub async fn mail_draft_discard(
     app: AppHandle,
@@ -1210,37 +1292,16 @@ pub async fn mail_draft_discard(
     id: i64,
 ) -> Result<(), String> {
     // サーバー削除に要る情報は、ローカル削除で消える前に読み出しておく。
-    let remote = store
-        .draft_remote_ref(id)
-        .ok()
-        .flatten()
-        .and_then(|(account_id, mid)| {
-            store
-                .get_account_imap(account_id)
-                .ok()
-                .flatten()
-                .map(|(imap_email, login, host, port)| (imap_email, login, host, port, mid))
-        });
+    let remote = draft_remote_target(&store, id);
+    // 墓標を先に残す（同期が既に取得済みの一覧から取り込み直すのを止める）。
+    if let Err(e) = store.tombstone_drafts(&[id]) {
+        log::warn!("下書きの墓標を残せませんでした（同期で復活する可能性があります）: {e}");
+    }
     // ローカルは即削除（UI 反映を待たせない）。
     store.delete_emails(&[id]).map_err(|e| e.to_string())?;
     // サーバーのコピー削除はバックグラウンドで（best-effort）。
-    if let Some((imap_email, login, host, port, mid)) = remote {
-        let service = app.config().identifier.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Ok(password) =
-                keyring::Entry::new(&service, &imap_email).and_then(|e| e.get_password())
-            {
-                let inner = mid
-                    .trim()
-                    .trim_start_matches('<')
-                    .trim_end_matches('>')
-                    .to_string();
-                let _ = tauri::async_runtime::spawn_blocking(move || {
-                    imap_sync::delete_draft_remote(&host, port, &login, &password, &inner)
-                })
-                .await;
-            }
-        });
+    if let Some(target) = remote {
+        spawn_draft_remote_delete(&app, target);
     }
     Ok(())
 }

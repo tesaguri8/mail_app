@@ -378,6 +378,8 @@ export function MailboxView({
   const allMatchRowsRef = useRef<ThreadListItem[]>([]);
   // 直前のゴミ箱移動の取消情報（Ctrl+Z／トーストで復元）。ids は移動したメール id。
   const [undoTrash, setUndoTrash] = useState<{ ids: number[]; count: number } | null>(null);
+  // 削除・復元などが失敗したときの理由（トーストで表示。数秒で自動的に消える）。
+  const [opError, setOpError] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; rowId: number } | null>(null);
   // 選択モード（チェックボックス表示中）。1件でも明示選択したら on。
   const [selecting, setSelecting] = useState(false);
@@ -484,6 +486,13 @@ export function MailboxView({
     const tmr = setTimeout(() => setUndoTrash(null), 6000);
     return () => clearTimeout(tmr);
   }, [undoTrash]);
+
+  // 失敗トーストも一定時間で消す（原因は読めるよう少し長めに出す）。
+  useEffect(() => {
+    if (!opError) return;
+    const tmr = setTimeout(() => setOpError(null), 10000);
+    return () => clearTimeout(tmr);
+  }, [opError]);
 
   // 矢印キーで前後のメールへ移動し、本文も切り替える（一覧は ↑↓、本文閲覧中は ←→）。
   // 端で止まる。最新の一覧/選択は keyNavRef 経由で参照する。
@@ -955,6 +964,12 @@ export function MailboxView({
     }
     if (wasAll) await loadMails({ keepScroll: true });
   };
+  // 削除・復元などが失敗したときの共通後始末。原因をトーストで知らせ、楽観更新で消した行を
+  // 一覧から復帰させる（黙って握り潰すと「ボタンが効かない」ように見えるため）。
+  const operationFailed = async (e: unknown) => {
+    setOpError(String(e));
+    await loadMails();
+  };
   // 楽観更新で一覧から外し、閲覧中なら閉じる（削除／ゴミ箱移動／復元の共通処理）。
   const dropRows = (rowIds: number[], emailIds: number[]) => {
     const idSet = new Set(rowIds);
@@ -993,8 +1008,8 @@ export function MailboxView({
       advance();
       try {
         await mailDelete(ids);
-      } catch {
-        /* noop */
+      } catch (e) {
+        await operationFailed(e);
       }
       return;
     }
@@ -1003,8 +1018,9 @@ export function MailboxView({
     setUndoTrash({ ids, count: rowIds.length }); // Ctrl+Z／トーストで復元できるようにする
     try {
       await mailTrash(ids);
-    } catch {
-      /* noop */
+    } catch (e) {
+      setUndoTrash(null); // 移動できていないので「取消」は出さない
+      await operationFailed(e);
     }
   };
   const actDelete = () => deleteRows(targetIds());
@@ -1040,8 +1056,8 @@ export function MailboxView({
     dropRows(rowIds, ids);
     try {
       await mailRestore(ids);
-    } catch {
-      /* noop */
+    } catch (e) {
+      await operationFailed(e);
     }
   };
   // 直前のゴミ箱移動を取り消す（Ctrl+Z／トースト）。復元後は一覧を読み直して元の位置へ戻す。
@@ -1271,8 +1287,8 @@ export function MailboxView({
       setOpened(null);
       setSelectedIds(new Set());
       await loadMails();
-    } catch {
-      /* noop */
+    } catch (e) {
+      await operationFailed(e);
     }
   };
 
@@ -1280,6 +1296,23 @@ export function MailboxView({
     <div
       className={`relative flex h-full min-h-0 flex-col ${folder === 'spam' ? 'bg-amber-600/15' : ''}`}
     >
+      {/* 操作が失敗したことを知らせるトースト（削除・復元など）。原因をそのまま出す。 */}
+      {opError && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-3 z-30 flex justify-center px-3">
+          <div className="pointer-events-auto flex max-w-full items-start gap-3 rounded-lg bg-rose-950/95 px-3 py-2 text-sm text-rose-50 shadow-lg ring-1 ring-rose-400/30">
+            <span className="min-w-0 break-words">
+              {t('mailbox.opFailed')}
+              <span className="ml-1 text-rose-200/80">{opError}</span>
+            </span>
+            <button
+              onClick={() => setOpError(null)}
+              className="shrink-0 rounded-md bg-white/10 px-2 py-1 text-xs hover:bg-white/20"
+            >
+              {t('mailbox.close')}
+            </button>
+          </div>
+        </div>
+      )}
       {/* ゴミ箱移動の取消トースト（数秒で自動的に消える。Ctrl+Z でも取消可） */}
       {undoTrash && (
         <div className="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex justify-center px-3">

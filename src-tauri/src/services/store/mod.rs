@@ -14,6 +14,7 @@ mod spam;
 mod storage;
 mod tags;
 mod threads;
+mod tombstones;
 
 pub use accounts::{NewAccount, SmtpAccount};
 pub use calendar_sync::{ApplyOutcome, LocalChange, RemoteEvent};
@@ -24,6 +25,9 @@ pub use emails::{
 pub use server_accounts::NewServerAccount;
 pub use threads::process_pending_at;
 pub use spam::SpamFeatures;
+pub use tombstones::{
+    mark_remote_deleted, pending_remote_deletes, purge_old_tombstones, PendingRemoteDelete,
+};
 
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};

@@ -190,14 +190,19 @@ pub enum InsertOutcome {
 /// 新規挿入はしないが、機能追加前に取り込んだ古いメールでも添付が使えるよう、
 /// uid と添付メタが未設定なら埋め戻して（バックフィル）Backfilled を返す。
 pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertOutcome> {
+    // フォルダごとに別レコードにするため canonical_key はフォルダ接頭辞付きで保存する。
+    let key = folder_key(&e.folder, &e.canonical_key);
+    // 破棄済みの下書き（墓標あり）は取り込まない。送信/破棄でローカルから消した下書きが、
+    // サーバー Drafts に残ったコピー経由で復活するのを防ぐ（services/store/tombstones.rs）。
+    if e.folder == "drafts" && super::tombstones::is_tombstoned(conn, e.account_id, &key)? {
+        return Ok(InsertOutcome::Unchanged);
+    }
     // 表示専用の HTML 本文は zstd 圧縮して BLOB 列へ（TEXT の body_html は使わない）。
     let body_html_z = e
         .body_html
         .as_deref()
         .filter(|s| !s.is_empty())
         .map(crate::services::compress::compress_text);
-    // フォルダごとに別レコードにするため canonical_key はフォルダ接頭辞付きで保存する。
-    let key = folder_key(&e.folder, &e.canonical_key);
     // 新規本文の fingerprint（引用照合・重複ヒントの手掛かり）。
     let body_fingerprint = e
         .clean_body
@@ -945,6 +950,11 @@ impl Store {
             let mut fts = tx.prepare("DELETE FROM email_fts WHERE rowid = ?1")?;
             let mut etags = tx.prepare("DELETE FROM email_tags WHERE email_id = ?1")?;
             let mut att = tx.prepare("DELETE FROM attachments WHERE email_id = ?1")?;
+            let mut quotes = tx.prepare("DELETE FROM message_quotes WHERE email_id = ?1")?;
+            // 他メールの引用が「照合先」としてこのメールを指している場合は参照だけ外す
+            // （matched_email_id に FK は無いので、残すと存在しない id を指したままになる）。
+            let mut unmatch =
+                tx.prepare("UPDATE message_quotes SET matched_email_id = NULL WHERE matched_email_id = ?1")?;
             let mut del = tx.prepare("DELETE FROM emails WHERE id = ?1")?;
             for id in ids {
                 if let Ok(Some(t)) = thread_of
@@ -957,6 +967,8 @@ impl Store {
                 fts.execute(params![id])?;
                 etags.execute(params![id])?;
                 att.execute(params![id])?; // FK 制約のため先に添付を削除
+                quotes.execute(params![id])?; // 同上（message_quotes.email_id も FK）
+                unmatch.execute(params![id])?;
                 del.execute(params![id])?;
             }
             for t in &affected {
@@ -1613,6 +1625,66 @@ mod tests {
             attachments: vec![],
         };
         insert_email(&conn, &e).unwrap();
+    }
+
+    /// 引用（message_quotes）を持つメールも完全削除できる。message_quotes.email_id には
+    /// FK があるため、引用行を先に消さないと外部キー制約で削除ごと失敗し、「ごみ箱を
+    /// 空にする」が黙って効かなくなる（実際に起きた不具合の回帰テスト）。
+    #[test]
+    fn delete_removes_quotes_and_unlinks_matches() {
+        let store = test_store();
+        seed(&store, "件名", "a@b", "本文", "trash", "k1");
+        seed(&store, "別件", "c@d", "本文2", "inbox", "k2");
+        let (id, other) = {
+            let conn = store.conn.lock().unwrap();
+            let pick = |key: &str| -> i64 {
+                conn.query_row(
+                    "SELECT id FROM emails WHERE canonical_key = ?1",
+                    params![key],
+                    |r| r.get(0),
+                )
+                .unwrap()
+            };
+            let (id, other) = (pick("trash:k1"), pick("k2"));
+            conn.execute(
+                "INSERT INTO message_quotes (email_id, block_order, fingerprint) VALUES (?1, 0, 'fp')",
+                params![id],
+            )
+            .unwrap();
+            // 別メールの引用が、削除するメールを照合先として指している状態も作る。
+            conn.execute(
+                "INSERT INTO message_quotes (email_id, block_order, fingerprint, matched_email_id) \
+                 VALUES (?1, 0, 'fp2', ?2)",
+                params![other, id],
+            )
+            .unwrap();
+            (id, other)
+        };
+
+        store.delete_emails(&[id]).unwrap();
+
+        let conn = store.conn.lock().unwrap();
+        let left: i64 = conn
+            .query_row("SELECT count(*) FROM emails", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 1, "引用を持つメールが削除できていない");
+        let orphan: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM message_quotes WHERE email_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphan, 0, "削除したメールの引用行が残っている");
+        // 残ったメールの引用は保持しつつ、照合先だけ外れる。
+        let matched: Option<i64> = conn
+            .query_row(
+                "SELECT matched_email_id FROM message_quotes WHERE email_id = ?1",
+                params![other],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(matched, None, "存在しないメールへの照合が残っている");
     }
 
     /// \Seen 取り込み: 既読で挿入→既読で保存。再取り込みで未読→既読の補正はするが、

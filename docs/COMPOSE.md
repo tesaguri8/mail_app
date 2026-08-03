@@ -9,7 +9,11 @@
 
 ## 1. 機能
 
-- **下書き自動保存**（**実装済み**）: 入力中つねに保存。下書きから再開。ローカル保存＋リモート同期。コマンドは §4 参照。
+- **下書き自動保存**（**実装済み**）: 入力中つねに保存。下書きから再開。コマンドは §4 参照。
+  - **ローカル保存は入力の 1 秒デバウンス、サーバー Drafts への APPEND は「明示保存」と「閉じる時」だけ**。入力のたびに APPEND すると、書いている間ずっとサーバー上で下書きの入れ替え（削除→APPEND）が走り、送信時の後片付けと競合してサーバーにゴミが残りやすい。
+  - **破棄・送信後の下書きは「墓標（`deleted_keys`）」で復活を止める**。ローカル削除の直前に `canonical_key` を墓標として残し、(1) 取り込み側（`insert_email`）が墓標のあるキーを取り込まない、(2) サーバー側コピーの削除が済んでいない墓標（`remote_pending=1`）は同期のたびに再試行する（`imap_sync::retry_pending_draft_deletes`。同期の Pass 0）。
+    - 背景: サーバー削除は best-effort で失敗しうるうえ、実行中の同期は「削除より前に取得した一覧」を持っているため、墓標が無いと **送信済みメールの下書きが下書きフォルダに溜まり続ける**（実測で 43 件中 30 件が送信済みの残骸）。
+    - 墓標はサーバー削除が済んでから 30 日で掃除する（`services/store/tombstones.rs`）。
 - **署名**（**実装済み・一部**）: アカウント別の署名（`signatures` テーブル＋`signature_*` コマンド。アカウントへは `accounts.signature_id` で紐付け）。※**返信時の挿入位置の設定は未実装**。
 - **送信取消（Undo Send）**（**未実装**）: 送信後すぐの待機時間内なら取消（ローカル保留→実送信）。`mail_undo_send` は未実装。
 - **送信予約（スケジュール送信）**（**未実装**）: 指定時刻に送信。`mail_schedule_send` は未実装。
@@ -46,7 +50,7 @@
 
 ## 4. データモデル（要約） / コマンド
 
-- `signatures` テーブル（**実装済み**）、下書きは `emails`（folder=draft）で管理（[DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)）。※`templates` テーブル・`emails.snooze_until` は**未実装**。
+- `signatures` テーブル（**実装済み**）、下書きは `emails`（folder=draft）で管理（[DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)）。破棄済み下書きの墓標は `deleted_keys`（0050。§1）。※`templates` テーブル・`emails.snooze_until` は**未実装**。
 - 添付メタデータ削除ポリシーは設定ストア（`strip_attachment_metadata`: `all` | `gps` | `off`）で保持（配線は §3 のとおり保留）。
 
 | コマンド | 用途 | 状態 |

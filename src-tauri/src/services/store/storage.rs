@@ -8,6 +8,26 @@
 use super::Store;
 use crate::models::RetentionReport;
 use rusqlite::params;
+use std::path::Path;
+
+/// 添付 1 件のローカル実体を消す。添付は `attachments/<添付id>/` に原本と表示用レンディション
+/// （`__rondine_view.jpg` 等）を置くので、そのフォルダごと消す。想定と違う場所に保存されている
+/// 古いデータは、巻き添えを避けてファイル 1 つだけ消す。
+fn remove_attachment_files(path: &str, attachment_id: i64) {
+    let file = Path::new(path);
+    let id = attachment_id.to_string();
+    let own_dir = file
+        .parent()
+        .filter(|dir| dir.file_name().is_some_and(|n| n.to_string_lossy() == id));
+    match own_dir {
+        Some(dir) => {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        None => {
+            let _ = std::fs::remove_file(file);
+        }
+    }
+}
 
 /// 保持期間ウィンドウ（'7d'/'30d'/'3m'/'6m'/'1y'/'2y'）を日数に変換する。
 /// 'all'（常に保持）/'off'（無効）や未知値は None（＝そのティアを働かせない）。
@@ -150,7 +170,7 @@ impl Store {
         let mut evicted = 0i32;
         let mut freed = 0i64;
         for (id, size, path) in candidates {
-            let _ = std::fs::remove_file(&path);
+            remove_attachment_files(&path, id);
             let conn = self.conn.lock().unwrap();
             conn.execute(
                 "UPDATE attachments SET file_path = NULL, checksum = NULL WHERE id = ?1",

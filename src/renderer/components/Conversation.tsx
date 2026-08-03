@@ -33,16 +33,18 @@ import type { MailDetail } from '@bindings/MailDetail';
 import type { TagSummary } from '@bindings/TagSummary';
 import type { AttachmentSummary } from '@bindings/AttachmentSummary';
 import { mailGet, mailAttachments, attachmentOpen } from '../services/mail';
+import { attachmentImage } from '../utils/imageCache';
 import { greenDomainAdd, greenDomainWarn } from '../services/green';
 import { threadRename, threadSplit, threadView } from '../services/threads';
 import { parseAddress } from '../utils/address';
 import { copyText } from '../utils/clipboard';
-import { getBubbleHtml, PREFS_EVENT } from '../config/prefs';
+import { getBubbleHtml, getInlineImages, PREFS_EVENT } from '../config/prefs';
 import { formatDateTime } from '../utils/datetime';
 import { saveAttachment } from '../utils/attachmentSave';
 import { withActivity } from '../stores/activity';
 import { MailBody, makeRenderDate } from './MailBody';
-import { AutoLinkText, HtmlText } from './HtmlText';
+import { AutoLinkText, HtmlText, inlineCidRefs } from './HtmlText';
+import { AttachedImages, isImage } from './AttachedImages';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import type { CalendarPanelInitial } from './CalendarPanel';
 
@@ -117,6 +119,7 @@ function Bubble({
   onToggleExpand,
   highlight,
   htmlBody,
+  inlineImagesOn,
 }: {
   m: ThreadMessage;
   you: string;
@@ -125,8 +128,10 @@ function Bubble({
   onToggleExpand: () => void;
   /** 検索語（複数）。本文中の一致をハイライトする。 */
   highlight?: string[];
-  /** 設定オン時、body_html があればバブルを HTML 本文で描画する（画像はプレースホルダ）。 */
+  /** 設定オン時、body_html があればバブルを HTML 本文で描画する（外部画像はプレースホルダ）。 */
   htmlBody?: boolean;
+  /** 設定オン時、本文が cid: で参照する埋め込み画像を取得して表示する。 */
+  inlineImagesOn?: boolean;
 }) {
   const { t } = useTranslation();
   const out = m.direction === 'out';
@@ -232,7 +237,11 @@ function Bubble({
     try {
       let list = atts;
       if (!list) {
-        list = (await mailAttachments(m.id)).filter((a) => a.kind !== 'inline');
+        // 本文に埋め込まれる（cid: で参照される）画像は本文側に出るので除き、
+        // 参照されない inline パートは通常の添付として開く/保存できるようにする。
+        list = (await mailAttachments(m.id)).filter(
+          (a) => a.kind !== 'inline' || !(a.content_id && htmlCids.has(a.content_id)),
+        );
         setAtts(list);
       }
       if (list.length === 0) return;
@@ -253,10 +262,74 @@ function Bubble({
   const clean = (m.clean_body ?? '').trim();
   const full = (m.body_plain ?? '').trim();
   const body = showQuotes ? full : clean || full;
-  // 設定オンで HTML 本文があるときは HtmlText で描画（画像は取得せずプレースホルダのまま）。
+  // 設定オンで HTML 本文があるときは HtmlText で描画（外部画像は取得せずプレースホルダのまま）。
   // ただし HTML には引用除去版が無いので、引用のある返信（has_quotes）はチャット感を保つため
   // プレーン（新規部分のみ）にフォールバックする。実質「引用のないメールだけ HTML 描画」。
   const renderHtml = !!htmlBody && !!m.body_html?.trim() && !m.has_quotes;
+
+  // 本文（HTML）が cid: で参照している Content-ID。埋め込み画像の解決と、
+  // 「本文に出ない inline パートは添付として扱う」判定の両方に使う。
+  const htmlCids = useMemo(() => new Set(inlineCidRefs(m.body_html ?? '')), [m.body_html]);
+
+  // 本文が cid: で参照する埋め込み画像（ロゴ等）を解決する。解決しないと本文中の画像が
+  // プレースホルダ（🖼）のままになる＝「インライン画像が表示されない」状態になる。
+  // 外部(http)画像とは別物で、取得はローカルの添付パートからなのでトラッキングは起きない。
+  // 対象は「HTML で描画するバブル」かつ「cid: 参照がある」ものだけ（実質ニュースレター等）。
+  // 本体未取得なら Rust 側が IMAP から該当パートだけ取り、以後はディスクキャッシュが効く。
+  const [inlineImages, setInlineImages] = useState<Record<string, string>>({});
+  // 右クリックの「保存/開く」で使う cid → 添付メタ。
+  const [inlineAtts, setInlineAtts] = useState<Record<string, AttachmentSummary>>({});
+  const wantInline = renderHtml && !!inlineImagesOn && htmlCids.size > 0;
+  useEffect(() => {
+    if (!wantInline) return;
+    let alive = true;
+    mailAttachments(m.id)
+      .then((list) => {
+        if (!alive) return;
+        list
+          .filter((a) => a.kind === 'inline' && a.content_id && htmlCids.has(a.content_id))
+          .forEach((a) => {
+            const cid = a.content_id as string;
+            setInlineAtts((prev) => ({ ...prev, [cid]: a }));
+            attachmentImage(a.id)
+              .then((url) => {
+                if (alive) setInlineImages((prev) => ({ ...prev, [cid]: url }));
+              })
+              .catch(() => undefined);
+          });
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [wantInline, htmlCids, m.id]);
+
+  // 本文中の埋め込み画像を右クリックしたときのメニュー（保存 / 既定アプリで開く）。
+  const [imgMenu, setImgMenu] = useState<{ x: number; y: number; att: AttachmentSummary } | null>(
+    null,
+  );
+
+  // 本文が無く画像だけのメール（iPhone から写真を送っただけのメール等）は、その画像を
+  // バブルにそのまま並べる。何も無いバブルに「本文がありません」とだけ出るのを避ける。
+  const [bubbleImages, setBubbleImages] = useState<AttachmentSummary[]>([]);
+  const emptyBody = !renderHtml && !body.trim();
+  useEffect(() => {
+    if (!emptyBody || !inlineImagesOn) return;
+    let alive = true;
+    mailAttachments(m.id)
+      .then((list) => {
+        if (!alive) return;
+        // 判定は「画像かどうか」＋「本文から cid: で参照されていないか」だけ（kind は使わない。
+        // Content-ID の有無でラベルが割れ、送信クライアント次第で見え方が変わってしまうため）。
+        setBubbleImages(
+          list.filter((a) => isImage(a) && !(a.content_id && htmlCids.has(a.content_id))),
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [emptyBody, inlineImagesOn, htmlCids, m.id]);
 
   // 本文中の日付に＋（カレンダー追加）を出す描画関数（折りたたみバブル・全文表示で共有）。
   const renderDate = makeRenderDate(handlers.onAddCalendar, {
@@ -539,11 +612,30 @@ function Bubble({
               </div>
             )}
             {renderHtml ? (
-              <HtmlText html={m.body_html as string} highlight={highlight} renderDate={renderDate} />
+              <HtmlText
+                html={m.body_html as string}
+                inlineImages={inlineImages}
+                highlight={highlight}
+                renderDate={renderDate}
+                onInlineImageMenu={(cid, x, y) => {
+                  const att = inlineAtts[cid];
+                  if (att) setImgMenu({ x, y, att });
+                }}
+              />
             ) : body ? (
               <AutoLinkText text={body} highlight={highlight} renderDate={renderDate} />
-            ) : (
+            ) : bubbleImages.length === 0 ? (
               <span className="text-white/40">{t('mailbox.noBody')}</span>
+            ) : null}
+
+            {/* 本文が無く画像だけのメールは、その画像をバブルに並べる（保存は右クリック）。
+                チャットの流れを埋めないようサムネイル表示にし、クリックで実寸に広げる。 */}
+            {bubbleImages.length > 0 && (
+              <AttachedImages
+                images={bubbleImages}
+                onMenu={(att, x, y) => setImgMenu({ x, y, att })}
+                compact
+              />
             )}
 
             {/* 操作行（フッター）: 返信・転送・引用トグル・添付・全文・メニュー */}
@@ -679,6 +771,38 @@ function Bubble({
         />
       )}
 
+      {/* 本文に埋め込まれた画像の右クリック: 添付一覧には出ないので、ここから保存・表示する。 */}
+      {imgMenu && (
+        <ContextMenu
+          x={imgMenu.x}
+          y={imgMenu.y}
+          header={imgMenu.att.filename}
+          items={[
+            {
+              key: 'save',
+              label: t('mailbox.attachmentDownload'),
+              Icon: Download,
+              onClick: () =>
+                void saveAttachment(
+                  imgMenu.att.id,
+                  imgMenu.att.filename,
+                  t('activity.downloadingAttachment'),
+                ),
+            },
+            {
+              key: 'open',
+              label: t('mailbox.openAttachment'),
+              Icon: Paperclip,
+              onClick: () =>
+                void withActivity(t('activity.openingAttachment'), () =>
+                  attachmentOpen(imgMenu.att.id),
+                ),
+            },
+          ]}
+          onClose={() => setImgMenu(null)}
+        />
+      )}
+
       {attMenu && atts && atts.length > 1 && (
         <ContextMenu
           x={attMenu.x}
@@ -719,6 +843,8 @@ export function Conversation({
   const [loading, setLoading] = useState(true);
   // バブルを HTML で描画するか（設定。PREFS_EVENT で即時反映）。
   const [htmlBubbles, setHtmlBubbles] = useState(getBubbleHtml());
+  // 本文埋め込み画像（cid:）を取得して表示するか（設定。PREFS_EVENT で即時反映）。
+  const [inlineImagesOn, setInlineImagesOn] = useState(getInlineImages());
   // 既定は全メール折りたたみ（バブルのみ）。クリックしたメールだけ展開する。
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   // タイトル編集
@@ -783,9 +909,12 @@ export function Conversation({
     load();
   }, [openedId, load]);
 
-  // バブルの HTML 表示設定の変更に追従する。
+  // バブルの HTML 表示・埋め込み画像の設定変更に追従する。
   useEffect(() => {
-    const onPrefs = () => setHtmlBubbles(getBubbleHtml());
+    const onPrefs = () => {
+      setHtmlBubbles(getBubbleHtml());
+      setInlineImagesOn(getInlineImages());
+    };
     window.addEventListener(PREFS_EVENT, onPrefs);
     return () => window.removeEventListener(PREFS_EVENT, onPrefs);
   }, []);
@@ -1038,6 +1167,7 @@ export function Conversation({
                 onToggleExpand={() => toggleExpand(m.id)}
                 highlight={terms}
                 htmlBody={htmlBubbles}
+                inlineImagesOn={inlineImagesOn}
               />
             </div>
           ))}

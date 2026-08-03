@@ -589,7 +589,8 @@
   "activity": {
     "receiving": "{{name}} の新着を受信中…",
     "openingAttachment": "添付を開いています…",
-    "downloadingAttachment": "添付をダウンロード中…"
+    "downloadingAttachment": "添付をダウンロード中…",
+    "loadingImages": "画像を読み込み中…"
   },
   "mailbox": {
     "title": "受信箱",
@@ -641,6 +642,8 @@
     "attachmentPreview": "プレビュー",
     "attachmentHide": "閉じる",
     "attachmentBusy": "処理中…",
+    "showImages": "画像 {{count}} 枚を表示",
+    "imageUnavailable": "画像を表示できません",
     "attachmentSaved": "保存しました",
     "attachmentSavedN": "{{count}} 件を保存しました",
     "attachmentSelectAll": "すべて選択／解除",

@@ -157,18 +157,6 @@ pub fn jpeg_bytes_to_data_url(jpeg: &[u8]) -> String {
     format!("data:image/jpeg;base64,{b64}")
 }
 
-/// 画像を web 表示用の JPEG レンディションにして data URL を返す。
-/// HEIC は JPEG へ変換し、大きすぎる画像は max_size に収まるよう縮小する。
-pub fn to_web_data_url(
-    bytes: &[u8],
-    content_type: Option<&str>,
-    filename: &str,
-    max_size: u32,
-) -> Result<String, String> {
-    let jpeg = to_web_jpeg_bytes(bytes, content_type, filename, max_size)?;
-    Ok(jpeg_bytes_to_data_url(&jpeg))
-}
-
 /// HEIC をデコードして JPEG バイト列にする（OSで開く用にディスク保存する素材）。
 pub fn heic_to_jpeg_bytes(bytes: &[u8], max_size: u32) -> Result<Vec<u8>, String> {
     let img = decode_heic(bytes)?;

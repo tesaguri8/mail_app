@@ -589,7 +589,8 @@
   "activity": {
     "receiving": "Receiving new mail — {{name}}…",
     "openingAttachment": "Opening attachment…",
-    "downloadingAttachment": "Downloading attachment…"
+    "downloadingAttachment": "Downloading attachment…",
+    "loadingImages": "Loading images…"
   },
   "mailbox": {
     "title": "Inbox",
@@ -641,6 +642,8 @@
     "attachmentPreview": "Preview",
     "attachmentHide": "Hide",
     "attachmentBusy": "Working…",
+    "showImages": "Show {{count}} image(s)",
+    "imageUnavailable": "Cannot display image",
     "attachmentSaved": "Saved",
     "attachmentSavedN": "Saved {{count}} files",
     "attachmentSelectAll": "Select / clear all",

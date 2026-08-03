@@ -20,7 +20,12 @@ import {
 } from '../services/mail';
 import { withActivity } from '../stores/activity';
 import { signatureList } from '../services/signatures';
-import { getComposeAutoSave, getFlyAnimation } from '../config/prefs';
+import {
+  getComposeAutoSave,
+  getFlyAnimation,
+  getLastSignature,
+  setLastSignature,
+} from '../config/prefs';
 import { playFlySound } from '../utils/flySound';
 import { RecipientInput } from './RecipientInput';
 import { ContextMenu } from './ContextMenu';
@@ -391,7 +396,18 @@ export function Compose({
     [signatures]
   );
 
-  // 署名が読み込めたら（およびアカウント変更時に）そのアカウントの既定署名を適用する。
+  // 署名を選び直したら、そのアカウントの次回の既定として覚える（「署名なし」も覚える）。
+  const chooseSignature = useCallback(
+    (id: number | null) => {
+      applySignature(id);
+      if (accountId != null) setLastSignature(accountId, id);
+    },
+    [applySignature, accountId],
+  );
+
+  // 署名が読み込めたら（およびアカウント変更時に）そのアカウントの署名を自動で適用する。
+  // 採用する署名は「前回そのアカウントで選んだ署名」→ 無ければアカウントの既定署名 → 無ければ
+  // 署名なし。前回「署名なし」を選んでいればそれも尊重する（毎回入る/毎回消すの手間を無くす）。
   // 下書きの再編集では本文に署名が既に含まれているので自動挿入しない（二重を防ぐ）。
   // 同じアカウントで再適用すると、本文の署名まわりを編集していた場合に旧ブロックの
   // 剥がしに失敗して署名が二重に付くため、アカウント単位で一度だけ適用する
@@ -401,8 +417,16 @@ export function Compose({
     if (signatures.length === 0 || target.mode === 'draft') return;
     if (autoSigAccountRef.current === accountId) return;
     autoSigAccountRef.current = accountId;
-    const acc = accounts.find((a) => a.id === accountId);
-    applySignature(acc?.signature_id ?? null);
+    const fallback = accounts.find((a) => a.id === accountId)?.signature_id ?? null;
+    const remembered = accountId != null ? getLastSignature(accountId) : undefined;
+    // 記録が無い、または記録していた署名が削除済みならアカウント既定へ戻す。
+    const chosen =
+      remembered === undefined
+        ? fallback
+        : remembered === null || signatures.some((s) => s.id === remembered)
+          ? remembered
+          : fallback;
+    applySignature(chosen);
   }, [accountId, signatures, accounts, applySignature, target.mode]);
 
   // 下書きの自動保存。ユーザーが何か書き込んだら（dirty）ローカルの drafts へ保存する。
@@ -998,7 +1022,8 @@ export function Compose({
             <select
               className="rounded-md bg-white/10 px-2 py-1.5 text-sm outline-none"
               value={sigId ?? ''}
-              onChange={(e) => applySignature(e.target.value ? Number(e.target.value) : null)}
+              onChange={(e) => chooseSignature(e.target.value ? Number(e.target.value) : null)}
+              title={t('compose.signatureRemembered')}
             >
               <option value="" className="text-black">
                 {t('compose.noSignature')}

@@ -218,6 +218,7 @@
     "forwardSep": "-------- Forwarded message --------",
     "signature": "Signature",
     "noSignature": "(No signature)",
+    "signatureRemembered": "The signature you pick here is reused next time you write from this account",
     "saveDraft": "Save draft",
     "discard": "Discard draft",
     "draftSaved": "Draft saved",

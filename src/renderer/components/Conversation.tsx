@@ -628,11 +628,13 @@ function Bubble({
               <span className="text-white/40">{t('mailbox.noBody')}</span>
             ) : null}
 
-            {/* 本文が無く画像だけのメールは、その画像をバブルに並べる（保存は右クリック）。 */}
+            {/* 本文が無く画像だけのメールは、その画像をバブルに並べる（保存は右クリック）。
+                チャットの流れを埋めないようサムネイル表示にし、クリックで実寸に広げる。 */}
             {bubbleImages.length > 0 && (
               <AttachedImages
                 images={bubbleImages}
                 onMenu={(att, x, y) => setImgMenu({ x, y, att })}
+                compact
               />
             )}
 

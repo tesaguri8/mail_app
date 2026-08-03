@@ -86,6 +86,7 @@ pub fn run() {
             commands::attachment_view,
             commands::attachment_open,
             commands::attachment_export,
+            commands::attachment_local_path,
             commands::open_local_path,
             commands::account_storage_info,
             commands::account_set_storage_limit,

@@ -590,7 +590,8 @@
     "receiving": "{{name}} の新着を受信中…",
     "openingAttachment": "添付を開いています…",
     "downloadingAttachment": "添付をダウンロード中…",
-    "loadingImages": "画像を読み込み中…"
+    "loadingImages": "画像を読み込み中…",
+    "preparingAttachments": "添付を準備中…"
   },
   "mailbox": {
     "title": "受信箱",

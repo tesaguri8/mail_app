@@ -356,6 +356,58 @@ pub fn recompute_reps_for_thread(conn: &Connection, thread_id: i64) -> rusqlite:
     Ok(())
 }
 
+/// 下書きの添付を保存し直す（毎回入れ替え。作成画面の添付欄がそのまま正）。
+/// 並び順は作成画面の並びをそのまま ord として持つ。
+fn replace_draft_attachments(
+    conn: &Connection,
+    draft_id: i64,
+    items: &[crate::models::DraftAttachment],
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM draft_attachments WHERE draft_id = ?1",
+        params![draft_id],
+    )?;
+    if items.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = conn.prepare(
+        "INSERT INTO draft_attachments \
+           (draft_id, ord, path, source_attachment_id, filename, size) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )?;
+    for (i, a) in items.iter().enumerate() {
+        stmt.execute(params![
+            draft_id,
+            i as i64,
+            a.path,
+            a.source_attachment_id.map(i64::from),
+            a.filename,
+            a.size
+        ])?;
+    }
+    Ok(())
+}
+
+/// 下書きに紐づく添付を並び順で取り出す。
+fn draft_attachments(
+    conn: &Connection,
+    draft_id: i64,
+) -> rusqlite::Result<Vec<crate::models::DraftAttachment>> {
+    let mut stmt = conn.prepare(
+        "SELECT path, source_attachment_id, filename, size \
+         FROM draft_attachments WHERE draft_id = ?1 ORDER BY ord",
+    )?;
+    let rows = stmt.query_map(params![draft_id], |r| {
+        Ok(crate::models::DraftAttachment {
+            path: r.get(0)?,
+            source_attachment_id: r.get::<_, Option<i64>>(1)?.map(|v| v as i32),
+            filename: r.get(2)?,
+            size: r.get::<_, i64>(3)? as i32,
+        })
+    })?;
+    rows.collect()
+}
+
 /// 引用ブロック（message_quotes）を一括挿入する。
 fn insert_quotes(conn: &Connection, email_id: i64, quotes: &[NewQuote]) -> rusqlite::Result<()> {
     if quotes.is_empty() {
@@ -1199,6 +1251,7 @@ impl Store {
                 "UPDATE email_fts SET subject = ?1, clean_body = ?2 WHERE rowid = ?3",
                 params![d.subject, d.body, id],
             )?;
+            replace_draft_attachments(&conn, id, &d.attachments)?;
             return Ok(id);
         }
         // 新規: サーバー Drafts 上で自分の下書きを一意に特定するための Message-ID を採番する。
@@ -1239,6 +1292,7 @@ impl Store {
             "INSERT INTO email_fts(rowid, subject, from_address, clean_body) VALUES (?1, ?2, ?3, ?4)",
             params![id, d.subject, from, d.body],
         )?;
+        replace_draft_attachments(&conn, id, &d.attachments)?;
         Ok(id)
     }
 
@@ -1259,6 +1313,7 @@ impl Store {
     /// 下書き 1 件を作成画面へ読み戻すための内容を取得する（drafts フォルダのみ）。
     pub fn get_draft(&self, id: i64) -> rusqlite::Result<Option<crate::models::DraftContent>> {
         let conn = self.conn.lock().unwrap();
+        let attachments = draft_attachments(&conn, id)?;
         conn.query_row(
             // 返信元メール（in_reply_to と Message-ID が一致し、下書き自身ではない同一アカウントの
             // 実メール）の id を相関サブクエリで一緒に引く。右ペインに元メールを並べて表示する用。
@@ -1282,6 +1337,7 @@ impl Store {
                     body: r.get(6)?,
                     in_reply_to: r.get(7)?,
                     source_id: r.get::<_, Option<i64>>(8)?.map(|v| v as i32),
+                    attachments: attachments.clone(),
                 })
             },
         )
@@ -1625,6 +1681,62 @@ mod tests {
             attachments: vec![],
         };
         insert_email(&conn, &e).unwrap();
+    }
+
+    /// 下書きの添付は保存・再取得でそのまま往復し、更新のたびに入れ替わる。
+    /// 転送で引き継いだ添付（本体未取得＝path なし）も source_attachment_id で覚えておく。
+    #[test]
+    fn draft_attachments_round_trip() {
+        use crate::models::{DraftAttachment, DraftInput};
+        let store = test_store();
+        let input = |id: Option<i32>, atts: Vec<DraftAttachment>| DraftInput {
+            draft_id: id,
+            account_id: 1,
+            to: vec!["you@example.com".to_string()],
+            cc: vec![],
+            bcc: vec![],
+            subject: "転送".to_string(),
+            body: "本文".to_string(),
+            in_reply_to: None,
+            attachments: atts,
+        };
+        let local = DraftAttachment {
+            path: Some("C:/tmp/a.pdf".to_string()),
+            source_attachment_id: None,
+            filename: "a.pdf".to_string(),
+            size: 10,
+        };
+        let carried = DraftAttachment {
+            path: None,
+            source_attachment_id: Some(42),
+            filename: "IMG_1.jpeg".to_string(),
+            size: 2048,
+        };
+
+        let id = store
+            .save_draft(&input(None, vec![local.clone(), carried.clone()]))
+            .unwrap();
+        let got = store.get_draft(id).unwrap().unwrap();
+        assert_eq!(got.attachments.len(), 2);
+        assert_eq!(got.attachments[0].path.as_deref(), Some("C:/tmp/a.pdf"));
+        assert_eq!(got.attachments[1].source_attachment_id, Some(42));
+        assert_eq!(got.attachments[1].filename, "IMG_1.jpeg");
+
+        // 更新は入れ替え（作成画面で外したものは消える）。
+        store
+            .save_draft(&input(Some(id as i32), vec![carried]))
+            .unwrap();
+        let got = store.get_draft(id).unwrap().unwrap();
+        assert_eq!(got.attachments.len(), 1);
+        assert_eq!(got.attachments[0].filename, "IMG_1.jpeg");
+
+        // 下書きを消すと添付の紐づけも残らない（ON DELETE CASCADE）。
+        store.delete_emails(&[id]).unwrap();
+        let conn = store.conn.lock().unwrap();
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM draft_attachments", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
     }
 
     /// 引用（message_quotes）を持つメールも完全削除できる。message_quotes.email_id には

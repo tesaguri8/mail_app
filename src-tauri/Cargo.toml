@@ -1,6 +1,6 @@
 [package]
 name = "rondine"
-version = "0.1.0-alpha.7"
+version = "0.1.0-alpha.8"
 description = "Rondine"
 authors = ["Tesaguri tech"]
 license = "UNLICENSED"

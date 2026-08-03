@@ -16,6 +16,7 @@ import {
   Paperclip,
   Pencil,
   Plus,
+  Printer,
   RefreshCw,
   Reply,
   ReplyAll,
@@ -42,6 +43,7 @@ import { contactLookupEmail } from '../services/contacts';
 import { mailLoadRemote, senderRemoteAllowed, senderSetRemotePolicy } from '../services/mail';
 import { AutoLinkText, HtmlText, inlineCidRefs, remoteImageUrls } from './HtmlText';
 import { AttachedImages, isImage } from './AttachedImages';
+import { PrintMail } from './PrintMail';
 import { attachmentImage } from '../utils/imageCache';
 import { ContextMenu } from './ContextMenu';
 import type { CalendarPanelInitial } from './CalendarPanel';
@@ -391,6 +393,8 @@ export function MailBody({
     y: number;
     att: AttachmentSummary;
   } | null>(null);
+  // 印刷中か（true の間だけ印刷用の版面を作り、ダイアログを開く）。
+  const [printing, setPrinting] = useState(false);
   // 添付画像のアプリ内プレビュー（attachment id → data URL）
   const [previews, setPreviews] = useState<Record<number, string>>({});
   const [inlineEnabled, setInlineEnabled] = useState(getInlineImages());
@@ -878,6 +882,16 @@ export function MailBody({
                 </button>
               )
             )}
+            {/* 印刷（プリンタのほか「PDF として保存」もダイアログから選べる） */}
+            <button
+              onClick={() => setPrinting(true)}
+              disabled={printing}
+              title={t('mailbox.print')}
+              aria-label={t('mailbox.print')}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80 disabled:opacity-50"
+            >
+              <Printer size={16} />
+            </button>
             {/* 全文をサーバーから再取得（要約保存の解除・本文キャッシュの復元） */}
             <button
               onClick={handleRefetch}
@@ -1263,6 +1277,9 @@ export function MailBody({
           onClose={() => setRemoteMenu(null)}
         />
       )}
+
+      {/* 印刷: 版面は非表示 iframe に作るので画面には何も出ない。 */}
+      {printing && <PrintMail emailId={detail.id} onDone={() => setPrinting(false)} />}
 
       {/* 本文に埋め込まれた画像の右クリックメニュー（保存 / 既定アプリで開く）。
           埋め込み画像は添付一覧に出さないので、保存導線はここに置く。 */}

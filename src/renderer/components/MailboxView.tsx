@@ -13,6 +13,7 @@ import {
   RefreshCw,
   RotateCcw,
   Rows2,
+  Printer,
   Search,
   SquarePen,
   Star,
@@ -63,6 +64,7 @@ import { Compose, type ComposeTarget } from './Compose';
 import { FolderIcons } from './FolderIcons';
 import { MAIL_FILTERS, matchesFilters } from './mailFilters';
 import { ContextMenu, type MenuItem } from './ContextMenu';
+import { PrintMail } from './PrintMail';
 import { DateFilter, matchesDate, type DateRange } from './DateFilter';
 import { SpamConflictAlert } from './SpamConflictAlert';
 import { TagFilter, matchesTags } from './TagFilter';
@@ -381,6 +383,8 @@ export function MailboxView({
   // 削除・復元などが失敗したときの理由（トーストで表示。数秒で自動的に消える）。
   const [opError, setOpError] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; rowId: number } | null>(null);
+  // 印刷対象のメール id（一覧の右クリックから。印刷ダイアログを閉じたら null に戻す）。
+  const [printId, setPrintId] = useState<number | null>(null);
   // 選択モード（チェックボックス表示中）。1件でも明示選択したら on。
   const [selecting, setSelecting] = useState(false);
   // 選択を完全に解除（手動選択・全一致モードともにクリア）。
@@ -1178,6 +1182,17 @@ export function MailboxView({
           if (menu) setTagPicker({ x: menu.x, y: menu.y, ids: targetIds() });
         },
       },
+      // 印刷は右クリックした 1 通が対象（複数選択時もその 1 通）。
+      ...(row
+        ? [
+            {
+              key: 'print',
+              label: t('mailbox.print'),
+              Icon: Printer,
+              onClick: () => setPrintId(row.id),
+            } as MenuItem,
+          ]
+        : []),
       // ゴミ箱内は「復元」、迷惑フォルダは「非迷惑に戻す」、それ以外は「迷惑」。
       inTrash
         ? { key: 'restore', label: t('ctx.restore'), Icon: RotateCcw, onClick: actRestore }
@@ -2029,6 +2044,8 @@ export function MailboxView({
           onClose={() => setMenu(null)}
         />
       )}
+
+      {printId != null && <PrintMail emailId={printId} onDone={() => setPrintId(null)} />}
 
       {tagPicker && (
         <TagPicker

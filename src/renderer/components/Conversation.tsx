@@ -15,6 +15,7 @@ import {
   MoreHorizontal,
   Paperclip,
   Pencil,
+  Printer,
   Quote,
   Reply,
   ReplyAll,
@@ -45,6 +46,7 @@ import { withActivity } from '../stores/activity';
 import { MailBody, makeRenderDate } from './MailBody';
 import { AutoLinkText, HtmlText, inlineCidRefs } from './HtmlText';
 import { AttachedImages, isImage } from './AttachedImages';
+import { PrintMail } from './PrintMail';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import type { CalendarPanelInitial } from './CalendarPanel';
 
@@ -308,6 +310,8 @@ function Bubble({
   const [imgMenu, setImgMenu] = useState<{ x: number; y: number; att: AttachmentSummary } | null>(
     null,
   );
+  // 印刷中か（バブルのメニューから。版面は非表示 iframe に作る）。
+  const [printing, setPrinting] = useState(false);
 
   // 本文が無く画像だけのメール（iPhone から写真を送っただけのメール等）は、その画像を
   // バブルにそのまま並べる。何も無いバブルに「本文がありません」とだけ出るのを避ける。
@@ -357,6 +361,12 @@ function Bubble({
       label: t('compose.forward'),
       Icon: Forward,
       onClick: () => handlers.onReply('forward', m.id),
+    },
+    {
+      key: 'print',
+      label: t('mailbox.print'),
+      Icon: Printer,
+      onClick: () => setPrinting(true),
     },
     read
       ? { key: 'unread', label: t('ctx.markUnread'), Icon: Mail, onClick: toggleRead }
@@ -770,6 +780,8 @@ function Bubble({
           onClose={() => setSelMenu(null)}
         />
       )}
+
+      {printing && <PrintMail emailId={m.id} onDone={() => setPrinting(false)} />}
 
       {/* 本文に埋め込まれた画像の右クリック: 添付一覧には出ないので、ここから保存・表示する。 */}
       {imgMenu && (

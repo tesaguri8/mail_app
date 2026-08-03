@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   AlertTriangle,
@@ -63,6 +63,10 @@ export function OrganizationsView({
   // 削除済み（ゴミ箱）を表示するか、と保持日数。
   const [showDeleted, setShowDeleted] = useState(false);
   const [retention, setRetention] = useState(7);
+  // 右ペイン（組織カード）のスクロール枠と、いま開いている組織の ID。
+  // 別の組織に切り替えたときだけ先頭へ戻す（保存後の開き直しでは読んでいた位置を保つ）。
+  const paneRef = useRef<HTMLElement>(null);
+  const openedIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -93,6 +97,9 @@ export function OrganizationsView({
 
   const open = useCallback((id: number) => {
     if (!isTauri) return;
+    // 前の組織で読んでいた位置のままにならないよう、先頭から読めるようにする。
+    if (openedIdRef.current !== id) paneRef.current?.scrollTo({ top: 0 });
+    openedIdRef.current = id;
     setSelectedId(id);
     setSaved(false);
     setOrgResults([]); // 前の検索結果による誤った統合判定を避ける
@@ -113,6 +120,8 @@ export function OrganizationsView({
   const startNew = () => {
     setSelectedId(null);
     setDetail(null);
+    openedIdRef.current = null;
+    paneRef.current?.scrollTo({ top: 0 });
     openDraft(orgDraft(null));
     setSaved(false);
     setOrgResults([]);
@@ -182,6 +191,7 @@ export function OrganizationsView({
       await organizationDelete(detail.org.id);
       setSelectedId(null);
       setDetail(null);
+      openedIdRef.current = null;
       setDraft(null);
       setBaseline('');
       load(query);
@@ -309,7 +319,7 @@ export function OrganizationsView({
       </aside>
 
       {/* 右：組織の詳細・編集 */}
-      <section className="min-h-0 flex-1 overflow-y-auto">
+      <section ref={paneRef} className="min-h-0 flex-1 overflow-y-auto">
         {!draft ? (
           <div className="flex h-full flex-col items-center justify-center gap-1 text-center">
             <Building2 size={40} className="text-white/25" />

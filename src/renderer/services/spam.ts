@@ -19,3 +19,7 @@ export const spamFindConflicts = () =>
 // 指定アドレスを迷惑差出人から外し、同アドレスの隔離済みメールを受信箱へ戻す。
 export const spamForgiveSender = (address: string) =>
   invoke<void>('spam_forgive_sender', { address });
+
+// 指定アドレスを「このまま迷惑」（住所録/グリーンより優先）にし、受信箱の同アドレスも迷惑へ。
+export const spamEnforceSender = (address: string) =>
+  invoke<void>('spam_enforce_sender', { address });

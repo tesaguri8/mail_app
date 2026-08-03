@@ -4,9 +4,13 @@ import type { GreenDomainEntry } from '@bindings/GreenDomainEntry';
 /** グリーン／警告ドメインの一覧（管理タブ用）。 */
 export const greenDomainList = () => invoke<GreenDomainEntry[]>('green_domain_list');
 
-/** ドメインをグリーンに認定（警告から外し手動グリーンへ）。 */
+/**
+ * ドメインをグリーンに認定（警告から外し手動グリーンへ）。
+ * 戻り値は認定したか。フリーメール（gmail.com 等）はドメイン単位で信頼できないため false
+ * （その場合は差出人を住所録に登録して「本人」として信頼する）。
+ */
 export const greenDomainAdd = (domain: string, note?: string) =>
-  invoke<void>('green_domain_add', { domain, note: note ?? null });
+  invoke<boolean>('green_domain_add', { domain, note: note ?? null });
 
 /** ドメインを警告（グリーン解除）に。自動グリーンを上書き除外し再登録を防ぐ。 */
 export const greenDomainWarn = (domain: string, note?: string) =>

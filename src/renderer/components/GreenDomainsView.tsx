@@ -20,6 +20,8 @@ export function GreenDomainsView() {
   const { t } = useTranslation();
   const [items, setItems] = useState<GreenDomainEntry[]>([]);
   const [input, setInput] = useState('');
+  // 追加できなかった理由（フリーメールはドメイン単位で認定不可）。
+  const [note, setNote] = useState('');
 
   const load = useCallback(() => {
     if (!isTauri) return;
@@ -45,15 +47,19 @@ export function GreenDomainsView() {
   const addManual = async () => {
     const d = normalize(input);
     if (!d || !isTauri) return;
+    setNote('');
     try {
-      await greenDomainAdd(d);
+      if (!(await greenDomainAdd(d))) {
+        setNote(t('green.freemail', { domain: d }));
+        return;
+      }
       setInput('');
       load();
     } catch {
       /* noop */
     }
   };
-  const run = (p: Promise<void>) => p.then(load).catch(() => undefined);
+  const run = (p: Promise<unknown>) => p.then(load).catch(() => undefined);
 
   return (
     <section className="flex h-full min-h-0 flex-col">
@@ -89,6 +95,11 @@ export function GreenDomainsView() {
             {t('green.add')}
           </button>
         </div>
+        {note && (
+          <p className="-mt-4 mb-4 rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+            {note}
+          </p>
+        )}
       </div>
 
       {/* スクロールするリスト領域（ドメイン一覧だけスクロール） */}

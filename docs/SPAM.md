@@ -409,8 +409,26 @@ junk 判定 → 迷惑フォルダへ隔離（is_junk=1, サーバー側は既�
 - **登録**: `mail_mark_spam` は、対象メールの差出人アドレス（正規化＝小文字・`<>`除去。**自分の口座アドレスは除外**）を `spam_senders` に登録し、受信箱にある同アドレスの既存メールを一括で `is_junk=1`（迷惑へ）にする。
 - **今後の新着**: 取り込み時（`insert_email`）に差出人が `spam_senders` にあれば、受信箱メールを `is_junk=1` にして自動隔離する（都度マーク不要）。
 - **解除（対称）**: `mail_mark_not_spam` は `spam_senders` から外し、同アドレスの隔離を解いて受信箱へ戻す。
-- **データ**: `spam_senders(address PRIMARY KEY, created_at)`（口座横断でグローバル。マイグレーション `0043_spam_senders.sql`）。一致は `from_address COLLATE NOCASE`（索引 `idx_emails_from_address_nocase`）。
+- **データ**: `spam_senders(address PRIMARY KEY, created_at, enforced)`（口座横断でグローバル。マイグレーション `0043_spam_senders.sql` / `0049_spam_sender_enforced.sql`）。一致は `from_address COLLATE NOCASE`（索引 `idx_emails_from_address_nocase`）。
 - **隔離のみ・削除しない**: §8.2 と同じく `is_junk` フラグの付け替えだけで、サーバー操作や完全削除はしない（取りこぼし防止の看板と両立）。
+
+#### 信頼シグナルとの優先順位（具体的な指定が勝つ）
+
+受信時の自動隔離（`insert_email` → `is_allowlisted_sender_conn`）は次の順で決める。**指定が具体的なほど強い**。
+
+| 順 | シグナル | 単位 | 結果 |
+|----|----------|------|------|
+| 1 | 本人検証（`verified_self`） | メール | 隔離しない |
+| 2 | 強制適用の迷惑登録（`spam_senders.enforced = 1`） | アドレス | 隔離する |
+| 3 | 住所録の本人一致（`is_known`） | アドレス | 隔離しない（矛盾として注意喚起） |
+| 4 | 迷惑登録（`spam_senders`） | アドレス | 隔離する |
+| 5 | グリーン**ドメイン** | ドメイン | 迷惑登録には勝たない |
+
+- **グリーンは迷惑登録に勝たない**: グリーンはドメイン単位の緩い信頼なので、ユーザーが名指しで迷惑にしたアドレスを許可し返さない（フリーメールを 1 件グリーンにするとそのドメイン全員が許可される、を防ぐ。フリーメールはそもそもドメイン単位でグリーンにできない。[GREEN_DOMAINS.md](GREEN_DOMAINS.md)）。
+- **注意喚起（`spam_find_conflicts`）**: 迷惑登録済みなのに住所録／グリーンの差出人を列挙し、UI（`SpamConflictAlert`）で 1 件ずつ解決する。
+  - **迷惑解除** `spam_forgive_sender`: 迷惑登録を外し、同アドレスの隔離を解いて受信箱へ戻す。
+  - **このまま迷惑** `spam_enforce_sender`: `enforced=1` にして迷惑登録を信頼シグナルより優先し、受信箱の同アドレスを迷惑へ移す。以後この差出人は注意喚起に再掲しない。
+  - グリーン判定は表示側と同じ集合（手動 ∪ 住所録由来 − フリーメール − 警告）を使う。
 
 ## 9. ユーザー設定（ハードコードしない）
 

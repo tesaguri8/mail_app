@@ -190,14 +190,19 @@ pub enum InsertOutcome {
 /// 新規挿入はしないが、機能追加前に取り込んだ古いメールでも添付が使えるよう、
 /// uid と添付メタが未設定なら埋め戻して（バックフィル）Backfilled を返す。
 pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertOutcome> {
+    // フォルダごとに別レコードにするため canonical_key はフォルダ接頭辞付きで保存する。
+    let key = folder_key(&e.folder, &e.canonical_key);
+    // 破棄済みの下書き（墓標あり）は取り込まない。送信/破棄でローカルから消した下書きが、
+    // サーバー Drafts に残ったコピー経由で復活するのを防ぐ（services/store/tombstones.rs）。
+    if e.folder == "drafts" && super::tombstones::is_tombstoned(conn, e.account_id, &key)? {
+        return Ok(InsertOutcome::Unchanged);
+    }
     // 表示専用の HTML 本文は zstd 圧縮して BLOB 列へ（TEXT の body_html は使わない）。
     let body_html_z = e
         .body_html
         .as_deref()
         .filter(|s| !s.is_empty())
         .map(crate::services::compress::compress_text);
-    // フォルダごとに別レコードにするため canonical_key はフォルダ接頭辞付きで保存する。
-    let key = folder_key(&e.folder, &e.canonical_key);
     // 新規本文の fingerprint（引用照合・重複ヒントの手掛かり）。
     let body_fingerprint = e
         .clean_body
@@ -265,7 +270,8 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
     insert_quotes(conn, id, &e.quotes)?;
     // 迷惑差出人に登録済みのアドレスからの新着（受信箱）は、受信時に自動で迷惑へ隔離する
     // （「このアドレスを迷惑にしたら今後の同アドレスも迷惑へ」。docs/SPAM.md）。
-    // ただし住所録・グリーン・本人検証などの信頼シグナルがあれば隔離しない（誤登録での取りこぼし防止）。
+    // ただし本人検証・住所録の本人一致があれば隔離しない（誤登録での取りこぼし防止）。
+    // グリーンは「ドメイン単位の緩い信頼」なのでアドレス単位の迷惑登録には勝たせない（§8.5 の優先順位）。
     if e.folder == "inbox" {
         if let Some(addr) = e.from_address.as_deref() {
             if super::spam::is_spam_sender_conn(conn, addr)?
@@ -348,6 +354,58 @@ pub fn recompute_reps_for_thread(conn: &Connection, thread_id: i64) -> rusqlite:
         )?;
     }
     Ok(())
+}
+
+/// 下書きの添付を保存し直す（毎回入れ替え。作成画面の添付欄がそのまま正）。
+/// 並び順は作成画面の並びをそのまま ord として持つ。
+fn replace_draft_attachments(
+    conn: &Connection,
+    draft_id: i64,
+    items: &[crate::models::DraftAttachment],
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM draft_attachments WHERE draft_id = ?1",
+        params![draft_id],
+    )?;
+    if items.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = conn.prepare(
+        "INSERT INTO draft_attachments \
+           (draft_id, ord, path, source_attachment_id, filename, size) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )?;
+    for (i, a) in items.iter().enumerate() {
+        stmt.execute(params![
+            draft_id,
+            i as i64,
+            a.path,
+            a.source_attachment_id.map(i64::from),
+            a.filename,
+            a.size
+        ])?;
+    }
+    Ok(())
+}
+
+/// 下書きに紐づく添付を並び順で取り出す。
+fn draft_attachments(
+    conn: &Connection,
+    draft_id: i64,
+) -> rusqlite::Result<Vec<crate::models::DraftAttachment>> {
+    let mut stmt = conn.prepare(
+        "SELECT path, source_attachment_id, filename, size \
+         FROM draft_attachments WHERE draft_id = ?1 ORDER BY ord",
+    )?;
+    let rows = stmt.query_map(params![draft_id], |r| {
+        Ok(crate::models::DraftAttachment {
+            path: r.get(0)?,
+            source_attachment_id: r.get::<_, Option<i64>>(1)?.map(|v| v as i32),
+            filename: r.get(2)?,
+            size: r.get::<_, i64>(3)? as i32,
+        })
+    })?;
+    rows.collect()
 }
 
 /// 引用ブロック（message_quotes）を一括挿入する。
@@ -944,6 +1002,11 @@ impl Store {
             let mut fts = tx.prepare("DELETE FROM email_fts WHERE rowid = ?1")?;
             let mut etags = tx.prepare("DELETE FROM email_tags WHERE email_id = ?1")?;
             let mut att = tx.prepare("DELETE FROM attachments WHERE email_id = ?1")?;
+            let mut quotes = tx.prepare("DELETE FROM message_quotes WHERE email_id = ?1")?;
+            // 他メールの引用が「照合先」としてこのメールを指している場合は参照だけ外す
+            // （matched_email_id に FK は無いので、残すと存在しない id を指したままになる）。
+            let mut unmatch =
+                tx.prepare("UPDATE message_quotes SET matched_email_id = NULL WHERE matched_email_id = ?1")?;
             let mut del = tx.prepare("DELETE FROM emails WHERE id = ?1")?;
             for id in ids {
                 if let Ok(Some(t)) = thread_of
@@ -956,6 +1019,8 @@ impl Store {
                 fts.execute(params![id])?;
                 etags.execute(params![id])?;
                 att.execute(params![id])?; // FK 制約のため先に添付を削除
+                quotes.execute(params![id])?; // 同上（message_quotes.email_id も FK）
+                unmatch.execute(params![id])?;
                 del.execute(params![id])?;
             }
             for t in &affected {
@@ -1186,6 +1251,7 @@ impl Store {
                 "UPDATE email_fts SET subject = ?1, clean_body = ?2 WHERE rowid = ?3",
                 params![d.subject, d.body, id],
             )?;
+            replace_draft_attachments(&conn, id, &d.attachments)?;
             return Ok(id);
         }
         // 新規: サーバー Drafts 上で自分の下書きを一意に特定するための Message-ID を採番する。
@@ -1226,6 +1292,7 @@ impl Store {
             "INSERT INTO email_fts(rowid, subject, from_address, clean_body) VALUES (?1, ?2, ?3, ?4)",
             params![id, d.subject, from, d.body],
         )?;
+        replace_draft_attachments(&conn, id, &d.attachments)?;
         Ok(id)
     }
 
@@ -1246,6 +1313,7 @@ impl Store {
     /// 下書き 1 件を作成画面へ読み戻すための内容を取得する（drafts フォルダのみ）。
     pub fn get_draft(&self, id: i64) -> rusqlite::Result<Option<crate::models::DraftContent>> {
         let conn = self.conn.lock().unwrap();
+        let attachments = draft_attachments(&conn, id)?;
         conn.query_row(
             // 返信元メール（in_reply_to と Message-ID が一致し、下書き自身ではない同一アカウントの
             // 実メール）の id を相関サブクエリで一緒に引く。右ペインに元メールを並べて表示する用。
@@ -1269,6 +1337,7 @@ impl Store {
                     body: r.get(6)?,
                     in_reply_to: r.get(7)?,
                     source_id: r.get::<_, Option<i64>>(8)?.map(|v| v as i32),
+                    attachments: attachments.clone(),
                 })
             },
         )
@@ -1612,6 +1681,122 @@ mod tests {
             attachments: vec![],
         };
         insert_email(&conn, &e).unwrap();
+    }
+
+    /// 下書きの添付は保存・再取得でそのまま往復し、更新のたびに入れ替わる。
+    /// 転送で引き継いだ添付（本体未取得＝path なし）も source_attachment_id で覚えておく。
+    #[test]
+    fn draft_attachments_round_trip() {
+        use crate::models::{DraftAttachment, DraftInput};
+        let store = test_store();
+        let input = |id: Option<i32>, atts: Vec<DraftAttachment>| DraftInput {
+            draft_id: id,
+            account_id: 1,
+            to: vec!["you@example.com".to_string()],
+            cc: vec![],
+            bcc: vec![],
+            subject: "転送".to_string(),
+            body: "本文".to_string(),
+            in_reply_to: None,
+            attachments: atts,
+        };
+        let local = DraftAttachment {
+            path: Some("C:/tmp/a.pdf".to_string()),
+            source_attachment_id: None,
+            filename: "a.pdf".to_string(),
+            size: 10,
+        };
+        let carried = DraftAttachment {
+            path: None,
+            source_attachment_id: Some(42),
+            filename: "IMG_1.jpeg".to_string(),
+            size: 2048,
+        };
+
+        let id = store
+            .save_draft(&input(None, vec![local.clone(), carried.clone()]))
+            .unwrap();
+        let got = store.get_draft(id).unwrap().unwrap();
+        assert_eq!(got.attachments.len(), 2);
+        assert_eq!(got.attachments[0].path.as_deref(), Some("C:/tmp/a.pdf"));
+        assert_eq!(got.attachments[1].source_attachment_id, Some(42));
+        assert_eq!(got.attachments[1].filename, "IMG_1.jpeg");
+
+        // 更新は入れ替え（作成画面で外したものは消える）。
+        store
+            .save_draft(&input(Some(id as i32), vec![carried]))
+            .unwrap();
+        let got = store.get_draft(id).unwrap().unwrap();
+        assert_eq!(got.attachments.len(), 1);
+        assert_eq!(got.attachments[0].filename, "IMG_1.jpeg");
+
+        // 下書きを消すと添付の紐づけも残らない（ON DELETE CASCADE）。
+        store.delete_emails(&[id]).unwrap();
+        let conn = store.conn.lock().unwrap();
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM draft_attachments", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    /// 引用（message_quotes）を持つメールも完全削除できる。message_quotes.email_id には
+    /// FK があるため、引用行を先に消さないと外部キー制約で削除ごと失敗し、「ごみ箱を
+    /// 空にする」が黙って効かなくなる（実際に起きた不具合の回帰テスト）。
+    #[test]
+    fn delete_removes_quotes_and_unlinks_matches() {
+        let store = test_store();
+        seed(&store, "件名", "a@b", "本文", "trash", "k1");
+        seed(&store, "別件", "c@d", "本文2", "inbox", "k2");
+        let (id, other) = {
+            let conn = store.conn.lock().unwrap();
+            let pick = |key: &str| -> i64 {
+                conn.query_row(
+                    "SELECT id FROM emails WHERE canonical_key = ?1",
+                    params![key],
+                    |r| r.get(0),
+                )
+                .unwrap()
+            };
+            let (id, other) = (pick("trash:k1"), pick("k2"));
+            conn.execute(
+                "INSERT INTO message_quotes (email_id, block_order, fingerprint) VALUES (?1, 0, 'fp')",
+                params![id],
+            )
+            .unwrap();
+            // 別メールの引用が、削除するメールを照合先として指している状態も作る。
+            conn.execute(
+                "INSERT INTO message_quotes (email_id, block_order, fingerprint, matched_email_id) \
+                 VALUES (?1, 0, 'fp2', ?2)",
+                params![other, id],
+            )
+            .unwrap();
+            (id, other)
+        };
+
+        store.delete_emails(&[id]).unwrap();
+
+        let conn = store.conn.lock().unwrap();
+        let left: i64 = conn
+            .query_row("SELECT count(*) FROM emails", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 1, "引用を持つメールが削除できていない");
+        let orphan: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM message_quotes WHERE email_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphan, 0, "削除したメールの引用行が残っている");
+        // 残ったメールの引用は保持しつつ、照合先だけ外れる。
+        let matched: Option<i64> = conn
+            .query_row(
+                "SELECT matched_email_id FROM message_quotes WHERE email_id = ?1",
+                params![other],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(matched, None, "存在しないメールへの照合が残っている");
     }
 
     /// \Seen 取り込み: 既読で挿入→既読で保存。再取り込みで未読→既読の補正はするが、

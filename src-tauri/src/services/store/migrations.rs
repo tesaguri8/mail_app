@@ -209,6 +209,19 @@ const MIGRATIONS: &[Migration] = &[
         version: 48,
         sql: include_str!("migrations/0048_event_reminders.sql"),
     },
+    Migration {
+        // 49 は迷惑差出人の「このまま迷惑（強制適用）」フラグ（信頼シグナルより優先。docs/SPAM.md §8.5）。
+        version: 49,
+        sql: include_str!("migrations/0049_spam_sender_enforced.sql"),
+    },
+    Migration {
+        version: 50,
+        sql: include_str!("migrations/0050_deleted_keys.sql"),
+    },
+    Migration {
+        version: 51,
+        sql: include_str!("migrations/0051_draft_attachments.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

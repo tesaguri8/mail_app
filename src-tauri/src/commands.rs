@@ -975,6 +975,10 @@ pub async fn mail_delete(
 ) -> Result<(), String> {
     // サーバー反映に要る情報は、ローカル削除で消える前に読み出しておく。
     let refs = store.purge_refs(&ids).map_err(|e| e.to_string())?;
+    // 下書きは墓標を残してから消す（サーバーにコピーが残っていても同期で復活させない）。
+    if let Err(e) = store.tombstone_drafts(&ids) {
+        log::warn!("下書きの墓標を残せませんでした（同期で復活する可能性があります）: {e}");
+    }
     store.delete_emails(&ids).map_err(|e| e.to_string())?;
     spawn_remote_purge(&app, &store, refs);
     Ok(())
@@ -1103,6 +1107,10 @@ pub async fn mail_empty_folder(
     let refs = store
         .purge_refs_for_folder(account_id, &folder)
         .map_err(|e| e.to_string())?;
+    // 中に下書き（ゴミ箱へ移した下書きを含む）があれば墓標を残してから消す。
+    if let Err(e) = store.tombstone_drafts_in_folder(account_id, &folder) {
+        log::warn!("下書きの墓標を残せませんでした（同期で復活する可能性があります）: {e}");
+    }
     let n = store
         .empty_folder(account_id, &folder)
         .map_err(|e| e.to_string())?;
@@ -1173,7 +1181,9 @@ pub async fn mail_draft_sync_remote(
         in_reply_to: draft.in_reply_to,
         references,
         message_id: Some(message_id.clone()),
-        attachments: Vec::new(), // 下書きのサーバー保存は本文のみ（添付の永続化は今回対象外）
+        // サーバー Drafts へ上げるのは本文のみ。添付はローカルの draft_attachments で
+        // 保持しており（再編集で復元される）、別端末との共有は現状の対象外。
+        attachments: Vec::new(),
         self_mark: None,         // 下書きには検証マークを付けない
     };
     let email = smtp::build_message(&message)?;
@@ -1200,9 +1210,83 @@ pub async fn mail_draft_sync_remote(
     .map_err(|e| e.to_string())?
 }
 
+/// 下書きのサーバー側コピーを消すのに要る情報（ローカル削除で消える前に集める）。
+struct DraftRemoteTarget {
+    account_id: i64,
+    /// keyring から資格情報を引くためのアカウントのメールアドレス。
+    imap_email: String,
+    login: String,
+    host: String,
+    port: u16,
+    /// Message-ID の中身（山括弧なし）。サーバー上の該当下書きを HEADER 検索で引く。
+    message_id_inner: String,
+}
+
+/// 下書き 1 件について、サーバー側コピーの削除に要る情報を集める。
+/// Message-ID が無い（古い下書き等）／アカウント設定が引けない場合は None。
+fn draft_remote_target(store: &Store, id: i64) -> Option<DraftRemoteTarget> {
+    let (account_id, message_id) = store.draft_remote_ref(id).ok().flatten()?;
+    let inner = message_id
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .to_string();
+    if inner.is_empty() {
+        return None;
+    }
+    let (imap_email, login, host, port) = store.get_account_imap(account_id).ok().flatten()?;
+    Some(DraftRemoteTarget {
+        account_id,
+        imap_email,
+        login,
+        host,
+        port,
+        message_id_inner: inner,
+    })
+}
+
+/// サーバー Drafts のコピーをバックグラウンドで削除し、成功したら墓標の再試行予約を下ろす。
+/// 失敗しても UI には影響させない（予約が残るので次回同期で再試行される）。
+fn spawn_draft_remote_delete(app: &AppHandle, target: DraftRemoteTarget) {
+    let service = app.config().identifier.clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let Ok(password) =
+            keyring::Entry::new(&service, &target.imap_email).and_then(|e| e.get_password())
+        else {
+            log::warn!("下書きのサーバー削除: 資格情報を取得できません（次回同期で再試行）");
+            return;
+        };
+        let DraftRemoteTarget {
+            account_id,
+            login,
+            host,
+            port,
+            message_id_inner,
+            ..
+        } = target;
+        let mid = message_id_inner.clone();
+        let done = tauri::async_runtime::spawn_blocking(move || {
+            imap_sync::delete_draft_remote(&host, port, &login, &password, &mid)
+        })
+        .await;
+        match done {
+            Ok(Ok(())) => {
+                let store = app.state::<Store>();
+                let _ = store.clear_tombstone_remote(account_id, &message_id_inner);
+            }
+            // 失敗しても墓標の予約（remote_pending=1）は残るので、次回の同期が拾って消す。
+            Ok(Err(e)) => log::warn!("下書きのサーバー削除に失敗（次回同期で再試行）: {e}"),
+            Err(e) => log::warn!("下書きのサーバー削除を実行できません: {e}"),
+        }
+    });
+}
+
 /// 下書きをサーバーとローカルの両方から削除する（破棄・送信後の後片付け）。
 /// ローカルは即削除して返し、サーバーのコピー削除はバックグラウンドで行う（best-effort。
 /// サーバー設定が無い/失敗しても UI は待たせない）。
+/// 削除の直前に墓標（deleted_keys）を残すので、サーバー削除が失敗しても・実行中の同期に
+/// 拾われても、下書きが復活することはない（services/store/tombstones.rs）。
 #[tauri::command]
 pub async fn mail_draft_discard(
     app: AppHandle,
@@ -1210,37 +1294,16 @@ pub async fn mail_draft_discard(
     id: i64,
 ) -> Result<(), String> {
     // サーバー削除に要る情報は、ローカル削除で消える前に読み出しておく。
-    let remote = store
-        .draft_remote_ref(id)
-        .ok()
-        .flatten()
-        .and_then(|(account_id, mid)| {
-            store
-                .get_account_imap(account_id)
-                .ok()
-                .flatten()
-                .map(|(imap_email, login, host, port)| (imap_email, login, host, port, mid))
-        });
+    let remote = draft_remote_target(&store, id);
+    // 墓標を先に残す（同期が既に取得済みの一覧から取り込み直すのを止める）。
+    if let Err(e) = store.tombstone_drafts(&[id]) {
+        log::warn!("下書きの墓標を残せませんでした（同期で復活する可能性があります）: {e}");
+    }
     // ローカルは即削除（UI 反映を待たせない）。
     store.delete_emails(&[id]).map_err(|e| e.to_string())?;
     // サーバーのコピー削除はバックグラウンドで（best-effort）。
-    if let Some((imap_email, login, host, port, mid)) = remote {
-        let service = app.config().identifier.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Ok(password) =
-                keyring::Entry::new(&service, &imap_email).and_then(|e| e.get_password())
-            {
-                let inner = mid
-                    .trim()
-                    .trim_start_matches('<')
-                    .trim_end_matches('>')
-                    .to_string();
-                let _ = tauri::async_runtime::spawn_blocking(move || {
-                    imap_sync::delete_draft_remote(&host, port, &login, &password, &inner)
-                })
-                .await;
-            }
-        });
+    if let Some(target) = remote {
+        spawn_draft_remote_delete(&app, target);
     }
     Ok(())
 }
@@ -1396,6 +1459,19 @@ pub fn spam_forgive_sender(store: State<Store>, address: String) -> Result<(), S
         .map_err(|e| e.to_string())?;
     store
         .set_sender_junk(&address, false)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 指定アドレスの迷惑登録を「このまま迷惑（強制適用）」にして矛盾を解消する（§8.5）。
+/// 住所録／グリーンより迷惑登録を優先し、受信箱に残っている同アドレスのメールも迷惑へ移す。
+#[tauri::command]
+pub fn spam_enforce_sender(store: State<Store>, address: String) -> Result<(), String> {
+    store
+        .enforce_spam_sender(&address)
+        .map_err(|e| e.to_string())?;
+    store
+        .set_sender_junk(&address, true)
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -2173,12 +2249,14 @@ pub fn green_domain_list(store: State<Store>) -> Result<Vec<GreenDomainEntry>, S
 }
 
 /// ドメインをグリーンに認定（警告から外し、手動グリーンに登録）。
+/// 戻り値は認定したか。フリーメール（gmail.com 等）はドメイン単位で信頼できないため `false`
+/// （呼び出し側は「住所録に登録して本人を信頼する」よう案内する。docs/GREEN_DOMAINS.md）。
 #[tauri::command]
 pub fn green_domain_add(
     store: State<Store>,
     domain: String,
     note: Option<String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     store
         .add_green_domain(&domain, note.as_deref())
         .map_err(|e| e.to_string())
@@ -2534,6 +2612,23 @@ pub async fn attachment_view(
     }
 
     let path = ensure_attachment_file(&app, &store, attachment_id).await?;
+    // 表示用 JPEG（レンディション）は添付フォルダに残して使い回す。原本のデコード→縮小→
+    // JPEG 化は重く、メールを開き直すたびに繰り返すと毎回待たされるため（写真 1 枚で数百ms）。
+    // 添付と同名になり得る場合だけは原本を壊さないようキャッシュしない。
+    let rendition = path.with_file_name(if thumb {
+        "__rondine_thumb.jpg"
+    } else {
+        "__rondine_view.jpg"
+    });
+    let cacheable = rendition != path;
+    if cacheable {
+        if let Ok(cached) = std::fs::read(&rendition) {
+            if !cached.is_empty() {
+                return Ok(media::jpeg_bytes_to_data_url(&cached));
+            }
+        }
+    }
+
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
     let max = if thumb {
         media::THUMB_MAX
@@ -2543,11 +2638,16 @@ pub async fn attachment_view(
 
     let filename = att.filename.clone();
     let content_type = att.content_type.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        media::to_web_data_url(&bytes, content_type.as_deref(), &filename, max)
+    let jpeg = tauri::async_runtime::spawn_blocking(move || {
+        media::to_web_jpeg_bytes(&bytes, content_type.as_deref(), &filename, max)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    if cacheable {
+        // 書けなくても表示は続ける（次回また変換するだけ）。
+        let _ = std::fs::write(&rendition, &jpeg);
+    }
+    Ok(media::jpeg_bytes_to_data_url(&jpeg))
 }
 
 /// 添付を OS の関連アプリで開く（未取得なら先に取得）。
@@ -2584,6 +2684,27 @@ pub async fn attachment_open(
     app.opener()
         .open_path(to_open.to_string_lossy().to_string(), None::<&str>)
         .map_err(|e| e.to_string())
+}
+
+/// 受信済みメールの添付をローカルファイルとして用意し、そのパスを返す（未取得なら先に取得）。
+/// 転送で元メールの添付をそのまま同梱するために使う（送信は「ローカルパスを渡す」経路のため）。
+#[tauri::command]
+pub async fn attachment_local_path(
+    app: AppHandle,
+    store: State<'_, Store>,
+    attachment_id: i64,
+) -> Result<AttachmentMeta, String> {
+    let att = store
+        .get_attachment(attachment_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "添付が見つかりません".to_string())?;
+    let path = ensure_attachment_file(&app, &store, attachment_id).await?;
+    let size = std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
+    Ok(AttachmentMeta {
+        path: path.to_string_lossy().to_string(),
+        name: att.filename,
+        size,
+    })
 }
 
 /// ローカルパスのファイルを OS の関連アプリで開く（作成画面で、添付を送信前に確認する用）。

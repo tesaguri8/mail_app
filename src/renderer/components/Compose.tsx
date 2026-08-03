@@ -5,18 +5,27 @@ import { Copy, Paperclip, Quote, Save, Scissors, Send, Trash2, X } from 'lucide-
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { DraftContent } from '@bindings/DraftContent';
+import type { DraftAttachment } from '@bindings/DraftAttachment';
 import type { SignatureSummary } from '@bindings/SignatureSummary';
 import {
+  attachmentLocalPath,
   attachmentMeta,
   attachmentStage,
+  mailAttachments,
   openLocalPath,
   mailDraftDiscard,
   mailDraftSyncRemote,
   mailSaveDraft,
   mailSend,
 } from '../services/mail';
+import { withActivity } from '../stores/activity';
 import { signatureList } from '../services/signatures';
-import { getComposeAutoSave, getFlyAnimation } from '../config/prefs';
+import {
+  getComposeAutoSave,
+  getFlyAnimation,
+  getLastSignature,
+  setLastSignature,
+} from '../config/prefs';
 import { playFlySound } from '../utils/flySound';
 import { RecipientInput } from './RecipientInput';
 import { ContextMenu } from './ContextMenu';
@@ -44,8 +53,63 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-/** 作成画面で保持する添付（送信時に path を Rust へ渡す）。 */
-type Attach = { path: string; name: string; size: number };
+/**
+ * 作成画面で保持する添付。送信時は `path` を Rust へ渡す。
+ * 転送で引き継いだ添付は、開いた時点では本体が手元に無いことがあるので `sourceId`
+ * （元メールの attachments.id）だけを持ち、送信/保存の直前にローカルへ用意して path を得る
+ * （開いただけで大きな添付をサーバーから取りに行かないため）。
+ */
+type Attach = {
+  /** ローカルの実ファイル。未取得の転送添付では未設定。 */
+  path?: string;
+  /** 転送元の添付 id（未取得のものを取り直すキー）。手元のファイルなら未設定。 */
+  sourceId?: number;
+  name: string;
+  size: number;
+};
+
+/** 一覧の key・重複判定に使う識別子（実ファイルはパス、転送添付は元の添付 id）。 */
+function attachKey(a: Attach): string {
+  return a.path ?? `src:${a.sourceId ?? ''}`;
+}
+
+/**
+ * 添付をローカルパスへ解決する（送信/下書き保存の直前に呼ぶ）。転送で引き継いだ添付は
+ * ここで初めてサーバーから取り直す。IMAP 接続を同時に張らないよう 1 件ずつ順に処理する。
+ * 1 件でも用意できなければエラー（黙って添付を落として送らない）。
+ */
+async function resolveAttachmentPaths(items: Attach[]): Promise<string[]> {
+  const paths: string[] = [];
+  for (const a of items) {
+    if (a.path) {
+      paths.push(a.path);
+    } else if (a.sourceId != null) {
+      const meta = await attachmentLocalPath(a.sourceId);
+      paths.push(meta.path);
+    }
+  }
+  return paths;
+}
+
+/** 作成画面の添付を、下書きに保存する形へ変換する。 */
+function toDraftAttachments(items: Attach[]): DraftAttachment[] {
+  return items.map((a) => ({
+    path: a.path ?? null,
+    source_attachment_id: a.sourceId ?? null,
+    filename: a.name,
+    size: a.size,
+  }));
+}
+
+/** 下書きに保存されていた添付を、作成画面の形へ戻す。 */
+function fromDraftAttachments(items: DraftAttachment[]): Attach[] {
+  return items.map((a) => ({
+    path: a.path ?? undefined,
+    sourceId: a.source_attachment_id ?? undefined,
+    name: a.filename,
+    size: a.size,
+  }));
+}
 
 function withPrefix(subject: string | null, prefix: 'Re' | 'Fwd'): string {
   const s = (subject ?? '').trim();
@@ -276,8 +340,11 @@ export function Compose({
   const [body, setBody] = useState(target.mode === 'draft' ? target.draft.body : '');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
-  // 添付ファイル（picker 選択 or ドロップ。送信時に path を Rust へ渡して読み込ませる）。
-  const [attachments, setAttachments] = useState<Attach[]>([]);
+  // 添付ファイル（picker 選択 or ドロップ or 転送で引き継いだ元メールの添付）。
+  // 送信時にローカルパスへ解決して Rust へ渡す（下書きの再編集では保存済みの添付を復元）。
+  const [attachments, setAttachments] = useState<Attach[]>(
+    target.mode === 'draft' ? fromDraftAttachments(target.draft.attachments) : [],
+  );
   // OS からファイルをドラッグ中か（ドロップ領域のハイライト用）。
   const [dragOver, setDragOver] = useState(false);
 
@@ -329,7 +396,18 @@ export function Compose({
     [signatures]
   );
 
-  // 署名が読み込めたら（およびアカウント変更時に）そのアカウントの既定署名を適用する。
+  // 署名を選び直したら、そのアカウントの次回の既定として覚える（「署名なし」も覚える）。
+  const chooseSignature = useCallback(
+    (id: number | null) => {
+      applySignature(id);
+      if (accountId != null) setLastSignature(accountId, id);
+    },
+    [applySignature, accountId],
+  );
+
+  // 署名が読み込めたら（およびアカウント変更時に）そのアカウントの署名を自動で適用する。
+  // 採用する署名は「前回そのアカウントで選んだ署名」→ 無ければアカウントの既定署名 → 無ければ
+  // 署名なし。前回「署名なし」を選んでいればそれも尊重する（毎回入る/毎回消すの手間を無くす）。
   // 下書きの再編集では本文に署名が既に含まれているので自動挿入しない（二重を防ぐ）。
   // 同じアカウントで再適用すると、本文の署名まわりを編集していた場合に旧ブロックの
   // 剥がしに失敗して署名が二重に付くため、アカウント単位で一度だけ適用する
@@ -339,8 +417,16 @@ export function Compose({
     if (signatures.length === 0 || target.mode === 'draft') return;
     if (autoSigAccountRef.current === accountId) return;
     autoSigAccountRef.current = accountId;
-    const acc = accounts.find((a) => a.id === accountId);
-    applySignature(acc?.signature_id ?? null);
+    const fallback = accounts.find((a) => a.id === accountId)?.signature_id ?? null;
+    const remembered = accountId != null ? getLastSignature(accountId) : undefined;
+    // 記録が無い、または記録していた署名が削除済みならアカウント既定へ戻す。
+    const chosen =
+      remembered === undefined
+        ? fallback
+        : remembered === null || signatures.some((s) => s.id === remembered)
+          ? remembered
+          : fallback;
+    applySignature(chosen);
   }, [accountId, signatures, accounts, applySignature, target.mode]);
 
   // 下書きの自動保存。ユーザーが何か書き込んだら（dirty）ローカルの drafts へ保存する。
@@ -372,11 +458,12 @@ export function Compose({
     if (splitAddresses(cc).length > 0) return true;
     if (splitAddresses(bcc).length > 0) return true;
     if (subject.trim().length > 0) return true;
+    if (attachments.length > 0) return true; // 添付だけ足した状態も「書きかけ」として残す
     // 本文から自動挿入の署名ブロックを除いた「書いた本文」で判定する。
     const sig = sigBlockRef.current;
     const written = sig && body.includes(sig) ? body.replace(sig, '') : body;
     return written.trim().length > 0;
-  }, [to, cc, bcc, subject, body]);
+  }, [to, cc, bcc, subject, body, attachments]);
 
   // 選択範囲を引用（各行 "> "）に置き換え、置き換えた範囲を選択し直してフォーカスを戻す。
   const quoteSelection = (start: number, end: number) => {
@@ -415,16 +502,13 @@ export function Compose({
   // サーバー Drafts への同期状態（フッターに表示）。'idle' は非表示。
   const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle');
   const syncErrRef = useRef<string>('');
-  // ローカル保存が成功するたびに増やし、サーバー同期のデバウンスを起動するトリガ。
-  const [saveTick, setSaveTick] = useState(0);
 
   // サーバーの Drafts フォルダへ同期する（成功/失敗をフッターに反映）。best-effort。
   const syncRemote = useCallback(async (id: number) => {
     // 送信中／送信後は Drafts へ APPEND しない。ここで APPEND すると、送信完了時の
     // 下書き削除（mail_draft_discard → delete_draft_remote）と競合し、「削除の後に
     // APPEND が勝つ」とサーバー Drafts に下書きが残ってしまう。すると次回同期で会話に
-    // 「添付なしの重複メール」として復活する。2.5s デバウンスの予約分がちょうど送信の
-    // 瞬間に発火し得るため、呼び出し時点で sendingRef を見て握り潰す。
+    // 「添付なしの重複メール」として復活する。
     if (sendingRef.current) return;
     setSyncState('syncing');
     try {
@@ -438,7 +522,9 @@ export function Compose({
 
   // 現在の内容で下書きを保存/更新する（自動保存と、閉じる時の確定保存で共有）。
   // `syncNow` が真なら保存後すぐサーバー Drafts へ同期する（明示保存ボタン用）。
-  // 偽（自動保存）のときは saveTick を進め、下のデバウンスで落ち着いてから同期する。
+  // 自動保存はローカルのみに留める（サーバー Drafts へは「明示保存」と「閉じる時」だけ
+  // APPEND する）。入力のたびに APPEND すると、書いている間ずっとサーバー上に下書きの
+  // 入れ替え（削除→APPEND）が走り、送信時の後片付けと競合してゴミが残りやすくなるため。
   // 何も書いていない新規は下書きを作らない（空の下書きがフォルダに溜まるのを防ぐ）。
   const saveDraft = useCallback(
     async (syncNow = false) => {
@@ -454,15 +540,15 @@ export function Compose({
           subject,
           body: composedBody(),
           in_reply_to: init.inReplyTo,
+          // 添付も一緒に保存する（転送で引き継いだ添付が、再編集で消えないように）。
+          attachments: toDraftAttachments(attachments),
         });
         draftIdRef.current = id;
         onDraftId?.(id); // 復元用: 現在編集中の下書き id を親へ通知
         setSaved(true);
         setUnsaved(false);
         if (syncNow) {
-          void syncRemote(id); // 明示保存: 即サーバー同期
-        } else {
-          setSaveTick((n) => n + 1); // 自動保存: 下のデバウンスで同期を予約
+          void syncRemote(id); // 明示保存: 即サーバー同期（自動保存はローカルのみ）
         }
       } catch {
         // 自動保存の失敗は致命的でないので黙って無視（次の入力で再試行）。
@@ -479,6 +565,7 @@ export function Compose({
       hasContent,
       syncRemote,
       onDraftId,
+      attachments,
     ]
   );
 
@@ -496,16 +583,6 @@ export function Compose({
     const h = setTimeout(() => void saveDraft(), 1000);
     return () => clearTimeout(h);
   }, [dirty, autoSave, saveDraft]);
-
-  // ローカル保存が済んだら、少し落ち着いてから（2.5s）サーバー Drafts へ同期する。
-  // 入力のたびに APPEND を打たないよう、ローカル保存より長めのデバウンスでまとめる。
-  useEffect(() => {
-    if (saveTick === 0 || !autoSave) return;
-    const id = draftIdRef.current;
-    if (id == null) return;
-    const h = setTimeout(() => void syncRemote(id), 2500);
-    return () => clearTimeout(h);
-  }, [saveTick, autoSave, syncRemote]);
 
   // 最新の saveDraft を参照する箱（アンマウント時の確定保存に使う。ref なので常に最新を指す）。
   const saveDraftRef = useRef(saveDraft);
@@ -590,6 +667,29 @@ export function Compose({
   const canSend =
     accountId != null && splitAddresses(to).length > 0 && !sending && !attachTooBig;
 
+  // 転送: 元メールの添付をすべて引き継いで添付欄に載せる。埋め込み画像（cid:）も含めるのは、
+  // 引用 HTML では cid: を解決できずプレースホルダに置き換わる（＝そのままでは相手に届かない）
+  // ため。落とすより添付として渡すほうが安全で、不要なものはユーザーが個別に外せる。
+  // ※ 埋め込み画像を「埋め込みのまま」転送する（multipart/related で Content-ID ごと同梱）のは
+  //   送信側の MIME 組み立ての拡張が要るため後続。
+  // この時点では本体を取りに行かず、送信/下書き保存の直前にローカルへ用意する（開いただけで
+  // 大きな添付をサーバーから取らないため）。
+  useEffect(() => {
+    if (target.mode !== 'forward') return;
+    let alive = true;
+    mailAttachments(target.source.id)
+      .then((list) => {
+        if (!alive || list.length === 0) return;
+        addAttachments(list.map((a) => ({ sourceId: a.id, name: a.filename, size: a.size })));
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+    // 転送対象が変わったときだけ引き継ぐ（addAttachments は同一内容の再追加を弾く）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
+
   // 添付を一覧へ追加する（同名・同サイズは重複とみなして除外。バッチ内の重複も除く）。
   const dedupKey = (a: Attach) => `${a.name}|${a.size}`;
   const addAttachments = (items: Attach[]) =>
@@ -604,8 +704,29 @@ export function Compose({
       }
       return [...prev, ...add];
     });
-  const removeAttachment = (path: string) =>
-    setAttachments((prev) => prev.filter((a) => a.path !== path));
+  const removeAttachment = (key: string) =>
+    setAttachments((prev) => prev.filter((a) => attachKey(a) !== key));
+
+  // 添付を既定アプリで開いて送信前に確認する。転送で引き継いだ添付はまだ手元に無いことが
+  // あるので、その場でローカルへ用意してから開く（用意できたら以後は手元のファイル扱い）。
+  const openAttachment = async (a: Attach) => {
+    try {
+      let path = a.path;
+      if (!path && a.sourceId != null) {
+        const src = a.sourceId;
+        const meta = await withActivity(t('activity.preparingAttachments'), () =>
+          attachmentLocalPath(src),
+        );
+        path = meta.path;
+        setAttachments((prev) =>
+          prev.map((x) => (attachKey(x) === attachKey(a) ? { ...x, path } : x)),
+        );
+      }
+      if (path) await openLocalPath(path);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   // ファイル選択ダイアログから添付を追加する。
   const pickAttachments = async () => {
@@ -641,6 +762,19 @@ export function Compose({
     sendingRef.current = true;
     setSending(true);
     setError('');
+    // 転送で引き継いだ添付は、まだ手元に無ければここでローカルへ用意する（サーバーから
+    // 取り直す＝時間がかかるのでフッターに進捗を出す。1 件ずつ順に取る）。
+    let paths: string[];
+    try {
+      paths = await withActivity(t('activity.preparingAttachments'), () =>
+        resolveAttachmentPaths(attachments),
+      );
+    } catch (e) {
+      setError(String(e));
+      sendingRef.current = false;
+      setSending(false);
+      return;
+    }
     // 送信リクエストは即開始し、その完了を待つ間つばめを飛ばす。
     const send = mailSend({
       account_id: accountId,
@@ -657,7 +791,7 @@ export function Compose({
       // References チェーンは Rust 側で in_reply_to から祖先を辿って積む（docs/THREADING.md）。
       references: null,
       // 添付はローカルパスを渡し、Rust が送信時に読み込んで MIME に同梱する。
-      attachments: attachments.map((a) => a.path),
+      attachments: paths,
     });
     try {
       if (flyOn && flyRef.current && sendBtnRef.current) {
@@ -850,12 +984,10 @@ export function Compose({
             <div className="flex flex-wrap gap-1.5 pl-14">
               {attachments.map((a) => (
                 <span
-                  key={a.path}
-                  // クリックで送信前に既定アプリで内容確認（添付は実ファイルのパスを持つ）。
+                  key={attachKey(a)}
+                  // クリックで送信前に既定アプリで内容確認（未取得の転送添付はここで取り寄せる）。
                   title={`${a.name}（${formatSize(a.size)}）・${t('compose.attachOpenHint')}`}
-                  onClick={() => {
-                    openLocalPath(a.path).catch((e) => setError(String(e)));
-                  }}
+                  onClick={() => void openAttachment(a)}
                   className="inline-flex max-w-[16rem] cursor-pointer select-none items-center gap-1.5 rounded-md bg-white/10 py-1 pl-2 pr-1 text-xs hover:bg-white/15"
                 >
                   <Paperclip size={12} className="shrink-0 text-white/50" />
@@ -866,7 +998,7 @@ export function Compose({
                     // 「外す」は開く動作を巻き込まないよう伝播を止める。
                     onClick={(e) => {
                       e.stopPropagation();
-                      removeAttachment(a.path);
+                      removeAttachment(attachKey(a));
                     }}
                     title={t('compose.attachRemove')}
                     aria-label={t('compose.attachRemove')}
@@ -890,7 +1022,8 @@ export function Compose({
             <select
               className="rounded-md bg-white/10 px-2 py-1.5 text-sm outline-none"
               value={sigId ?? ''}
-              onChange={(e) => applySignature(e.target.value ? Number(e.target.value) : null)}
+              onChange={(e) => chooseSignature(e.target.value ? Number(e.target.value) : null)}
+              title={t('compose.signatureRemembered')}
             >
               <option value="" className="text-black">
                 {t('compose.noSignature')}

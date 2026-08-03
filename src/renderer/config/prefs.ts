@@ -13,6 +13,8 @@ const HOME_COUNT_SHOW_KEY = 'rondine.homeCountShow';
 const HOME_COUNT_FILTER_KEY = 'rondine.homeCountFilter';
 const PHONE_AUTOFORMAT_KEY = 'rondine.phoneAutoformat';
 const COMPOSE_AUTOSAVE_KEY = 'rondine.composeAutosave';
+/** 「最後に使った署名」はアカウント別に持つ（キーは `<接頭辞><アカウントid>`）。 */
+const LAST_SIGNATURE_PREFIX = 'rondine.lastSignature.';
 export const PREFS_EVENT = 'rondine:prefs';
 
 /** 本文埋め込み画像（inline asset）を自動取得して表示するか。既定: オン。 */
@@ -112,6 +114,29 @@ export function setAutoSyncSeconds(sec: number): void {
   const v = Number.isFinite(sec) && sec >= 10 ? Math.round(sec) : 30;
   localStorage.setItem(AUTO_SYNC_SEC_KEY, String(v));
   window.dispatchEvent(new Event(PREFS_EVENT));
+}
+
+/**
+ * 作成画面で「最後に使った署名」（アカウント別）。docs/COMPOSE.md §1。
+ *
+ * 返り値は「その署名の id」/「null＝署名なしを選んだ」/「undefined＝まだ選んだことがない」。
+ * undefined のときだけアカウントの既定署名（`accounts.signature_id`）を使う。
+ * ※「署名なし」を選んだことも覚える必要があるので、null と undefined を区別している。
+ */
+export function getLastSignature(accountId: number): number | null | undefined {
+  const v = localStorage.getItem(`${LAST_SIGNATURE_PREFIX}${accountId}`);
+  if (v === null) return undefined; // 未記録
+  if (v === '') return null; // 「署名なし」を選んだ
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** 作成画面で選んだ署名を、そのアカウントの次回の既定として覚える（null＝署名なし）。 */
+export function setLastSignature(accountId: number, signatureId: number | null): void {
+  localStorage.setItem(
+    `${LAST_SIGNATURE_PREFIX}${accountId}`,
+    signatureId == null ? '' : String(signatureId),
+  );
 }
 
 /** 実効の自動同期間隔（秒）。オフなら 0（useAutoSync が参照）。 */

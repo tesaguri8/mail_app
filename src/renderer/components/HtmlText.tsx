@@ -55,6 +55,21 @@ type InlineImages = Record<string, string>;
 type RemoteImages = Record<string, string>;
 
 /**
+ * 描画中ずっと変わらない設定・コールバック一式。DOM を再帰的にたどる renderNode へ
+ * 引数を一つずつ引き回さないようまとめて渡す。
+ */
+type RenderCtx = {
+  inlineImages: InlineImages;
+  remoteImages: RemoteImages;
+  remoteDefaultExpanded: boolean;
+  renderEmail?: (email: string) => ReactNode;
+  renderDate?: (raw: string) => ReactNode;
+  highlightRe: RegExp | null;
+  /** 本文中のインライン画像を右クリックしたとき（保存/開く メニュー用。cid を渡す）。 */
+  onInlineImageMenu?: (cid: string, x: number, y: number) => void;
+};
+
+/**
  * 許可済みリモート画像。既定はサムネイル（小さくインライン）で、クリックすると
  * 完全表示⇄サムネを切替える。defaultExpanded=true なら最初から完全表示で描画。
  */
@@ -86,24 +101,14 @@ function RemoteImg({
   );
 }
 
-function renderNode(
-  node: Node,
-  key: number,
-  inlineImages: InlineImages,
-  remoteImages: RemoteImages,
-  remoteDefaultExpanded: boolean,
-  renderEmail: ((email: string) => ReactNode) | undefined,
-  renderDate: ((raw: string) => ReactNode) | undefined,
-  highlightRe: RegExp | null,
-  insideLink = false,
-): ReactNode {
+function renderNode(node: Node, key: number, ctx: RenderCtx, insideLink = false): ReactNode {
   if (node.nodeType === Node.TEXT_NODE) {
     const text = node.textContent ?? '';
     if (!text) return text;
     // 既に <a> の内側のテキストは、リンクの二重化を避けて再リンク化しない（ハイライトのみ）。
-    if (insideLink) return highlightText(text, highlightRe, `hl${key}`);
+    if (insideLink) return highlightText(text, ctx.highlightRe, `hl${key}`);
     // 生の URL / メールアドレス / 日付を自動リンク化（プレーンの AutoLinkText と同じロジック）。
-    return linkifyToNodes(text, renderEmail, highlightRe, renderDate);
+    return linkifyToNodes(text, ctx.renderEmail, ctx.highlightRe, ctx.renderDate);
   }
   if (node.nodeType !== Node.ELEMENT_NODE) return null;
 
@@ -118,13 +123,24 @@ function renderNode(
     const alt = el.getAttribute('alt') ?? '';
     if (src.toLowerCase().startsWith('cid:')) {
       const cid = src.slice(4).replace(/^<|>$/g, '');
-      const url = inlineImages[cid];
+      const url = ctx.inlineImages[cid];
       if (url) {
+        const onMenu = ctx.onInlineImageMenu;
         return (
           <img
             key={key}
             src={url}
             alt={alt}
+            // 右クリックで「保存 / 開く」を出す（インライン画像は添付一覧に出ないため）。
+            onContextMenu={
+              onMenu
+                ? (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onMenu(cid, e.clientX, e.clientY);
+                  }
+                : undefined
+            }
             className="my-2 block max-h-[480px] max-w-full rounded-md"
           />
         );
@@ -133,10 +149,10 @@ function renderNode(
     // 許可して取得済みのリモート画像は、サニタイズ済み data URL で表示する。
     const remote = remoteSrc(src);
     if (remote) {
-      const loaded = remoteImages[remote];
+      const loaded = ctx.remoteImages[remote];
       if (loaded) {
         return (
-          <RemoteImg key={key} src={loaded} alt={alt} defaultExpanded={remoteDefaultExpanded} />
+          <RemoteImg key={key} src={loaded} alt={alt} defaultExpanded={ctx.remoteDefaultExpanded} />
         );
       }
     }
@@ -160,21 +176,7 @@ function renderNode(
   // <a> の内側では子テキストを再リンク化しない（insideLink を子へ伝播）。
   const insideChildLink = insideLink || tag === 'a';
   const children: ReactNode[] = [];
-  el.childNodes.forEach((c, i) =>
-    children.push(
-      renderNode(
-        c,
-        i,
-        inlineImages,
-        remoteImages,
-        remoteDefaultExpanded,
-        renderEmail,
-        renderDate,
-        highlightRe,
-        insideChildLink,
-      ),
-    ),
-  );
+  el.childNodes.forEach((c, i) => children.push(renderNode(c, i, ctx, insideChildLink)));
 
   if (tag === 'br') return <br key={key} />;
 
@@ -223,6 +225,29 @@ export function remoteImageUrls(html: string): string[] {
     if (u) urls.add(u);
   });
   return [...urls];
+}
+
+/**
+ * HTML 本文が `cid:` で参照している Content-ID を重複なく集める。
+ * 「本文に埋め込まれている画像」と「本文からは参照されていない inline パート」を
+ * 区別するのに使う（後者は添付一覧に出して保存できるようにする）。
+ */
+export function inlineCidRefs(html: string): string[] {
+  let doc: Document;
+  try {
+    doc = new DOMParser().parseFromString(html, 'text/html');
+  } catch {
+    return [];
+  }
+  const cids = new Set<string>();
+  doc.querySelectorAll('img').forEach((img) => {
+    const src = (img.getAttribute('src') ?? '').trim();
+    if (src.toLowerCase().startsWith('cid:')) {
+      const cid = src.slice(4).replace(/^<|>$/g, '');
+      if (cid) cids.add(cid);
+    }
+  });
+  return [...cids];
 }
 
 /** リンク（HTML 本文とプレーン本文で共通の見た目）。下線なしの水色・折返し可。 */
@@ -385,6 +410,7 @@ export function HtmlText({
   remoteDefaultExpanded = false,
   renderEmail,
   renderDate,
+  onInlineImageMenu,
   highlight,
 }: {
   html: string;
@@ -396,6 +422,8 @@ export function HtmlText({
   renderEmail?: (email: string) => ReactNode;
   /** 本文中の日付の描画（ホバーで＋・クリックでカレンダー入力）。 */
   renderDate?: (raw: string) => ReactNode;
+  /** インライン画像の右クリック（保存/開く メニューを出す）。cid と画面座標を渡す。 */
+  onInlineImageMenu?: (cid: string, x: number, y: number) => void;
   /** 検索語（複数）。本文中の一致を <mark> でハイライトする。 */
   highlight?: string[];
 }) {
@@ -405,13 +433,17 @@ export function HtmlText({
   } catch {
     return <>{html}</>;
   }
-  const re = buildHighlightRe(highlight);
+  const ctx: RenderCtx = {
+    inlineImages,
+    remoteImages,
+    remoteDefaultExpanded,
+    renderEmail,
+    renderDate,
+    onInlineImageMenu,
+    highlightRe: buildHighlightRe(highlight),
+  };
   const nodes: ReactNode[] = [];
-  doc.body.childNodes.forEach((c, i) =>
-    nodes.push(
-      renderNode(c, i, inlineImages, remoteImages, remoteDefaultExpanded, renderEmail, renderDate, re),
-    ),
-  );
+  doc.body.childNodes.forEach((c, i) => nodes.push(renderNode(c, i, ctx)));
   return (
     <div className="break-words text-sm leading-relaxed text-white/90 [&_a]:break-all">{nodes}</div>
   );

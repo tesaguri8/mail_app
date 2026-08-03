@@ -141,7 +141,8 @@
     "warnSection": "除外（警告）（{{count}} 件）",
     "warnHint": "意図的に外したドメイン。住所録にあっても自動グリーンにしません（再登録を防止）。",
     "makeGreen": "グリーンにする",
-    "restore": "元に戻す"
+    "restore": "元に戻す",
+    "freemail": "「{{domain}}」はフリーメールのため、ドメイン単位ではグリーンにできません。信頼するなら差出人を住所録に登録してください。"
   },
   "search": {
     "placeholder": "メールを検索",
@@ -174,11 +175,14 @@
   },
   "spamAlert": {
     "title": "確認が必要な差出人が {{count}} 件",
-    "banner": "住所録／グリーン指定なのに迷惑登録されている差出人が {{count}} 件あります。誤登録の可能性があります。",
+    "banner": "住所録／グリーン指定なのに迷惑登録されている差出人が {{count}} 件あります。信頼するなら「迷惑解除」、迷惑登録を優先するなら「このまま迷惑」を選んでください。",
     "reasonContact": "住所録",
     "reasonGreen": "グリーン",
     "reasonContactGreen": "住所録・グリーン",
-    "forgive": "迷惑解除"
+    "forgive": "迷惑解除",
+    "forgiveHint": "この差出人を信頼し、迷惑登録を外して受信箱に戻します",
+    "enforce": "このまま迷惑",
+    "enforceHint": "住所録／グリーンより迷惑登録を優先します（今後もこの差出人は迷惑へ。この注意には再表示しません）"
   },
   "compose": {
     "new": "新規作成",
@@ -197,6 +201,9 @@
     "ccPlaceholder": "Cc に名前かアドレスを追加",
     "bccPlaceholder": "Bcc に名前かアドレスを追加",
     "recipientRemove": "この宛先を外す",
+    "recipientCopyAddress": "メールアドレスをコピー",
+    "recipientCopyWithName": "表示名つきでコピー",
+    "recipientEdit": "この宛先を編集",
     "recipientInvalid": "メールアドレスの形式が正しくないようです",
     "subjectPlaceholder": "件名を入力",
     "attachLabel": "添付",
@@ -214,6 +221,7 @@
     "forwardSep": "-------- 転送メッセージ --------",
     "signature": "署名",
     "noSignature": "（署名なし）",
+    "signatureRemembered": "ここで選んだ署名は、このアカウントの次回の作成時にも使われます",
     "saveDraft": "下書き保存",
     "discard": "下書きを破棄",
     "draftSaved": "下書きを保存しました",
@@ -585,7 +593,9 @@
   "activity": {
     "receiving": "{{name}} の新着を受信中…",
     "openingAttachment": "添付を開いています…",
-    "downloadingAttachment": "添付をダウンロード中…"
+    "downloadingAttachment": "添付をダウンロード中…",
+    "loadingImages": "画像を読み込み中…",
+    "preparingAttachments": "添付を準備中…"
   },
   "mailbox": {
     "title": "受信箱",
@@ -631,12 +641,17 @@
     "selectMailCheckbox": "このメールを選択",
     "noBody": "本文がありません",
     "attachments": "添付ファイル",
+    "print": "印刷",
+    "printDate": "日時",
+    "printNoSubject": "（件名なし）",
     "openAttachment": "添付を開く",
     "attachmentDownload": "ダウンロード",
     "attachmentOpen": "開く",
     "attachmentPreview": "プレビュー",
     "attachmentHide": "閉じる",
     "attachmentBusy": "処理中…",
+    "showImages": "画像 {{count}} 枚を表示",
+    "imageUnavailable": "画像を表示できません",
     "attachmentSaved": "保存しました",
     "attachmentSavedN": "{{count}} 件を保存しました",
     "attachmentSelectAll": "すべて選択／解除",
@@ -663,6 +678,7 @@
     "deletePermanentConfirm": "{{count}} 件を完全に削除します。元に戻せません。よろしいですか？",
     "trashedToast": "{{count}} 件をゴミ箱に移動しました",
     "undo": "元に戻す",
+    "opFailed": "操作に失敗しました:",
     "noMatch": "一致するメールはありません。",
     "w_n50": "最新50件",
     "w_n200": "最新200件",

@@ -88,6 +88,11 @@ export const attachmentOpen = (attachmentId: number) =>
 // ローカルパスのファイルを OS の関連アプリで開く（作成画面で添付を送信前に確認する）。
 export const openLocalPath = (path: string) => invoke<void>('open_local_path', { path });
 
+// 受信済みメールの添付をローカルファイルとして用意し、そのパスを返す（未取得なら先に取得）。
+// 転送で元メールの添付をそのまま同梱するときに使う。
+export const attachmentLocalPath = (attachmentId: number) =>
+  invoke<AttachmentMeta>('attachment_local_path', { attachmentId });
+
 // 添付を指定の場所へ保存（ダウンロード）。dest は保存先フルパス。
 export const attachmentExport = (attachmentId: number, dest: string) =>
   invoke<void>('attachment_export', { attachmentId, dest });

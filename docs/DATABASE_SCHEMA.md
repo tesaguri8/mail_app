@@ -472,6 +472,34 @@ CREATE TABLE folder_sync (
     FOREIGN KEY (account_id) REFERENCES accounts(id)
 );
 
+-- 破棄済み下書きの墓標（0050。docs/COMPOSE.md §1）。送信・破棄でローカルから消した下書きの
+-- canonical_key を残し、サーバー Drafts に残ったコピーからの「復活」を取り込み側で弾く。
+-- remote_pending=1 はサーバー側コピーの削除が未完了＝同期のたびに削除を再試行する印。
+CREATE TABLE deleted_keys (
+    account_id     INTEGER NOT NULL,
+    canonical_key  TEXT NOT NULL,  -- emails.canonical_key（例 'drafts:draft-1-...@example.com'）
+    message_id     TEXT,           -- サーバー削除に使う Message-ID の中身（山括弧なし）
+    folder         TEXT NOT NULL,  -- 消したときのフォルダ（現状 'drafts' のみ）
+    remote_pending INTEGER NOT NULL DEFAULT 0,
+    deleted_at     INTEGER NOT NULL, -- Unix 秒。サーバー削除済みのものは 30 日で掃除。
+    PRIMARY KEY (account_id, canonical_key)
+);
+
+-- 下書きに紐づく添付（0051。docs/COMPOSE.md §1）。転送では元メールの添付を引き継ぐため、
+-- 書きかけの状態でも添付を覚えておく（下書きから復元したときに黙って消えないように）。
+-- path はローカルの実ファイル。転送元の添付が未取得なら path は NULL で、
+-- source_attachment_id から送信時に取り直す。
+CREATE TABLE draft_attachments (
+    draft_id             INTEGER NOT NULL,  -- emails.id（folder='drafts'）
+    ord                  INTEGER NOT NULL,  -- 作成画面での並び順
+    path                 TEXT,              -- ローカル実ファイル（未取得なら NULL）
+    source_attachment_id INTEGER,           -- 転送元 attachments.id
+    filename             TEXT NOT NULL,
+    size                 INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (draft_id, ord),
+    FOREIGN KEY (draft_id) REFERENCES emails(id) ON DELETE CASCADE
+);
+
 -- アプリ設定の汎用 key-value（0014。docs/SPAM.md §9）。非機密設定の単一ソース（資格情報は keyring）。
 CREATE TABLE app_settings (
     key   TEXT PRIMARY KEY,

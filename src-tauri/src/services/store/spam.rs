@@ -41,9 +41,25 @@ pub fn is_spam_sender_conn(conn: &Connection, address: &str) -> rusqlite::Result
     Ok(n > 0)
 }
 
-/// 差出人が「許可リスト」に該当するか（住所録に登録済み / グリーン認定ドメイン / 本人検証）。
+/// このアドレスが「このまま迷惑（強制適用）」で登録されているか（docs/SPAM.md §8.5）。
+/// ユーザーが注意喚起に対して明示的に選んだ差出人なので、信頼シグナルより優先する。
+fn is_enforced_spam_sender_conn(conn: &Connection, norm: &str) -> rusqlite::Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM spam_senders WHERE address = ?1 AND enforced = 1",
+        params![norm],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
+/// 差出人が「許可リスト」に該当するか（本人検証 / 住所録に登録済みの本人）。
 /// 該当すれば、迷惑差出人として登録済みでも受信時に自動隔離しない（誤登録・共有アドレスの
-/// 取り違え等での取りこぼしを防ぐ。信頼シグナルは迷惑差出人ブロックより優先。docs/SPAM.md）。
+/// 取り違え等での取りこぼしを防ぐ）。
+///
+/// 優先順位は**具体的な指定が勝つ**（docs/SPAM.md §8.5）:
+/// 本人検証 ＞ 強制適用の迷惑登録（enforced）＞ 住所録の本人一致 ＞ アドレス単位の迷惑登録
+/// ＞ グリーン**ドメイン**。グリーンはドメイン単位の緩い信頼なので、アドレス単位の迷惑登録には
+/// 勝たせない（フリーメールを 1 件グリーンにするとそのドメイン全員が許可される、を防ぐ）。
 pub fn is_allowlisted_sender_conn(
     conn: &Connection,
     address: &str,
@@ -56,32 +72,12 @@ pub fn is_allowlisted_sender_conn(
     if norm.is_empty() {
         return Ok(false);
     }
-    // 住所録に登録済みの差出人は信頼する。
-    let contact: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id \
-         WHERE lower(ce.value) = ?1 AND c.deleted_at IS NULL",
-        params![norm],
-        |r| r.get(0),
-    )?;
-    if contact > 0 {
-        return Ok(true);
+    // ユーザーが「このまま迷惑」を選んだ差出人は、住所録に居ても隔離する。
+    if is_enforced_spam_sender_conn(conn, &norm)? {
+        return Ok(false);
     }
-    // グリーン認定ドメインは信頼する（差出人ドメインが一致）。
-    if let Some(domain) = norm
-        .rsplit('@')
-        .next()
-        .filter(|d| !d.is_empty() && d.contains('.'))
-    {
-        let green: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM green_domains WHERE domain = ?1",
-            params![domain],
-            |r| r.get(0),
-        )?;
-        if green > 0 {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    // 住所録に登録済み（アドレス完全一致）の差出人は信頼する。
+    super::greendomain::address_is_known(conn, &norm)
 }
 
 /// 迷惑判定・学習に使うメールの素性（保存済み emails 行から取り出す）。
@@ -328,17 +324,39 @@ impl Store {
         Ok(())
     }
 
+    /// アドレスの迷惑登録を「このまま迷惑（強制適用）」にする（docs/SPAM.md §8.5）。
+    /// 住所録／グリーンとの矛盾を知らせた上でユーザーが迷惑を選んだ場合に使う。
+    /// 以後この差出人は信頼シグナルより迷惑登録を優先して隔離し、注意喚起にも再掲しない。
+    /// 未登録のアドレスなら、強制適用で新規登録する。
+    pub fn enforce_spam_sender(&self, address: &str) -> rusqlite::Result<()> {
+        let norm = normalize_sender_address(address);
+        if norm.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO spam_senders(address, created_at, enforced) VALUES (?1, ?2, 1) \
+             ON CONFLICT(address) DO UPDATE SET enforced = 1",
+            params![norm, now_secs()],
+        )?;
+        Ok(())
+    }
+
     /// 迷惑差出人リストと信頼シグナル（住所録/グリーン）の矛盾を列挙する（注意喚起用）。
     /// 誤登録に気付けるよう、迷惑登録済みなのに住所録に居る／グリーン認定の差出人を返す。
+    /// 「このまま迷惑」を選んだ差出人（enforced=1）は解決済みなので返さない。
     pub fn find_spam_sender_conflicts(
         &self,
     ) -> rusqlite::Result<Vec<crate::models::SpamSenderConflict>> {
         let conn = self.conn.lock().unwrap();
         let addrs: Vec<String> = {
-            let mut stmt = conn.prepare("SELECT address FROM spam_senders ORDER BY address")?;
+            let mut stmt = conn
+                .prepare("SELECT address FROM spam_senders WHERE enforced = 0 ORDER BY address")?;
             let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
             rows.collect::<rusqlite::Result<_>>()?
         };
+        // グリーン集合は表示側と同じ定義（手動 ∪ 住所録由来 − フリーメール − 警告）を使う。
+        let green_set = super::greendomain::green_domain_set(&conn)?;
         let mut out = Vec::new();
         for addr in addrs {
             let name: Option<String> = conn
@@ -349,18 +367,9 @@ impl Store {
                     |r| r.get(0),
                 )
                 .optional()?;
-            let is_contact = name.is_some();
-            let is_green = match addr.rsplit('@').next().filter(|d| d.contains('.')) {
-                Some(domain) => {
-                    let n: i64 = conn.query_row(
-                        "SELECT COUNT(*) FROM green_domains WHERE domain = ?1",
-                        params![domain],
-                        |r| r.get(0),
-                    )?;
-                    n > 0
-                }
-                None => false,
-            };
+            let is_contact = name.is_some() || super::greendomain::address_is_known(&conn, &addr)?;
+            let is_green = super::greendomain::domain_of(&addr)
+                .is_some_and(|domain| green_set.contains(&domain));
             if is_contact || is_green {
                 let reason = match (is_contact, is_green) {
                     (true, true) => "contact_green",
@@ -521,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn allowlisted_sender_contact_green_and_self() {
+    fn allowlisted_sender_contact_and_self_but_not_green_domain() {
         let store = Store::open_in_memory_for_test();
         let conn = store.conn.lock().unwrap();
         conn.execute("INSERT INTO contacts (id, display_name) VALUES (1, '野崎')", [])
@@ -536,11 +545,44 @@ mod tests {
 
         // 住所録に登録済みの差出人は許可（表示名つき・大文字でも一致）。
         assert!(is_allowlisted_sender_conn(&conn, "野崎 <NOZAPI333@icloud.com>", false).unwrap());
-        // グリーン認定ドメインの差出人は許可。
-        assert!(is_allowlisted_sender_conn(&conn, "who@example.co.jp", false).unwrap());
+        // グリーン認定は「ドメイン単位の緩い信頼」なので、アドレス単位の迷惑登録には勝たせない。
+        assert!(!is_allowlisted_sender_conn(&conn, "who@example.co.jp", false).unwrap());
         // 本人検証は無条件で許可。
         assert!(is_allowlisted_sender_conn(&conn, "anyone@nowhere.example", true).unwrap());
         // どれにも該当しない差出人は非許可。
         assert!(!is_allowlisted_sender_conn(&conn, "stranger@bad.example", false).unwrap());
+    }
+
+    #[test]
+    fn enforced_spam_sender_beats_contact_and_leaves_conflicts() {
+        let store = Store::open_in_memory_for_test();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute("INSERT INTO contacts (id, display_name) VALUES (1, '知人')", [])
+                .unwrap();
+            conn.execute(
+                "INSERT INTO contact_emails (contact_id, value) VALUES (1, 'known@gmail.com')",
+                [],
+            )
+            .unwrap();
+        }
+        store.add_spam_sender("known@gmail.com").unwrap();
+
+        // 強制適用の前: 住所録一致なので隔離しない＝矛盾として注意喚起に出る。
+        {
+            let conn = store.conn.lock().unwrap();
+            assert!(is_allowlisted_sender_conn(&conn, "known@gmail.com", false).unwrap());
+        }
+        let conflicts = store.find_spam_sender_conflicts().unwrap();
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].address, "known@gmail.com");
+
+        // 「このまま迷惑」を選ぶと、住所録より迷惑登録が優先され、注意喚起からも消える。
+        store.enforce_spam_sender("known@gmail.com").unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            assert!(!is_allowlisted_sender_conn(&conn, "known@gmail.com", false).unwrap());
+        }
+        assert!(store.find_spam_sender_conflicts().unwrap().is_empty());
     }
 }

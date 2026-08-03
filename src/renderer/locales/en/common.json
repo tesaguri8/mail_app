@@ -141,7 +141,8 @@
     "warnSection": "Excluded (warning) ({{count}})",
     "warnHint": "Domains you intentionally excluded. They won't be auto-greened even if present in the address book (prevents re-adding).",
     "makeGreen": "Make green",
-    "restore": "Reset"
+    "restore": "Reset",
+    "freemail": "\"{{domain}}\" is a freemail domain, so it can't be greened domain-wide. Add the sender to your address book to trust them individually."
   },
   "search": {
     "placeholder": "Search mail",
@@ -174,11 +175,14 @@
   },
   "spamAlert": {
     "title": "{{count}} sender(s) need review",
-    "banner": "{{count}} sender(s) are in your contacts/green list but marked as spam — this may be a mistake.",
+    "banner": "{{count}} sender(s) are in your contacts/green list but marked as spam. Choose \"Unmark spam\" to trust them, or \"Keep as spam\" to let the spam entry win.",
     "reasonContact": "Contact",
     "reasonGreen": "Green",
     "reasonContactGreen": "Contact & Green",
-    "forgive": "Unmark spam"
+    "forgive": "Unmark spam",
+    "forgiveHint": "Trust this sender: remove the spam entry and move their mail back to the inbox",
+    "enforce": "Keep as spam",
+    "enforceHint": "Let the spam entry win over contacts/green (future mail stays spam and this notice won't show it again)"
   },
   "compose": {
     "new": "Compose",
@@ -197,6 +201,9 @@
     "ccPlaceholder": "Add a name or address to Cc",
     "bccPlaceholder": "Add a name or address to Bcc",
     "recipientRemove": "Remove this recipient",
+    "recipientCopyAddress": "Copy email address",
+    "recipientCopyWithName": "Copy with display name",
+    "recipientEdit": "Edit recipient",
     "recipientInvalid": "This doesn't look like a valid email address",
     "subjectPlaceholder": "Enter a subject",
     "attachLabel": "Attach",
@@ -214,6 +221,7 @@
     "forwardSep": "-------- Forwarded message --------",
     "signature": "Signature",
     "noSignature": "(No signature)",
+    "signatureRemembered": "The signature you pick here is reused next time you write from this account",
     "saveDraft": "Save draft",
     "discard": "Discard draft",
     "draftSaved": "Draft saved",
@@ -585,7 +593,9 @@
   "activity": {
     "receiving": "Receiving new mail — {{name}}…",
     "openingAttachment": "Opening attachment…",
-    "downloadingAttachment": "Downloading attachment…"
+    "downloadingAttachment": "Downloading attachment…",
+    "loadingImages": "Loading images…",
+    "preparingAttachments": "Preparing attachments…"
   },
   "mailbox": {
     "title": "Inbox",
@@ -631,12 +641,17 @@
     "selectMailCheckbox": "Select this email",
     "noBody": "No body",
     "attachments": "Attachments",
+    "print": "Print",
+    "printDate": "Date",
+    "printNoSubject": "(No subject)",
     "openAttachment": "Open attachment",
     "attachmentDownload": "Download",
     "attachmentOpen": "Open",
     "attachmentPreview": "Preview",
     "attachmentHide": "Hide",
     "attachmentBusy": "Working…",
+    "showImages": "Show {{count}} image(s)",
+    "imageUnavailable": "Cannot display image",
     "attachmentSaved": "Saved",
     "attachmentSavedN": "Saved {{count}} files",
     "attachmentSelectAll": "Select / clear all",
@@ -663,6 +678,7 @@
     "deletePermanentConfirm": "Permanently delete {{count}} message(s)? This cannot be undone.",
     "trashedToast": "Moved {{count}} to Trash",
     "undo": "Undo",
+    "opFailed": "Operation failed:",
     "noMatch": "No matching mail.",
     "w_n50": "Latest 50",
     "w_n200": "Latest 200",

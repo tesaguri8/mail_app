@@ -16,6 +16,7 @@ import {
   Paperclip,
   Pencil,
   Plus,
+  Printer,
   RefreshCw,
   Reply,
   ReplyAll,
@@ -32,7 +33,6 @@ import { DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import {
   attachmentExport,
   attachmentOpen,
-  attachmentView,
   mailAttachments,
   mailRefetch,
 } from '../services/mail';
@@ -41,7 +41,10 @@ import { getInlineImages, getRemoteImageMode, PREFS_EVENT } from '../config/pref
 import { greenDomainAdd, greenDomainWarn } from '../services/green';
 import { contactLookupEmail } from '../services/contacts';
 import { mailLoadRemote, senderRemoteAllowed, senderSetRemotePolicy } from '../services/mail';
-import { AutoLinkText, HtmlText, remoteImageUrls } from './HtmlText';
+import { AutoLinkText, HtmlText, inlineCidRefs, remoteImageUrls } from './HtmlText';
+import { AttachedImages, isImage } from './AttachedImages';
+import { PrintMail } from './PrintMail';
+import { attachmentImage } from '../utils/imageCache';
 import { ContextMenu } from './ContextMenu';
 import type { CalendarPanelInitial } from './CalendarPanel';
 import { parseDateTime, type ParsedDate } from '../utils/dateparse';
@@ -288,14 +291,6 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp|tiff?|heic|heif|avif)$/i;
-
-/** 画像（変換すれば表示できる HEIC 等を含む）かどうか。 */
-function isImage(a: AttachmentSummary): boolean {
-  if (a.content_type?.toLowerCase().startsWith('image/')) return true;
-  return IMAGE_EXT.test(a.filename);
-}
-
 /**
  * メール本文の表示（インライン）。Phase: プレーン本文のみ（HTML/リモート画像は
  * 後続でサニタイズ＋ブロック。docs/MAIL_SECURITY.md）。既定は引用除去後の clean_body。
@@ -392,6 +387,14 @@ export function MailBody({
   const remoteAttemptedRef = useRef(false);
   // 外部画像アイコンの右クリックメニュー位置（許可の付与/解除・表示切替）。
   const [remoteMenu, setRemoteMenu] = useState<{ x: number; y: number } | null>(null);
+  // 本文に埋め込まれた画像の右クリックメニュー（保存・既定アプリで開く）。
+  const [inlineMenu, setInlineMenu] = useState<{
+    x: number;
+    y: number;
+    att: AttachmentSummary;
+  } | null>(null);
+  // 印刷中か（true の間だけ印刷用の版面を作り、ダイアログを開く）。
+  const [printing, setPrinting] = useState(false);
   // 添付画像のアプリ内プレビュー（attachment id → data URL）
   const [previews, setPreviews] = useState<Record<number, string>>({});
   const [inlineEnabled, setInlineEnabled] = useState(getInlineImages());
@@ -439,8 +442,10 @@ export function MailBody({
     // インライン画像（cid:）は has_attachments に数えないため（例: 本文が画像 1 枚だけの
     // multipart/related）、本文が cid: を参照するときも添付メタを読み込む。読まないと
     // 本文中のインライン画像を解決できず、プレースホルダのまま何も表示されない。
+    // 本文が HTML を持たない（プレーンのみ）メールにも inline パートは付き得るので、
+    // その場合も読み込む（参照されない inline は下の fileAttachments で添付一覧に出す）。
     const needsInline = (detail.body_html ?? '').toLowerCase().includes('cid:');
-    if (detail.has_attachments || needsInline) {
+    if (detail.has_attachments || needsInline || !detail.body_html?.trim()) {
       mailAttachments(detail.id)
         .then((a) => {
           if (active) {
@@ -459,13 +464,23 @@ export function MailBody({
 
   const hasHtmlBody = (d.body_html?.trim()?.length ?? 0) > 0;
 
-  // HTML 本文＋設定オンのとき、インライン画像を取得して cid マップを作る。
+  // 本文（HTML）が cid: で参照している Content-ID の集合。
+  // 参照されているものは本文へ埋め込み、参照されていない inline パート（プレーン本文の
+  // メールに付いた埋め込み画像など）は添付一覧に出して保存できるようにする。
+  const referencedCids = useMemo(
+    () => new Set(hasHtmlBody ? inlineCidRefs(d.body_html ?? '') : []),
+    [d.body_html, hasHtmlBody],
+  );
+
+  // 設定オンのとき、本文が参照するインライン画像を取得して cid マップを作る。
   useEffect(() => {
     let active = true;
-    if (!hasHtmlBody || !inlineEnabled) return;
-    const targets = attachments.filter((a) => a.kind === 'inline' && a.content_id && isImage(a));
+    if (!inlineEnabled || referencedCids.size === 0) return;
+    const targets = attachments.filter(
+      (a) => a.kind === 'inline' && a.content_id && referencedCids.has(a.content_id) && isImage(a),
+    );
     targets.forEach((a) => {
-      attachmentView(a.id)
+      attachmentImage(a.id)
         .then((url) => {
           if (active && a.content_id) {
             setInlineImages((m) => ({ ...m, [a.content_id as string]: url }));
@@ -476,7 +491,7 @@ export function MailBody({
     return () => {
       active = false;
     };
-  }, [attachments, hasHtmlBody, inlineEnabled]);
+  }, [attachments, inlineEnabled, referencedCids]);
 
   // 本文（HTML）に含まれる外部画像 URL。モード切替と一括取得に使う。
   const remoteUrls = useMemo(() => {
@@ -580,7 +595,7 @@ export function MailBody({
     setBusyId(a.id);
     setNote('');
     try {
-      const url = await attachmentView(a.id);
+      const url = await attachmentImage(a.id);
       setPreviews((m) => ({ ...m, [a.id]: url }));
     } catch (e) {
       setNote(String(e));
@@ -627,8 +642,21 @@ export function MailBody({
     }
   };
 
-  // 一覧に出すのは本来の添付のみ（inline 画像は本文側に表示）。
-  const fileAttachments = attachments.filter((a) => a.kind !== 'inline');
+  // 一覧に出すのは「本来の添付」＋「本文から参照されていない inline パート」。
+  // 本文に埋め込まれている（cid: で参照される）画像は本文側に出るので一覧からは省く。
+  // 一方、プレーン本文のメールに付いた inline 画像などはどこにも参照が無く、一覧に出さないと
+  // 表示も保存もできないまま埋もれてしまう。
+  const fileAttachments = attachments.filter(
+    (a) => a.kind !== 'inline' || !(a.content_id && referencedCids.has(a.content_id)),
+  );
+
+  // 本文の下にそのまま並べて表示する画像＝「本文（HTML）から cid: で参照されていない画像」。
+  // 写真だけを送ってくるメール（本文が空）をそのまま読めるようにするため（Thunderbird 等と
+  // 同じ見え方）。判定に attachments.kind は使わない: Content-ID の有無で inline/attachment が
+  // 決まるため、同じ「写真を添付しただけのメール」でも送信クライアントによってラベルが割れる
+  // （Gmail iOS は Content-ID を付ける／デスクトップは付けない）。画像かどうかだけで揃える。
+  // PDF/ZIP 等の非画像は従来どおり添付一覧のみ。
+  const bodyImages = fileAttachments.filter(isImage);
 
   const toggleOne = (id: number) => {
     setSelected((prev) => {
@@ -700,12 +728,18 @@ export function MailBody({
   }, [detail.id, detail.body_state]);
 
   // 差出人ドメインをグリーン認定/解除（一覧のバッジは onGreenChange で更新）。
+  // フリーメール（gmail.com 等）はドメイン単位で信頼できないため認定は拒否され、理由を出す。
   const toggleGreen = async () => {
     if (!senderDomain) return;
     const next = !isGreen;
+    setNote('');
     try {
-      if (next) await greenDomainAdd(senderDomain);
-      else await greenDomainWarn(senderDomain);
+      if (next) {
+        if (!(await greenDomainAdd(senderDomain))) {
+          setNote(t('green.freemail', { domain: senderDomain }));
+          return;
+        }
+      } else await greenDomainWarn(senderDomain);
       setGreenOverride(next);
       onGreenChange?.();
     } catch {
@@ -848,6 +882,16 @@ export function MailBody({
                 </button>
               )
             )}
+            {/* 印刷（プリンタのほか「PDF として保存」もダイアログから選べる） */}
+            <button
+              onClick={() => setPrinting(true)}
+              disabled={printing}
+              title={t('mailbox.print')}
+              aria-label={t('mailbox.print')}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80 disabled:opacity-50"
+            >
+              <Printer size={16} />
+            </button>
             {/* 全文をサーバーから再取得（要約保存の解除・本文キャッシュの復元） */}
             <button
               onClick={handleRefetch}
@@ -880,7 +924,12 @@ export function MailBody({
                 <X size={16} />
               </button>
             )}
-            {note && <span className="ml-1 text-[10px] text-white/45">{note}</span>}
+            {note && (
+              // 長い理由（フリーメールは認定不可 等）でも操作列を崩さないよう省略し、全文は title で。
+              <span className="ml-1 max-w-[16rem] truncate text-[10px] text-white/45" title={note}>
+                {note}
+              </span>
+            )}
           </div>
         </div>
         <div className="mt-1 text-xs text-white/50">
@@ -1019,6 +1068,10 @@ export function MailBody({
             remoteDefaultExpanded={remoteExpandDefault}
             highlight={highlight}
             renderDate={renderDate}
+            onInlineImageMenu={(cid, x, y) => {
+              const att = attachments.find((a) => a.kind === 'inline' && a.content_id === cid);
+              if (att) setInlineMenu({ x, y, att });
+            }}
             renderEmail={
               onAddContact
                 ? (email) => (
@@ -1054,9 +1107,20 @@ export function MailBody({
         ) : (
           <p className="text-sm text-white/40">{t('mailbox.noBody')}</p>
         )}
+
+        {/* 本文に埋め込むつもりで送られた画像（本文からは参照されていないもの）を本文の下へ。
+            設定「本文埋め込み画像を表示」がオフのときは出さない。 */}
+        {inlineEnabled && (
+          <AttachedImages
+            images={bodyImages}
+            onMenu={(att, x, y) => setInlineMenu({ x, y, att })}
+          />
+        )}
       </div>
 
-      {detail.has_attachments && (
+      {/* has_attachments は inline パートを数えないので、本文に出ない inline 画像しか無いメール
+          （プレーン本文＋埋め込み画像など）でも一覧を出せるよう fileAttachments でも判定する。 */}
+      {(detail.has_attachments || fileAttachments.length > 0) && (
         <div className="border-t border-white/10">
           <div className="flex items-center gap-2 px-5 py-2 text-xs font-medium text-white/50">
             {fileAttachments.length > 0 && (
@@ -1211,6 +1275,34 @@ export function MailBody({
             },
           ]}
           onClose={() => setRemoteMenu(null)}
+        />
+      )}
+
+      {/* 印刷: 版面は非表示 iframe に作るので画面には何も出ない。 */}
+      {printing && <PrintMail emailId={detail.id} onDone={() => setPrinting(false)} />}
+
+      {/* 本文に埋め込まれた画像の右クリックメニュー（保存 / 既定アプリで開く）。
+          埋め込み画像は添付一覧に出さないので、保存導線はここに置く。 */}
+      {inlineMenu && (
+        <ContextMenu
+          x={inlineMenu.x}
+          y={inlineMenu.y}
+          header={inlineMenu.att.filename}
+          items={[
+            {
+              key: 'save',
+              label: t('mailbox.attachmentDownload'),
+              Icon: Download,
+              onClick: () => void handleSave(inlineMenu.att),
+            },
+            {
+              key: 'open',
+              label: t('mailbox.openAttachment'),
+              Icon: ImageIcon,
+              onClick: () => void handleOpen(inlineMenu.att),
+            },
+          ]}
+          onClose={() => setInlineMenu(null)}
         />
       )}
     </div>

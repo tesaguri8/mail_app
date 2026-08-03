@@ -588,7 +588,20 @@ pub struct ContactMatch {
     pub matched_name: bool,
 }
 
-/// 会社・組織（所属連絡先の件数つき）。コンボボックスの候補・組織一覧に使う。
+/// 組織の所在地（構造化住所）。連絡先の住所と同じ構成で、ラベルは持たない（代表所在地 1 か所）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct OrgAddress {
+    pub postal: Option<String>,
+    pub region: Option<String>,
+    pub city: Option<String>,
+    pub street: Option<String>,
+    pub extended: Option<String>,
+    pub country: Option<String>,
+}
+
+/// 会社・組織（所属連絡先の件数つき）。コンボボックスの候補・組織一覧・組織カードに使う。
+/// 代表電話/FAX/代表メール/URL/所在地は会社共通の情報で、個人の連絡先ではラベル表示する。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]
 pub struct OrganizationSummary {
@@ -596,10 +609,36 @@ pub struct OrganizationSummary {
     pub name: String,
     pub name_kana: Option<String>,
     pub note: Option<String>,
+    /// 代表電話番号（フロントで E.164 正準形に整えて保存）。
+    pub phone: Option<String>,
+    /// 代表 FAX 番号（同上）。
+    pub fax: Option<String>,
+    /// 代表メールアドレス（info@… など）。
+    pub email: Option<String>,
+    /// ウェブサイトの URL。
+    pub url: Option<String>,
+    /// 所在地（未入力の項目は None）。
+    pub address: OrgAddress,
     /// この組織に所属する連絡先の件数（削除済みは除く）。
     pub member_count: i32,
     /// 論理削除（ゴミ箱）の日時（UTC 文字列）。非 null＝削除済み。
     pub deleted_at: Option<String>,
+}
+
+/// 組織カードの作成・更新入力（フロントから受け取る）。`id` が None なら新規作成。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct OrganizationInput {
+    pub id: Option<i32>,
+    pub name: String,
+    pub name_kana: Option<String>,
+    pub note: Option<String>,
+    pub phone: Option<String>,
+    pub fax: Option<String>,
+    pub email: Option<String>,
+    pub url: Option<String>,
+    #[serde(default)]
+    pub address: OrgAddress,
 }
 
 /// 組織の共有アドレス（会社の代表 info@ / 代表電話 / 代表FAX 等）。

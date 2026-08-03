@@ -38,7 +38,7 @@
 - **SQLite**（Rust `rusqlite`・`bundled`）- メタデータ管理・索引
 - **FTS5** - 全文検索（メール大量件数向けにインデックス検索）
 - **SQLCipher** - データベース暗号化は後続（未導入。現状は `bundled` プレーン SQLite）
-- マイグレーションは Rust 側で自前 SQL 管理（Alembic 不採用。現在 0001〜0043、0035 は意図的に欠番）
+- マイグレーションは Rust 側で自前 SQL 管理（Alembic 不採用。現在 0001〜0052、0035 は意図的に欠番）
 
 ## 主な機能
 
@@ -174,7 +174,7 @@ src/renderer/locales/
 ## データベース管理
 
 SQLite（`rusqlite` `bundled` + FTS5。SQLCipher 暗号化は後続・未導入）を Rust バックエンドで管理。マイグレーションは
-Alembic ではなく、`src-tauri/src/services/store/migrations/` 内で自前のバージョン管理 SQL として実装する（現在 0001〜0043、0035 は意図的に欠番）。
+Alembic ではなく、`src-tauri/src/services/store/migrations/` 内で自前のバージョン管理 SQL として実装する（現在 0001〜0052、0035 は意図的に欠番）。
 
 - スキーマ例: accounts / mailboxes / messages / threads / attachments / tags / messages_fts
 - 起動時に現在のスキーマバージョンを確認し、未適用のマイグレーションを順次適用

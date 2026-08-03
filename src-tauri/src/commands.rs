@@ -4,7 +4,8 @@ use crate::models::{
     ContactSummary, DataLocation, DbInfo, DraftContent, DraftInput, DuplicateGroup, EventAttendee,
     EventInput, EventSummary, GcalCredentialsStatus, GcalSyncResult, GoogleAccount, GreenDomainEntry,
     HomeUnreadCounts, IcsImportReport, ImportReport, MailDetail,
-    MailSummary, OrgDuplicateGroup, OrganizationDetail, OrganizationSummary, RebuildAction,
+    MailSummary, OrgDuplicateGroup, OrganizationDetail, OrganizationInput, OrganizationSummary,
+    RebuildAction,
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSenderConflict, SpamSettings, SpamVerdict,
     StorageInfo, SyncProgress,
@@ -1627,6 +1628,12 @@ pub fn organization_list(
         .map_err(|e| e.to_string())
 }
 
+/// 単一の組織（組織カード）を取得。連絡先のラベル表示・カード編集ダイアログ用。
+#[tauri::command]
+pub fn organization_get(store: State<Store>, id: i64) -> Result<OrganizationSummary, String> {
+    store.get_organization(id).map_err(|e| e.to_string())
+}
+
 /// 組織の詳細（所属連絡先＋共有アドレスを件数つきで）。住所録の「組織」タブ用。
 #[tauri::command]
 pub fn organization_detail(store: State<Store>, id: i64) -> Result<OrganizationDetail, String> {
@@ -1695,21 +1702,17 @@ pub fn mail_trash_purge(store: State<Store>) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// 組織を作成/編集する（名前・メモ）。id 指定で更新、無ければ新規。
+/// 組織カード（名前・よみ・メモ・代表電話/FAX/代表メール/URL・所在地）を作成/編集する。
+/// `input.id` 指定で更新、無ければ新規。
 #[tauri::command]
 pub fn organization_upsert(
     store: State<Store>,
-    id: Option<i64>,
-    name: String,
-    name_kana: Option<String>,
-    note: Option<String>,
+    input: OrganizationInput,
 ) -> Result<OrganizationSummary, String> {
-    if name.trim().is_empty() {
+    if input.name.trim().is_empty() {
         return Err("組織名を入力してください".to_string());
     }
-    store
-        .upsert_organization(id, &name, name_kana.as_deref(), note.as_deref())
-        .map_err(|e| e.to_string())
+    store.upsert_organization(&input).map_err(|e| e.to_string())
 }
 
 /// 組織名の重複候補（正規化名で束ねたグループ）を返す。組織の統一 UI 用。

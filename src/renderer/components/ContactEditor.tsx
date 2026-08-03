@@ -22,14 +22,24 @@ import type { ContactValueInput } from '@bindings/ContactValueInput';
 import type { ContactAddressInput } from '@bindings/ContactAddressInput';
 import type { ContactMatch } from '@bindings/ContactMatch';
 import type { CountryCode } from 'libphonenumber-js';
+import type { OrganizationSummary } from '@bindings/OrganizationSummary';
 import {
   contactDelete,
   contactFindMatches,
   contactGet,
   contactUpsert,
 } from '../services/contacts';
+import { organizationGet } from '../services/organizations';
 import { tagList } from '../services/tags';
-import { AddressRows, PhoneRows, TagInput, ValueRows, addressToFlat } from './ContactValueEditor';
+import {
+  AddressRows,
+  Field,
+  PhoneRows,
+  TagInput,
+  ValueRows,
+  addressToFlat,
+} from './ContactValueEditor';
+import { OrgCardDialog, OrgCardInfo } from './OrgCard';
 import { OrgCombobox } from './OrgCombobox';
 import { toE164 } from '../utils/phone';
 import { formatPostal } from '../utils/postal';
@@ -189,6 +199,10 @@ export function ContactEditor({
   const [confirmDup, setConfirmDup] = useState(false);
   // タグ入力の候補（既存タグ名）。保存でタグが増えることがあるので取り直す。
   const [tagNames, setTagNames] = useState<string[]>([]);
+  // 所属組織のカード（会社共通の代表連絡先。ここではラベル表示のみ）。
+  const [org, setOrg] = useState<OrganizationSummary | null>(null);
+  // 組織カードの編集ダイアログの表示。
+  const [editOrg, setEditOrg] = useState(false);
 
   const loadTags = useCallback(() => {
     if (!isTauri) return;
@@ -197,6 +211,22 @@ export function ContactEditor({
       .catch(() => undefined);
   }, []);
   useEffect(loadTags, [loadTags]);
+
+  // 所属組織のカードを取り込む（組織を選び直したら追従。未所属・新規組織なら消す）。
+  const orgId = draft?.org_id ?? null;
+  useEffect(() => {
+    if (!isTauri || orgId == null) {
+      setOrg(null);
+      return;
+    }
+    let alive = true;
+    organizationGet(orgId)
+      .then((o) => alive && setOrg(o))
+      .catch(() => alive && setOrg(null));
+    return () => {
+      alive = false;
+    };
+  }, [orgId]);
 
   const openDraft = (d: ContactInput) => {
     setDraft(d);
@@ -208,6 +238,7 @@ export function ContactEditor({
     setSaved(false);
     setMatches([]);
     setConfirmDup(false);
+    setEditOrg(false);
     if (!request) {
       setDraft(null);
       setBaseline('');
@@ -505,6 +536,11 @@ export function ContactEditor({
             name={draft.organization ?? ''}
             onChange={(org_id, name) => patch({ org_id, organization: nullify(name) })}
           />
+          {/* 会社共通の情報（代表電話・FAX・代表メール・URL・所在地）はラベル表示。
+              変更は所属する全員に効くので、［編集］で組織カードを開いて行う。 */}
+          {org && org.id === draft.org_id && (
+            <OrgCardInfo org={org} onEdit={() => setEditOrg(true)} />
+          )}
           <div className="flex gap-2">
             <Field icon={<Briefcase size={15} />} label={t('contact.orgTitle')}>
               <input
@@ -634,27 +670,12 @@ export function ContactEditor({
           </div>
         </div>
       )}
-    </div>
-  );
-}
 
-function Field({
-  icon,
-  label,
-  children,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-1 flex items-center gap-1.5 text-xs text-white/50">
-        {icon}
-        {label}
-      </span>
-      {children}
-    </label>
+      {/* 組織カードの編集（会社共通の情報なので、所属している全員に反映される）。 */}
+      {editOrg && org && (
+        <OrgCardDialog org={org} onClose={() => setEditOrg(false)} onSaved={setOrg} />
+      )}
+    </div>
   );
 }
 

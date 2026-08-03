@@ -76,15 +76,3 @@ export function attachmentImage(id: number, thumb = false): Promise<string> {
   inflight.set(key, req);
   return req;
 }
-
-/** 指定添付のキャッシュを捨てる（再取得したいとき用）。 */
-export function forgetAttachmentImage(id: number): void {
-  for (const thumb of [false, true]) {
-    const key = cacheKey(id, thumb);
-    const url = cache.get(key);
-    if (url !== undefined) {
-      cache.delete(key);
-      chars -= url.length;
-    }
-  }
-}

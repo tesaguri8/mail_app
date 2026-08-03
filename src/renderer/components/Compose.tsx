@@ -5,16 +5,20 @@ import { Copy, Paperclip, Quote, Save, Scissors, Send, Trash2, X } from 'lucide-
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { DraftContent } from '@bindings/DraftContent';
+import type { DraftAttachment } from '@bindings/DraftAttachment';
 import type { SignatureSummary } from '@bindings/SignatureSummary';
 import {
+  attachmentLocalPath,
   attachmentMeta,
   attachmentStage,
+  mailAttachments,
   openLocalPath,
   mailDraftDiscard,
   mailDraftSyncRemote,
   mailSaveDraft,
   mailSend,
 } from '../services/mail';
+import { withActivity } from '../stores/activity';
 import { signatureList } from '../services/signatures';
 import { getComposeAutoSave, getFlyAnimation } from '../config/prefs';
 import { playFlySound } from '../utils/flySound';
@@ -44,8 +48,63 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-/** 作成画面で保持する添付（送信時に path を Rust へ渡す）。 */
-type Attach = { path: string; name: string; size: number };
+/**
+ * 作成画面で保持する添付。送信時は `path` を Rust へ渡す。
+ * 転送で引き継いだ添付は、開いた時点では本体が手元に無いことがあるので `sourceId`
+ * （元メールの attachments.id）だけを持ち、送信/保存の直前にローカルへ用意して path を得る
+ * （開いただけで大きな添付をサーバーから取りに行かないため）。
+ */
+type Attach = {
+  /** ローカルの実ファイル。未取得の転送添付では未設定。 */
+  path?: string;
+  /** 転送元の添付 id（未取得のものを取り直すキー）。手元のファイルなら未設定。 */
+  sourceId?: number;
+  name: string;
+  size: number;
+};
+
+/** 一覧の key・重複判定に使う識別子（実ファイルはパス、転送添付は元の添付 id）。 */
+function attachKey(a: Attach): string {
+  return a.path ?? `src:${a.sourceId ?? ''}`;
+}
+
+/**
+ * 添付をローカルパスへ解決する（送信/下書き保存の直前に呼ぶ）。転送で引き継いだ添付は
+ * ここで初めてサーバーから取り直す。IMAP 接続を同時に張らないよう 1 件ずつ順に処理する。
+ * 1 件でも用意できなければエラー（黙って添付を落として送らない）。
+ */
+async function resolveAttachmentPaths(items: Attach[]): Promise<string[]> {
+  const paths: string[] = [];
+  for (const a of items) {
+    if (a.path) {
+      paths.push(a.path);
+    } else if (a.sourceId != null) {
+      const meta = await attachmentLocalPath(a.sourceId);
+      paths.push(meta.path);
+    }
+  }
+  return paths;
+}
+
+/** 作成画面の添付を、下書きに保存する形へ変換する。 */
+function toDraftAttachments(items: Attach[]): DraftAttachment[] {
+  return items.map((a) => ({
+    path: a.path ?? null,
+    source_attachment_id: a.sourceId ?? null,
+    filename: a.name,
+    size: a.size,
+  }));
+}
+
+/** 下書きに保存されていた添付を、作成画面の形へ戻す。 */
+function fromDraftAttachments(items: DraftAttachment[]): Attach[] {
+  return items.map((a) => ({
+    path: a.path ?? undefined,
+    sourceId: a.source_attachment_id ?? undefined,
+    name: a.filename,
+    size: a.size,
+  }));
+}
 
 function withPrefix(subject: string | null, prefix: 'Re' | 'Fwd'): string {
   const s = (subject ?? '').trim();
@@ -276,8 +335,11 @@ export function Compose({
   const [body, setBody] = useState(target.mode === 'draft' ? target.draft.body : '');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
-  // 添付ファイル（picker 選択 or ドロップ。送信時に path を Rust へ渡して読み込ませる）。
-  const [attachments, setAttachments] = useState<Attach[]>([]);
+  // 添付ファイル（picker 選択 or ドロップ or 転送で引き継いだ元メールの添付）。
+  // 送信時にローカルパスへ解決して Rust へ渡す（下書きの再編集では保存済みの添付を復元）。
+  const [attachments, setAttachments] = useState<Attach[]>(
+    target.mode === 'draft' ? fromDraftAttachments(target.draft.attachments) : [],
+  );
   // OS からファイルをドラッグ中か（ドロップ領域のハイライト用）。
   const [dragOver, setDragOver] = useState(false);
 
@@ -372,11 +434,12 @@ export function Compose({
     if (splitAddresses(cc).length > 0) return true;
     if (splitAddresses(bcc).length > 0) return true;
     if (subject.trim().length > 0) return true;
+    if (attachments.length > 0) return true; // 添付だけ足した状態も「書きかけ」として残す
     // 本文から自動挿入の署名ブロックを除いた「書いた本文」で判定する。
     const sig = sigBlockRef.current;
     const written = sig && body.includes(sig) ? body.replace(sig, '') : body;
     return written.trim().length > 0;
-  }, [to, cc, bcc, subject, body]);
+  }, [to, cc, bcc, subject, body, attachments]);
 
   // 選択範囲を引用（各行 "> "）に置き換え、置き換えた範囲を選択し直してフォーカスを戻す。
   const quoteSelection = (start: number, end: number) => {
@@ -453,6 +516,8 @@ export function Compose({
           subject,
           body: composedBody(),
           in_reply_to: init.inReplyTo,
+          // 添付も一緒に保存する（転送で引き継いだ添付が、再編集で消えないように）。
+          attachments: toDraftAttachments(attachments),
         });
         draftIdRef.current = id;
         onDraftId?.(id); // 復元用: 現在編集中の下書き id を親へ通知
@@ -476,6 +541,7 @@ export function Compose({
       hasContent,
       syncRemote,
       onDraftId,
+      attachments,
     ]
   );
 
@@ -577,6 +643,29 @@ export function Compose({
   const canSend =
     accountId != null && splitAddresses(to).length > 0 && !sending && !attachTooBig;
 
+  // 転送: 元メールの添付をすべて引き継いで添付欄に載せる。埋め込み画像（cid:）も含めるのは、
+  // 引用 HTML では cid: を解決できずプレースホルダに置き換わる（＝そのままでは相手に届かない）
+  // ため。落とすより添付として渡すほうが安全で、不要なものはユーザーが個別に外せる。
+  // ※ 埋め込み画像を「埋め込みのまま」転送する（multipart/related で Content-ID ごと同梱）のは
+  //   送信側の MIME 組み立ての拡張が要るため後続。
+  // この時点では本体を取りに行かず、送信/下書き保存の直前にローカルへ用意する（開いただけで
+  // 大きな添付をサーバーから取らないため）。
+  useEffect(() => {
+    if (target.mode !== 'forward') return;
+    let alive = true;
+    mailAttachments(target.source.id)
+      .then((list) => {
+        if (!alive || list.length === 0) return;
+        addAttachments(list.map((a) => ({ sourceId: a.id, name: a.filename, size: a.size })));
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+    // 転送対象が変わったときだけ引き継ぐ（addAttachments は同一内容の再追加を弾く）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
+
   // 添付を一覧へ追加する（同名・同サイズは重複とみなして除外。バッチ内の重複も除く）。
   const dedupKey = (a: Attach) => `${a.name}|${a.size}`;
   const addAttachments = (items: Attach[]) =>
@@ -591,8 +680,29 @@ export function Compose({
       }
       return [...prev, ...add];
     });
-  const removeAttachment = (path: string) =>
-    setAttachments((prev) => prev.filter((a) => a.path !== path));
+  const removeAttachment = (key: string) =>
+    setAttachments((prev) => prev.filter((a) => attachKey(a) !== key));
+
+  // 添付を既定アプリで開いて送信前に確認する。転送で引き継いだ添付はまだ手元に無いことが
+  // あるので、その場でローカルへ用意してから開く（用意できたら以後は手元のファイル扱い）。
+  const openAttachment = async (a: Attach) => {
+    try {
+      let path = a.path;
+      if (!path && a.sourceId != null) {
+        const src = a.sourceId;
+        const meta = await withActivity(t('activity.preparingAttachments'), () =>
+          attachmentLocalPath(src),
+        );
+        path = meta.path;
+        setAttachments((prev) =>
+          prev.map((x) => (attachKey(x) === attachKey(a) ? { ...x, path } : x)),
+        );
+      }
+      if (path) await openLocalPath(path);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   // ファイル選択ダイアログから添付を追加する。
   const pickAttachments = async () => {
@@ -628,6 +738,19 @@ export function Compose({
     sendingRef.current = true;
     setSending(true);
     setError('');
+    // 転送で引き継いだ添付は、まだ手元に無ければここでローカルへ用意する（サーバーから
+    // 取り直す＝時間がかかるのでフッターに進捗を出す。1 件ずつ順に取る）。
+    let paths: string[];
+    try {
+      paths = await withActivity(t('activity.preparingAttachments'), () =>
+        resolveAttachmentPaths(attachments),
+      );
+    } catch (e) {
+      setError(String(e));
+      sendingRef.current = false;
+      setSending(false);
+      return;
+    }
     // 送信リクエストは即開始し、その完了を待つ間つばめを飛ばす。
     const send = mailSend({
       account_id: accountId,
@@ -644,7 +767,7 @@ export function Compose({
       // References チェーンは Rust 側で in_reply_to から祖先を辿って積む（docs/THREADING.md）。
       references: null,
       // 添付はローカルパスを渡し、Rust が送信時に読み込んで MIME に同梱する。
-      attachments: attachments.map((a) => a.path),
+      attachments: paths,
     });
     try {
       if (flyOn && flyRef.current && sendBtnRef.current) {
@@ -837,12 +960,10 @@ export function Compose({
             <div className="flex flex-wrap gap-1.5 pl-14">
               {attachments.map((a) => (
                 <span
-                  key={a.path}
-                  // クリックで送信前に既定アプリで内容確認（添付は実ファイルのパスを持つ）。
+                  key={attachKey(a)}
+                  // クリックで送信前に既定アプリで内容確認（未取得の転送添付はここで取り寄せる）。
                   title={`${a.name}（${formatSize(a.size)}）・${t('compose.attachOpenHint')}`}
-                  onClick={() => {
-                    openLocalPath(a.path).catch((e) => setError(String(e)));
-                  }}
+                  onClick={() => void openAttachment(a)}
                   className="inline-flex max-w-[16rem] cursor-pointer select-none items-center gap-1.5 rounded-md bg-white/10 py-1 pl-2 pr-1 text-xs hover:bg-white/15"
                 >
                   <Paperclip size={12} className="shrink-0 text-white/50" />
@@ -853,7 +974,7 @@ export function Compose({
                     // 「外す」は開く動作を巻き込まないよう伝播を止める。
                     onClick={(e) => {
                       e.stopPropagation();
-                      removeAttachment(a.path);
+                      removeAttachment(attachKey(a));
                     }}
                     title={t('compose.attachRemove')}
                     aria-label={t('compose.attachRemove')}

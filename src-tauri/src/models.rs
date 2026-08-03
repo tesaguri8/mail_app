@@ -925,6 +925,22 @@ pub struct AttachmentMeta {
     pub size: i64,
 }
 
+/// 下書きに紐づく添付 1 件（作成画面 ⇄ 下書きの往復で使う）。
+/// 手元にファイルがあるものは `path`、転送で引き継いだが本体が未取得のものは
+/// `source_attachment_id` を持つ（送信時にサーバーから取り直してから同梱する）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct DraftAttachment {
+    /// ローカルの実ファイル（選択/退避したファイル、または取得済みの添付）。未取得なら None。
+    pub path: Option<String>,
+    /// 転送元の attachments.id（未取得のものを取り直すキー）。手元のファイルなら None。
+    pub source_attachment_id: Option<i32>,
+    /// 表示名。
+    pub filename: String,
+    /// バイト数（合計サイズの表示・上限判定用。添付は 25MB 上限なので i32 で足りる）。
+    pub size: i32,
+}
+
 /// 下書きの自動保存の入力（フロントから受け取る。docs/COMPOSE.md）。
 /// 書きかけの内容をローカルの drafts フォルダへ保存する（IMAP へは上げない）。
 /// `draft_id` があれば既存の下書きを更新、無ければ新規作成して id を返す。
@@ -945,6 +961,9 @@ pub struct DraftInput {
     /// 返信元の Message-ID（返信の下書きのみ。新規/転送は None）。再編集・再送信の
     /// スレッド化に使う。
     pub in_reply_to: Option<String>,
+    /// 添付（転送で引き継いだものを含む）。再編集で復元できるよう下書きと一緒に保存する。
+    #[serde(default)]
+    pub attachments: Vec<DraftAttachment>,
 }
 
 /// 下書きの再編集用の内容（drafts フォルダの 1 件を作成画面へ読み戻す）。
@@ -967,6 +986,8 @@ pub struct DraftContent {
     /// 返信元メール（in_reply_to で紐づく元メール）の emails.id。作成画面で右ペインに
     /// 元メールを並べて表示するのに使う（返信時と同じ 2 分割）。見つからなければ None。
     pub source_id: Option<i32>,
+    /// 保存時の添付（転送で引き継いだものを含む）。作成画面はこれを添付欄へ復元する。
+    pub attachments: Vec<DraftAttachment>,
 }
 
 /// 同期の進捗（Tauri イベント "sync:progress" のペイロード）。

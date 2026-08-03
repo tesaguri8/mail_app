@@ -1181,7 +1181,9 @@ pub async fn mail_draft_sync_remote(
         in_reply_to: draft.in_reply_to,
         references,
         message_id: Some(message_id.clone()),
-        attachments: Vec::new(), // 下書きのサーバー保存は本文のみ（添付の永続化は今回対象外）
+        // サーバー Drafts へ上げるのは本文のみ。添付はローカルの draft_attachments で
+        // 保持しており（再編集で復元される）、別端末との共有は現状の対象外。
+        attachments: Vec::new(),
         self_mark: None,         // 下書きには検証マークを付けない
     };
     let email = smtp::build_message(&message)?;
@@ -2682,6 +2684,27 @@ pub async fn attachment_open(
     app.opener()
         .open_path(to_open.to_string_lossy().to_string(), None::<&str>)
         .map_err(|e| e.to_string())
+}
+
+/// 受信済みメールの添付をローカルファイルとして用意し、そのパスを返す（未取得なら先に取得）。
+/// 転送で元メールの添付をそのまま同梱するために使う（送信は「ローカルパスを渡す」経路のため）。
+#[tauri::command]
+pub async fn attachment_local_path(
+    app: AppHandle,
+    store: State<'_, Store>,
+    attachment_id: i64,
+) -> Result<AttachmentMeta, String> {
+    let att = store
+        .get_attachment(attachment_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "添付が見つかりません".to_string())?;
+    let path = ensure_attachment_file(&app, &store, attachment_id).await?;
+    let size = std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
+    Ok(AttachmentMeta {
+        path: path.to_string_lossy().to_string(),
+        name: att.filename,
+        size,
+    })
 }
 
 /// ローカルパスのファイルを OS の関連アプリで開く（作成画面で、添付を送信前に確認する用）。

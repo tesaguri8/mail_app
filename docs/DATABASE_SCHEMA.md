@@ -485,6 +485,21 @@ CREATE TABLE deleted_keys (
     PRIMARY KEY (account_id, canonical_key)
 );
 
+-- 下書きに紐づく添付（0051。docs/COMPOSE.md §1）。転送では元メールの添付を引き継ぐため、
+-- 書きかけの状態でも添付を覚えておく（下書きから復元したときに黙って消えないように）。
+-- path はローカルの実ファイル。転送元の添付が未取得なら path は NULL で、
+-- source_attachment_id から送信時に取り直す。
+CREATE TABLE draft_attachments (
+    draft_id             INTEGER NOT NULL,  -- emails.id（folder='drafts'）
+    ord                  INTEGER NOT NULL,  -- 作成画面での並び順
+    path                 TEXT,              -- ローカル実ファイル（未取得なら NULL）
+    source_attachment_id INTEGER,           -- 転送元 attachments.id
+    filename             TEXT NOT NULL,
+    size                 INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (draft_id, ord),
+    FOREIGN KEY (draft_id) REFERENCES emails(id) ON DELETE CASCADE
+);
+
 -- アプリ設定の汎用 key-value（0014。docs/SPAM.md §9）。非機密設定の単一ソース（資格情報は keyring）。
 CREATE TABLE app_settings (
     key   TEXT PRIMARY KEY,

@@ -5,10 +5,12 @@
 //! そのままだと消したはずの下書きが次の同期で復活してしまう（送信済みメールの下書きが
 //! 下書きフォルダに溜まり続ける原因）。
 //!
-//! そこでローカル削除の直前に canonical_key を墓標として残し、
+//! そこでローカル削除の直前に canonical_key を墓標として残し、次の二段構えで復活を止める。
+//!
 //!  - 取り込み側（[`super::emails::insert_email`]）は墓標のあるキーを取り込まない
 //!  - サーバー側のコピー削除が済んでいない墓標（`remote_pending=1`）は同期のたびに再試行する
-//! という二段構えで復活を止める。役目を終えた墓標は一定期間後に掃除する。
+//!
+//! 役目を終えた墓標は一定期間後に掃除する。
 
 use super::Store;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
@@ -197,6 +199,7 @@ mod tests {
                 subject: "書きかけ".to_string(),
                 body: "本文".to_string(),
                 in_reply_to: None,
+                attachments: vec![],
             })
             .unwrap();
         let conn = store.conn.lock().unwrap();

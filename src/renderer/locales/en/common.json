@@ -590,7 +590,8 @@
     "receiving": "Receiving new mail — {{name}}…",
     "openingAttachment": "Opening attachment…",
     "downloadingAttachment": "Downloading attachment…",
-    "loadingImages": "Loading images…"
+    "loadingImages": "Loading images…",
+    "preparingAttachments": "Preparing attachments…"
   },
   "mailbox": {
     "title": "Inbox",

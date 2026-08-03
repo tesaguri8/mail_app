@@ -291,7 +291,19 @@ CREATE TABLE organizations (
     note TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TEXT                 -- 0027: 論理削除（ゴミ箱）
+    deleted_at TEXT,                -- 0027: 論理削除（ゴミ箱）
+    -- 0052: 組織カード（会社共通の代表連絡先。連絡先ではラベル表示し、編集は組織カードで行う）
+    phone TEXT,                     -- 代表電話（E.164 正準形）
+    fax TEXT,                       -- 代表FAX（同上）
+    email TEXT,                     -- 代表メール（info@… など）
+    url TEXT,                       -- ウェブサイト
+    -- 所在地は contact_addresses と同じ構成。組織は代表所在地 1 か所だけ持つ
+    postal TEXT,                    -- 郵便番号
+    region TEXT,                    -- 都道府県
+    city TEXT,                      -- 市区町村
+    street TEXT,                    -- 番地・建物
+    extended TEXT,                  -- 補足
+    country TEXT
 );
 
 -- カレンダー予定（実装: migrations/0038_calendar.sql / 0039_calendar_meta.sql）

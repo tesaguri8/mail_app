@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   AlertTriangle,
@@ -10,13 +10,13 @@ import {
   RotateCcw,
   Save,
   Search,
-  StickyNote,
   Trash2,
   User,
   Users,
   X,
 } from 'lucide-react';
 import type { OrganizationSummary } from '@bindings/OrganizationSummary';
+import type { OrganizationInput } from '@bindings/OrganizationInput';
 import type { OrganizationDetail } from '@bindings/OrganizationDetail';
 import {
   organizationDelete,
@@ -28,13 +28,15 @@ import {
 } from '../services/organizations';
 import { trashRetentionGet } from '../services/trash';
 import { trashDaysLeft } from '../utils/trash';
+import { OrgCardFields, orgDraft } from './OrgCard';
 import { OrgAutocomplete } from './OrgCombobox';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 /**
- * 住所録の「組織」タブ。左＝組織一覧（検索）、右＝所属連絡先・共有アドレス（共有件数つき）・
- * 組織名/メモの編集。共有アドレスの指定自体は連絡先編集の「共有」トグルで行う。
+ * 住所録の「組織」タブ。左＝組織一覧（検索）、右＝組織カード（会社名・代表電話・FAX・
+ * 代表メール・URL・所在地・メモ）の編集と、所属連絡先・共有アドレス（共有件数つき）。
+ * 共有アドレスの指定自体は連絡先編集の「共有」トグルで行う。
  */
 export function OrganizationsView({
   focusId,
@@ -50,9 +52,10 @@ export function OrganizationsView({
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [detail, setDetail] = useState<OrganizationDetail | null>(null);
-  const [name, setName] = useState('');
-  const [note, setNote] = useState('');
-  const [creating, setCreating] = useState(false);
+  // 編集中の組織カード。null＝何も開いていない。id:null＝新規。
+  const [draft, setDraft] = useState<OrganizationInput | null>(null);
+  // 変更検知の基準（読み込み/保存直後の状態）。
+  const [baseline, setBaseline] = useState('');
   const [saved, setSaved] = useState(false);
   // 会社名オートコンプリートの候補（自分自身は除外）と、統合確認ダイアログの表示。
   const [orgResults, setOrgResults] = useState<OrganizationSummary[]>([]);
@@ -60,6 +63,10 @@ export function OrganizationsView({
   // 削除済み（ゴミ箱）を表示するか、と保持日数。
   const [showDeleted, setShowDeleted] = useState(false);
   const [retention, setRetention] = useState(7);
+  // 右ペイン（組織カード）のスクロール枠と、いま開いている組織の ID。
+  // 別の組織に切り替えたときだけ先頭へ戻す（保存後の開き直しでは読んでいた位置を保つ）。
+  const paneRef = useRef<HTMLElement>(null);
+  const openedIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -83,17 +90,23 @@ export function OrganizationsView({
     return () => clearTimeout(h);
   }, [query, load]);
 
+  const openDraft = (d: OrganizationInput) => {
+    setDraft(d);
+    setBaseline(JSON.stringify(d));
+  };
+
   const open = useCallback((id: number) => {
     if (!isTauri) return;
+    // 前の組織で読んでいた位置のままにならないよう、先頭から読めるようにする。
+    if (openedIdRef.current !== id) paneRef.current?.scrollTo({ top: 0 });
+    openedIdRef.current = id;
     setSelectedId(id);
-    setCreating(false);
     setSaved(false);
     setOrgResults([]); // 前の検索結果による誤った統合判定を避ける
     organizationDetail(id)
       .then((d) => {
         setDetail(d);
-        setName(d.org.name);
-        setNote(d.org.note ?? '');
+        openDraft(orgDraft(d.org));
       })
       .catch(() => undefined);
   }, []);
@@ -107,16 +120,21 @@ export function OrganizationsView({
   const startNew = () => {
     setSelectedId(null);
     setDetail(null);
-    setName('');
-    setNote('');
-    setCreating(true);
+    openedIdRef.current = null;
+    paneRef.current?.scrollTo({ top: 0 });
+    openDraft(orgDraft(null));
     setSaved(false);
     setOrgResults([]);
   };
 
-  const dirty = detail
-    ? name.trim() !== detail.org.name || note.trim() !== (detail.org.note ?? '').trim()
-    : creating && name.trim() !== '';
+  const name = draft?.name ?? '';
+  const creating = draft !== null && draft.id === null;
+  const dirty = draft ? JSON.stringify(draft) !== baseline : false;
+
+  const patch = (next: OrganizationInput) => {
+    setDraft(next);
+    setSaved(false);
+  };
 
   // 会社名が別の既存組織の名前に一致するか（候補は自分自身を除外済み）。
   const nameMatch =
@@ -125,17 +143,12 @@ export function OrganizationsView({
   const mergeTarget = detail && !creating ? nameMatch : null;
 
   const doSave = async () => {
+    if (!draft) return;
     try {
-      const result = await organizationUpsert(
-        selectedId,
-        name.trim(),
-        null,
-        note.trim() === '' ? null : note.trim(),
-      );
-      setSaved(true);
-      setCreating(false);
+      const result = await organizationUpsert({ ...draft, name: draft.name.trim() });
       load(query);
       open(result.id);
+      setSaved(true);
     } catch {
       /* noop */
     }
@@ -178,9 +191,9 @@ export function OrganizationsView({
       await organizationDelete(detail.org.id);
       setSelectedId(null);
       setDetail(null);
-      setName('');
-      setNote('');
-      setCreating(false);
+      openedIdRef.current = null;
+      setDraft(null);
+      setBaseline('');
       load(query);
     } catch {
       /* noop */
@@ -196,8 +209,6 @@ export function OrganizationsView({
       /* noop */
     }
   };
-
-  const editing = detail !== null || creating;
 
   return (
     <div className="flex h-full min-h-0">
@@ -308,8 +319,8 @@ export function OrganizationsView({
       </aside>
 
       {/* 右：組織の詳細・編集 */}
-      <section className="min-h-0 flex-1 overflow-y-auto">
-        {!editing ? (
+      <section ref={paneRef} className="min-h-0 flex-1 overflow-y-auto">
+        {!draft ? (
           <div className="flex h-full flex-col items-center justify-center gap-1 text-center">
             <Building2 size={40} className="text-white/25" />
             <p className="text-sm text-white/45">{t('org.noSelection')}</p>
@@ -326,14 +337,8 @@ export function OrganizationsView({
                   ariaLabel={t('org.namePlaceholder')}
                   inputClassName="w-full rounded bg-transparent px-1 py-1 pr-9 text-xl font-semibold outline-none focus:bg-white/10"
                   onResults={setOrgResults}
-                  onChange={(text) => {
-                    setName(text);
-                    setSaved(false);
-                  }}
-                  onSelect={(o) => {
-                    setName(o.name);
-                    setSaved(false);
-                  }}
+                  onChange={(text) => patch({ ...draft, name: text })}
+                  onSelect={(o) => patch({ ...draft, name: o.name })}
                 />
               </div>
               <button
@@ -374,6 +379,12 @@ export function OrganizationsView({
                 </button>
               </div>
             )}
+
+            {/* 組織カード（代表電話・FAX・代表メール・URL・所在地・メモ）。
+                所属している連絡先では、この内容をラベル表示する。 */}
+            <div className="mb-5">
+              <OrgCardFields draft={draft} onChange={patch} />
+            </div>
 
             {/* 共有アドレス（組織 ＋ 値 ＋ 共有件数） */}
             {detail && detail.shared_values.length > 0 && (
@@ -448,22 +459,6 @@ export function OrganizationsView({
               </div>
             )}
 
-            {/* メモ */}
-            <label className="block">
-              <span className="mb-1 flex items-center gap-1.5 text-xs text-white/50">
-                <StickyNote size={14} />
-                {t('contact.note')}
-              </span>
-              <textarea
-                rows={3}
-                className="w-full resize-y rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                value={note}
-                onChange={(e) => {
-                  setNote(e.target.value);
-                  setSaved(false);
-                }}
-              />
-            </label>
           </div>
         )}
       </section>

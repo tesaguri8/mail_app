@@ -222,6 +222,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 51,
         sql: include_str!("migrations/0051_draft_attachments.sql"),
     },
+    Migration {
+        // 52 は組織カード（代表電話・FAX・代表メール・URL・所在地）。
+        version: 52,
+        sql: include_str!("migrations/0052_org_fields.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
@@ -326,6 +331,11 @@ mod tests {
              CREATE TABLE accounts (id INTEGER PRIMARY KEY, email TEXT);
              CREATE TABLE attachments (id INTEGER PRIMARY KEY, email_id INTEGER NOT NULL,
                filename TEXT, kind TEXT, content_type TEXT, content_id TEXT, size INTEGER);
+             -- 組織（0026 で作成・0027 で deleted_at 追加）。0052(組織カードの列追加)が動くよう用意する。
+             CREATE TABLE organizations (id INTEGER PRIMARY KEY, name TEXT NOT NULL,
+               name_kana TEXT, note TEXT,
+               created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, deleted_at TEXT);
              PRAGMA user_version = 35;",
         )
         .unwrap();

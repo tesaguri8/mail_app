@@ -128,6 +128,7 @@ pub fn run() {
             commands::contact_restore,
             commands::contact_group_list,
             commands::organization_list,
+            commands::organization_get,
             commands::organization_detail,
             commands::organization_upsert,
             commands::organization_delete,

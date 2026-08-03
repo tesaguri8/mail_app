@@ -2,7 +2,8 @@ use super::Store;
 use crate::models::{
     ContactAddress, ContactAddressInput, ContactGroupSummary, ContactInput, ContactMatch,
     ContactSummary, ContactValue, ContactValueInput, DuplicateGroup, ImportReport,
-    OrgDuplicateGroup, OrgSharedValue, OrganizationDetail, OrganizationSummary,
+    OrgAddress, OrgDuplicateGroup, OrgSharedValue, OrganizationDetail, OrganizationInput,
+    OrganizationSummary,
 };
 use crate::services::dedupe::{digits, fold, fold_remove_ws, mobile_number};
 use crate::services::name_norm::match_rank;
@@ -43,6 +44,52 @@ fn row_to_contact(r: &Row) -> rusqlite::Result<ContactSummary> {
 const CONTACT_COLS: &str = "id, display_name, family_name, given_name, phonetic_family, \
      phonetic_given, name_kana, email, phone, organization, org_title, org_department, \
      address, birthday, note, is_favorite, is_business, allow_remote_images, org_id, deleted_at";
+
+/// organizations の 1 行を OrganizationSummary に写す（列順は ORG_COLS と対応）。
+fn row_to_org(r: &Row) -> rusqlite::Result<OrganizationSummary> {
+    Ok(OrganizationSummary {
+        id: r.get::<_, i64>(0)? as i32,
+        name: r.get(1)?,
+        name_kana: r.get(2)?,
+        note: r.get(3)?,
+        phone: r.get(4)?,
+        fax: r.get(5)?,
+        email: r.get(6)?,
+        url: r.get(7)?,
+        address: OrgAddress {
+            postal: r.get(8)?,
+            region: r.get(9)?,
+            city: r.get(10)?,
+            street: r.get(11)?,
+            extended: r.get(12)?,
+            country: r.get(13)?,
+        },
+        member_count: r.get::<_, i64>(14)? as i32,
+        deleted_at: r.get(15)?,
+    })
+}
+
+/// 組織の取得列（別名 o の organizations と、所属件数のサブクエリ）。
+const ORG_COLS: &str = "o.id, o.name, o.name_kana, o.note, o.phone, o.fax, o.email, o.url, \
+     o.postal, o.region, o.city, o.street, o.extended, o.country, \
+     (SELECT count(*) FROM contacts c WHERE c.org_id = o.id AND c.deleted_at IS NULL), \
+     o.deleted_at";
+
+/// 組織カードの項目（組織名以外）。統合時に「統合先で空の項目を統合元で埋める」のに使う。
+const ORG_CARD_COLS: [&str; 12] = [
+    "name_kana",
+    "note",
+    "phone",
+    "fax",
+    "email",
+    "url",
+    "postal",
+    "region",
+    "city",
+    "street",
+    "extended",
+    "country",
+];
 
 /// あいまいヒットとして拾う最大件数（誤ヒットが末尾に大量に並ぶのを防ぐ上限）。
 const FUZZY_LIMIT: usize = 30;
@@ -834,26 +881,12 @@ impl Store {
         } else {
             format!("WHERE {}", conds.join(" AND "))
         };
-        let sql = format!(
-            "SELECT o.id, o.name, o.name_kana, o.note, \
-                    (SELECT count(*) FROM contacts c WHERE c.org_id = o.id AND c.deleted_at IS NULL) AS cnt, \
-                    o.deleted_at \
-             FROM organizations o {where_sql}"
-        );
+        let sql = format!("SELECT {ORG_COLS} FROM organizations o {where_sql}");
         let mut stmt = conn.prepare(&sql)?;
         let binds: Vec<&dyn rusqlite::ToSql> =
             likes.iter().map(|t| t as &dyn rusqlite::ToSql).collect();
         let mut rows: Vec<OrganizationSummary> = stmt
-            .query_map(rusqlite::params_from_iter(binds), |r: &Row| {
-                Ok(OrganizationSummary {
-                    id: r.get::<_, i64>(0)? as i32,
-                    name: r.get(1)?,
-                    name_kana: r.get(2)?,
-                    note: r.get(3)?,
-                    member_count: r.get::<_, i64>(4)? as i32,
-                    deleted_at: r.get(5)?,
-                })
-            })?
+            .query_map(rusqlite::params_from_iter(binds), row_to_org)?
             .collect::<rusqlite::Result<_>>()?;
         // 関連度順: 一致トークン数 desc → 有効(非削除)優先 → 所属多い順 → 名前。
         rows.sort_by(|a, b| {
@@ -870,41 +903,46 @@ impl Store {
     pub fn get_organization(&self, id: i64) -> rusqlite::Result<OrganizationSummary> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT o.id, o.name, o.name_kana, o.note, \
-                    (SELECT count(*) FROM contacts c WHERE c.org_id = o.id AND c.deleted_at IS NULL), \
-                    o.deleted_at \
-             FROM organizations o WHERE o.id = ?1",
+            &format!("SELECT {ORG_COLS} FROM organizations o WHERE o.id = ?1"),
             params![id],
-            |r| {
-                Ok(OrganizationSummary {
-                    id: r.get::<_, i64>(0)? as i32,
-                    name: r.get(1)?,
-                    name_kana: r.get(2)?,
-                    note: r.get(3)?,
-                    member_count: r.get::<_, i64>(4)? as i32,
-                    deleted_at: r.get(5)?,
-                })
-            },
+            row_to_org,
         )
     }
 
-    /// 組織を作成/編集する（id 指定で名前・メモを更新し、所属連絡先の organization 文字列も同期）。
+    /// 組織カード（名前・よみ・メモ・代表電話/FAX/代表メール/URL・所在地）を作成/編集する。
+    /// `input.id` 指定で更新し、所属連絡先の organization 文字列も新しい名前へ同期する。
+    /// 更新後（新規なら作成後）の組織を返す。
     pub fn upsert_organization(
         &self,
-        id: Option<i64>,
-        name: &str,
-        name_kana: Option<&str>,
-        note: Option<&str>,
+        input: &OrganizationInput,
     ) -> rusqlite::Result<OrganizationSummary> {
-        let name = name.trim();
+        let name = input.name.trim();
+        let a = &input.address;
         let oid = {
             let conn = self.conn.lock().unwrap();
-            match id {
+            match input.id.map(i64::from) {
                 Some(id) => {
                     conn.execute(
                         "UPDATE organizations SET name = ?1, name_kana = ?2, note = ?3, \
-                         updated_at = CURRENT_TIMESTAMP WHERE id = ?4",
-                        params![name, name_kana, note, id],
+                         phone = ?4, fax = ?5, email = ?6, url = ?7, postal = ?8, region = ?9, \
+                         city = ?10, street = ?11, extended = ?12, country = ?13, \
+                         updated_at = CURRENT_TIMESTAMP WHERE id = ?14",
+                        params![
+                            name,
+                            input.name_kana,
+                            input.note,
+                            input.phone,
+                            input.fax,
+                            input.email,
+                            input.url,
+                            a.postal,
+                            a.region,
+                            a.city,
+                            a.street,
+                            a.extended,
+                            a.country,
+                            id,
+                        ],
                     )?;
                     conn.execute(
                         "UPDATE contacts SET organization = ?1 WHERE org_id = ?2",
@@ -914,8 +952,25 @@ impl Store {
                 }
                 None => {
                     conn.execute(
-                        "INSERT INTO organizations (name, name_kana, note) VALUES (?1, ?2, ?3)",
-                        params![name, name_kana, note],
+                        "INSERT INTO organizations \
+                         (name, name_kana, note, phone, fax, email, url, \
+                          postal, region, city, street, extended, country) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                        params![
+                            name,
+                            input.name_kana,
+                            input.note,
+                            input.phone,
+                            input.fax,
+                            input.email,
+                            input.url,
+                            a.postal,
+                            a.region,
+                            a.city,
+                            a.street,
+                            a.extended,
+                            a.country,
+                        ],
                     )?;
                     conn.last_insert_rowid()
                 }
@@ -1081,7 +1136,15 @@ impl Store {
                  updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
                 params![name, keep_id],
             )?;
+            // 統合先で空のカード項目は、統合元に入っていた値で埋める（消える情報をなくす）。
+            let fill = ORG_CARD_COLS
+                .iter()
+                .map(|c| format!("{c} = COALESCE({c}, (SELECT {c} FROM organizations WHERE id = ?1))"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let fill_sql = format!("UPDATE organizations SET {fill} WHERE id = ?2");
             for did in drop_ids {
+                tx.execute(&fill_sql, params![did, keep_id])?;
                 tx.execute(
                     "UPDATE contacts SET org_id = ?1 WHERE org_id = ?2",
                     params![keep_id, did],
@@ -1990,7 +2053,13 @@ mod tests {
     #[test]
     fn org_soft_delete_hides_and_revives_on_reuse() {
         let s = store();
-        let oid = s.upsert_organization(None, "テスト社", None, None).unwrap().id as i64;
+        let oid = s
+            .upsert_organization(&OrganizationInput {
+                name: "テスト社".into(),
+                ..Default::default()
+            })
+            .unwrap()
+            .id as i64;
         assert!(s.delete_organization(oid).unwrap());
         assert!(s.list_organizations(None, false).unwrap().is_empty());
         assert_eq!(s.list_organizations(None, true).unwrap().len(), 1);
@@ -2004,6 +2073,75 @@ mod tests {
             .unwrap();
         assert_eq!(c.org_id, Some(oid as i32));
         assert_eq!(s.list_organizations(None, false).unwrap().len(), 1);
+    }
+
+    /// 組織カード（代表電話・FAX・代表メール・URL・所在地）は保存・取得でき、
+    /// 統合では統合先の値を優先しつつ、空欄は統合元の値で埋まる（カードの情報を失わない）。
+    #[test]
+    fn org_card_fields_round_trip_and_survive_merge() {
+        let s = store();
+        let keep = s
+            .upsert_organization(&OrganizationInput {
+                name: "テスト社".into(),
+                phone: Some("+81311112222".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let dropped = s
+            .upsert_organization(&OrganizationInput {
+                name: "(株)テスト".into(),
+                phone: Some("+81399999999".into()),
+                fax: Some("+81311113333".into()),
+                email: Some("info@example.com".into()),
+                url: Some("https://example.com".into()),
+                address: OrgAddress {
+                    postal: Some("900-0001".into()),
+                    region: Some("沖縄県".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(dropped.email.as_deref(), Some("info@example.com"));
+        assert_eq!(dropped.address.postal.as_deref(), Some("900-0001"));
+
+        let merged = s
+            .merge_organizations(keep.id as i64, &[dropped.id as i64], "テスト社")
+            .unwrap();
+        // 統合先に入っていた代表電話はそのまま。
+        assert_eq!(merged.phone.as_deref(), Some("+81311112222"));
+        // 統合先で空だった項目は統合元から引き継ぐ。
+        assert_eq!(merged.fax.as_deref(), Some("+81311113333"));
+        assert_eq!(merged.email.as_deref(), Some("info@example.com"));
+        assert_eq!(merged.url.as_deref(), Some("https://example.com"));
+        assert_eq!(merged.address.region.as_deref(), Some("沖縄県"));
+    }
+
+    /// 組織カードの保存で会社名を変えると、所属している連絡先の organization 文字列も追従する。
+    #[test]
+    fn org_rename_syncs_member_organization_string() {
+        let s = store();
+        let c = s
+            .upsert_contact(&ContactInput {
+                display_name: "田中".into(),
+                organization: Some("テスト社".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let oid = c.org_id.unwrap();
+        s.upsert_organization(&OrganizationInput {
+            id: Some(oid),
+            name: "テスト株式会社".into(),
+            phone: Some("+81311112222".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        let after = s.get_contact(c.id as i64).unwrap();
+        assert_eq!(after.organization.as_deref(), Some("テスト株式会社"));
+        assert_eq!(
+            s.get_organization(oid as i64).unwrap().phone.as_deref(),
+            Some("+81311112222")
+        );
     }
 
     #[test]

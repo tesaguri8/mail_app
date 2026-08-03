@@ -52,6 +52,27 @@ function useDnd<T>(list: T[], onChange: (l: T[]) => void) {
   };
 }
 
+/** アイコン付き見出しラベルと入力欄のまとまり（連絡先の編集・組織カードで共有）。 */
+export function Field({
+  icon,
+  label,
+  children,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 flex items-center gap-1.5 text-xs text-white/50">
+        {icon}
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
+
 /** ドラッグハンドル。 */
 function DragHandle(props: React.HTMLAttributes<HTMLSpanElement> & { draggable?: boolean }) {
   const { t } = useTranslation();

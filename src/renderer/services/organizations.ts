@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { OrganizationSummary } from '@bindings/OrganizationSummary';
+import type { OrganizationInput } from '@bindings/OrganizationInput';
 import type { OrganizationDetail } from '@bindings/OrganizationDetail';
 import type { OrgDuplicateGroup } from '@bindings/OrgDuplicateGroup';
 
@@ -12,17 +13,18 @@ export const organizationList = (query?: string, includeDeleted = false) =>
 export const organizationRestore = (id: number) =>
   invoke<void>('organization_restore', { id });
 
+/** 単一の組織（組織カード）を取得。連絡先のラベル表示・カード編集ダイアログ用。 */
+export const organizationGet = (id: number) =>
+  invoke<OrganizationSummary>('organization_get', { id });
+
 /** 組織の詳細（所属連絡先＋共有アドレスを件数つきで）。 */
 export const organizationDetail = (id: number) =>
   invoke<OrganizationDetail>('organization_detail', { id });
 
-/** 組織を作成/編集（名前・メモ）。id 指定で更新、無ければ新規。 */
-export const organizationUpsert = (
-  id: number | null,
-  name: string,
-  nameKana: string | null,
-  note: string | null,
-) => invoke<OrganizationSummary>('organization_upsert', { id, name, nameKana, note });
+/** 組織カード（名前・よみ・メモ・代表電話/FAX/代表メール/URL・所在地）を作成/編集。
+ *  input.id 指定で更新、無ければ新規。 */
+export const organizationUpsert = (input: OrganizationInput) =>
+  invoke<OrganizationSummary>('organization_upsert', { input });
 
 /** 組織を削除（所属している連絡先があるときはバックエンド側で拒否される）。 */
 export const organizationDelete = (id: number) => invoke<void>('organization_delete', { id });

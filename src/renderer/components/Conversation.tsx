@@ -32,7 +32,8 @@ import type { ThreadMessage } from '@bindings/ThreadMessage';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { TagSummary } from '@bindings/TagSummary';
 import type { AttachmentSummary } from '@bindings/AttachmentSummary';
-import { mailGet, mailAttachments, attachmentOpen, attachmentView } from '../services/mail';
+import { mailGet, mailAttachments, attachmentOpen } from '../services/mail';
+import { attachmentImage } from '../utils/imageCache';
 import { greenDomainAdd, greenDomainWarn } from '../services/green';
 import { threadRename, threadSplit, threadView } from '../services/threads';
 import { parseAddress } from '../utils/address';
@@ -290,7 +291,7 @@ function Bubble({
           .forEach((a) => {
             const cid = a.content_id as string;
             setInlineAtts((prev) => ({ ...prev, [cid]: a }));
-            attachmentView(a.id)
+            attachmentImage(a.id)
               .then((url) => {
                 if (alive) setInlineImages((prev) => ({ ...prev, [cid]: url }));
               })

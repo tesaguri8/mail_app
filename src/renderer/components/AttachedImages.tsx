@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Image as ImageIcon } from 'lucide-react';
 import type { AttachmentSummary } from '@bindings/AttachmentSummary';
-import { attachmentView } from '../services/mail';
+import { attachmentImage, peekAttachmentImage } from '../utils/imageCache';
 import { withActivity } from '../stores/activity';
 
 const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp|tiff?|heic|heif|avif)$/i;
@@ -43,43 +43,58 @@ export function AttachedImages({
   onMenu?: (att: AttachmentSummary, x: number, y: number) => void;
 }) {
   const { t } = useTranslation();
-  const [urls, setUrls] = useState<Record<number, string>>({});
   const total = images.reduce((s, a) => s + a.size, 0);
+  // 対象の同一性はメール切替の検知に使う（images は毎レンダー新しい配列になるため）。
+  const key = images.map((a) => a.id).join(',');
+  // 読み込み済み（メモリキャッシュ）のぶんは最初の描画から出す＝別のメールから戻っても
+  // 取り直さない・「処理中」を出さない。
+  const cached = useMemo(() => {
+    const seed: Record<number, string> = {};
+    for (const a of images) {
+      const url = peekAttachmentImage(a.id);
+      if (url) seed[a.id] = url;
+    }
+    return seed;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  const [urls, setUrls] = useState<Record<number, string>>(cached);
   const [wanted, setWanted] = useState(total <= AUTO_MAX_TOTAL);
   const [busy, setBusy] = useState(false);
-  // 対象が変わったら取得済みを捨てて、上限判定からやり直す（メール切替）。
-  const key = images.map((a) => a.id).join(',');
 
   useEffect(() => {
-    setUrls({});
+    setUrls(cached);
     setWanted(total <= AUTO_MAX_TOTAL);
-    // key（表示対象）が変わったときだけリセットする。total は key に従属。
+    // key（表示対象）が変わったときだけやり直す。cached / total は key に従属。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
   useEffect(() => {
-    if (!wanted || images.length === 0) return;
+    if (!wanted) return;
+    // まだ手元に無いものだけ取りに行く。全部キャッシュ済みなら通信も進捗表示もしない。
+    const missing = images.filter((a) => peekAttachmentImage(a.id) === undefined);
+    if (missing.length === 0) return;
     let alive = true;
     setBusy(true);
     // 本体未取得なら Rust 側が IMAP から該当パートだけ取るので、フッターに進捗を出す。
-    void withActivity(t('activity.loadingImages'), async () => {
-      for (const a of images) {
+    // 1 枚ずつ順に取る（同時に IMAP 接続を張らない）。
+    const load = async () => {
+      for (const a of missing) {
         if (!alive) return;
         try {
-          const url = await attachmentView(a.id);
+          const url = await attachmentImage(a.id);
           if (!alive) return;
           setUrls((prev) => ({ ...prev, [a.id]: url }));
         } catch {
           /* この 1 枚は表示できない（他は続ける） */
         }
       }
-    }).finally(() => {
+    };
+    void withActivity(t('activity.loadingImages'), load).finally(() => {
       if (alive) setBusy(false);
     });
     return () => {
       alive = false;
     };
-    // images は毎レンダー新しい配列になるので、対象の同一性は key で見る。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wanted, key, t]);
 

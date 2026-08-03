@@ -32,7 +32,6 @@ import { DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import {
   attachmentExport,
   attachmentOpen,
-  attachmentView,
   mailAttachments,
   mailRefetch,
 } from '../services/mail';
@@ -43,6 +42,7 @@ import { contactLookupEmail } from '../services/contacts';
 import { mailLoadRemote, senderRemoteAllowed, senderSetRemotePolicy } from '../services/mail';
 import { AutoLinkText, HtmlText, inlineCidRefs, remoteImageUrls } from './HtmlText';
 import { AttachedImages, isImage } from './AttachedImages';
+import { attachmentImage } from '../utils/imageCache';
 import { ContextMenu } from './ContextMenu';
 import type { CalendarPanelInitial } from './CalendarPanel';
 import { parseDateTime, type ParsedDate } from '../utils/dateparse';
@@ -476,7 +476,7 @@ export function MailBody({
       (a) => a.kind === 'inline' && a.content_id && referencedCids.has(a.content_id) && isImage(a),
     );
     targets.forEach((a) => {
-      attachmentView(a.id)
+      attachmentImage(a.id)
         .then((url) => {
           if (active && a.content_id) {
             setInlineImages((m) => ({ ...m, [a.content_id as string]: url }));
@@ -591,7 +591,7 @@ export function MailBody({
     setBusyId(a.id);
     setNote('');
     try {
-      const url = await attachmentView(a.id);
+      const url = await attachmentImage(a.id);
       setPreviews((m) => ({ ...m, [a.id]: url }));
     } catch (e) {
       setNote(String(e));

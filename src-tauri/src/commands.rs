@@ -2610,6 +2610,23 @@ pub async fn attachment_view(
     }
 
     let path = ensure_attachment_file(&app, &store, attachment_id).await?;
+    // 表示用 JPEG（レンディション）は添付フォルダに残して使い回す。原本のデコード→縮小→
+    // JPEG 化は重く、メールを開き直すたびに繰り返すと毎回待たされるため（写真 1 枚で数百ms）。
+    // 添付と同名になり得る場合だけは原本を壊さないようキャッシュしない。
+    let rendition = path.with_file_name(if thumb {
+        "__rondine_thumb.jpg"
+    } else {
+        "__rondine_view.jpg"
+    });
+    let cacheable = rendition != path;
+    if cacheable {
+        if let Ok(cached) = std::fs::read(&rendition) {
+            if !cached.is_empty() {
+                return Ok(media::jpeg_bytes_to_data_url(&cached));
+            }
+        }
+    }
+
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
     let max = if thumb {
         media::THUMB_MAX
@@ -2619,11 +2636,16 @@ pub async fn attachment_view(
 
     let filename = att.filename.clone();
     let content_type = att.content_type.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        media::to_web_data_url(&bytes, content_type.as_deref(), &filename, max)
+    let jpeg = tauri::async_runtime::spawn_blocking(move || {
+        media::to_web_jpeg_bytes(&bytes, content_type.as_deref(), &filename, max)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    if cacheable {
+        // 書けなくても表示は続ける（次回また変換するだけ）。
+        let _ = std::fs::write(&rendition, &jpeg);
+    }
+    Ok(media::jpeg_bytes_to_data_url(&jpeg))
 }
 
 /// 添付を OS の関連アプリで開く（未取得なら先に取得）。

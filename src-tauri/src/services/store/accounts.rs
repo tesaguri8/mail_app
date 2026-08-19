@@ -174,8 +174,10 @@ impl Store {
                        AND COALESCE(e.folder,'inbox') = 'inbox' AND e.is_junk = 0),
                     (SELECT COUNT(*) FROM emails e WHERE e.account_id = accounts.id
                        AND COALESCE(e.folder,'inbox') = 'inbox' AND e.is_junk = 0),
-                    (SELECT COALESCE(server_total,0) FROM folder_sync fs
-                       WHERE fs.account_id = accounts.id AND fs.folder = 'inbox')
+                    -- 未同期のアカウントは folder_sync に行が無く、相関サブクエリ自体が NULL に
+                    -- なる（COALESCE をサブクエリの内側に置くと拾えない）。外側で 0 に畳む。
+                    COALESCE((SELECT server_total FROM folder_sync fs
+                       WHERE fs.account_id = accounts.id AND fs.folder = 'inbox'), 0)
              FROM accounts ORDER BY COALESCE(sort_order, id), id",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -367,5 +369,33 @@ mod tests {
             store.data_versions(id).unwrap(),
             Some((dataver::INGEST_VERSION, dataver::PARSE_VERSION))
         );
+    }
+
+    /// 追加直後（一度も同期していない）のアカウントも一覧に出ること。
+    /// folder_sync に行が無いと相関サブクエリが NULL になり、i64 での取り出しが
+    /// InvalidColumnType で落ちていた（アカウントを追加しても画面に出ない不具合）。
+    #[test]
+    fn list_accounts_includes_never_synced_account() {
+        let store = test_store();
+        store
+            .insert_account(&NewAccount {
+                email: "new@example.com".into(),
+                display_name: None,
+                username: None,
+                imap_host: "imap.example.com".into(),
+                imap_port: 993,
+                smtp_host: "smtp.example.com".into(),
+                smtp_port: 587,
+                server_account_id: None,
+            })
+            .unwrap();
+
+        let accounts = store.list_accounts().unwrap();
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].email, "new@example.com");
+        // 未同期なのでサーバ側総数は 0 として扱う（NULL で落とさない）。
+        assert_eq!(accounts[0].server_total_count, 0);
+        assert_eq!(accounts[0].unread_count, 0);
+        assert_eq!(accounts[0].total_count, 0);
     }
 }

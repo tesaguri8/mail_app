@@ -74,7 +74,9 @@ export default function App() {
     if (!isTauri) return;
     accountList()
       .then(setAccounts)
-      .catch(() => undefined);
+      // 握り潰すと「アカウントを追加しても一覧に出ない」ように見えて原因が追えない。
+      // 一覧は空のままにしつつ、理由はコンソールへ残す。
+      .catch((e) => console.error('account_list failed:', e));
   }, []);
   useEffect(refreshAccounts, [refreshAccounts]);
 

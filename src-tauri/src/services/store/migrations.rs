@@ -227,6 +227,12 @@ const MIGRATIONS: &[Migration] = &[
         version: 52,
         sql: include_str!("migrations/0052_org_fields.sql"),
     },
+    Migration {
+        // 53 は Google 連携アカウントの共通化（calendar_accounts → google_accounts）。
+        // カレンダーと連絡先で 1 アカウント・1 refresh_token を共有する（docs/CALENDAR_SYNC.md）。
+        version: 53,
+        sql: include_str!("migrations/0053_google_accounts.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
@@ -482,5 +488,45 @@ mod tests {
             .query_row("SELECT count(*) FROM event_attendees", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0);
+    }
+
+    /// 0053（calendar_accounts → google_accounts）の更新パス。既に Google カレンダーを
+    /// 連携済みの DB で、アカウントと同期実績が失われない（＝再連携・全予定の再取得を
+    /// 強いない）ことを確かめる。
+    #[test]
+    fn migration_0053_preserves_linked_google_accounts() {
+        let conn = Connection::open_in_memory().unwrap();
+        // 0041 が作る当時の calendar_accounts をそのまま再現し、連携済み 1 件を入れる。
+        conn.execute_batch(
+            "CREATE TABLE calendar_accounts (
+                 id INTEGER PRIMARY KEY,
+                 provider TEXT NOT NULL DEFAULT 'google',
+                 email TEXT NOT NULL,
+                 external_id TEXT,
+                 last_sync_at TIMESTAMP,
+                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                 UNIQUE(provider, email));
+             INSERT INTO calendar_accounts (email, external_id, last_sync_at)
+                 VALUES ('a@gmail.com', 'sub123', '2026-08-20 01:23:45');
+             PRAGMA user_version = 52;",
+        )
+        .unwrap();
+        run(&conn).unwrap();
+
+        let (email, ext, last, cal, con): (String, String, String, i64, i64) = conn
+            .query_row(
+                "SELECT email, external_id, last_calendar_sync_at, sync_calendar, sync_contacts \
+                 FROM google_accounts",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(email, "a@gmail.com");
+        assert_eq!(ext, "sub123");
+        // 最終同期時刻はカレンダー側へ引き継ぐ。
+        assert_eq!(last, "2026-08-20 01:23:45");
+        // 既存アカウントはカレンダー有効・連絡先は未有効。
+        assert_eq!(cal, 1);
+        assert_eq!(con, 0);
     }
 }

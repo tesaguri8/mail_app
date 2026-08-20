@@ -19,6 +19,9 @@ pub struct TokenSet {
     pub access_token: String,
     /// 初回同意時のみ返る。再取得できないため keyring に保存して使い回す。
     pub refresh_token: Option<String>,
+    /// 実際に許可されたスコープ（スペース区切り）。ユーザーが一部だけ許可することがあるため
+    /// 要求と一致するとは限らない。後から別サービスを有効化する際の再同意判定に使う。
+    pub granted_scopes: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -27,6 +30,8 @@ struct TokenResponse {
     access_token: Option<String>,
     #[serde(default)]
     refresh_token: Option<String>,
+    #[serde(default)]
+    scope: Option<String>,
     #[serde(default)]
     error: Option<String>,
     #[serde(default)]
@@ -58,10 +63,15 @@ fn make_pkce() -> Result<(String, String), String> {
 }
 
 /// 認可フローを実行し、トークンと連携アカウントのメールアドレスを返す。
+///
+/// `scope` は `super::scopes()` で組み立てたスペース区切りの要求スコープ。既に別サービスで
+/// 連携済みのアカウントを追加同意させる場合も、この関数に新しいスコープ集合を渡せばよい
+/// （`include_granted_scopes` により既存の許可は失われない）。
 pub async fn run_flow(
     app: &AppHandle,
     client_id: &str,
     client_secret: &str,
+    scope: &str,
 ) -> Result<(TokenSet, String), String> {
     // 1) ループバックの待受を確保（ポートは OS 任せ）。
     let listener =
@@ -81,9 +91,11 @@ pub async fn run_flow(
             ("client_id", client_id),
             ("redirect_uri", &redirect_uri),
             ("response_type", "code"),
-            ("scope", super::SCOPES),
+            ("scope", scope),
             ("access_type", "offline"),
             ("prompt", "consent"),
+            // 追加同意でも既存の許可を失わない（カレンダー連携済みに連絡先を足す場合など）。
+            ("include_granted_scopes", "true"),
             ("code_challenge", &challenge),
             ("code_challenge_method", "S256"),
             ("state", &state),
@@ -186,6 +198,7 @@ async fn exchange_code(
     Ok(TokenSet {
         access_token: body.access_token.unwrap(),
         refresh_token: body.refresh_token,
+        granted_scopes: body.scope,
     })
 }
 

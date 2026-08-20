@@ -4,6 +4,7 @@ mod calendars;
 mod contacts;
 mod emails;
 mod events;
+mod google_accounts;
 mod greendomain;
 mod migrations;
 mod recipients;
@@ -17,7 +18,8 @@ mod threads;
 mod tombstones;
 
 pub use accounts::{NewAccount, SmtpAccount};
-pub use calendar_sync::{ApplyOutcome, LocalChange, RemoteEvent};
+pub use calendar_sync::{ApplyOutcome, LocalChange, RemoteEvent, SyncedCalendar};
+pub use google_accounts::GoogleService;
 pub use emails::{
     insert_email, rederive_attachments, AttachmentFetchInfo, InsertOutcome, NewAttachment, NewEmail,
     NewQuote, PurgeRef,

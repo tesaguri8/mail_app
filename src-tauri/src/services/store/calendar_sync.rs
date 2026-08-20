@@ -1,6 +1,5 @@
 use super::Store;
-use crate::models::GoogleAccount;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{params, Connection, OptionalExtension};
 
 /// 予定のリマインダーを与えられた集合へ全置き換えする（同期の取り込み用。dirty は触らない）。
 fn replace_event_reminders(
@@ -21,9 +20,9 @@ fn replace_event_reminders(
     Ok(())
 }
 
-/// 同期エンジン（services/gcal）が Store へ渡す「Google 側の予定」1件。
+/// 同期エンジン（services/google/calendar）が Store へ渡す「Google 側の予定」1件。
 /// 日時などは既にローカル表現（'YYYY-MM-DD' / 'YYYY-MM-DDTHH:MM'）へ変換済み。
-/// Store 層を gcal に依存させないため、境界の受け渡し型はここ（store 側）に置く。
+/// Store 層を同期エンジンに依存させないため、境界の受け渡し型はここ（store 側）に置く。
 #[derive(Debug, Clone, Default)]
 pub struct RemoteEvent {
     pub external_id: String,
@@ -68,6 +67,19 @@ pub struct LocalChange {
     pub visibility: String,
 }
 
+/// 同期対象の Google カレンダー 1 件（同期エンジンが列挙に使う）。
+#[derive(Debug, Clone)]
+pub struct SyncedCalendar {
+    /// ローカル calendars.id。
+    pub local_id: i64,
+    /// Google 側のカレンダー ID。
+    pub external_id: String,
+    /// 増分同期トークン（未取得なら None＝フル同期）。
+    pub sync_token: Option<String>,
+    /// owner | writer | reader | freeBusyReader。
+    pub access_role: String,
+}
+
 /// apply_remote_event の結果（同期サマリの集計用）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplyOutcome {
@@ -79,89 +91,7 @@ pub enum ApplyOutcome {
     Skipped,
 }
 
-fn row_to_account(r: &Row) -> rusqlite::Result<GoogleAccount> {
-    Ok(GoogleAccount {
-        id: r.get::<_, i64>(0)? as i32,
-        email: r.get(1)?,
-        last_sync_at: r.get(2)?,
-    })
-}
-
 impl Store {
-    // ── 連携アカウント ──────────────────────────────────────────────
-
-    /// Google アカウントを登録（既存なら external_id を更新）し、行 id を返す。
-    pub fn upsert_calendar_account(
-        &self,
-        email: &str,
-        external_id: Option<&str>,
-    ) -> rusqlite::Result<i64> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "INSERT INTO calendar_accounts (provider, email, external_id) VALUES ('google', ?1, ?2) \
-             ON CONFLICT(provider, email) DO UPDATE SET external_id = COALESCE(?2, external_id)",
-            params![email, external_id],
-        )?;
-        conn.query_row(
-            "SELECT id FROM calendar_accounts WHERE provider = 'google' AND email = ?1",
-            params![email],
-            |r| r.get(0),
-        )
-    }
-
-    /// 連携済み Google アカウント一覧。
-    pub fn list_calendar_accounts(&self) -> rusqlite::Result<Vec<GoogleAccount>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, email, last_sync_at FROM calendar_accounts \
-             WHERE provider = 'google' ORDER BY id",
-        )?;
-        let rows = stmt.query_map([], row_to_account)?;
-        rows.collect()
-    }
-
-    /// アカウントのメールアドレス（keyring キー）を引く。
-    pub fn calendar_account_email(&self, account_id: i64) -> rusqlite::Result<Option<String>> {
-        let conn = self.conn.lock().unwrap();
-        conn.query_row(
-            "SELECT email FROM calendar_accounts WHERE id = ?1",
-            params![account_id],
-            |r| r.get(0),
-        )
-        .optional()
-    }
-
-    /// 最終同期時刻を現在時刻に更新。
-    pub fn touch_calendar_account_synced(&self, account_id: i64) -> rusqlite::Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "UPDATE calendar_accounts SET last_sync_at = CURRENT_TIMESTAMP WHERE id = ?1",
-            params![account_id],
-        )?;
-        Ok(())
-    }
-
-    /// アカウントの連携を解除する。所属する Google カレンダーとその予定を削除する
-    /// （ローカル専用カレンダー・予定には触れない）。
-    pub fn delete_calendar_account(&self, account_id: i64) -> rusqlite::Result<()> {
-        let conn = self.conn.lock().unwrap();
-        // このアカウントの Google カレンダーに属する予定を物理削除。
-        conn.execute(
-            "DELETE FROM events WHERE calendar_id IN \
-                (SELECT id FROM calendars WHERE account_id = ?1)",
-            params![account_id],
-        )?;
-        conn.execute(
-            "DELETE FROM calendars WHERE account_id = ?1",
-            params![account_id],
-        )?;
-        conn.execute(
-            "DELETE FROM calendar_accounts WHERE id = ?1",
-            params![account_id],
-        )?;
-        Ok(())
-    }
-
     // ── Google カレンダー（calendars 行の同期メタ） ───────────────────
 
     /// Google カレンダーをローカル calendars に upsert（external_id で突き合わせ）し、行 id を返す。
@@ -211,11 +141,11 @@ impl Store {
         }
     }
 
-    /// 同期対象の Google カレンダー（local_id, external_id, sync_token, access_role）を返す。
+    /// 同期対象（sync_enabled かつ Google 連携済み）のカレンダーを返す。
     pub fn list_synced_google_calendars(
         &self,
         account_id: i64,
-    ) -> rusqlite::Result<Vec<(i64, String, Option<String>, String)>> {
+    ) -> rusqlite::Result<Vec<SyncedCalendar>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, external_id, sync_token, COALESCE(access_role, 'reader') \
@@ -224,12 +154,12 @@ impl Store {
                AND external_id IS NOT NULL",
         )?;
         let rows = stmt.query_map(params![account_id], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, Option<String>>(2)?,
-                r.get::<_, String>(3)?,
-            ))
+            Ok(SyncedCalendar {
+                local_id: r.get(0)?,
+                external_id: r.get(1)?,
+                sync_token: r.get(2)?,
+                access_role: r.get(3)?,
+            })
         })?;
         rows.collect()
     }
@@ -495,22 +425,9 @@ mod tests {
     }
 
     #[test]
-    fn account_upsert_and_list() {
-        let s = mem_store();
-        let id = s.upsert_calendar_account("a@gmail.com", Some("sub123")).unwrap();
-        assert!(id > 0);
-        // 同じメールなら同じ行（external_id を更新）
-        let id2 = s.upsert_calendar_account("a@gmail.com", Some("sub456")).unwrap();
-        assert_eq!(id, id2);
-        let accts = s.list_calendar_accounts().unwrap();
-        assert_eq!(accts.len(), 1);
-        assert_eq!(accts[0].email, "a@gmail.com");
-    }
-
-    #[test]
     fn apply_remote_insert_update_delete() {
         let s = mem_store();
-        let acct = s.upsert_calendar_account("a@gmail.com", None).unwrap();
+        let acct = s.upsert_google_account("a@gmail.com", None, None).unwrap();
         let cal = s
             .upsert_google_calendar(acct, "cal_ext_1", "予定表", Some("#64b5f6"), "owner", true)
             .unwrap();
@@ -540,7 +457,7 @@ mod tests {
     #[test]
     fn local_changes_are_tracked_and_cleared() {
         let s = mem_store();
-        let acct = s.upsert_calendar_account("a@gmail.com", None).unwrap();
+        let acct = s.upsert_google_account("a@gmail.com", None, None).unwrap();
         let cal = s
             .upsert_google_calendar(acct, "cal_ext_1", "予定表", None, "owner", true)
             .unwrap();
@@ -565,14 +482,14 @@ mod tests {
     #[test]
     fn disconnect_removes_google_calendars_and_events() {
         let s = mem_store();
-        let acct = s.upsert_calendar_account("a@gmail.com", None).unwrap();
+        let acct = s.upsert_google_account("a@gmail.com", None, None).unwrap();
         let cal = s
             .upsert_google_calendar(acct, "cal_ext_1", "予定表", None, "owner", true)
             .unwrap();
         s.apply_remote_event(cal, &remote("ev1", "会議", "2026-07-06T10:00")).unwrap();
 
-        s.delete_calendar_account(acct).unwrap();
-        assert!(s.list_calendar_accounts().unwrap().is_empty());
+        s.delete_google_account(acct).unwrap();
+        assert!(s.list_google_accounts().unwrap().is_empty());
         // 既定（ローカル）カレンダーは残る
         assert_eq!(s.list_calendars().unwrap().len(), 1);
         assert_eq!(s.list_events("2026-07-01", "2026-08-01", false).unwrap().len(), 0);

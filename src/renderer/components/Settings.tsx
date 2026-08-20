@@ -48,15 +48,15 @@ import {
   mailTrashPurge,
 } from '../services/trash';
 import {
-  gcalAccounts,
-  gcalConnect,
-  gcalCredentialsStatus,
-  gcalDisconnect,
-  gcalSetCredentials,
-  gcalSync,
-} from '../services/gcal';
+  googleAccounts,
+  googleConnect,
+  googleCredentialsStatus,
+  googleDisconnect,
+  googleSetCredentials,
+} from '../services/google';
+import { gcalSync } from '../services/gcal';
 import type { GoogleAccount } from '@bindings/GoogleAccount';
-import type { GcalCredentialsStatus } from '@bindings/GcalCredentialsStatus';
+import type { GoogleCredentialsStatus } from '@bindings/GoogleCredentialsStatus';
 import { AccountSetup } from './AccountSetup';
 import { SignatureManager } from './SignatureManager';
 import { TagManager } from './TagManager';
@@ -719,7 +719,7 @@ function TrashSettings() {
  */
 function GoogleCalendarSettings() {
   const { t } = useTranslation();
-  const [creds, setCreds] = useState<GcalCredentialsStatus | null>(null);
+  const [creds, setCreds] = useState<GoogleCredentialsStatus | null>(null);
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [accounts, setAccounts] = useState<GoogleAccount[]>([]);
@@ -729,8 +729,8 @@ function GoogleCalendarSettings() {
 
   const refresh = () => {
     if (!isTauri) return;
-    gcalCredentialsStatus().then(setCreds).catch(() => undefined);
-    gcalAccounts().then(setAccounts).catch(() => setAccounts([]));
+    googleCredentialsStatus().then(setCreds).catch(() => undefined);
+    googleAccounts().then(setAccounts).catch(() => setAccounts([]));
   };
   useEffect(refresh, []);
 
@@ -740,11 +740,11 @@ function GoogleCalendarSettings() {
     setError(null);
     setMessage(null);
     try {
-      await gcalSetCredentials(clientId.trim(), clientSecret.trim());
+      await googleSetCredentials(clientId.trim(), clientSecret.trim());
       setClientId('');
       setClientSecret('');
       setMessage(t('settings.gcalSaved'));
-      gcalCredentialsStatus().then(setCreds).catch(() => undefined);
+      googleCredentialsStatus().then(setCreds).catch(() => undefined);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -762,7 +762,7 @@ function GoogleCalendarSettings() {
     setError(null);
     setMessage(null);
     try {
-      await gcalConnect();
+      await googleConnect();
       refresh();
     } catch (e) {
       setError(String(e));
@@ -786,7 +786,7 @@ function GoogleCalendarSettings() {
           deletedOut: r.deleted_out,
         }),
       );
-      gcalAccounts().then(setAccounts).catch(() => undefined);
+      googleAccounts().then(setAccounts).catch(() => undefined);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -800,7 +800,7 @@ function GoogleCalendarSettings() {
     setError(null);
     setMessage(null);
     try {
-      await gcalDisconnect(id);
+      await googleDisconnect(id);
       refresh();
     } catch (e) {
       setError(String(e));
@@ -886,10 +886,10 @@ function GoogleCalendarSettings() {
                 <div className="min-w-0">
                   <div className="truncate text-sm text-white/90">{a.email}</div>
                   <div className="text-xs text-white/40">
-                    {a.last_sync_at
+                    {a.last_calendar_sync_at
                       ? t('settings.gcalLastSync', {
                           // SQLite の CURRENT_TIMESTAMP は 'YYYY-MM-DD HH:MM:SS'(UTC)。ISO 化して解釈。
-                          when: new Date(a.last_sync_at.replace(' ', 'T') + 'Z').toLocaleString(),
+                          when: new Date(a.last_calendar_sync_at.replace(' ', 'T') + 'Z').toLocaleString(),
                         })
                       : t('settings.gcalNeverSynced')}
                   </div>

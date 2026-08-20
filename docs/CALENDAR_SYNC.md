@@ -72,9 +72,12 @@ Rondine のローカルカレンダーと Google カレンダーを**双方向**
 無ければこの環境変数を使います。
 
 ```dotenv
-GCAL_CLIENT_ID=xxxx-xxxx.apps.googleusercontent.com
-GCAL_CLIENT_SECRET=GOCSPX-xxxxxxxx
+GOOGLE_CLIENT_ID=xxxx-xxxx.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=GOCSPX-xxxxxxxx
 ```
+
+> 旧名 `GCAL_CLIENT_ID` / `GCAL_CLIENT_SECRET` も引き続き読み込みます（既存の `.env` を
+> 壊さないため）。新規は `GOOGLE_*` を使ってください。
 
 雛形は `.env.example`（`cp .env.example .env` で複製して実値を記入）。実値は**絶対にコミットしない**でください。
 
@@ -82,21 +85,52 @@ GCAL_CLIENT_SECRET=GOCSPX-xxxxxxxx
 
 ## 3. 設計（実装メモ）
 
-### 3-1. 認証（`services/gcal/oauth.rs`）
+### 3-0. モジュール構成（Google 連携全体）
+
+Google 連携は **カレンダーと連絡先で共通の土台**を持つ。連絡先同期（People API）を足すときに
+同じアカウントを二重連携させないため、認証・アカウント管理はサービス非依存の層に置く。
+
+```
+services/google.rs              共通: エンドポイント・スコープ組み立て・HTTP クライアント
+services/google/oauth.rs        共通: OAuth（ループバック + PKCE）
+services/google/calendar.rs     カレンダー同期のまとめ（API ベース URL）
+services/google/calendar/{api,convert,sync}.rs
+```
+
+- **アカウント 1 件 = refresh_token 1 本**。カレンダーと連絡先はこれを共有する。
+- 要求スコープは固定文字列ではなく `google::scopes(&[...])` で組み立てる。
+- Tauri コマンドは、共通のものが `google_*`（`google_connect` / `google_disconnect` /
+  `google_accounts` / `google_set_credentials` / `google_credentials_status`）、
+  カレンダー固有の同期が `gcal_sync`。
+
+### 3-1. 認証（`services/google/oauth.rs`）
 
 - ループバック待受（`127.0.0.1:0` の任意ポート）+ **PKCE(S256)** + `state` 検証。
 - `access_type=offline` / `prompt=consent` で **refresh token** を取得。
-- スコープ: `https://www.googleapis.com/auth/calendar openid email`
-  （読み書き＋連携アカウントのメール特定）。
-- keyring 保存キー: Client Secret = `gcal:client_secret` / refresh token = `gcal:refresh:<email>`。
-  Client ID は `app_settings.gcal_client_id`（非機密）。
-- 資格情報の解決順: **保存済み（app_settings/keyring）→ 環境変数（`GCAL_CLIENT_ID` /
-  `GCAL_CLIENT_SECRET`。dev の `.env` 用）**。`commands.rs::gcal_resolve_credentials`。
+- `include_granted_scopes=true` を付けるので、**後から別サービスのスコープを追加同意しても
+  既存の許可は失われない**（カレンダー連携済みに連絡先を足す場合など）。
+- スコープ: `openid email` ＋ サービスごと（カレンダー =
+  `https://www.googleapis.com/auth/calendar`、連絡先 = `.../auth/contacts`）。
+- 実際に許可されたスコープはトークン応答から `google_accounts.granted_scopes` に記録する
+  （ユーザーが一部だけ許可することがあるため、要求ではなく実測値を持つ）。
+- keyring 保存キー: Client Secret = `google:client_secret` /
+  refresh token = `google:refresh:<email>`。Client ID は `app_settings.google_client_id`（非機密）。
+  旧キー（`gcal:` 接頭辞）は読み出し時に新キーへ自動で移す（再連携は不要）。
+- 資格情報の解決順: **保存済み（app_settings/keyring）→ 環境変数（`GOOGLE_CLIENT_ID` /
+  `GOOGLE_CLIENT_SECRET`。dev の `.env` 用）→ アプリ同梱の既定クライアント**。
+  `commands.rs::google_resolve_credentials`。
+- **同梱の既定クライアント**（`services/google.rs` の `BUILTIN_CLIENT_ID` /
+  `BUILTIN_CLIENT_SECRET`）は製品化用の枠で、現在は空。実値を入れると、ユーザーが自分で
+  Google Cloud Console にクライアントを作る手順（§1）が不要になる。デスクトップ種別の
+  client_secret は秘匿性を前提としない種別なので同梱してよい。
 - 同期のたびに refresh token → access token を取り直す（アクセストークンは保存しない）。
 
-### 3-2. データモデル（`migrations/0041_calendar_sync.sql`）
+### 3-2. データモデル（`migrations/0041_calendar_sync.sql` / `0053_google_accounts.sql`）
 
-- `calendar_accounts`: 連携した Google アカウント（複数対応。メタのみ、資格情報は keyring）。
+- `google_accounts`: 連携した Google アカウント（複数対応。メタのみ、資格情報は keyring）。
+  0041 では `calendar_accounts` だったものを 0053 でサービス共通へ改称し、
+  `granted_scopes` / `sync_calendar` / `sync_contacts` /
+  `last_calendar_sync_at` / `last_contacts_sync_at` を追加した。
 - `calendars` に追加: `account_id` / `sync_token`（増分同期）/ `access_role` / `sync_enabled`。
   - `source='google'` / `external_id`（Google カレンダー ID）は既存（0039）。
 - `events` に追加: `etag` / `dirty`（ローカル変更が未送信＝1）。
@@ -104,7 +138,7 @@ GCAL_CLIENT_SECRET=GOCSPX-xxxxxxxx
 - ユーザー操作（`event_upsert` / `event_delete`）は `dirty=1` を立て、Google カレンダー所属の
   予定だけが次回同期で送信される。同期エンジンの取り込み（`apply_remote_event`）は `dirty=0`。
 
-### 3-3. 同期アルゴリズム（`services/gcal/sync.rs`）
+### 3-3. 同期アルゴリズム（`services/google/calendar/sync.rs`）
 
 カレンダーごとに **push → pull** の順で実行:
 
@@ -122,7 +156,7 @@ GCAL_CLIENT_SECRET=GOCSPX-xxxxxxxx
 
 競合解決は v1 では概ね **後勝ち**（push→pull の順なので、最後に同期した側の状態へ収束）。
 
-### 3-4. 変換の要点（`services/gcal/convert.rs`）
+### 3-4. 変換の要点（`services/google/calendar/convert.rs`）
 
 - 日時: ローカルは端末ローカルの素の文字列（終日=`YYYY-MM-DD` / 時間指定=`YYYY-MM-DDTHH:MM`）。
   取り込み時は Google の RFC3339（オフセット付き）→ 端末ローカルへ、送信時は端末オフセットを付けて RFC3339 に。

@@ -3,7 +3,7 @@
 /**
  * OAuth クライアント資格情報の設定状況（Client ID の有無を UI に伝える。値は返さない）。
  */
-export type GcalCredentialsStatus = { 
+export type GoogleCredentialsStatus = { 
 /**
  * Client ID / Secret の両方が保存済みなら true。
  */

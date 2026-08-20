@@ -165,7 +165,7 @@ pub async fn list_calendars(
             query.push(("pageToken", pt.clone()));
         }
         let resp = client
-            .get(format!("{}/users/me/calendarList", super::CAL_API_BASE))
+            .get(format!("{}/users/me/calendarList", super::API_BASE))
             .bearer_auth(token)
             .query(&query)
             .send()
@@ -206,7 +206,7 @@ pub async fn list_events(
     let resp = client
         .get(format!(
             "{}/calendars/{}/events",
-            super::CAL_API_BASE,
+            super::API_BASE,
             enc(calendar_id)
         ))
         .bearer_auth(token)
@@ -227,7 +227,7 @@ pub async fn insert_event(
     let resp = client
         .post(format!(
             "{}/calendars/{}/events",
-            super::CAL_API_BASE,
+            super::API_BASE,
             enc(calendar_id)
         ))
         .bearer_auth(token)
@@ -249,7 +249,7 @@ pub async fn patch_event(
     let resp = client
         .patch(format!(
             "{}/calendars/{}/events/{}",
-            super::CAL_API_BASE,
+            super::API_BASE,
             enc(calendar_id),
             enc(event_id)
         ))
@@ -271,7 +271,7 @@ pub async fn delete_event(
     let resp = client
         .delete(format!(
             "{}/calendars/{}/events/{}",
-            super::CAL_API_BASE,
+            super::API_BASE,
             enc(calendar_id),
             enc(event_id)
         ))

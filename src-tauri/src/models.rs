@@ -470,16 +470,23 @@ pub struct IcsImportReport {
     pub skipped: i32,
 }
 
-/// 連携した Google（カレンダー）アカウント。資格情報（refresh_token）は keyring に保存し、
-/// ここにはメタ情報のみ持つ（docs/CALENDAR_SYNC.md）。
+/// 連携した Google アカウント。カレンダーと連絡先で 1 件を共有し、サービスごとに
+/// 有効フラグと最終同期時刻だけを分けて持つ。資格情報（refresh_token）は keyring に
+/// 保存し、ここにはメタ情報のみ持つ（docs/CALENDAR_SYNC.md）。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]
 pub struct GoogleAccount {
     pub id: i32,
     /// 連携した Google アカウントのメールアドレス。
     pub email: String,
-    /// 最終同期時刻（UTC 文字列）。未同期なら None。
-    pub last_sync_at: Option<String>,
+    /// カレンダー同期を有効にしているか。
+    pub sync_calendar: bool,
+    /// 連絡先同期を有効にしているか。
+    pub sync_contacts: bool,
+    /// カレンダーの最終同期時刻（UTC 文字列）。未同期なら None。
+    pub last_calendar_sync_at: Option<String>,
+    /// 連絡先の最終同期時刻（UTC 文字列）。未同期なら None。
+    pub last_contacts_sync_at: Option<String>,
 }
 
 /// Google カレンダー同期の結果サマリ（docs/CALENDAR_SYNC.md）。
@@ -501,7 +508,7 @@ pub struct GcalSyncResult {
 /// OAuth クライアント資格情報の設定状況（Client ID の有無を UI に伝える。値は返さない）。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]
-pub struct GcalCredentialsStatus {
+pub struct GoogleCredentialsStatus {
     /// Client ID / Secret の両方が保存済みなら true。
     pub configured: bool,
     /// 保存済みの Client ID（末尾のみ表示用。未設定なら None）。

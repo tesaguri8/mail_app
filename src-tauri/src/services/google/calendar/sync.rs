@@ -6,7 +6,7 @@
 use super::api::{self, ApiError};
 use super::convert;
 use crate::models::GcalSyncResult;
-use crate::services::store::{ApplyOutcome, Store};
+use crate::services::store::{ApplyOutcome, GoogleService, Store};
 use chrono::{Duration, Local};
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
@@ -30,7 +30,7 @@ pub async fn sync_account(
     access_token: &str,
     account_id: i64,
 ) -> Result<GcalSyncResult, String> {
-    let client = super::http_client()?;
+    let client = crate::services::google::http_client()?;
     let mut result = GcalSyncResult::default();
 
     // 1) カレンダー一覧を取り込み、ローカル calendars に upsert。
@@ -61,11 +61,12 @@ pub async fn sync_account(
         .list_synced_google_calendars(account_id)
         .map_err(|e| e.to_string())?;
     result.calendars = synced.len() as i32;
-    for (local_id, ext_id, sync_token, access_role) in synced {
+    for cal in synced {
+        let (local_id, ext_id) = (cal.local_id, cal.external_id.as_str());
         // 書き込み可能なカレンダーのみローカル変更を送信する。
-        if matches!(access_role.as_str(), "owner" | "writer") {
+        if matches!(cal.access_role.as_str(), "owner" | "writer") {
             if let Err(e) =
-                push_calendar(store, &client, access_token, local_id, &ext_id, &mut result).await
+                push_calendar(store, &client, access_token, local_id, ext_id, &mut result).await
             {
                 log::warn!("sync_account: push 失敗 cal {local_id} (ext {ext_id})（スキップ）: {e}");
             }
@@ -75,8 +76,8 @@ pub async fn sync_account(
             &client,
             access_token,
             local_id,
-            &ext_id,
-            sync_token.as_deref(),
+            ext_id,
+            cal.sync_token.as_deref(),
             &mut result,
         )
         .await
@@ -86,7 +87,7 @@ pub async fn sync_account(
     }
 
     store
-        .touch_calendar_account_synced(account_id)
+        .touch_google_account_synced(account_id, GoogleService::Calendar)
         .map_err(|e| e.to_string())?;
     Ok(result)
 }
@@ -99,7 +100,7 @@ pub async fn push_calendar_only(
     calendar_local_id: i64,
     calendar_ext_id: &str,
 ) -> Result<GcalSyncResult, String> {
-    let client = super::http_client()?;
+    let client = crate::services::google::http_client()?;
     let mut result = GcalSyncResult::default();
     push_calendar(
         store,

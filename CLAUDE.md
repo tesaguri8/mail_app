@@ -388,4 +388,65 @@ git worktree list
 
 ---
 
+---
+
+<!-- takibi:dev-machines:start 【全プロジェクト同一の本文】配布元は takibi/docs/ops/dev-machines.md §1。
+     直すときは配布元を直してから貼り直す。ここを直接編集しない（次の貼り直しで消える） -->
+
+## 開発機の使い分け（raytrek / xps / vaio）
+
+**開発のメインは `raytrek`（Ubuntu Server）。**確認は 3 段で降りる。
+
+| 段 | 機械 | 何をするか | 誰が見るか |
+|---|---|---|---|
+| ① | **`raytrek`** | コード・テスト・lint・**Linux の GUI 自動確認**（`grim` / `wtype` / `swaymsg`） | エージェントが自分で確かめる。人は **noVNC** |
+| ② | **`xps`**（Windows） | **Windows 版のビルドと確認**（`#[cfg(windows)]` / トレイ / 通知 / IME / WebView2 / パス） | **エージェントが `ssh xps` で叩く。**人は **RDP** で見る |
+| ③ | **`vaio`**（Windows） | **開発モードでの最終確認**（日常使いの機械も更新して普段どおり触る） | 人 |
+
+- **落ちたら上の段に戻って直す。**②③ は確認の場であって**編集の場ではない**
+- **① を通っても ② を通ったことにならない** — `#[cfg(windows)]` は Linux では**コンパイルすらされない**。
+  **Windows 固有のコードも書くのは `raytrek`。**確かめられないだけなので、
+  **「② での確認が要る」と明示して渡す**（黙って「動いた」にしない）
+- **② と ③ は Windows 版があるプロジェクトだけの段。**無いプロジェクトは ① で終わる
+  （**本文はどのプロジェクトでも同じものを貼るので、行は落とさない**）
+- **② へは `git push` / `pull` で渡す**（`scp` / `rsync` で送らない — 確かめた版が言えなくなる）。
+  **押し忘れると `xps` には前の版がある**
+
+### GUI を触る前に、このセッションに面があるか確かめる
+
+`raytrek` では複数プロジェクトが並行して動き、**GUI の画面（面）はセッションごとに分けてある。**
+**面を持たないセッションから `grim` / `wtype` を叩くと、別のプロジェクトの画面に触る。**
+
+```sh
+echo "$TAKIBI_SCREEN"                        # 空なら、このセッションは面を持っていない
+~/dev/takibi/setup/sway/screen.sh auto       # 空いている面を取って結び付ける（noVNC の URL が出る）
+```
+
+- **取るのは GUI を触るときだけ**（1 面あたり約 130 MB）。端末しか使わないなら要らない
+- **面はセッションが消えると自動で返る。**取りっぱなしを気にしなくてよい
+- **`setenv` は既に走っているペインには効かない。**取った直後は**新しい窓かペインから**使う。
+  手で入れるなら `. ~/.local/state/takibi/screen-<N>.env`（`export` 付きなので子にも渡る）
+- **`shot.sh` は面が決まらないと撮らずに止まる**（`wtype` はもともと落ちる）。**黙って他人の面を撮らない**
+- **`DISPLAY` を自分で決めない。**面番号とも `WAYLAND_DISPLAY` とも一致しない
+  （面 6 が `wayland-2` の `:1` だったことがある）。`screen.sh` が書いたものを使う
+
+### セッションの立て方
+
+**1 プロジェクト（1 worktree）= 1 tmux セッション。名前はディレクトリ名に揃える。**
+
+```sh
+tmux new-session -d -s <project> -c ~/dev/<project>
+tmux send-keys -t <project> '~/dev/takibi/setup/sway/screen.sh auto' Enter   # GUI を触るときだけ
+tmux attach -t <project>                                                     # → claude を起動
+```
+
+- **名前を揃える理由**: セッション一覧・面の返却・worktree の対応が**全部この名前で読める**
+- **利用者が後で名前を変えることがある。名前は鍵ではない**ので、
+  `rename-session` しても面の結び付けは残る（セッション環境に載っている）
+- worktree は `<project>-wt-1` / `<project>-wt-2`（ディレクトリ名と同じ）
+- **消すのは `tmux kill-session -t <project>`。**面は自動で返る
+<!-- takibi:dev-machines:end -->
+
+---
+
 最終更新日: 2026年7月（Tauri 2 + Rust スタック）

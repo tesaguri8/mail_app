@@ -445,6 +445,11 @@ tmux attach -t <project>                                                     # �
   `rename-session` しても面の結び付けは残る（セッション環境に載っている）
 - worktree は `<project>-wt-1` / `<project>-wt-2`（ディレクトリ名と同じ）
 - **消すのは `tmux kill-session -t <project>`。**面は自動で返る
+- **`tmux kill-server` を打たない。**`$TMUX` が立っている限り、消えるのは**いま自分が居るサーバー**で、
+  **同居する全プロジェクトのセッションが一斉に落ちる**（2026-08-25 に 14 本落とした）
+- **`TMUX_TMPDIR` では隔離できない。**tmux は `$TMUX` に書かれたソケットを優先するので、
+  **環境変数を変えても本番サーバーに繋がる。**試験用のサーバーが要るときは
+  **`-L <名前>` を全コマンドに付ける**（`tmux -L t new-session -d …` → `tmux -L t kill-server`）
 <!-- takibi:dev-machines:end -->
 
 ---

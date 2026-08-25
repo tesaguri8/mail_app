@@ -4,8 +4,10 @@
 //! 複数 EMAIL/TEL（type=pref を優先）・N（姓;名;…）・X-PHONETIC-*（よみ）・ADR・BDAY・NOTE・UID。
 //! PHOTO やその他 X- プロパティは無視する。
 
+use serde::{Deserialize, Serialize};
+
 /// ラベル付きの値（メール・電話）。
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ImportedValue {
     pub label: Option<String>,
     pub value: String,
@@ -13,7 +15,7 @@ pub struct ImportedValue {
 }
 
 /// ラベル付きの構造化住所。
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ImportedAddress {
     pub label: Option<String>,
     pub postal: Option<String>,
@@ -28,7 +30,7 @@ pub struct ImportedAddress {
 /// 取り込んだ 1 件の連絡先（DB 投入前の中間表現）。
 /// flat な email/phone/address は主(primary)値（一覧・重複判定・後方互換用）、
 /// all_* が全件のラベル付き値（子テーブルへ保存）。
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ImportedContact {
     pub display_name: String,
     /// 姓（構造化名）。

@@ -2,7 +2,8 @@ use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentMeta, AttachmentSummary, AutoconfigResult,
     AttendeeInput, CalendarInput, CalendarSummary, ContactGroupSummary, ContactInput, ContactMatch,
     ContactSummary, DataLocation, DbInfo, DraftContent, DraftInput, DuplicateGroup, EventAttendee,
-    EventInput, EventSummary, GcalSyncResult, GoogleAccount, GoogleCredentialsStatus,
+    EventInput, EventSummary, GcalSyncResult, GcontactsSyncResult, GoogleAccount,
+    GoogleCredentialsStatus,
     GreenDomainEntry,
     HomeUnreadCounts, IcsImportReport, ImportReport, MailDetail,
     MailSummary, OrgDuplicateGroup, OrganizationDetail, OrganizationInput, OrganizationSummary,
@@ -2248,19 +2249,24 @@ pub fn google_accounts(store: State<Store>) -> Result<Vec<GoogleAccount>, String
 
 /// Google アカウントを連携する（OAuth 同意フロー → refresh_token を keyring に保存）。
 ///
-/// 現状の要求スコープはカレンダーのみ。連絡先同期を足すときは `google::scopes` に
-/// `SCOPE_CONTACTS` を加えて再同意させる（`include_granted_scopes` により既存の許可は残る）。
+/// `contacts` を立てると連絡先スコープも要求する。既にカレンダーだけで連携済みの
+/// アカウントに後から足す場合もこのコマンドを呼べばよく、`include_granted_scopes` に
+/// より既存の許可は失われない。
 #[tauri::command]
 pub async fn google_connect(
     app: AppHandle,
     store: State<'_, Store>,
+    contacts: bool,
 ) -> Result<GoogleAccount, String> {
     let (client_id, client_secret) = google_read_credentials(&app, store.inner())?;
-    let scope = google::scopes(&[google::SCOPE_CALENDAR]);
-    let (tokens, email) =
-        google::oauth::run_flow(&app, &client_id, &client_secret, &scope).await?;
+    let mut wanted = vec![google::SCOPE_CALENDAR];
+    if contacts {
+        wanted.push(google::SCOPE_CONTACTS);
+    }
+    let scope = google::scopes(&wanted);
+    let (tokens, email) = google::oauth::run_flow(&app, &client_id, &client_secret, &scope).await?;
     let refresh = tokens.refresh_token.ok_or(
-        "refresh_token を取得できませんでした（同意画面でカレンダーの権限を許可してください）",
+        "refresh_token を取得できませんでした（同意画面で要求した権限を許可してください）",
     )?;
     let service = app.config().identifier.clone();
     keyring::Entry::new(&service, &google_refresh_key(&email))
@@ -2271,6 +2277,14 @@ pub async fn google_connect(
         .map_err(|e| e.to_string())?;
     store
         .set_google_account_service(id, GoogleService::Calendar, true)
+        .map_err(|e| e.to_string())?;
+    // 実際に許可されたスコープで判断する（同意画面で連絡先だけ外されることがある）。
+    let granted_contacts = tokens
+        .granted_scopes
+        .as_deref()
+        .is_some_and(|g| g.split(' ').any(|s| s == google::SCOPE_CONTACTS));
+    store
+        .set_google_account_service(id, GoogleService::Contacts, granted_contacts)
         .map_err(|e| e.to_string())?;
     store
         .list_google_accounts()
@@ -2311,6 +2325,36 @@ pub async fn gcal_sync(
         .await
         .ok_or("保存された認証情報がありません。もう一度連携してください")?;
     google::calendar::sync::sync_account(store.inner(), &access, account_id).await
+}
+
+/// 指定アカウントの Google 連絡先を取り込む（現状は取り込みのみ）。
+///
+/// 取り込み先は台帳（`contact_identities`）までで、住所録には反映しない。既存の住所録と
+/// 全件重複させないためで、結果の `unlinked` が照合フェーズの対象数になる。
+#[tauri::command]
+pub async fn gcontacts_sync(
+    app: AppHandle,
+    store: State<'_, Store>,
+    account_id: i64,
+) -> Result<GcontactsSyncResult, String> {
+    let scopes = store
+        .google_account_scopes(account_id)
+        .map_err(|e| e.to_string())?;
+    // 連絡先スコープが無いまま呼ぶと People API が 403 を返すので、先に分かる文言で止める。
+    if !scopes
+        .as_deref()
+        .is_some_and(|g| g.split(' ').any(|s| s == google::SCOPE_CONTACTS))
+    {
+        return Err(
+            "このアカウントには連絡先の権限がありません。設定 > Google カレンダー で\
+             「連絡先も同期する」を有効にして連携し直してください"
+                .into(),
+        );
+    }
+    let access = google_account_access(&app, store.inner(), account_id)
+        .await
+        .ok_or("保存された認証情報がありません。もう一度連携してください")?;
+    google::contacts::sync::sync_account(store.inner(), &access, account_id).await
 }
 
 /// グリーン／警告ドメインの一覧（管理タブ用。住所録由来の自動グリーンも含む）。

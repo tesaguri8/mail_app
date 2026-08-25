@@ -505,6 +505,23 @@ pub struct GcalSyncResult {
     pub calendars: i32,
 }
 
+/// Google 連絡先取り込みの結果サマリ。
+///
+/// 取り込みは `contact_identities`（台帳）までで、住所録には反映しない。`unlinked` は
+/// 「取り込んだが、まだローカルの誰とも結び付いていない」件数＝照合フェーズの対象数。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct GcontactsSyncResult {
+    /// Google から取り込んだ（新規＋更新）件数。
+    pub pulled: i32,
+    /// Google 側で削除された印を付けた件数。
+    pub deleted_in: i32,
+    /// 連絡先として成立せず飛ばした件数（名前もメールも電話も無い等）。
+    pub skipped: i32,
+    /// 未照合の件数（照合フェーズの対象数）。
+    pub unlinked: i32,
+}
+
 /// OAuth クライアント資格情報の設定状況（Client ID の有無を UI に伝える。値は返さない）。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

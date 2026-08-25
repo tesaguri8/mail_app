@@ -55,6 +55,7 @@ import {
   googleSetCredentials,
 } from '../services/google';
 import { gcalSync } from '../services/gcal';
+import { gcontactsSync } from '../services/gcontacts';
 import type { GoogleAccount } from '@bindings/GoogleAccount';
 import type { GoogleCredentialsStatus } from '@bindings/GoogleCredentialsStatus';
 import { AccountSetup } from './AccountSetup';
@@ -723,7 +724,11 @@ function GoogleCalendarSettings() {
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [accounts, setAccounts] = useState<GoogleAccount[]>([]);
-  const [busy, setBusy] = useState<'idle' | 'saving' | 'connecting' | 'syncing'>('idle');
+  const [busy, setBusy] = useState<
+    'idle' | 'saving' | 'connecting' | 'syncing' | 'syncingContacts'
+  >('idle');
+  // 連携時に連絡先スコープも要求するか（既定は off。カレンダーだけの利用者に権限を求めない）。
+  const [withContacts, setWithContacts] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -762,7 +767,7 @@ function GoogleCalendarSettings() {
     setError(null);
     setMessage(null);
     try {
-      await googleConnect();
+      await googleConnect(withContacts);
       refresh();
     } catch (e) {
       setError(String(e));
@@ -784,6 +789,29 @@ function GoogleCalendarSettings() {
           pushed: r.pushed,
           deletedIn: r.deleted_in,
           deletedOut: r.deleted_out,
+        }),
+      );
+      googleAccounts().then(setAccounts).catch(() => undefined);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy('idle');
+    }
+  };
+
+  const syncContacts = async (id: number) => {
+    if (!isTauri || busy !== 'idle') return;
+    setBusy('syncingContacts');
+    setError(null);
+    setMessage(null);
+    try {
+      const r = await gcontactsSync(id);
+      setMessage(
+        t('settings.gcontactsSyncDone', {
+          pulled: r.pulled,
+          deletedIn: r.deleted_in,
+          skipped: r.skipped,
+          unlinked: r.unlinked,
         }),
       );
       googleAccounts().then(setAccounts).catch(() => undefined);
@@ -860,6 +888,20 @@ function GoogleCalendarSettings() {
 
       {/* 連携ボタン */}
       <div>
+        <label className="mb-2 flex items-start gap-2 text-sm text-white/85">
+          <input
+            type="checkbox"
+            checked={withContacts}
+            onChange={(e) => setWithContacts(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            {t('settings.gcontactsOptIn')}
+            <span className="mt-0.5 block text-xs text-white/40">
+              {t('settings.gcontactsOptInHint')}
+            </span>
+          </span>
+        </label>
         <button
           onClick={connect}
           disabled={busy !== 'idle' || !creds?.configured}
@@ -893,6 +935,17 @@ function GoogleCalendarSettings() {
                         })
                       : t('settings.gcalNeverSynced')}
                   </div>
+                  {a.sync_contacts && (
+                    <div className="text-xs text-white/40">
+                      {a.last_contacts_sync_at
+                        ? t('settings.gcontactsLastSync', {
+                            when: new Date(
+                              a.last_contacts_sync_at.replace(' ', 'T') + 'Z',
+                            ).toLocaleString(),
+                          })
+                        : t('settings.gcontactsNeverSynced')}
+                    </div>
+                  )}
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <button
@@ -903,6 +956,21 @@ function GoogleCalendarSettings() {
                     <RefreshCw size={13} className={busy === 'syncing' ? 'animate-spin' : ''} />
                     {busy === 'syncing' ? t('settings.gcalSyncing') : t('settings.gcalSyncNow')}
                   </button>
+                  {a.sync_contacts && (
+                    <button
+                      onClick={() => syncContacts(a.id)}
+                      disabled={busy !== 'idle'}
+                      className="flex items-center gap-1 rounded-md bg-white/15 px-2.5 py-1.5 text-xs font-medium hover:bg-white/25 disabled:opacity-40"
+                    >
+                      <RefreshCw
+                        size={13}
+                        className={busy === 'syncingContacts' ? 'animate-spin' : ''}
+                      />
+                      {busy === 'syncingContacts'
+                        ? t('settings.gcontactsSyncing')
+                        : t('settings.gcontactsSyncNow')}
+                    </button>
+                  )}
                   <button
                     onClick={() => disconnect(a.id)}
                     disabled={busy !== 'idle'}

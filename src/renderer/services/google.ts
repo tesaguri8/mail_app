@@ -17,8 +17,13 @@ export const googleCredentialsStatus = () =>
 /** 連携済み Google アカウント一覧。 */
 export const googleAccounts = () => invoke<GoogleAccount[]>('google_accounts');
 
-/** Google アカウントを連携する（ブラウザで同意 → 完了で解決）。 */
-export const googleConnect = () => invoke<GoogleAccount>('google_connect');
+/**
+ * Google アカウントを連携する（ブラウザで同意 → 完了で解決）。
+ * `contacts` を立てると連絡先（People API）の権限も要求する。連携済みのアカウントに
+ * 後から足す場合も、同じ呼び出しで差分同意できる。
+ */
+export const googleConnect = (contacts: boolean) =>
+  invoke<GoogleAccount>('google_connect', { contacts });
 
 /** 連携を解除する（取り込んだカレンダー/予定も削除）。 */
 export const googleDisconnect = (accountId: number) =>

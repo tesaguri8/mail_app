@@ -233,6 +233,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 53,
         sql: include_str!("migrations/0053_google_accounts.sql"),
     },
+    Migration {
+        // 54 は Google 連絡先（People API）の取り込み台帳 contact_identities。
+        version: 54,
+        sql: include_str!("migrations/0054_contact_identities.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

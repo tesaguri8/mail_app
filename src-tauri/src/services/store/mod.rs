@@ -1,6 +1,7 @@
 mod accounts;
 mod calendar_sync;
 mod calendars;
+mod contact_sync;
 mod contacts;
 mod emails;
 mod events;
@@ -19,6 +20,7 @@ mod tombstones;
 
 pub use accounts::{NewAccount, SmtpAccount};
 pub use calendar_sync::{ApplyOutcome, LocalChange, RemoteEvent, SyncedCalendar};
+pub use contact_sync::{ContactIdentity, RemoteContact};
 pub use google_accounts::GoogleService;
 pub use emails::{
     insert_email, rederive_attachments, AttachmentFetchInfo, InsertOutcome, NewAttachment, NewEmail,

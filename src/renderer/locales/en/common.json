@@ -513,7 +513,14 @@
     "gcalSyncDone": "Sync done: {{pulled}} pulled / {{pushed}} pushed / {{deletedIn}} deleted-in / {{deletedOut}} deleted-out",
     "gcalNeedCredentials": "Save the OAuth client credentials first.",
     "gcalTestUserNote": "For an OAuth app in testing status, the authorization (refresh token) expires after about 7 days. If \"Sync now\" starts failing, just connect again.",
-    "gcalError": "Error: {{message}}"
+    "gcalError": "Error: {{message}}",
+    "gcontactsOptIn": "Also sync contacts (People API)",
+    "gcontactsOptInHint": "Requests the contacts permission when connecting. Imported contacts land in a staging ledger and do not appear in your address book yet — matching them against existing entries is a later step, so nothing gets duplicated.",
+    "gcontactsSyncNow": "Import contacts",
+    "gcontactsSyncing": "Importing…",
+    "gcontactsLastSync": "Contacts last imported: {{when}}",
+    "gcontactsNeverSynced": "Contacts never imported",
+    "gcontactsSyncDone": "Import done: {{pulled}} imported / {{deletedIn}} deleted / {{skipped}} skipped ({{unlinked}} not yet matched)"
   },
   "dataloc": {
     "title": "Data location",

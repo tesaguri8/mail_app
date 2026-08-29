@@ -415,7 +415,7 @@ git worktree list
 - **② でも GUI を自分で確かめられる**（`[確定]` 2026-08-29）。**`setup/windows/gui/gui.sh` で
   撮る・押す・打つができる** — ①の `grim` / `wtype` / `swaymsg` に対応する。
   **成り立ちは違う**（Windows は「常に描く画面」を作れないので、**自動ログオン + タスク経由**で
-  代える）ので、**触る前に [`setup/windows/gui/`](../../setup/windows/gui/README.md) を読む**
+  代える）ので、**触る前に `~/dev/takibi/setup/windows/gui/README.md` を読む**
 - **`[要注意]` どの機械で確かめたかを必ず言う。****機械が違えば結果が違う**
   （2026-08-29: `takibid` の tmux のサーバー不在判定が、**ソケットの残骸がある `vaio` では通り、
   新品の `zv` では落ちた**。**どちらも健全な機械**で、違いは履歴だけだった）
@@ -443,7 +443,7 @@ git worktree list
 - **GUI の操作も含めて、自分で確かめてから利用者に報告する。**
   **「別の機械での確認が要る」と渡して終わりにしない** — **道具はある**
   （`raytrek` は `grim` / `wtype` / `swaymsg`、`zv` は
-  [`setup/windows/gui/gui.sh`](../../setup/windows/gui/README.md)）
+  `setup/windows/gui/gui.sh`（→ `~/dev/takibi/setup/windows/gui/README.md`））
 
 ### GUI を触る前に、このセッションに面があるか確かめる
 

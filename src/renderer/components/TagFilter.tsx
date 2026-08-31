@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Tooltip } from './Tooltip';
 import { Tag } from 'lucide-react';
 import type { TagSummary } from '@bindings/TagSummary';
 import { DEFAULT_TAG_COLOR } from '../utils/tagColors';
@@ -59,15 +60,16 @@ export function TagFilter({
 
   return (
     <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        title={t('tag.filter')}
-        aria-label={t('tag.filter')}
-        aria-pressed={on}
-        className={btnClass}
-      >
-        <Tag size={variant === 'round' ? 17 : 15} />
-      </button>
+      <Tooltip label={t('tag.filter')}>
+        <button
+          onClick={() => setOpen((v) => !v)}
+          aria-label={t('tag.filter')}
+          aria-pressed={on}
+          className={btnClass}
+        >
+          <Tag size={variant === 'round' ? 17 : 15} />
+        </button>
+      </Tooltip>
 
       {/* アイコンの左下を起点に展開（コンテンツ側への重なりは許容。親の overflow-hidden は外してある） */}
       {open && (

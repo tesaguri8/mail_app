@@ -467,6 +467,13 @@ impl Store {
     /// 重複候補を record linkage で束ねて返す（2 件以上のみ、確信度順）。
     /// 検出ロジックは services::dedupe。全メール/全電話（子テーブル）を材料に渡す。
     pub fn find_duplicate_groups(&self) -> rusqlite::Result<Vec<DuplicateGroup>> {
+        let contacts = self.contacts_for_dedupe()?;
+        Ok(crate::services::dedupe::group(&contacts))
+    }
+
+    /// 判定に使う材料（全メール/全電話）を詰めた連絡先一覧。重複検出と照合フェーズで共有する。
+    /// 共有指定された値（会社の代表メール/電話等）は手掛かりから除外する。
+    pub(super) fn contacts_for_dedupe(&self) -> rusqlite::Result<Vec<ContactSummary>> {
         let mut contacts = self.list_contacts(None, &[], false)?;
         let conn = self.conn.lock().unwrap();
         let collect =
@@ -502,7 +509,7 @@ impl Store {
                 c.phones = v.into_iter().map(mk).collect();
             }
         }
-        Ok(crate::services::dedupe::group(&contacts))
+        Ok(contacts)
     }
 
     /// 入力（メール/電話/FAX/氏名）に一致する既存連絡先を返す。新規登録前チェック・
@@ -831,10 +838,16 @@ impl Store {
                     )?;
                 }
 
-                // drop 側のタグを keep に移し、drop 行を削除（子テーブルは CASCADE）。
+                // drop 側のタグと外部 ID の台帳を keep に移し、drop 行を削除（子テーブルは CASCADE）。
+                // 台帳を先に付け替えないと ON DELETE SET NULL で紐付けが失われ、次の同期で
+                // 同じ連絡先がもう一度新規として起こされる。
                 for id in drop_ids {
                     tx.execute(
                         "UPDATE OR IGNORE contact_tags SET contact_id = ?1 WHERE contact_id = ?2",
+                        params![keep_id, id],
+                    )?;
+                    tx.execute(
+                        "UPDATE contact_identities SET contact_id = ?1 WHERE contact_id = ?2",
                         params![keep_id, id],
                     )?;
                     tx.execute("DELETE FROM contacts WHERE id = ?1", params![id])?;
@@ -1342,7 +1355,11 @@ fn address_string(a: &ContactAddress) -> String {
 }
 
 /// インポート 1 件を新規挿入。flat 列は主(primary)値、子テーブルへ全件を保存。
-fn insert_from_import(tx: &rusqlite::Transaction, c: &ImportedContact) -> rusqlite::Result<()> {
+/// 取り込み中間表現から連絡先を 1 件起こし、その ID を返す。
+pub(super) fn insert_from_import(
+    tx: &rusqlite::Transaction,
+    c: &ImportedContact,
+) -> rusqlite::Result<i64> {
     tx.execute(
         "INSERT INTO contacts \
              (display_name, family_name, given_name, phonetic_family, phonetic_given, \
@@ -1370,7 +1387,7 @@ fn insert_from_import(tx: &rusqlite::Transaction, c: &ImportedContact) -> rusqli
     )?;
     let id = tx.last_insert_rowid();
     write_import_children(tx, id, c)?;
-    Ok(())
+    Ok(id)
 }
 
 /// ImportedContact のラベル付き複数値を子テーブルへ書き込む（全件置き換え）。

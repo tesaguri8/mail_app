@@ -1,12 +1,18 @@
 //! Google 連絡先（People API）取り込みの台帳操作（マイグレーション 0054）。
 //!
 //! 取り込んだ連絡先は `contacts` へ直接入れず、いったん `contact_identities` に溜める。
-//! 既存の住所録と全件重複させないためで、「ローカルの誰と同じ人か」の判定は照合フェーズが行う。
-//! ここでは Google 側の状態をそのまま鏡写しに保つことだけを責務にする。
+//! 既存の住所録と全件重複させないためで、「ローカルの誰と同じ人か」の判定は照合が行う。
+//!
+//! このモジュールの責務は 2 つ。取り込み（pull）については **Google 側の状態をそのまま鏡写しに
+//! 保つ**こと。照合については、判定そのものは `services::contact_match`（DB を見ない）に任せ、
+//! **その結果を住所録と台帳へ書き込む**こと。
 
 use super::{ApplyOutcome, Store};
+use crate::models::GcontactsMatchResult;
+use crate::services::contact_match::{self, MatchDecision, MatchOutcome};
 use crate::services::vcard::ImportedContact;
 use rusqlite::{params, OptionalExtension};
+use std::collections::HashSet;
 
 /// 同期エンジン（services/google/contacts）が Store へ渡す「Google 側の連絡先」1 件。
 /// Store 層を同期エンジンに依存させないため、境界の受け渡し型はここ（store 側）に置く。
@@ -114,6 +120,98 @@ impl Store {
         )
     }
 
+    /// 未照合の台帳を（外部 ID, 取り込んだ内容）で返す（照合フェーズの入力）。
+    /// 内容を読み戻せない行は判定材料が無いので飛ばす。順序は external_id 昇順で固定し、
+    /// 同じ台帳からは何度計画しても同じ結果が出るようにする。
+    pub fn unlinked_identities(
+        &self,
+        account_id: i64,
+    ) -> rusqlite::Result<Vec<(String, ImportedContact)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT external_id, snapshot FROM contact_identities \
+             WHERE provider = 'google' AND account_id = ?1 \
+               AND contact_id IS NULL AND remote_deleted = 0 \
+             ORDER BY external_id",
+        )?;
+        let rows = stmt.query_map(params![account_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (external_id, snapshot) = row?;
+            if let Some(c) = snapshot.as_deref().and_then(|s| serde_json::from_str(s).ok()) {
+                out.push((external_id, c));
+            }
+        }
+        Ok(out)
+    }
+
+    /// このアカウントの台帳がすでに掴んでいるローカル連絡先 ID。
+    /// 1 人のローカル連絡先を 2 つの外部 ID が掴まないよう、紐付け先から外すために使う。
+    fn linked_contact_ids(&self, account_id: i64) -> rusqlite::Result<HashSet<i64>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT contact_id FROM contact_identities \
+             WHERE provider = 'google' AND account_id = ?1 AND contact_id IS NOT NULL",
+        )?;
+        let rows = stmt.query_map(params![account_id], |r| r.get::<_, i64>(0))?;
+        rows.collect()
+    }
+
+    /// 照合の計画を立てる（読み取りのみ）。プレビューと適用が同じ道を通るよう 1 か所に集める。
+    /// 戻り値は（材料にした台帳, 1 件ずつの判定）。判定は台帳と同じ順で並ぶ。
+    fn build_contact_match_plan(
+        &self,
+        account_id: i64,
+    ) -> rusqlite::Result<(Vec<(String, ImportedContact)>, Vec<MatchOutcome>)> {
+        // ロックは各ヘルパーの内側で完結させる（Mutex は非再入）。
+        let remote = self.unlinked_identities(account_id)?;
+        let already_linked = self.linked_contact_ids(account_id)?;
+        let locals = self.contacts_for_dedupe()?;
+        let plan = contact_match::plan(&remote, &locals, &already_linked);
+        Ok((remote, plan))
+    }
+
+    /// 照合の下見（件数だけ。DB は変えない）。
+    pub fn preview_contact_matches(
+        &self,
+        account_id: i64,
+    ) -> rusqlite::Result<GcontactsMatchResult> {
+        let (_, plan) = self.build_contact_match_plan(account_id)?;
+        Ok(summarize(&plan))
+    }
+
+    /// 照合を適用する。高確信は既存へ紐付け、それ以外は新規として住所録に起こして紐付ける。
+    ///
+    /// 起こした連絡先のうち「似た相手が居たもの」は、既存の重複整理が同じ物差しで拾う
+    /// （判定に `services::dedupe` を使っているため）。ここで人に代わって統合はしない。
+    pub fn apply_contact_matches(
+        &self,
+        account_id: i64,
+    ) -> rusqlite::Result<GcontactsMatchResult> {
+        let (remote, plan) = self.build_contact_match_plan(account_id)?;
+        let report = summarize(&plan);
+
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        // 判定は台帳と同じ順に並ぶので、位置で対応付けられる。
+        for (outcome, (external_id, contact)) in plan.iter().zip(remote.iter()) {
+            debug_assert_eq!(&outcome.external_id, external_id);
+            let contact_id = match outcome.decision {
+                MatchDecision::Link(id) => id,
+                MatchDecision::Create => super::contacts::insert_from_import(&tx, contact)?,
+            };
+            tx.execute(
+                "UPDATE contact_identities SET contact_id = ?1 \
+                 WHERE provider = 'google' AND account_id = ?2 AND external_id = ?3",
+                params![contact_id, account_id, external_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(report)
+    }
+
     /// 台帳 1 件を読み出す（照合フェーズ・送信フェーズ用）。
     pub fn contact_identity(
         &self,
@@ -138,6 +236,21 @@ impl Store {
             },
         )
         .optional()
+    }
+}
+
+/// 計画を UI 向けの件数にまとめる。
+fn summarize(plan: &[MatchOutcome]) -> GcontactsMatchResult {
+    let linked = plan
+        .iter()
+        .filter(|o| matches!(o.decision, MatchDecision::Link(_)))
+        .count();
+    // 「似た相手が居たのに決めきれず新規にした」件数＝このあと重複整理に出る見込み。
+    let ambiguous = plan.iter().filter(|o| !o.rivals.is_empty()).count();
+    GcontactsMatchResult {
+        linked: linked as i32,
+        created: (plan.len() - linked) as i32,
+        ambiguous: ambiguous as i32,
     }
 }
 
@@ -308,5 +421,127 @@ mod tests {
         assert_eq!(s.count_unlinked_identities(b).unwrap(), 1);
         let got = s.contact_identity(b, "people/c1").unwrap().unwrap();
         assert_eq!(got.snapshot.unwrap().display_name, "B の連絡先");
+    }
+
+    /// ローカル連絡先を 1 件起こす（照合の相手役）。
+    fn local_contact(s: &Store, name: &str, email: &str) -> i64 {
+        let conn = s.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO contacts (display_name, email) VALUES (?1, ?2)",
+            params![name, email],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    fn remote_with_email(id: &str, name: &str, email: &str) -> RemoteContact {
+        RemoteContact {
+            external_id: id.into(),
+            etag: Some("e1".into()),
+            deleted: false,
+            contact: Some(ImportedContact {
+                display_name: name.into(),
+                email: Some(email.into()),
+                source: "google".into(),
+                external_id: Some(id.into()),
+                ..Default::default()
+            }),
+        }
+    }
+
+    #[test]
+    fn matching_links_the_known_one_and_creates_the_rest() {
+        let s = mem_store();
+        let acct = account(&s);
+        let known = local_contact(&s, "末松 信吾", "s@x.jp");
+        s.apply_remote_contact(acct, &remote_with_email("people/c1", "末松信吾", "s@x.jp"))
+            .unwrap();
+        s.apply_remote_contact(acct, &remote_with_email("people/c2", "山田太郎", "t@y.jp"))
+            .unwrap();
+
+        // 下見は DB を変えない。
+        let preview = s.preview_contact_matches(acct).unwrap();
+        assert_eq!((preview.linked, preview.created, preview.ambiguous), (1, 1, 0));
+        assert_eq!(s.count_unlinked_identities(acct).unwrap(), 2);
+
+        let applied = s.apply_contact_matches(acct).unwrap();
+        assert_eq!((applied.linked, applied.created, applied.ambiguous), (1, 1, 0));
+        // 既知の相手は既存の連絡先へ紐付き、住所録は増えない。
+        assert_eq!(
+            s.contact_identity(acct, "people/c1").unwrap().unwrap().contact_id,
+            Some(known)
+        );
+        // 未知の相手は新規として起こし、その ID で紐付く。
+        let created = s
+            .contact_identity(acct, "people/c2")
+            .unwrap()
+            .unwrap()
+            .contact_id
+            .expect("新規として起こした連絡先に紐付くはず");
+        assert_ne!(created, known);
+        assert_eq!(s.get_contact(created).unwrap().display_name, "山田太郎");
+        assert_eq!(s.count_unlinked_identities(acct).unwrap(), 0);
+    }
+
+    #[test]
+    fn applying_again_has_nothing_left_to_do() {
+        let s = mem_store();
+        let acct = account(&s);
+        s.apply_remote_contact(acct, &remote_with_email("people/c1", "山田太郎", "t@y.jp"))
+            .unwrap();
+        s.apply_contact_matches(acct).unwrap();
+
+        // 2 度目は未照合が無いので何も起こさない（押し直しで二重登録しない）。
+        let again = s.apply_contact_matches(acct).unwrap();
+        assert_eq!((again.linked, again.created, again.ambiguous), (0, 0, 0));
+        let n: i64 = {
+            let conn = s.conn.lock().unwrap();
+            conn.query_row("SELECT count(*) FROM contacts", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn an_ambiguous_one_is_created_and_counted_for_review() {
+        let s = mem_store();
+        let acct = account(&s);
+        // 同名だけの一致（同姓同名の別人があり得る）は自動で寄せない。
+        local_contact(&s, "山田太郎", "a@x.jp");
+        s.apply_remote_contact(acct, &remote_with_email("people/c1", "山田太郎", "b@y.jp"))
+            .unwrap();
+
+        let r = s.apply_contact_matches(acct).unwrap();
+        assert_eq!((r.linked, r.created, r.ambiguous), (0, 1, 1));
+        // 起こした側は既存の重複整理が同じ物差しで拾う。
+        let groups = s.find_duplicate_groups().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].contacts.len(), 2);
+    }
+
+    #[test]
+    fn merging_contacts_hands_the_link_over_to_the_survivor() {
+        let s = mem_store();
+        let acct = account(&s);
+        let keep = local_contact(&s, "末松 信吾", "s@x.jp");
+        s.apply_remote_contact(acct, &remote_with_email("people/c1", "末松信吾", "g@x.jp"))
+            .unwrap();
+        s.apply_contact_matches(acct).unwrap();
+        let drop_id = s
+            .contact_identity(acct, "people/c1")
+            .unwrap()
+            .unwrap()
+            .contact_id
+            .expect("新規として起こされているはず");
+        assert_ne!(drop_id, keep);
+
+        s.merge_contacts(keep, &[drop_id]).unwrap();
+
+        // 統合で消えた側に付いていた紐付けは、残した側へ移る（外れると次の同期で二重に起こる）。
+        assert_eq!(
+            s.contact_identity(acct, "people/c1").unwrap().unwrap().contact_id,
+            Some(keep)
+        );
+        assert_eq!(s.count_unlinked_identities(acct).unwrap(), 0);
     }
 }

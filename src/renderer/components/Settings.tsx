@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
-import { FolderInput, HardDrive, RotateCcw, RefreshCw, Link2, Unlink } from 'lucide-react';
+import { FolderInput, HardDrive, RotateCcw, RefreshCw, Link2, Unlink, Users } from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { SpamSettings as SpamSettingsType } from '@bindings/SpamSettings';
 import type { DataLocation } from '@bindings/DataLocation';
@@ -55,7 +55,12 @@ import {
   googleSetCredentials,
 } from '../services/google';
 import { gcalSync } from '../services/gcal';
-import { gcontactsSync } from '../services/gcontacts';
+import {
+  gcontactsMatchApply,
+  gcontactsMatchPreview,
+  gcontactsSync,
+} from '../services/gcontacts';
+import type { GcontactsMatchResult } from '@bindings/GcontactsMatchResult';
 import type { GoogleAccount } from '@bindings/GoogleAccount';
 import type { GoogleCredentialsStatus } from '@bindings/GoogleCredentialsStatus';
 import { AccountSetup } from './AccountSetup';
@@ -725,8 +730,13 @@ function GoogleCalendarSettings() {
   const [clientSecret, setClientSecret] = useState('');
   const [accounts, setAccounts] = useState<GoogleAccount[]>([]);
   const [busy, setBusy] = useState<
-    'idle' | 'saving' | 'connecting' | 'syncing' | 'syncingContacts'
+    'idle' | 'saving' | 'connecting' | 'syncing' | 'syncingContacts' | 'matchingContacts'
   >('idle');
+  // 照合の下見の結果。確認待ちのあいだだけ入る。
+  const [pendingMatch, setPendingMatch] = useState<{
+    accountId: number;
+    plan: GcontactsMatchResult;
+  } | null>(null);
   // 連携時に連絡先スコープも要求するか（既定は off。カレンダーだけの利用者に権限を求めない）。
   const [withContacts, setWithContacts] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -815,6 +825,51 @@ function GoogleCalendarSettings() {
         }),
       );
       googleAccounts().then(setAccounts).catch(() => undefined);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy('idle');
+    }
+  };
+
+  // 台帳に溜まった連絡先を住所録へ反映する（照合フェーズ）。
+  // 住所録に新しい行が増える操作なので、まず下見の件数を見せて確認を取る。
+  // window.confirm は Linux の WebView で素通りする（実測）ため、確認は画面内で行う。
+  const previewMatch = async (id: number) => {
+    if (!isTauri || busy !== 'idle') return;
+    setBusy('matchingContacts');
+    setError(null);
+    setMessage(null);
+    setPendingMatch(null);
+    try {
+      const p = await gcontactsMatchPreview(id);
+      if (p.linked === 0 && p.created === 0) {
+        setMessage(t('settings.gcontactsMatchNothing'));
+        return;
+      }
+      setPendingMatch({ accountId: id, plan: p });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy('idle');
+    }
+  };
+
+  const applyMatch = async () => {
+    if (!isTauri || busy !== 'idle' || !pendingMatch) return;
+    const id = pendingMatch.accountId;
+    setBusy('matchingContacts');
+    setError(null);
+    setPendingMatch(null);
+    try {
+      const r = await gcontactsMatchApply(id);
+      setMessage(
+        t('settings.gcontactsMatchDone', {
+          linked: r.linked,
+          created: r.created,
+          ambiguous: r.ambiguous,
+        }),
+      );
     } catch (e) {
       setError(String(e));
     } finally {
@@ -971,6 +1026,18 @@ function GoogleCalendarSettings() {
                         : t('settings.gcontactsSyncNow')}
                     </button>
                   )}
+                  {a.sync_contacts && (
+                    <button
+                      onClick={() => previewMatch(a.id)}
+                      disabled={busy !== 'idle'}
+                      className="flex items-center gap-1 rounded-md bg-white/15 px-2.5 py-1.5 text-xs font-medium hover:bg-white/25 disabled:opacity-40"
+                    >
+                      <Users size={13} />
+                      {busy === 'matchingContacts'
+                        ? t('settings.gcontactsMatching')
+                        : t('settings.gcontactsMatchNow')}
+                    </button>
+                  )}
                   <button
                     onClick={() => disconnect(a.id)}
                     disabled={busy !== 'idle'}
@@ -986,6 +1053,33 @@ function GoogleCalendarSettings() {
         )}
       </div>
 
+      {pendingMatch && (
+        <div className="space-y-2 rounded-lg border border-white/20 bg-white/5 p-3">
+          <p className="text-sm text-white/80">
+            {t('settings.gcontactsMatchConfirm', {
+              linked: pendingMatch.plan.linked,
+              created: pendingMatch.plan.created,
+              ambiguous: pendingMatch.plan.ambiguous,
+            })}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={applyMatch}
+              disabled={busy !== 'idle'}
+              className="rounded-md bg-emerald-500/80 px-3 py-1.5 text-xs font-medium hover:bg-emerald-500 disabled:opacity-40"
+            >
+              {t('settings.gcontactsMatchRun')}
+            </button>
+            <button
+              onClick={() => setPendingMatch(null)}
+              disabled={busy !== 'idle'}
+              className="rounded-md border border-white/20 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10 disabled:opacity-40"
+            >
+              {t('settings.gcontactsMatchCancel')}
+            </button>
+          </div>
+        </div>
+      )}
       {message && <p className="text-sm text-emerald-300">{message}</p>}
       {error && <p className="text-sm text-red-300">{t('settings.gcalError', { message: error })}</p>}
       {!isTauri && <p className="text-xs text-white/40">{t('settings.spamPreviewNote')}</p>}

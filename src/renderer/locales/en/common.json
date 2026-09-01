@@ -515,12 +515,19 @@
     "gcalTestUserNote": "For an OAuth app in testing status, the authorization (refresh token) expires after about 7 days. If \"Sync now\" starts failing, just connect again.",
     "gcalError": "Error: {{message}}",
     "gcontactsOptIn": "Also sync contacts (People API)",
-    "gcontactsOptInHint": "Requests the contacts permission when connecting. Imported contacts land in a staging ledger and do not appear in your address book yet — matching them against existing entries is a later step, so nothing gets duplicated.",
+    "gcontactsOptInHint": "Requests the contacts permission when connecting. Imported contacts land in a staging ledger first; \"Add to address book\" matches them against your existing entries before anything is added, so nothing gets duplicated.",
     "gcontactsSyncNow": "Import contacts",
     "gcontactsSyncing": "Importing…",
     "gcontactsLastSync": "Contacts last imported: {{when}}",
     "gcontactsNeverSynced": "Contacts never imported",
-    "gcontactsSyncDone": "Import done: {{pulled}} imported / {{deletedIn}} deleted / {{skipped}} skipped ({{unlinked}} not yet matched)"
+    "gcontactsSyncDone": "Import done: {{pulled}} imported / {{deletedIn}} deleted / {{skipped}} skipped ({{unlinked}} not yet matched)",
+    "gcontactsMatchNow": "Add to address book",
+    "gcontactsMatching": "Matching…",
+    "gcontactsMatchNothing": "Nothing left to add to the address book.",
+    "gcontactsMatchConfirm": "This links {{linked}} to existing contacts and adds {{created}} as new ({{ambiguous}} of them look close to someone you already have and will show up under \"Merge duplicates\").",
+    "gcontactsMatchRun": "Go ahead",
+    "gcontactsMatchCancel": "Cancel",
+    "gcontactsMatchDone": "Added to the address book: {{linked}} linked / {{created}} new ({{ambiguous}} to review under \"Merge duplicates\")"
   },
   "dataloc": {
     "title": "Data location",

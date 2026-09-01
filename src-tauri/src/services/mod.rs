@@ -2,6 +2,7 @@ pub mod autoconfig;
 pub mod bodyfetch;
 pub mod bodystructure;
 pub mod compress;
+pub mod contact_match;
 pub mod datadir;
 pub mod dataver;
 pub mod dedupe;

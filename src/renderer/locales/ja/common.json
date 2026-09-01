@@ -515,12 +515,19 @@
     "gcalTestUserNote": "テスト公開状態の OAuth アプリでは、認証（refresh token）が約 7 日で失効します。失効したら「今すぐ同期」がエラーになるので、もう一度「連携」してください。",
     "gcalError": "エラー: {{message}}",
     "gcontactsOptIn": "連絡先も同期する（People API）",
-    "gcontactsOptInHint": "有効にすると連携時に連絡先の権限も要求します。取り込んだ連絡先はいったん取り込み台帳に入り、住所録にはまだ反映されません（既存の住所録と重複させないため、照合は次の段階で行います）。",
+    "gcontactsOptInHint": "有効にすると連携時に連絡先の権限も要求します。取り込んだ連絡先はいったん取り込み台帳に入ります。既存の住所録と重複させないため、住所録へは「住所録へ反映」で照合してから入ります。",
     "gcontactsSyncNow": "連絡先を取り込む",
     "gcontactsSyncing": "取り込み中…",
     "gcontactsLastSync": "連絡先の最終取り込み: {{when}}",
     "gcontactsNeverSynced": "連絡先は未取り込み",
-    "gcontactsSyncDone": "取り込み完了: {{pulled}} 件 / 削除 {{deletedIn}} 件 / 対象外 {{skipped}} 件（うち未照合 {{unlinked}} 件）"
+    "gcontactsSyncDone": "取り込み完了: {{pulled}} 件 / 削除 {{deletedIn}} 件 / 対象外 {{skipped}} 件（うち未照合 {{unlinked}} 件）",
+    "gcontactsMatchNow": "住所録へ反映",
+    "gcontactsMatching": "照合中…",
+    "gcontactsMatchNothing": "住所録へ反映する連絡先はありません。",
+    "gcontactsMatchConfirm": "{{linked}} 件を既存の連絡先に紐付け、{{created}} 件を新しく登録します（うち {{ambiguous}} 件は似た相手が居るため、あとで「重複整理」に候補として出ます）。",
+    "gcontactsMatchRun": "実行する",
+    "gcontactsMatchCancel": "やめる",
+    "gcontactsMatchDone": "住所録へ反映しました: 紐付け {{linked}} 件 / 新規 {{created}} 件（うち {{ambiguous}} 件は「重複整理」でご確認ください）"
   },
   "dataloc": {
     "title": "データの保存先",

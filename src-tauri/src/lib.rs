@@ -177,6 +177,8 @@ pub fn run() {
             commands::google_disconnect,
             commands::gcal_sync,
             commands::gcontacts_sync,
+            commands::gcontacts_match_preview,
+            commands::gcontacts_match_apply,
             commands::data_location,
             commands::data_relocate,
             commands::data_reset_location,

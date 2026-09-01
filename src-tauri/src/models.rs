@@ -522,6 +522,21 @@ pub struct GcontactsSyncResult {
     pub unlinked: i32,
 }
 
+/// 照合フェーズ（台帳 → 住所録）の結果サマリ。プレビューと適用で同じ形を返す。
+///
+/// `ambiguous` は「似た相手が居たが自動で決めきれず、新規として起こした」件数。
+/// 判定は重複検出と同じ物差しなので、この分はそのまま「重複整理」に候補として出る。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct GcontactsMatchResult {
+    /// 既存の連絡先に紐付けた（紐付ける）件数。
+    pub linked: i32,
+    /// 新規として住所録に起こした（起こす）件数。
+    pub created: i32,
+    /// `created` のうち、似た相手が居て人の確認に回る件数。
+    pub ambiguous: i32,
+}
+
 /// OAuth クライアント資格情報の設定状況（Client ID の有無を UI に伝える。値は返さない）。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

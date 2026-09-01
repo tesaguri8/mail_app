@@ -2,7 +2,7 @@ use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentMeta, AttachmentSummary, AutoconfigResult,
     AttendeeInput, CalendarInput, CalendarSummary, ContactGroupSummary, ContactInput, ContactMatch,
     ContactSummary, DataLocation, DbInfo, DraftContent, DraftInput, DuplicateGroup, EventAttendee,
-    EventInput, EventSummary, GcalSyncResult, GcontactsSyncResult, GoogleAccount,
+    EventInput, EventSummary, GcalSyncResult, GcontactsMatchResult, GcontactsSyncResult, GoogleAccount,
     GoogleCredentialsStatus,
     GreenDomainEntry,
     HomeUnreadCounts, IcsImportReport, ImportReport, MailDetail,
@@ -2369,6 +2369,31 @@ pub async fn gcontacts_sync(
         .await
         .ok_or("保存された認証情報がありません。もう一度連携してください")?;
     google::contacts::sync::sync_account(store.inner(), &access, account_id).await
+}
+
+/// 照合の下見: 台帳の未照合分を住所録と突き合わせ、紐付く／起こす件数だけを返す（DB は変えない）。
+#[tauri::command]
+pub fn gcontacts_match_preview(
+    store: State<Store>,
+    account_id: i64,
+) -> Result<GcontactsMatchResult, String> {
+    store
+        .preview_contact_matches(account_id)
+        .map_err(|e| e.to_string())
+}
+
+/// 照合の適用: 高確信は既存の連絡先へ紐付け、それ以外は新規として住所録に起こす。
+///
+/// 決めきれなかった分は起こしたうえで「重複整理」に候補として出る（判定は重複検出と同じ物差し）。
+/// ここで人に代わって統合はしない。
+#[tauri::command]
+pub fn gcontacts_match_apply(
+    store: State<Store>,
+    account_id: i64,
+) -> Result<GcontactsMatchResult, String> {
+    store
+        .apply_contact_matches(account_id)
+        .map_err(|e| e.to_string())
 }
 
 /// グリーン／警告ドメインの一覧（管理タブ用。住所録由来の自動グリーンも含む）。

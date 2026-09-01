@@ -4244,7 +4244,7 @@ dependencies = [
 
 [[package]]
 name = "rondine"
-version = "0.1.0-alpha.9"
+version = "0.1.0-alpha.10"
 dependencies = [
  "base64 0.22.1",
  "chrono",

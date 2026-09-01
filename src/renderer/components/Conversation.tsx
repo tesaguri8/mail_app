@@ -313,27 +313,33 @@ function Bubble({
   // 印刷中か（バブルのメニューから。版面は非表示 iframe に作る）。
   const [printing, setPrinting] = useState(false);
 
-  // 本文が無く画像だけのメール（iPhone から写真を送っただけのメール等）は、その画像を
-  // バブルにそのまま並べる。何も無いバブルに「本文がありません」とだけ出るのを避ける。
+  // バブルに並べる画像。本文が無く画像だけのメール（iPhone から写真を送っただけ等）に加え、
+  // **本文と画像の両方があるメールでも並べる**。以前は本文が空のときだけ出していたため、
+  // 本文のあるメールに画像が付いていても、フッターの 📎 以外に手掛かりが無く気づけなかった
+  // （利用者報告 2026-09-01）。サムネイル表示なのでチャットの流れは埋めない。
   const [bubbleImages, setBubbleImages] = useState<AttachmentSummary[]>([]);
-  const emptyBody = !renderHtml && !body.trim();
   useEffect(() => {
-    if (!emptyBody || !inlineImagesOn) return;
+    // 添付が無いメールで問い合わせない（スレッドの全バブルで引くのを避ける）。
+    if (!m.has_attachments || !inlineImagesOn) return;
     let alive = true;
     mailAttachments(m.id)
       .then((list) => {
         if (!alive) return;
-        // 判定は「画像かどうか」＋「本文から cid: で参照されていないか」だけ（kind は使わない。
-        // Content-ID の有無でラベルが割れ、送信クライアント次第で見え方が変わってしまうため）。
-        setBubbleImages(
-          list.filter((a) => isImage(a) && !(a.content_id && htmlCids.has(a.content_id))),
-        );
+        // ここでは「画像かどうか」だけで拾う（kind は使わない。Content-ID の有無でラベルが
+        // 割れ、送信クライアント次第で見え方が変わってしまうため）。本文に既に出ているものを
+        // 除く判定は描画側で行う（下の shownImages）。
+        setBubbleImages(list.filter(isImage));
       })
       .catch(() => undefined);
     return () => {
       alive = false;
     };
-  }, [emptyBody, inlineImagesOn, htmlCids, m.id]);
+  }, [m.has_attachments, inlineImagesOn, m.id]);
+
+  // バブルに並べる画像から、本文に実際に表示できた埋め込み画像を除いたもの。
+  const shownImages = bubbleImages.filter(
+    (a) => !(a.content_id && inlineImages[a.content_id]),
+  );
 
   // 本文中の日付に＋（カレンダー追加）を出す描画関数（折りたたみバブル・全文表示で共有）。
   const renderDate = makeRenderDate(handlers.onAddCalendar, {
@@ -638,11 +644,15 @@ function Bubble({
               <span className="text-white/40">{t('mailbox.noBody')}</span>
             ) : null}
 
-            {/* 本文が無く画像だけのメールは、その画像をバブルに並べる（保存は右クリック）。
-                チャットの流れを埋めないようサムネイル表示にし、クリックで実寸に広げる。 */}
-            {bubbleImages.length > 0 && (
+            {/* 画像添付をバブルに並べる（保存は右クリック）。本文の有無に関わらず出すので、
+                本文のあるメールでも画像が付いていることに気づける。チャットの流れを埋めない
+                ようサムネイル表示にし、クリックで実寸に広げる。
+                除くのは「本文に **実際に表示できた** 埋め込み画像」だけ。cid: で参照されて
+                いても読み込めていなければ本文にはプレースホルダしか出ないので、その場合は
+                サムネイルを出す（実測 2026-09-01: 画像があるのに気づけない状態だった）。 */}
+            {shownImages.length > 0 && (
               <AttachedImages
-                images={bubbleImages}
+                images={shownImages}
                 onMenu={(att, x, y) => setImgMenu({ x, y, att })}
                 compact
               />

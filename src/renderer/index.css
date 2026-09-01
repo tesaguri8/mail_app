@@ -1,7 +1,11 @@
 @import 'tailwindcss';
 
 :root {
-  color-scheme: light dark;
+  /* アプリ全面がダーク（背景画像 + 白文字）なので、OS の申告に委ねず宣言する。
+     ネイティブ部品（<select> のポップアップ等）はこの指定で背景と文字色を決めるため、
+     'light dark' のままだとダーク設定の無い環境（headless の Linux 等）でライト扱いになり、
+     白背景 + 白文字で読めなくなる（実測 2026-09-01 / raytrek の sway）。 */
+  color-scheme: dark;
 }
 
 html,

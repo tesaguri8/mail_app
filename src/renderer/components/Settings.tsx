@@ -324,16 +324,16 @@ function DisplaySettings() {
             }}
             className="mt-2 w-48 rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
           >
-            <option value="all" className="text-black">
+            <option value="all">
               {t('settings.homeCountAll')}
             </option>
-            <option value="green" className="text-black">
+            <option value="green">
               {t('settings.homeCountGreen')}
             </option>
-            <option value="known" className="text-black">
+            <option value="known">
               {t('settings.homeCountKnown')}
             </option>
-            <option value="vip" className="text-black">
+            <option value="vip">
               {t('settings.homeCountVip')}
             </option>
           </select>
@@ -365,13 +365,13 @@ function DisplaySettings() {
           }}
           className="mt-2 w-56 rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
         >
-          <option value="hidden" className="text-black">
+          <option value="hidden">
             {t('settings.remoteHidden')}
           </option>
-          <option value="thumb" className="text-black">
+          <option value="thumb">
             {t('settings.remoteThumb')}
           </option>
-          <option value="full" className="text-black">
+          <option value="full">
             {t('settings.remoteFull')}
           </option>
         </select>
@@ -424,7 +424,7 @@ function DisplaySettings() {
               className="w-full rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
             >
               {countries.map((c) => (
-                <option key={c.region} value={c.region} className="text-black">
+                <option key={c.region} value={c.region}>
                   {c.name} (+{c.calling})
                 </option>
               ))}
@@ -441,10 +441,10 @@ function DisplaySettings() {
               }}
               className="w-full rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
             >
-              <option value="national" className="text-black">
+              <option value="national">
                 {t('settings.phoneStyleNational')}
               </option>
-              <option value="international" className="text-black">
+              <option value="international">
                 {t('settings.phoneStyleInternational')}
               </option>
             </select>

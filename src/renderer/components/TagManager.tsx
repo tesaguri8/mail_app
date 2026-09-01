@@ -135,7 +135,7 @@ export function TagManager() {
                 onChange={(e) => moveTag(tag, e.target.value === '' ? null : Number(e.target.value))}
                 title={t('tag.parent')}
                 aria-label={t('tag.parent')}
-                className="shrink-0 rounded bg-white/10 px-1.5 py-1 text-xs text-white/70 outline-none [color-scheme:dark]"
+                className="shrink-0 rounded bg-white/10 px-1.5 py-1 text-xs text-white/70 outline-none"
               >
                 <option value="">{t('tag.parentNone')}</option>
                 {items

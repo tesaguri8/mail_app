@@ -91,6 +91,27 @@ describe('Tooltip', () => {
     expect(tooltipText()).toBeNull();
   });
 
+  it('押した後は、カーソルが乗ったままでも出し直さない（メニューに重ならない）', () => {
+    render();
+    act(() => {
+      wrapper().dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      vi.advanceTimersByTime(300);
+      wrapper().dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      // 押した後も乗ったまま（menu が開くとその上に重なってしまう）
+      wrapper().dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      vi.advanceTimersByTime(300);
+    });
+    expect(tooltipText()).toBeNull();
+
+    // いったん離れれば、次に乗せたときはまた出る
+    act(() => {
+      wrapper().dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+      wrapper().dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      vi.advanceTimersByTime(300);
+    });
+    expect(tooltipText()).toBe('スター');
+  });
+
   it('キーボードで辿っても出る（native title には無い挙動）', () => {
     render();
     act(() => {

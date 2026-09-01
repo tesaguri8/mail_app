@@ -319,8 +319,11 @@ function Bubble({
   // （利用者報告 2026-09-01）。サムネイル表示なのでチャットの流れは埋めない。
   const [bubbleImages, setBubbleImages] = useState<AttachmentSummary[]>([]);
   useEffect(() => {
-    // 添付が無いメールで問い合わせない（スレッドの全バブルで引くのを避ける）。
-    if (!m.has_attachments || !inlineImagesOn) return;
+    // 【要注意】has_attachments で足切りしない。**インライン画像はこの列に数えられない**ため
+    // （実測 2026-09-01: 添付 1 件が inline のメールで has_attachments = 0）、足切りすると
+    // まさに出したい埋め込み画像だけが落ちる。取得はスレッド内のバブルごとに 1 回で、
+    // 通常 2〜9 件なので許容する。
+    if (!inlineImagesOn) return;
     let alive = true;
     mailAttachments(m.id)
       .then((list) => {
@@ -334,7 +337,7 @@ function Bubble({
     return () => {
       alive = false;
     };
-  }, [m.has_attachments, inlineImagesOn, m.id]);
+  }, [inlineImagesOn, m.id]);
 
   // バブルに並べる画像から、本文に実際に表示できた埋め込み画像を除いたもの。
   const shownImages = bubbleImages.filter(

@@ -41,7 +41,7 @@ import { parseAddress } from '../utils/address';
 import { copyText } from '../utils/clipboard';
 import { getBubbleHtml, getInlineImages, PREFS_EVENT } from '../config/prefs';
 import { formatDateTime } from '../utils/datetime';
-import { saveAttachment } from '../utils/attachmentSave';
+import { saveAllAttachments, saveAttachment } from '../utils/attachmentSave';
 import { withActivity } from '../stores/activity';
 import { MailBody, makeRenderDate } from './MailBody';
 import { AutoLinkText, HtmlText, inlineCidRefs } from './HtmlText';
@@ -820,15 +820,30 @@ function Bubble({
           x={attMenu.x}
           y={attMenu.y}
           header={t(attMenu.mode === 'save' ? 'mailbox.attachmentDownload' : 'mailbox.attachments')}
-          items={atts.map((a) => ({
-            key: `att-${a.id}`,
-            label: a.filename,
-            Icon: attMenu.mode === 'save' ? Download : Paperclip,
-            onClick: () =>
-              attMenu.mode === 'save'
-                ? void saveAttachment(a.id, a.filename, t('activity.downloadingAttachment'))
-                : void withActivity(t('activity.openingAttachment'), () => attachmentOpen(a.id)),
-          }))}
+          items={[
+            // 保存のときだけ「すべて保存」を先頭に置く。開く側に付けないのは、添付の数だけ
+            // 外部アプリが一斉に立ち上がってしまうため。
+            ...(attMenu.mode === 'save'
+              ? [
+                  {
+                    key: 'att-save-all',
+                    label: t('mailbox.attachmentSaveAll', { count: atts.length }),
+                    Icon: Download,
+                    onClick: () =>
+                      void saveAllAttachments(atts, t('activity.downloadingAttachment')),
+                  },
+                ]
+              : []),
+            ...atts.map((a) => ({
+              key: `att-${a.id}`,
+              label: a.filename,
+              Icon: attMenu.mode === 'save' ? Download : Paperclip,
+              onClick: () =>
+                attMenu.mode === 'save'
+                  ? void saveAttachment(a.id, a.filename, t('activity.downloadingAttachment'))
+                  : void withActivity(t('activity.openingAttachment'), () => attachmentOpen(a.id)),
+            })),
+          ]}
           onClose={() => setAttMenu(null)}
         />
       )}

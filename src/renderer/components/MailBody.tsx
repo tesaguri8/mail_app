@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ask, open } from '@tauri-apps/plugin-dialog';
-import { downloadDir, join } from '@tauri-apps/api/path';
+import { ask } from '@tauri-apps/plugin-dialog';
 import {
   BadgeCheck,
   BookOpen,
@@ -30,12 +29,7 @@ import type { MailDetail } from '@bindings/MailDetail';
 import type { AttachmentSummary } from '@bindings/AttachmentSummary';
 import type { TagSummary } from '@bindings/TagSummary';
 import { DEFAULT_TAG_COLOR } from '../utils/tagColors';
-import {
-  attachmentExport,
-  attachmentOpen,
-  mailAttachments,
-  mailRefetch,
-} from '../services/mail';
+import { attachmentOpen, mailAttachments, mailRefetch } from '../services/mail';
 import type { ContactSummary } from '@bindings/ContactSummary';
 import { getInlineImages, getRemoteImageMode, PREFS_EVENT } from '../config/prefs';
 import { greenDomainAdd, greenDomainWarn } from '../services/green';
@@ -49,7 +43,7 @@ import { ContextMenu } from './ContextMenu';
 import type { CalendarPanelInitial } from './CalendarPanel';
 import { parseDateTime, type ParsedDate } from '../utils/dateparse';
 import { formatDateTime } from '../utils/datetime';
-import { saveAttachment } from '../utils/attachmentSave';
+import { saveAllAttachments, saveAttachment } from '../utils/attachmentSave';
 import { withActivity } from '../stores/activity';
 
 /** 「表示名 <メール>」に整形。表示名が無ければアドレスのみ。 */
@@ -674,33 +668,16 @@ export function MailBody({
   };
 
   // チェックした添付をまとめて、選んだフォルダへ保存する。
+  // 実処理は utils/attachmentSave に置き、会話バブルの「すべて保存」と共通にする。
   const handleSaveSelected = async () => {
-    let dir: string | null = null;
-    try {
-      const picked = await open({ directory: true, defaultPath: await downloadDir() });
-      dir = typeof picked === 'string' ? picked : null;
-    } catch {
-      dir = null;
-    }
-    if (!dir) return;
-    const folder = dir;
-    setSavingAll(true);
     setNote('');
+    setSavingAll(true);
     const targets = fileAttachments.filter((a) => selected.has(a.id));
-    let ok = 0;
-    // まとめ保存中もフッターに進捗（不確定）を出す。
-    await withActivity(t('activity.downloadingAttachment'), async () => {
-      for (const a of targets) {
-        try {
-          await attachmentExport(a.id, await join(folder, a.filename));
-          ok += 1;
-        } catch {
-          /* 個別の失敗はスキップ */
-        }
-      }
-    });
-    setNote(t('mailbox.attachmentSavedN', { count: ok }));
+    const ok = await saveAllAttachments(targets, t('activity.downloadingAttachment'));
     setSavingAll(false);
+    // null はフォルダ選択のキャンセル。何も知らせずに閉じる。
+    if (ok === null) return;
+    setNote(t('mailbox.attachmentSavedN', { count: ok }));
   };
 
   // 全文をサーバーから再取得して要約保存を解除する（このメールだけ本文キャッシュを復元）。

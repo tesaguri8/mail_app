@@ -500,11 +500,11 @@ export function AccountSetup({
                         setEditSig(e.target.value === '' ? null : Number(e.target.value))
                       }
                     >
-                      <option value="" className="text-black">
+                      <option value="">
                         {t('account.signatureNone')}
                       </option>
                       {signatures.map((s) => (
-                        <option key={s.id} value={s.id} className="text-black">
+                        <option key={s.id} value={s.id}>
                           {s.name || t('signature.untitled')}
                         </option>
                       ))}
@@ -563,7 +563,7 @@ export function AccountSetup({
                         onChange={(e) => changeFullWindow(a.id, e.target.value)}
                       >
                         {FULL_WINDOWS.map((w) => (
-                          <option key={w} value={w} className="text-black">
+                          <option key={w} value={w}>
                             {windowLabel(t, w)}
                           </option>
                         ))}
@@ -600,11 +600,11 @@ export function AccountSetup({
                         }}
                       >
                         {BODY_WINDOWS.map((w) => (
-                          <option key={w} value={w} className="text-black">
+                          <option key={w} value={w}>
                             {windowLabel(t, w)}
                           </option>
                         ))}
-                        <option value="custom" className="text-black">
+                        <option value="custom">
                           {t('storage.bodyWindowCustom')}
                         </option>
                       </select>
@@ -640,7 +640,7 @@ export function AccountSetup({
                         onChange={(e) => changeLimit(a.id, Number(e.target.value))}
                       >
                         {LIMIT_GB.map((g) => (
-                          <option key={g} value={g} className="text-black">
+                          <option key={g} value={g}>
                             {g} GB
                           </option>
                         ))}
@@ -749,11 +749,11 @@ export function AccountSetup({
               defaultValue=""
               onChange={(e) => onPickServer(e.target.value)}
             >
-              <option value="" className="text-black">
+              <option value="">
                 {t('account.useExistingServer')}
               </option>
               {servers.map((s) => (
-                <option key={s.id} value={s.id} className="text-black">
+                <option key={s.id} value={s.id}>
                   {s.imap_host}（{s.username}）
                 </option>
               ))}

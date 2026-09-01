@@ -889,7 +889,7 @@ export function Compose({
             onChange={(e) => setAccountId(Number(e.target.value))}
           >
             {accounts.map((a) => (
-              <option key={a.id} value={a.id} className="text-black">
+              <option key={a.id} value={a.id}>
                 {a.display_name ? `${a.display_name} <${a.email}>` : a.email}
               </option>
             ))}
@@ -1025,11 +1025,11 @@ export function Compose({
               onChange={(e) => chooseSignature(e.target.value ? Number(e.target.value) : null)}
               title={t('compose.signatureRemembered')}
             >
-              <option value="" className="text-black">
+              <option value="">
                 {t('compose.noSignature')}
               </option>
               {signatures.map((s) => (
-                <option key={s.id} value={s.id} className="text-black">
+                <option key={s.id} value={s.id}>
                   {s.name}
                 </option>
               ))}

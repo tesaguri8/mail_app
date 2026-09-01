@@ -20,7 +20,7 @@ export function matchesDate(dateStr: string | null, df: DateRange | null): boole
 }
 
 const inputCls =
-  'rounded-md border border-white/15 bg-white/10 px-2 py-1 text-xs text-white outline-none focus:bg-white/20 [color-scheme:dark]';
+  'rounded-md border border-white/15 bg-white/10 px-2 py-1 text-xs text-white outline-none focus:bg-white/20';
 
 /** ローカル日付を YYYY-MM-DD に整形（UTC ずれを避ける）。 */
 function fmt(d: Date): string {

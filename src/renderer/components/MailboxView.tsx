@@ -1356,12 +1356,12 @@ export function MailboxView({
         >
           {/* 全アカウント横断表示。既定は「全て」。複数アカウントがある時のみ選べる。 */}
           {accounts.length > 1 && (
-            <option value="all" className="text-black">
+            <option value="all">
               {t('mailbox.allAccounts')}
             </option>
           )}
           {accounts.map((a) => (
-            <option key={a.id} value={a.id} className="text-black">
+            <option key={a.id} value={a.id}>
               {a.email}
             </option>
           ))}

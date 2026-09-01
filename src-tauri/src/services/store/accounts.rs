@@ -275,25 +275,49 @@ impl Store {
 
     /// 同期範囲を変更。次回同期で新範囲を初回取得し直せるよう UID 状態もリセットする。
     /// アカウントと、その受信メール（FTS含む）を削除する。
-    pub fn delete_account(&self, id: i64) -> rusqlite::Result<()> {
+    /// メールアドレスから既存アカウントの id を引く（大文字小文字は無視）。
+    /// 同じアドレスを二重に登録させないための確認に使う。
+    pub fn find_account_id_by_email(&self, email: &str) -> rusqlite::Result<Option<i64>> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "DELETE FROM email_fts WHERE rowid IN (SELECT id FROM emails WHERE account_id=?1)",
-            params![id],
-        )?;
-        // FK 制約のため、メール本体より先に添付を削除する。
-        conn.execute(
-            "DELETE FROM attachments WHERE email_id IN (SELECT id FROM emails WHERE account_id=?1)",
-            params![id],
-        )?;
-        conn.execute(
-            "DELETE FROM email_tags WHERE email_id IN (SELECT id FROM emails WHERE account_id=?1)",
-            params![id],
-        )?;
-        conn.execute("DELETE FROM emails WHERE account_id=?1", params![id])?;
-        conn.execute("DELETE FROM folder_sync WHERE account_id=?1", params![id])?;
-        conn.execute("DELETE FROM accounts WHERE id=?1", params![id])?;
-        Ok(())
+        conn.query_row(
+            "SELECT id FROM accounts WHERE lower(email) = lower(?1) LIMIT 1",
+            params![email],
+            |r| r.get(0),
+        )
+        .optional()
+    }
+
+    /// アカウントと、そのアカウントに属するデータを削除する。
+    ///
+    /// **子から順に消す。**`message_quotes` は `emails` への外部キー（ON DELETE なし）を
+    /// 持つため、先に消さないと `DELETE FROM emails` が FOREIGN KEY constraint failed で
+    /// 失敗する（引用ブロックはほぼ全メールに付くので、実質すべてのアカウントが消せなかった）。
+    ///
+    /// 途中で失敗したときに中途半端な状態を残さないよう、全体を 1 トランザクションで行う。
+    pub fn delete_account(&self, id: i64) -> rusqlite::Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let of_account = "SELECT id FROM emails WHERE account_id=?1";
+        // メール本体にぶら下がるもの（FTS は外部コンテンツ表なので rowid で消す）。
+        for sql in [
+            format!("DELETE FROM email_fts WHERE rowid IN ({of_account})"),
+            format!("DELETE FROM message_quotes WHERE email_id IN ({of_account})"),
+            format!("DELETE FROM attachments WHERE email_id IN ({of_account})"),
+            format!("DELETE FROM email_tags WHERE email_id IN ({of_account})"),
+        ] {
+            tx.execute(&sql, params![id])?;
+        }
+        // メール本体 → アカウント単位のもの → アカウント本体。
+        for sql in [
+            "DELETE FROM emails WHERE account_id=?1",
+            "DELETE FROM folder_sync WHERE account_id=?1",
+            "DELETE FROM logical_threads WHERE account_id=?1",
+            "DELETE FROM deleted_keys WHERE account_id=?1",
+            "DELETE FROM accounts WHERE id=?1",
+        ] {
+            tx.execute(sql, params![id])?;
+        }
+        tx.commit()
     }
 
     pub fn set_sync_window(&self, id: i64, window: &str) -> rusqlite::Result<()> {
@@ -397,5 +421,111 @@ mod tests {
         assert_eq!(accounts[0].server_total_count, 0);
         assert_eq!(accounts[0].unread_count, 0);
         assert_eq!(accounts[0].total_count, 0);
+    }
+
+    /// 引用ブロック（message_quotes）が残っていてもアカウントを削除できること。
+    /// message_quotes は emails への外部キーを持つので、先に消さないと
+    /// 「DELETE FROM emails」が FOREIGN KEY constraint failed で失敗し、
+    /// UI 上は「− を押しても無反応」になっていた（2026-09-01 の実測）。
+    #[test]
+    fn delete_account_removes_rows_that_reference_emails() {
+        let store = test_store();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1,'a@b','i','s')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO emails (id, account_id, canonical_key, folder, subject)
+                 VALUES (10, 1, 'k1', 'inbox', '件名')",
+                [],
+            )
+            .unwrap();
+            // 引用ブロック（外部キーで emails を参照。ここが削除を止めていた）。
+            conn.execute(
+                "INSERT INTO message_quotes (email_id, block_order) VALUES (10, 0)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO logical_threads (id, account_id) VALUES (5, 1)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO folder_sync (account_id, folder) VALUES (1, 'inbox')",
+                [],
+            )
+            .unwrap();
+        }
+
+        store.delete_account(1).unwrap();
+
+        let conn = store.conn.lock().unwrap();
+        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        assert_eq!(count("SELECT count(*) FROM accounts"), 0);
+        assert_eq!(count("SELECT count(*) FROM emails"), 0);
+        assert_eq!(count("SELECT count(*) FROM message_quotes"), 0);
+        assert_eq!(count("SELECT count(*) FROM logical_threads"), 0);
+        assert_eq!(count("SELECT count(*) FROM folder_sync"), 0);
+    }
+
+    /// 他アカウントのデータは巻き添えにしない。
+    #[test]
+    fn delete_account_leaves_other_accounts_intact() {
+        let store = test_store();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO accounts (id, email, imap_host, smtp_host)
+                 VALUES (1,'a@b','i','s'), (2,'c@d','i','s')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO emails (id, account_id, canonical_key, folder)
+                 VALUES (10, 1, 'k1', 'inbox'), (11, 2, 'k1', 'inbox')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO message_quotes (email_id, block_order) VALUES (10, 0), (11, 0)",
+                [],
+            )
+            .unwrap();
+        }
+
+        store.delete_account(1).unwrap();
+
+        let conn = store.conn.lock().unwrap();
+        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        assert_eq!(count("SELECT count(*) FROM accounts"), 1);
+        assert_eq!(count("SELECT count(*) FROM emails WHERE account_id = 2"), 1);
+        assert_eq!(count("SELECT count(*) FROM message_quotes"), 1);
+    }
+
+    /// 二重登録の確認は大文字小文字を無視する（同じ受信箱を別物として扱わない）。
+    #[test]
+    fn find_account_id_by_email_ignores_case() {
+        let store = test_store();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO accounts (id, email, imap_host, smtp_host)
+                 VALUES (1,'Suematsu@SNG-Design.com','i','s')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .find_account_id_by_email("suematsu@sng-design.com")
+                .unwrap(),
+            Some(1)
+        );
+        assert_eq!(store.find_account_id_by_email("other@example.com").unwrap(), None);
     }
 }

@@ -122,6 +122,8 @@ export function AccountSetup({
   const [smtpPort, setSmtpPort] = useState(587);
   const [note, setNote] = useState('');
   const [status, setStatus] = useState('');
+  // アカウント一覧側の操作（削除）の失敗を、一覧の直下に出す。
+  const [listError, setListError] = useState('');
   const [busy, setBusy] = useState(false);
 
   // 接続ドットのチェック。既定は軽量な TCP 到達確認（速い・固まらない・連続ログインにならない）。
@@ -347,11 +349,13 @@ export function AccountSetup({
   };
 
   const onDelete = async (id: number) => {
+    setListError('');
     try {
       await accountDelete(id);
       onChanged();
-    } catch {
-      /* noop */
+    } catch (e) {
+      // 握り潰すと「押しても無反応」に見えるので、理由をそのまま出す。
+      setListError('✕ ' + String(e));
     }
   };
 
@@ -704,6 +708,8 @@ export function AccountSetup({
           ))}
         </ul>
       )}
+
+      {listError && <p className="mt-2 text-xs text-red-300">{listError}</p>}
 
       {!adding && (
         <button

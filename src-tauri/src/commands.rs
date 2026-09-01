@@ -142,6 +142,20 @@ pub fn account_add(
     input: AccountInput,
     password: String,
 ) -> Result<AccountSummary, String> {
+    // 同じアドレスの二重登録を拒む。登録できてしまうと、同じメールがアカウントの数だけ
+    // 取り込まれ（emails は UNIQUE(account_id, canonical_key) なので別行になる）、
+    // 一覧に同じメールが並ぶ（実測 2026-09-01: 同一アドレスが 4 つ登録されていた）。
+    if store
+        .find_account_id_by_email(&input.email)
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {
+        return Err(format!(
+            "{} は既に登録されています。設定を変えたい場合は、追加ではなく既存のアカウントを編集してください",
+            input.email
+        ));
+    }
+
     // 資格情報は平文 DB でなく OS 金庫へ（サービス名 = アプリ identifier、ユーザー名 = email）
     let service = app.config().identifier.clone();
     let entry = keyring::Entry::new(&service, &input.email).map_err(|e| e.to_string())?;

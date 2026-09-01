@@ -261,7 +261,7 @@ export function PhoneRows({
                 }
               >
                 {countries.map((c) => (
-                  <option key={c.region} value={c.region} className="text-black">
+                  <option key={c.region} value={c.region}>
                     {c.region} +{c.calling}
                   </option>
                 ))}

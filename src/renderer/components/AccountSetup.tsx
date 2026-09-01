@@ -13,6 +13,7 @@ import {
   accountPing,
   accountReorder,
   accountTestLogin,
+  accountSetPassword,
   accountUpdate,
   serverAccountList,
 } from '../services/accounts';
@@ -76,6 +77,8 @@ export function AccountSetup({
   const [editing, setEditing] = useState<number | null>(null);
   const [editName, setEditName] = useState('');
   const [editSig, setEditSig] = useState<number | null>(null);
+  // 資格情報が失われたときに入れ直すためのパスワード（編集中のアカウント用）。
+  const [editPassword, setEditPassword] = useState('');
   const [editFullWindow, setEditFullWindow] = useState('all');
   const [editBodyWindow, setEditBodyWindow] = useState('all');
   const [editStatus, setEditStatus] = useState('');
@@ -122,6 +125,8 @@ export function AccountSetup({
   const [smtpPort, setSmtpPort] = useState(587);
   const [note, setNote] = useState('');
   const [status, setStatus] = useState('');
+  // アカウント一覧側の操作（削除）の失敗を、一覧の直下に出す。
+  const [listError, setListError] = useState('');
   const [busy, setBusy] = useState(false);
 
   // 接続ドットのチェック。既定は軽量な TCP 到達確認（速い・固まらない・連続ログインにならない）。
@@ -246,6 +251,18 @@ export function AccountSetup({
     }
   };
 
+  // パスワードだけを入れ直す（資格情報が失われたときの復旧。メールは消さない）。
+  const savePassword = async (id: number) => {
+    if (!editPassword) return;
+    try {
+      await accountSetPassword(id, editPassword);
+      setEditPassword('');
+      setEditStatus('✓ ' + t('account.passwordSaved'));
+    } catch (e) {
+      setEditStatus('✕ ' + String(e));
+    }
+  };
+
   const saveEdit = async (id: number) => {
     try {
       await accountUpdate(id, editName.trim() || null, editSig);
@@ -347,11 +364,13 @@ export function AccountSetup({
   };
 
   const onDelete = async (id: number) => {
+    setListError('');
     try {
       await accountDelete(id);
       onChanged();
-    } catch {
-      /* noop */
+    } catch (e) {
+      // 握り潰すと「押しても無反応」に見えるので、理由をそのまま出す。
+      setListError('✕ ' + String(e));
     }
   };
 
@@ -496,16 +515,39 @@ export function AccountSetup({
                         setEditSig(e.target.value === '' ? null : Number(e.target.value))
                       }
                     >
-                      <option value="" className="text-black">
+                      <option value="">
                         {t('account.signatureNone')}
                       </option>
                       {signatures.map((s) => (
-                        <option key={s.id} value={s.id} className="text-black">
+                        <option key={s.id} value={s.id}>
                           {s.name || t('signature.untitled')}
                         </option>
                       ))}
                     </select>
                   </label>
+                  {/* パスワードの入れ直し（資格情報が失われたときの復旧手段） */}
+                  <div className="rounded-md border border-white/10 p-3">
+                    <div className="mb-1 text-xs text-white/55">{t('account.resetPassword')}</div>
+                    <p className="mb-2 text-[11px] text-white/40">
+                      {t('account.resetPasswordHint')}
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        className={inputCls}
+                        type="password"
+                        placeholder={t('account.password')}
+                        value={editPassword}
+                        onChange={(e) => setEditPassword(e.target.value)}
+                      />
+                      <button
+                        className={btnCls}
+                        onClick={() => savePassword(a.id)}
+                        disabled={!editPassword}
+                      >
+                        {t('account.save')}
+                      </button>
+                    </div>
+                  </div>
                   {/* ストレージ（容量上限とエビクション） */}
                   <div className="rounded-md border border-white/10 p-3">
                     <div className="mb-1 flex items-center justify-between">
@@ -559,7 +601,7 @@ export function AccountSetup({
                         onChange={(e) => changeFullWindow(a.id, e.target.value)}
                       >
                         {FULL_WINDOWS.map((w) => (
-                          <option key={w} value={w} className="text-black">
+                          <option key={w} value={w}>
                             {windowLabel(t, w)}
                           </option>
                         ))}
@@ -596,11 +638,11 @@ export function AccountSetup({
                         }}
                       >
                         {BODY_WINDOWS.map((w) => (
-                          <option key={w} value={w} className="text-black">
+                          <option key={w} value={w}>
                             {windowLabel(t, w)}
                           </option>
                         ))}
-                        <option value="custom" className="text-black">
+                        <option value="custom">
                           {t('storage.bodyWindowCustom')}
                         </option>
                       </select>
@@ -636,7 +678,7 @@ export function AccountSetup({
                         onChange={(e) => changeLimit(a.id, Number(e.target.value))}
                       >
                         {LIMIT_GB.map((g) => (
-                          <option key={g} value={g} className="text-black">
+                          <option key={g} value={g}>
                             {g} GB
                           </option>
                         ))}
@@ -705,6 +747,8 @@ export function AccountSetup({
         </ul>
       )}
 
+      {listError && <p className="mt-2 text-xs text-red-300">{listError}</p>}
+
       {!adding && (
         <button
           onClick={() => setAdding(true)}
@@ -743,11 +787,11 @@ export function AccountSetup({
               defaultValue=""
               onChange={(e) => onPickServer(e.target.value)}
             >
-              <option value="" className="text-black">
+              <option value="">
                 {t('account.useExistingServer')}
               </option>
               {servers.map((s) => (
-                <option key={s.id} value={s.id} className="text-black">
+                <option key={s.id} value={s.id}>
                   {s.imap_host}（{s.username}）
                 </option>
               ))}

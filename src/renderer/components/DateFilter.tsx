@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Tooltip } from './Tooltip';
 import { CalendarDays, GripHorizontal, X } from 'lucide-react';
 
 export type DateMode = 'after' | 'before' | 'range';
@@ -19,7 +20,7 @@ export function matchesDate(dateStr: string | null, df: DateRange | null): boole
 }
 
 const inputCls =
-  'rounded-md border border-white/15 bg-white/10 px-2 py-1 text-xs text-white outline-none focus:bg-white/20 [color-scheme:dark]';
+  'rounded-md border border-white/15 bg-white/10 px-2 py-1 text-xs text-white outline-none focus:bg-white/20';
 
 /** ローカル日付を YYYY-MM-DD に整形（UTC ずれを避ける）。 */
 function fmt(d: Date): string {
@@ -153,19 +154,20 @@ export function DateFilter({
 
   return (
     <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        title={t('date.filter')}
-        aria-label={t('date.filter')}
-        aria-pressed={on}
-        className={`flex h-8 w-8 items-center justify-center rounded-md ${
-          on
-            ? 'bg-sky-500/30 text-sky-200 ring-1 ring-sky-300/40'
-            : 'text-white/55 hover:text-white/80'
-        }`}
-      >
-        <CalendarDays size={15} />
-      </button>
+      <Tooltip label={t('date.filter')}>
+        <button
+          onClick={() => setOpen((v) => !v)}
+          aria-label={t('date.filter')}
+          aria-pressed={on}
+          className={`flex h-8 w-8 items-center justify-center rounded-md ${
+            on
+              ? 'bg-sky-500/30 text-sky-200 ring-1 ring-sky-300/40'
+              : 'text-white/55 hover:text-white/80'
+          }`}
+        >
+          <CalendarDays size={15} />
+        </button>
+      </Tooltip>
 
       {/* 既定はアイコン直下に展開。見出しをドラッグすると position:fixed で自由に移動でき、
           一覧に被って邪魔なときに避けられる（親の overflow に切られないよう fixed にする）。 */}

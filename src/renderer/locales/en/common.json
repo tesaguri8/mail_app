@@ -120,7 +120,7 @@
     "bookmark": "Bookmarked",
     "attachment": "Has attachment",
     "flag": "Follow-up",
-    "invert": "Invert filters (show non-matching)"
+    "invert": "Invert filters (show mail matching none of them)"
   },
   "green": {
     "tab": "Green domains",
@@ -565,6 +565,9 @@
     "email": "Email address",
     "username": "Server username (usually your email)",
     "password": "Password / app password",
+    "resetPassword": "Re-enter password",
+    "resetPasswordHint": "Use this when you see “credentials not found”. Re-entering it here restores access without deleting the mail already downloaded.",
+    "passwordSaved": "Password saved",
     "autoconfig": "Auto-configure",
     "imapHost": "IMAP server",
     "imapPort": "IMAP port",
@@ -673,6 +676,7 @@
     "attachmentSavedN": "Saved {{count}} files",
     "attachmentSelectAll": "Select / clear all",
     "attachmentSaveSelected": "Save selected ({{count}})",
+    "attachmentSaveAll": "Save all ({{count}})",
     "attachmentsInlineOnly": "Only images embedded in the body; no attached files.",
     "attachmentsUnfetched": "Attachment details not fetched yet. Get them via Settings → Accounts → \"Repair re-import\".",
     "more": "Read more →",

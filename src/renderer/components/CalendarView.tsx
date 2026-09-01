@@ -1884,7 +1884,7 @@ export function EventEditor({
   const field =
     'w-full rounded-lg bg-white/10 px-3 py-2 text-sm outline-none ring-1 ring-white/10 placeholder:text-white/40 focus:ring-white/30';
   const small =
-    'rounded-lg bg-white/10 px-2 py-1.5 text-sm outline-none ring-1 ring-white/10 [color-scheme:dark] focus:ring-white/30';
+    'rounded-lg bg-white/10 px-2 py-1.5 text-sm outline-none ring-1 ring-white/10 focus:ring-white/30';
 
   return (
     <aside className="flex w-80 shrink-0 flex-col overflow-hidden rounded-xl bg-white/5 text-white ring-1 ring-white/10">

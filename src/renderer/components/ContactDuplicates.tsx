@@ -390,7 +390,7 @@ export function ContactDuplicates({
                   <EditField icon={<Cake size={14} />} label={t('contact.birthday')}>
                     <input
                       type="date"
-                      className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15 [color-scheme:dark]"
+                      className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
                       value={draft.birthday ?? ''}
                       onChange={(e) => patch({ birthday: nullify(e.target.value) })}
                     />

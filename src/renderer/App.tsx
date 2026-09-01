@@ -69,6 +69,11 @@ export default function App() {
   // 背景（かぶせグラデ＋写真）。会話の固定見出しラベル等が「同じ背景を同じ位置で」貼って
   // 透明に見せられるよう、同じ文字列を CSS 変数 --app-backdrop としても配る（bg-fixed で位置合わせ）。
   const backdrop = `linear-gradient(160deg, rgba(10,14,28,${(0.35 + dim * 0.6).toFixed(2)}) 0%, rgba(6,9,20,${(0.55 + dim * 0.5).toFixed(2)}) 100%), url(${backgroundUrl})`;
+  // 各画面の面（パネル）に敷く土台。写真の上に文字が直接乗ると、明るい写真では沈むため、
+  // 背景よりわずかに濃い面を敷いて内容を浮かせる。濃さはスライダー(dim)に追随させ、
+  // 0% でも最低 5% は残す（利用者提案 2026-09-01「スライダー指定＋5%」）。
+  // ホームは全面ビジュアルが意匠なので敷かない。
+  const panelTint = `rgba(6, 9, 20, ${Math.min(dim + 0.05, 1).toFixed(2)})`;
 
   const refreshAccounts = useCallback(() => {
     if (!isTauri) return;
@@ -154,7 +159,10 @@ export default function App() {
       >
         <TitleBar onNavigate={navigate} onCycleBackground={cycleBackground} />
 
-        <main className="min-h-0 flex-1 overflow-hidden">
+        <main
+          className="min-h-0 flex-1 overflow-hidden"
+          style={view === 'home' ? undefined : { backgroundColor: panelTint }}
+        >
           {view === 'home' && (
             <Home
               accounts={accounts}

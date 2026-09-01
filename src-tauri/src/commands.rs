@@ -146,6 +146,20 @@ pub fn account_add(
     input: AccountInput,
     password: String,
 ) -> Result<AccountSummary, String> {
+    // 同じアドレスの二重登録を拒む。登録できてしまうと、同じメールがアカウントの数だけ
+    // 取り込まれ（emails は UNIQUE(account_id, canonical_key) なので別行になる）、
+    // 一覧に同じメールが並ぶ（実測 2026-09-01: 同一アドレスが 4 つ登録されていた）。
+    if store
+        .find_account_id_by_email(&input.email)
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {
+        return Err(format!(
+            "{} は既に登録されています。設定を変えたい場合は、追加ではなく既存のアカウントを編集してください",
+            input.email
+        ));
+    }
+
     // 資格情報は平文 DB でなく OS 金庫へ（サービス名 = アプリ identifier、ユーザー名 = email）
     let service = app.config().identifier.clone();
     let entry = keyring::Entry::new(&service, &input.email).map_err(|e| e.to_string())?;
@@ -3169,6 +3183,31 @@ pub async fn account_ping(store: State<'_, Store>, account_id: i64) -> Result<()
     .map_err(|e| e.to_string())?
 }
 
+/// 既存アカウントのパスワードだけを入れ直す（keyring を更新）。
+///
+/// 資格情報が失われた場合の復旧手段。これが無いと、削除して追加し直すしかなく、
+/// 取り込み済みのメールまで消える（実測 2026-09-01: 重複整理で資格情報が消えた際、
+/// 復旧の手立てが無かった）。
+#[tauri::command]
+pub fn account_set_password(
+    app: AppHandle,
+    store: State<Store>,
+    account_id: i64,
+    password: String,
+) -> Result<(), String> {
+    if password.is_empty() {
+        return Err("パスワードを入力してください".into());
+    }
+    let (email, ..) = store
+        .get_account_imap(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("アカウントが見つかりません")?;
+    let service = app.config().identifier.clone();
+    keyring::Entry::new(&service, &email)
+        .and_then(|e| e.set_password(&password))
+        .map_err(|e| format!("資格情報を保存できません: {e}"))
+}
+
 /// アカウントを削除（受信メールと keyring の資格情報も削除）。
 #[tauri::command]
 pub fn account_delete(
@@ -3181,9 +3220,22 @@ pub fn account_delete(
         .get_account_imap(account_id)
         .map_err(|e| e.to_string())?
     {
-        let service = app.config().identifier.clone();
-        if let Ok(entry) = keyring::Entry::new(&service, &email) {
-            let _ = entry.delete_credential();
+        // 【要注意】keyring のキーはメールアドレス。同じアドレスのアカウントが他にも
+        // 残っているときに消すと、**残した側までログインできなくなる**
+        // （実測 2026-09-01: 重複登録 4 件を整理したら、残した 1 件で添付も同期も
+        // 「資格情報を取得できません」になった）。最後の 1 件のときだけ消す。
+        let others = store
+            .count_accounts_with_email(&email, account_id)
+            .map_err(|e| e.to_string())?;
+        if others == 0 {
+            let service = app.config().identifier.clone();
+            if let Ok(entry) = keyring::Entry::new(&service, &email) {
+                let _ = entry.delete_credential();
+            }
+        } else {
+            log::info!(
+                "account_delete: {email} は他に {others} 件残っているため資格情報は残す"
+            );
         }
     }
     // 保持していた IMAP 接続を破棄する。

@@ -30,3 +30,23 @@ export function matchesFilters(m: FilterableRow, filters: Set<string>): boolean 
   // flag（要再確認）はマーク手段が入るまでフィルタしない（空表示で混乱させない）
   return true;
 }
+
+/**
+ * 選択中のトグルの **どれにも当てはまらない** か（各条件を否定して AND）。
+ * 反転（除外）ボタンの述語。
+ *
+ * `!matchesFilters()` ではないことに注意。matchesFilters は AND なので、その否定は
+ * ド・モルガンで OR になり（「スター**または**知り合いでない」）、条件を足すほど対象が
+ * 増えてしまう。反転の用途は「不要メールを一気に絞って一括選択する」ことなので、
+ * 求めるのは「スターでもなく、知り合いでもない」＝ 各条件の否定の AND。
+ */
+export function matchesNoneOfFilters(m: FilterableRow, filters: Set<string>): boolean {
+  if (filters.has('unread') && !m.is_read) return false; // 「未読」の否定＝既読だけ
+  if (filters.has('attachment') && m.has_real_attachments) return false;
+  if (filters.has('star') && m.is_starred) return false;
+  if (filters.has('green') && m.is_green) return false;
+  if (filters.has('vip') && m.is_vip) return false;
+  if (filters.has('known') && m.is_known) return false;
+  // flag は matchesFilters と同じく非適用（反転でも対象にしない）
+  return true;
+}

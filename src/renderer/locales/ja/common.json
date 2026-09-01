@@ -120,7 +120,7 @@
     "bookmark": "ブックマーク",
     "attachment": "添付あり",
     "flag": "要再確認",
-    "invert": "条件を反転（一致しないものを表示）"
+    "invert": "条件を反転（どれにも当てはまらないものを表示）"
   },
   "green": {
     "tab": "グリーンドメイン",
@@ -565,6 +565,9 @@
     "email": "メールアドレス",
     "username": "サーバーのユーザー名（通常はメールアドレス）",
     "password": "パスワード / アプリパスワード",
+    "resetPassword": "パスワードを入れ直す",
+    "resetPasswordHint": "資格情報が失われて「資格情報を取得できません」と出るときに使います。ここで入れ直せば、取り込み済みのメールを消さずに復旧できます。",
+    "passwordSaved": "パスワードを保存しました",
     "autoconfig": "自動設定",
     "imapHost": "IMAP サーバー",
     "imapPort": "IMAP ポート",
@@ -673,6 +676,7 @@
     "attachmentSavedN": "{{count}} 件を保存しました",
     "attachmentSelectAll": "すべて選択／解除",
     "attachmentSaveSelected": "選択を保存 ({{count}})",
+    "attachmentSaveAll": "すべて保存 ({{count}})",
     "attachmentsInlineOnly": "本文に埋め込まれた画像のみで、添付ファイルはありません。",
     "attachmentsUnfetched": "添付情報は未取得です。設定 → アカウント → 「点検再取り込み」で取得できます。",
     "more": "もっと読む →",

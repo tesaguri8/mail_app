@@ -13,6 +13,7 @@ import {
   accountPing,
   accountReorder,
   accountTestLogin,
+  accountSetPassword,
   accountUpdate,
   serverAccountList,
 } from '../services/accounts';
@@ -76,6 +77,8 @@ export function AccountSetup({
   const [editing, setEditing] = useState<number | null>(null);
   const [editName, setEditName] = useState('');
   const [editSig, setEditSig] = useState<number | null>(null);
+  // 資格情報が失われたときに入れ直すためのパスワード（編集中のアカウント用）。
+  const [editPassword, setEditPassword] = useState('');
   const [editFullWindow, setEditFullWindow] = useState('all');
   const [editBodyWindow, setEditBodyWindow] = useState('all');
   const [editStatus, setEditStatus] = useState('');
@@ -245,6 +248,18 @@ export function AccountSetup({
       sync.toast(String(e), 'error');
     } finally {
       setRederiving(null);
+    }
+  };
+
+  // パスワードだけを入れ直す（資格情報が失われたときの復旧。メールは消さない）。
+  const savePassword = async (id: number) => {
+    if (!editPassword) return;
+    try {
+      await accountSetPassword(id, editPassword);
+      setEditPassword('');
+      setEditStatus('✓ ' + t('account.passwordSaved'));
+    } catch (e) {
+      setEditStatus('✕ ' + String(e));
     }
   };
 
@@ -510,6 +525,29 @@ export function AccountSetup({
                       ))}
                     </select>
                   </label>
+                  {/* パスワードの入れ直し（資格情報が失われたときの復旧手段） */}
+                  <div className="rounded-md border border-white/10 p-3">
+                    <div className="mb-1 text-xs text-white/55">{t('account.resetPassword')}</div>
+                    <p className="mb-2 text-[11px] text-white/40">
+                      {t('account.resetPasswordHint')}
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        className={inputCls}
+                        type="password"
+                        placeholder={t('account.password')}
+                        value={editPassword}
+                        onChange={(e) => setEditPassword(e.target.value)}
+                      />
+                      <button
+                        className={btnCls}
+                        onClick={() => savePassword(a.id)}
+                        disabled={!editPassword}
+                      >
+                        {t('account.save')}
+                      </button>
+                    </div>
+                  </div>
                   {/* ストレージ（容量上限とエビクション） */}
                   <div className="rounded-md border border-white/10 p-3">
                     <div className="mb-1 flex items-center justify-between">

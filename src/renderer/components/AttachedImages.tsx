@@ -74,6 +74,8 @@ export function AttachedImages({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
   const [urls, setUrls] = useState<Record<string, string>>(cached);
+  // 読み込みに失敗した画像の理由（variantKey → メッセージ）。握り潰さず表示できるように持つ。
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [wanted, setWanted] = useState(total <= AUTO_MAX_TOTAL);
   const [busy, setBusy] = useState(false);
 
@@ -110,8 +112,13 @@ export function AttachedImages({
           const url = await attachmentImage(att.id, thumb);
           if (!alive) return;
           setUrls((prev) => ({ ...prev, [variantKey(att.id, thumb)]: url }));
-        } catch {
-          /* この 1 枚は表示できない（他は続ける） */
+        } catch (e) {
+          // 握り潰すと「画像を表示できません」としか出ず、原因が追えない。
+          // 理由を控えてプレースホルダの title に出し、コンソールにも残す。
+          if (!alive) return;
+          const reason = String(e);
+          setErrors((prev) => ({ ...prev, [variantKey(att.id, thumb)]: reason }));
+          console.error('attachmentImage failed:', att.id, att.filename, reason);
         }
       }
     };
@@ -142,8 +149,10 @@ export function AttachedImages({
     );
   }
 
-  const placeholder = (small: boolean) => (
+  // 読み込めなかった枠。理由が分かっていれば title に出す（握り潰して原因不明にしない）。
+  const placeholder = (small: boolean, reason?: string) => (
     <div
+      title={reason}
       className={`flex items-center justify-center rounded-md border border-white/10 text-[11px] text-white/35 ${
         small ? 'h-24 w-24' : 'px-3 py-4'
       }`}
@@ -159,7 +168,8 @@ export function AttachedImages({
         {images.map((a) => {
           const big = zoomed.has(a.id);
           const url = urls[variantKey(a.id, !big)];
-          if (!url) return <div key={a.id}>{placeholder(!big)}</div>;
+          if (!url)
+            return <div key={a.id}>{placeholder(!big, errors[variantKey(a.id, !big)])}</div>;
           return (
             <img
               key={a.id}
@@ -220,7 +230,7 @@ export function AttachedImages({
               className="block max-h-[70vh] max-w-full rounded-md"
             />
           ) : (
-            placeholder(false)
+            placeholder(false, errors[variantKey(a.id, false)])
           )}
         </figure>
       ))}

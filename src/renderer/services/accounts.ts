@@ -42,3 +42,7 @@ export const accountUpdate = (
   displayName: string | null,
   signatureId: number | null
 ) => invoke<void>('account_update', { accountId, displayName, signatureId });
+
+/** 既存アカウントのパスワードだけを入れ直す（資格情報が失われたときの復旧用）。 */
+export const accountSetPassword = (accountId: number, password: string) =>
+  invoke<void>('account_set_password', { accountId, password });

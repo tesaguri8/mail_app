@@ -62,7 +62,8 @@ import { Conversation, type ConversationHandlers } from './Conversation';
 import { threadList, threadCount } from '../services/threads';
 import { Compose, type ComposeTarget } from './Compose';
 import { FolderIcons } from './FolderIcons';
-import { MAIL_FILTERS, matchesFilters } from './mailFilters';
+import { MAIL_FILTERS, matchesFilters, matchesNoneOfFilters } from './mailFilters';
+import { Tooltip } from './Tooltip';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { PrintMail } from './PrintMail';
 import { DateFilter, matchesDate, type DateRange } from './DateFilter';
@@ -1216,9 +1217,12 @@ export function MailboxView({
 
   // 一覧の絞り込み述語（トグル/期間/タグ）。表示用と「全一致選択」で同じ条件を使う。
   const passesFilters = (m: ThreadListItem) => {
-    // トグル絞り込み。反転（invert）時は「一致しない」ものを通す（条件が無ければ反転は無効）。
-    const toggleBase = matchesFilters(m, filters);
-    const togglePass = filterInvert && filters.size > 0 ? !toggleBase : toggleBase;
+    // トグル絞り込み。反転（invert）時は「選択した条件のどれにも当てはまらない」ものを通す
+    // （条件が無ければ反転は無効）。matchesFilters の否定ではない点に注意（mailFilters.ts 参照）。
+    const togglePass =
+      filterInvert && filters.size > 0
+        ? matchesNoneOfFilters(m, filters)
+        : matchesFilters(m, filters);
     return togglePass && matchesDate(m.date, dateFilter) && matchesTags(m.tag_ids, tagFilter);
   };
   // 検索モードでは FTS 結果を、通常は読み込み済み一覧を対象に、絞り込みを重ねて表示する。
@@ -1371,45 +1375,46 @@ export function MailboxView({
         {MAIL_FILTERS.map(({ key, Icon }) => {
           const on = filters.has(key);
           return (
-            <button
-              key={key}
-              onClick={() => toggleFilter(key)}
-              title={t(`filter.${key}`)}
-              aria-label={t(`filter.${key}`)}
-              aria-pressed={on}
-              className={`flex h-8 w-8 items-center justify-center rounded-md ${
-                on
-                  ? 'bg-sky-500/30 text-sky-200 ring-1 ring-sky-300/40'
-                  : 'text-white/55 hover:text-white/80'
-              }`}
-            >
-              <span className="relative inline-flex">
-                <Icon size={15} />
-                {key === 'unread' && (
-                  <span className="absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full bg-sky-400 ring-1 ring-neutral-900/60" />
-                )}
-              </span>
-            </button>
+            <Tooltip key={key} label={t(`filter.${key}`)}>
+              <button
+                onClick={() => toggleFilter(key)}
+                aria-label={t(`filter.${key}`)}
+                aria-pressed={on}
+                className={`flex h-8 w-8 items-center justify-center rounded-md ${
+                  on
+                    ? 'bg-sky-500/30 text-sky-200 ring-1 ring-sky-300/40'
+                    : 'text-white/55 hover:text-white/80'
+                }`}
+              >
+                <span className="relative inline-flex">
+                  <Icon size={15} />
+                  {key === 'unread' && (
+                    <span className="absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full bg-sky-400 ring-1 ring-neutral-900/60" />
+                  )}
+                </span>
+              </button>
+            </Tooltip>
           );
         })}
         <DateFilter value={dateFilter} onChange={setDateFilter} />
         <TagFilter tags={tags} value={tagFilter} onChange={setTagFilter} />
-        {/* 反転（除外）: 選択中トグルに「一致しない」ものを表示。ツールバー右端に置く。
-            不要メール（既読・知り合い以外 等）を一気に絞って一括選択するのに使う。 */}
-        <button
-          onClick={() => setFilterInvert((v) => !v)}
-          disabled={filters.size === 0}
-          title={t('filter.invert')}
-          aria-label={t('filter.invert')}
-          aria-pressed={filterInvert}
-          className={`flex h-8 w-8 items-center justify-center rounded-md disabled:opacity-40 ${
-            filterInvert && filters.size > 0
-              ? 'bg-amber-500/30 text-amber-200 ring-1 ring-amber-300/40'
-              : 'text-white/55 hover:text-white/80'
-          }`}
-        >
-          <FlipHorizontal2 size={15} />
-        </button>
+        {/* 反転（除外）: 選択中トグルの「どれにも当てはまらない」ものを表示。ツールバー右端。
+            不要メール（既読かつ知り合いでない 等）を一気に絞って一括選択するのに使う。 */}
+        <Tooltip label={t('filter.invert')}>
+          <button
+            onClick={() => setFilterInvert((v) => !v)}
+            disabled={filters.size === 0}
+            aria-label={t('filter.invert')}
+            aria-pressed={filterInvert}
+            className={`flex h-8 w-8 items-center justify-center rounded-md disabled:opacity-40 ${
+              filterInvert && filters.size > 0
+                ? 'bg-amber-500/30 text-amber-200 ring-1 ring-amber-300/40'
+                : 'text-white/55 hover:text-white/80'
+            }`}
+          >
+            <FlipHorizontal2 size={15} />
+          </button>
+        </Tooltip>
       </div>
       {/* ゴミ箱/迷惑メール: フィルタ群の下に「空にする」（完全削除）ボタン */}
       {(folder === 'trash' || folder === 'spam') && (

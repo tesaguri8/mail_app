@@ -120,7 +120,7 @@
     "bookmark": "Bookmarked",
     "attachment": "Has attachment",
     "flag": "Follow-up",
-    "invert": "Invert filters (show non-matching)"
+    "invert": "Invert filters (show mail matching none of them)"
   },
   "green": {
     "tab": "Green domains",

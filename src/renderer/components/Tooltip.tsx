@@ -16,12 +16,16 @@ const SHOW_DELAY = 300;
 export function Tooltip({ label, children }: { label: string; children: ReactNode }) {
   const ref = useRef<HTMLSpanElement>(null);
   const timer = useRef<number | undefined>(undefined);
+  // 押した後、カーソルが乗ったままでも出し直さないための抑止。押すと何かが起きる
+  // （メニューが開く等）ので、その上にツールチップが重なると邪魔になる。
+  const suppressed = useRef(false);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
   // 表示待ちの最中にアンマウントされてもタイマーを残さない。
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
   const show = () => {
+    if (suppressed.current) return;
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => {
       const el = ref.current;
@@ -39,17 +43,29 @@ export function Tooltip({ label, children }: { label: string; children: ReactNod
     setPos(null);
   };
 
+  /** 押したら消し、カーソルが離れるまで出し直さない。 */
+  const hideUntilLeave = () => {
+    suppressed.current = true;
+    hide();
+  };
+
+  /** 離れたら抑止を解く（次に乗せたらまた出る）。 */
+  const leave = () => {
+    suppressed.current = false;
+    hide();
+  };
+
   return (
     <span
       ref={ref}
       className="inline-flex"
       onMouseEnter={show}
-      onMouseLeave={hide}
+      onMouseLeave={leave}
       // キーボード操作でも出す（Tab で辿ったとき）。
       onFocusCapture={show}
-      onBlurCapture={hide}
-      // 押したら即座に消す（クリック後に残らないように）。
-      onPointerDown={hide}
+      onBlurCapture={leave}
+      // 押したら即座に消し、離れるまで出し直さない。
+      onPointerDown={hideUntilLeave}
     >
       {children}
       {pos && (

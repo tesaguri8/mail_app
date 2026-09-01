@@ -287,6 +287,20 @@ impl Store {
         .optional()
     }
 
+    /// 同じメールアドレスを使う他のアカウントの件数（`except_id` を除く）。
+    ///
+    /// keyring のキーはメールアドレスなので、重複登録があるときに 1 件消しただけで
+    /// 資格情報を消すと、残した側までログインできなくなる（実測 2026-09-01）。
+    /// 削除前にこれで確認する。
+    pub fn count_accounts_with_email(&self, email: &str, except_id: i64) -> rusqlite::Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT count(*) FROM accounts WHERE lower(email) = lower(?1) AND id <> ?2",
+            params![email, except_id],
+            |r| r.get(0),
+        )
+    }
+
     /// アカウントと、そのアカウントに属するデータを削除する。
     ///
     /// **子から順に消す。**`message_quotes` は `emails` への外部キー（ON DELETE なし）を
@@ -527,5 +541,43 @@ mod tests {
             Some(1)
         );
         assert_eq!(store.find_account_id_by_email("other@example.com").unwrap(), None);
+    }
+
+    /// 同じアドレスのアカウントが他にも残っているかを数えられること。
+    /// keyring のキーはメールアドレスなので、削除時にこれを見ないと、重複を 1 件消しただけで
+    /// 残した側の資格情報まで巻き添えで消える（実測 2026-09-01）。
+    #[test]
+    fn count_accounts_with_email_excludes_itself() {
+        let store = test_store();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES
+                   (1,'me@example.com','i','s'),
+                   (2,'ME@Example.com','i','s'),
+                   (3,'other@example.com','i','s')",
+                [],
+            )
+            .unwrap();
+        // 1 を消そうとしている時点で、同じアドレスは 2 が残っている（大文字小文字は無視）。
+        assert_eq!(
+            store.count_accounts_with_email("me@example.com", 1).unwrap(),
+            1
+        );
+        // 2 も消した後を想定すると、残りは 0（このとき初めて資格情報を消してよい）。
+        store.delete_account(2).unwrap();
+        assert_eq!(
+            store.count_accounts_with_email("me@example.com", 1).unwrap(),
+            0
+        );
+        // 別アドレスは巻き込まない。
+        assert_eq!(
+            store
+                .count_accounts_with_email("other@example.com", 1)
+                .unwrap(),
+            1
+        );
     }
 }

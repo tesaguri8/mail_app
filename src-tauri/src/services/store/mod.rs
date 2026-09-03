@@ -20,7 +20,7 @@ mod tombstones;
 
 pub use accounts::{NewAccount, SmtpAccount};
 pub use calendar_sync::{ApplyOutcome, LocalChange, RemoteEvent, SyncedCalendar};
-pub use contact_sync::{ContactIdentity, RemoteContact};
+pub use contact_sync::{ContactIdentity, ContactPush, RemoteContact};
 pub use google_accounts::GoogleService;
 pub use emails::{
     insert_email, rederive_attachments, AttachmentFetchInfo, InsertOutcome, NewAttachment, NewEmail,

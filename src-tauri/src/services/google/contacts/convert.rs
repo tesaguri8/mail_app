@@ -1,10 +1,17 @@
-//! Google の Person → 取り込み中間表現（`vcard::ImportedContact`）への変換。
+//! Google の Person ⇄ Rondine の連絡先の変換。
 //!
-//! 中間表現は vCard / Google CSV の取り込みと共通のものを使う。同じ型に落としておけば、
-//! 照合（`services::dedupe`）も保存（`store::contacts`）も取り込み元を問わず同じ道を通る。
+//! 取り込み（Person → `vcard::ImportedContact`）は vCard / Google CSV と共通の中間表現へ落とす。
+//! 同じ型に落としておけば、照合（`services::contact_match`）も保存（`store::contacts`）も
+//! 取り込み元を問わず同じ道を通る。
+//!
+//! 送信（`ContactSummary` → People API の本文）は逆向き。**Rondine 固有の属性
+//! （取引先フラグ・外部画像許可・組織レコードへのリンク）は送らない**。Google 側に対応概念が
+//! 無く、往復で落ちるため（docs/CONTACTS_SYNC.md §3-4）。
 
 use super::api::{GAddress, GPerson, GTypedValue};
+use crate::models::ContactSummary;
 use crate::services::vcard::{ImportedAddress, ImportedContact, ImportedValue};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 
 /// People API の種別（`type`）を Rondine の見出しラベルへ。vCard 取り込みと同じ語彙に揃える。
@@ -178,6 +185,166 @@ pub fn imported_from_person(
     })
 }
 
+// ── 送信（Rondine → Google） ────────────────────────────────────────
+
+/// Rondine の見出しラベル → People API の種別（`type`）。取り込み側 `type_label` の逆。
+/// 語彙に無いユーザー独自のラベルは、そのままカスタム種別として送る。
+fn write_type(label: Option<&str>) -> Option<String> {
+    let l = label.map(str::trim).filter(|l| !l.is_empty())?;
+    Some(
+        match l {
+            "自宅" => "home",
+            "職場" => "work",
+            "携帯" => "mobile",
+            "FAX" => "otherFax",
+            "代表" => "main",
+            other => other,
+        }
+        .to_string(),
+    )
+}
+
+/// メール／電話を送信用の配列にする。
+///
+/// - **共有指定の値は送らない**（会社の代表メール／代表電話。人ではなく組織のものなので）
+/// - 主値を先頭に置く。People API は配列の先頭を主値として扱う
+fn write_typed_values(values: &[crate::models::ContactValue], flat: Option<&str>) -> Vec<Value> {
+    let mut kept: Vec<&crate::models::ContactValue> = values
+        .iter()
+        .filter(|v| !v.is_shared && !v.value.trim().is_empty())
+        .collect();
+    if kept.is_empty() {
+        // 複数値を持たない連絡先は主値だけを送る。
+        return flat
+            .and_then(non_empty)
+            .map(|v| vec![json!({ "value": v })])
+            .unwrap_or_default();
+    }
+    kept.sort_by_key(|v| !v.is_primary);
+    kept.iter()
+        .map(|v| match write_type(v.label.as_deref()) {
+            Some(t) => json!({ "value": v.value.trim(), "type": t }),
+            None => json!({ "value": v.value.trim() }),
+        })
+        .collect()
+}
+
+fn write_addresses(addresses: &[crate::models::ContactAddress]) -> Vec<Value> {
+    let mut kept: Vec<&crate::models::ContactAddress> = addresses.iter().collect();
+    kept.sort_by_key(|a| !a.is_primary);
+    kept.iter()
+        .map(|a| {
+            let mut o = serde_json::Map::new();
+            let mut put = |k: &str, v: &Option<String>| {
+                if let Some(v) = v.as_deref().and_then(non_empty) {
+                    o.insert(k.to_string(), Value::String(v));
+                }
+            };
+            put("postalCode", &a.postal);
+            put("region", &a.region);
+            put("city", &a.city);
+            put("streetAddress", &a.street);
+            put("extendedAddress", &a.extended);
+            put("country", &a.country);
+            if let Some(t) = write_type(a.label.as_deref()) {
+                o.insert("type".to_string(), Value::String(t));
+            }
+            Value::Object(o)
+        })
+        .collect()
+}
+
+/// 住所録の誕生日表記（`YYYY-MM-DD` / 年なしの `--MM-DD`）を People API の形へ。
+/// どちらでもない自由入力は `text` としてそのまま送る。
+fn write_birthday(raw: &str) -> Option<Value> {
+    let b = raw.trim();
+    if b.is_empty() {
+        return None;
+    }
+    let num = |s: &str| s.parse::<u32>().ok().filter(|n| *n > 0);
+    if let Some(md) = b.strip_prefix("--") {
+        // 年なし（vCard 4.0 と同じ表記）。
+        if let Some((m, d)) = md.split_once('-') {
+            if let (Some(m), Some(d)) = (num(m), num(d)) {
+                return Some(json!({ "date": { "month": m, "day": d } }));
+            }
+        }
+        return Some(json!({ "text": b }));
+    }
+    let parts: Vec<&str> = b.split('-').collect();
+    if parts.len() == 3 {
+        if let (Ok(y), Some(m), Some(d)) = (parts[0].parse::<i32>(), num(parts[1]), num(parts[2])) {
+            return Some(json!({ "date": { "year": y, "month": m, "day": d } }));
+        }
+    }
+    Some(json!({ "text": b }))
+}
+
+/// 連絡先 1 件を People API の書き込み本文にする。
+///
+/// `etag` は更新時に必須（読んだ版のものを渡す）。作成時は None。
+///
+/// `updatePersonFields`（[`super::WRITE_PERSON_FIELDS`]）に挙げた項目は**本文に無ければ
+/// Google 側で消える**ので、空でもキー自体は必ず入れる（ローカルで消した項目が
+/// Google 側にも反映されるように）。
+pub fn person_write_from_contact(c: &ContactSummary, etag: Option<&str>) -> Value {
+    // People API の displayName は読み取り専用。姓名に分けて送る必要がある。
+    // Rondine 側が姓名を持たない（表示名だけの）連絡先は、表示名を姓に入れる
+    // — 日本語の氏名は姓が先なので、Google 側の表示も元の並びのままになる。
+    let mut name = serde_json::Map::new();
+    let family = c.family_name.as_deref().and_then(non_empty);
+    let given = c.given_name.as_deref().and_then(non_empty);
+    match (family, given) {
+        (None, None) => {
+            if let Some(dn) = non_empty(&c.display_name) {
+                name.insert("familyName".into(), Value::String(dn));
+            }
+        }
+        (f, g) => {
+            if let Some(f) = f {
+                name.insert("familyName".into(), Value::String(f));
+            }
+            if let Some(g) = g {
+                name.insert("givenName".into(), Value::String(g));
+            }
+        }
+    }
+    if let Some(v) = c.phonetic_family.as_deref().and_then(non_empty) {
+        name.insert("phoneticFamilyName".into(), Value::String(v));
+    }
+    if let Some(v) = c.phonetic_given.as_deref().and_then(non_empty) {
+        name.insert("phoneticGivenName".into(), Value::String(v));
+    }
+
+    let mut org = serde_json::Map::new();
+    for (k, v) in [
+        ("name", &c.organization),
+        ("title", &c.org_title),
+        ("department", &c.org_department),
+    ] {
+        if let Some(v) = v.as_deref().and_then(non_empty) {
+            org.insert(k.to_string(), Value::String(v));
+        }
+    }
+
+    let mut body = json!({
+        "names": if name.is_empty() { vec![] } else { vec![Value::Object(name)] },
+        "emailAddresses": write_typed_values(&c.emails, c.email.as_deref()),
+        "phoneNumbers": write_typed_values(&c.phones, c.phone.as_deref()),
+        "addresses": write_addresses(&c.addresses),
+        "organizations": if org.is_empty() { vec![] } else { vec![Value::Object(org)] },
+        "biographies": c.note.as_deref().and_then(non_empty)
+            .map(|n| vec![json!({ "value": n, "contentType": "TEXT_PLAIN" })])
+            .unwrap_or_default(),
+        "birthdays": c.birthday.as_deref().and_then(write_birthday)
+            .map(|b| vec![b]).unwrap_or_default(),
+    });
+    if let (Some(etag), Some(obj)) = (etag, body.as_object_mut()) {
+        obj.insert("etag".to_string(), Value::String(etag.to_string()));
+    }
+    body
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +457,170 @@ mod tests {
         let c = imported_from_person(&p, &HashMap::new()).unwrap();
         assert_eq!(c.all_phones[0].label, None);
         assert_eq!(c.all_phones[1].label.as_deref(), Some("実家"));
+    }
+
+    // ── 送信（Rondine → Google） ──────────────────────────────────
+
+    fn contact(name: &str) -> ContactSummary {
+        ContactSummary {
+            id: 1,
+            display_name: name.into(),
+            family_name: None,
+            given_name: None,
+            phonetic_family: None,
+            phonetic_given: None,
+            name_kana: None,
+            email: None,
+            phone: None,
+            organization: None,
+            org_id: None,
+            org_title: None,
+            org_department: None,
+            address: None,
+            birthday: None,
+            note: None,
+            is_favorite: false,
+            is_business: false,
+            allow_remote_images: false,
+            deleted_at: None,
+            emails: Vec::new(),
+            phones: Vec::new(),
+            addresses: Vec::new(),
+            tags: Vec::new(),
+        }
+    }
+
+    fn value(label: Option<&str>, v: &str, primary: bool, shared: bool) -> crate::models::ContactValue {
+        crate::models::ContactValue {
+            id: 0,
+            label: label.map(str::to_string),
+            value: v.into(),
+            is_primary: primary,
+            is_shared: shared,
+        }
+    }
+
+    #[test]
+    fn write_puts_a_display_only_name_into_the_family_name() {
+        // People API の displayName は読み取り専用。姓名に分けて送るしかない。
+        let b = person_write_from_contact(&contact("山田太郎"), None);
+        assert_eq!(b["names"][0]["familyName"], "山田太郎");
+        assert!(b["names"][0].get("givenName").is_none());
+    }
+
+    #[test]
+    fn write_keeps_a_structured_name_as_is() {
+        let mut c = contact("山田 太郎");
+        c.family_name = Some("山田".into());
+        c.given_name = Some("太郎".into());
+        c.phonetic_family = Some("ヤマダ".into());
+        c.phonetic_given = Some("タロウ".into());
+        let b = person_write_from_contact(&c, None);
+        assert_eq!(b["names"][0]["familyName"], "山田");
+        assert_eq!(b["names"][0]["givenName"], "太郎");
+        assert_eq!(b["names"][0]["phoneticFamilyName"], "ヤマダ");
+        assert_eq!(b["names"][0]["phoneticGivenName"], "タロウ");
+    }
+
+    #[test]
+    fn write_maps_labels_back_to_google_types() {
+        let mut c = contact("山田太郎");
+        c.phones = vec![
+            value(Some("携帯"), "090-1111-2222", true, false),
+            value(Some("FAX"), "03-1111-2222", false, false),
+            value(Some("直通"), "03-3333-4444", false, false),
+        ];
+        let b = person_write_from_contact(&c, None);
+        assert_eq!(b["phoneNumbers"][0]["type"], "mobile");
+        assert_eq!(b["phoneNumbers"][1]["type"], "otherFax");
+        // 語彙に無いラベルはカスタム種別としてそのまま送る。
+        assert_eq!(b["phoneNumbers"][2]["type"], "直通");
+    }
+
+    #[test]
+    fn write_puts_the_primary_value_first() {
+        // People API は配列の先頭を主値として扱う。
+        let mut c = contact("山田太郎");
+        c.emails = vec![
+            value(Some("職場"), "work@x.jp", false, false),
+            value(Some("自宅"), "home@x.jp", true, false),
+        ];
+        let b = person_write_from_contact(&c, None);
+        assert_eq!(b["emailAddresses"][0]["value"], "home@x.jp");
+        assert_eq!(b["emailAddresses"][0]["type"], "home");
+    }
+
+    #[test]
+    fn write_skips_values_shared_with_the_company() {
+        // 代表メール・代表電話は人ではなく組織のもの。Google 側に対応概念が無いので送らない。
+        let mut c = contact("山田太郎");
+        c.emails = vec![
+            value(None, "taro@x.jp", true, false),
+            value(Some("代表"), "info@x.jp", false, true),
+        ];
+        let b = person_write_from_contact(&c, None);
+        assert_eq!(b["emailAddresses"].as_array().unwrap().len(), 1);
+        assert_eq!(b["emailAddresses"][0]["value"], "taro@x.jp");
+    }
+
+    #[test]
+    fn write_falls_back_to_the_flat_value() {
+        // 複数値を持たない連絡先（一覧から作った等）は主値だけを送る。
+        let mut c = contact("山田太郎");
+        c.email = Some("taro@x.jp".into());
+        let b = person_write_from_contact(&c, None);
+        assert_eq!(b["emailAddresses"][0]["value"], "taro@x.jp");
+    }
+
+    #[test]
+    fn write_converts_the_three_birthday_shapes() {
+        let mut c = contact("山田太郎");
+        c.birthday = Some("1980-05-03".into());
+        let b = person_write_from_contact(&c, None);
+        assert_eq!(b["birthdays"][0]["date"]["year"], 1980);
+        assert_eq!(b["birthdays"][0]["date"]["month"], 5);
+        assert_eq!(b["birthdays"][0]["date"]["day"], 3);
+
+        // 年なし（vCard 4.0 と同じ表記）。
+        c.birthday = Some("--05-03".into());
+        let b = person_write_from_contact(&c, None);
+        assert!(b["birthdays"][0]["date"].get("year").is_none());
+        assert_eq!(b["birthdays"][0]["date"]["month"], 5);
+
+        // 日付として読めないものは原文のまま送る。
+        c.birthday = Some("昭和55年ごろ".into());
+        let b = person_write_from_contact(&c, None);
+        assert_eq!(b["birthdays"][0]["text"], "昭和55年ごろ");
+    }
+
+    #[test]
+    fn write_carries_the_etag_when_updating() {
+        let b = person_write_from_contact(&contact("山田太郎"), Some("etag-1"));
+        assert_eq!(b["etag"], "etag-1");
+        // 作成時は etag を送らない（送ると弾かれる）。
+        let b = person_write_from_contact(&contact("山田太郎"), None);
+        assert!(b.get("etag").is_none());
+    }
+
+    #[test]
+    fn write_sends_empty_arrays_so_cleared_fields_are_cleared() {
+        // updatePersonFields に挙げた項目は「本文に無ければ消える」。ローカルで消した項目が
+        // Google 側にも反映されるよう、空でもキーは必ず入れる。
+        let b = person_write_from_contact(&contact("山田太郎"), None);
+        for key in ["emailAddresses", "phoneNumbers", "addresses", "organizations", "biographies", "birthdays"] {
+            assert_eq!(
+                b[key].as_array().map(Vec::len),
+                Some(0),
+                "{key} は空配列で送る"
+            );
+        }
+    }
+
+    #[test]
+    fn write_does_not_touch_labels() {
+        // ラベル（memberships）の同期は後続の段。いま送ると Google 側のラベル分けを消す。
+        assert!(!super::super::WRITE_PERSON_FIELDS.contains("memberships"));
+        let b = person_write_from_contact(&contact("山田太郎"), None);
+        assert!(b.get("memberships").is_none());
     }
 }

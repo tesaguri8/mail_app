@@ -2371,6 +2371,21 @@ pub async fn gcontacts_sync(
     google::contacts::sync::sync_account(store.inner(), &access, account_id).await
 }
 
+/// 「Rondine で新しく作った連絡先も Google 側に作る」設定を切り替える。
+///
+/// 既定は無効。住所録を Google へ上げるかどうかは利用者が決めることなので、明示的に
+/// 有効にしたときだけローカル生まれの連絡先を送る。
+#[tauri::command]
+pub fn gcontacts_set_push_new(
+    store: State<Store>,
+    account_id: i64,
+    enabled: bool,
+) -> Result<(), String> {
+    store
+        .set_push_new_contacts(account_id, enabled)
+        .map_err(|e| e.to_string())
+}
+
 /// 照合の下見: 台帳の未照合分を住所録と突き合わせ、紐付く／起こす件数だけを返す（DB は変えない）。
 #[tauri::command]
 pub fn gcontacts_match_preview(

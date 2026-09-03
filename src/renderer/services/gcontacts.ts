@@ -23,3 +23,7 @@ export const gcontactsMatchPreview = (accountId: number) =>
 /** 照合を適用する（紐付け＋新規作成）。 */
 export const gcontactsMatchApply = (accountId: number) =>
   invoke<GcontactsMatchResult>('gcontacts_match_apply', { accountId });
+
+/** 「Rondine で新しく作った連絡先も Google 側に作る」設定を切り替える。 */
+export const gcontactsSetPushNew = (accountId: number, enabled: boolean) =>
+  invoke<void>('gcontacts_set_push_new', { accountId, enabled });

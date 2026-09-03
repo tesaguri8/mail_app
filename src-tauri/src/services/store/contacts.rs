@@ -282,7 +282,7 @@ impl Store {
                          email = ?7, phone = ?8, organization = ?9, org_title = ?10, \
                          org_department = ?11, address = ?12, birthday = ?13, note = ?14, \
                          is_favorite = ?15, is_business = ?16, allow_remote_images = ?17, \
-                         org_id = ?18, updated_at = CURRENT_TIMESTAMP \
+                         org_id = ?18, dirty = 1, updated_at = CURRENT_TIMESTAMP \
                      WHERE id = ?19",
                     params![
                         input.display_name,
@@ -314,9 +314,9 @@ impl Store {
                          (display_name, family_name, given_name, phonetic_family, phonetic_given, \
                           name_kana, email, phone, organization, org_title, org_department, \
                           address, birthday, note, is_favorite, is_business, allow_remote_images, \
-                          org_id) \
+                          org_id, dirty) \
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
-                          ?16, ?17, ?18)",
+                          ?16, ?17, ?18, 1)",
                     params![
                         input.display_name,
                         input.family_name,
@@ -364,20 +364,22 @@ impl Store {
     }
 
     /// 連絡先を論理削除（ゴミ箱へ。deleted_at を立てて一覧から隠す。保持期間後に完全削除）。
+    /// 連携済みなら次の同期で Google 側も削除する（dirty=1）。
     pub fn delete_contact(&self, id: i64) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE contacts SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?1",
+            "UPDATE contacts SET deleted_at = CURRENT_TIMESTAMP, dirty = 1 WHERE id = ?1",
             params![id],
         )?;
         Ok(())
     }
 
     /// 論理削除した連絡先を復元する（deleted_at をクリア）。
+    /// Google 側は既に消えている可能性があるため、次の同期で作り直せるよう dirty=1 にする。
     pub fn restore_contact(&self, id: i64) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE contacts SET deleted_at = NULL WHERE id = ?1",
+            "UPDATE contacts SET deleted_at = NULL, dirty = 1 WHERE id = ?1",
             params![id],
         )?;
         Ok(())
@@ -443,16 +445,20 @@ impl Store {
                     None
                 };
 
-                match existing {
+                // 取り込みはローカルの変更なので、連携済みなら次の同期で Google へ送る
+                // （新規をどう扱うかは google_accounts.push_new_contacts が決める）。
+                let touched = match existing {
                     Some(id) => {
                         update_from_import(&tx, id, c)?;
                         updated += 1;
+                        id
                     }
                     None => {
-                        insert_from_import(&tx, c)?;
                         imported += 1;
+                        insert_from_import(&tx, c)?
                     }
-                }
+                };
+                tx.execute("UPDATE contacts SET dirty = 1 WHERE id = ?1", params![touched])?;
             }
         }
         tx.commit()?;
@@ -791,7 +797,7 @@ impl Store {
                      email = ?1, phone = ?2, organization = ?3, org_title = ?4, \
                      org_department = ?5, name_kana = ?6, address = ?7, birthday = ?8, note = ?9, \
                      is_favorite = ?10, is_business = ?11, allow_remote_images = ?12, \
-                     updated_at = CURRENT_TIMESTAMP \
+                     dirty = 1, updated_at = CURRENT_TIMESTAMP \
                  WHERE id = ?13",
                     params![
                         email,
@@ -2429,7 +2435,9 @@ mod tests {
 
 /// 既存連絡先へインポート値を反映。新値が NULL の項目は既存を残す（COALESCE）。
 /// is_favorite / is_business / allow_remote_images は触らない（ユーザー設定を温存）。
-fn update_from_import(
+/// 取り込み中間表現で既存の連絡先を更新する。ユーザーが入れた値は COALESCE で温存し、
+/// `dirty` は触らない（取り込み由来の更新を「未送信のローカル変更」にしないため）。
+pub(super) fn update_from_import(
     tx: &rusqlite::Transaction,
     id: i64,
     c: &ImportedContact,

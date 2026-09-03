@@ -238,6 +238,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 54,
         sql: include_str!("migrations/0054_contact_identities.sql"),
     },
+    Migration {
+        // 55 は Google 連絡先の送信（push）。contacts.dirty と、新規をどう扱うかの既定。
+        version: 55,
+        sql: include_str!("migrations/0055_contact_push.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
@@ -347,6 +352,8 @@ mod tests {
                name_kana TEXT, note TEXT,
                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, deleted_at TEXT);
+             -- 住所録（0016 で作成）。0055(contacts.dirty 追加)が動くよう用意する。
+             CREATE TABLE contacts (id INTEGER PRIMARY KEY, display_name TEXT NOT NULL);
              PRAGMA user_version = 35;",
         )
         .unwrap();
@@ -513,6 +520,8 @@ mod tests {
                  UNIQUE(provider, email));
              INSERT INTO calendar_accounts (email, external_id, last_sync_at)
                  VALUES ('a@gmail.com', 'sub123', '2026-08-20 01:23:45');
+             -- 0054(contact_identities の外部キー)・0055(contacts.dirty 追加)が動くよう用意する。
+             CREATE TABLE contacts (id INTEGER PRIMARY KEY, display_name TEXT NOT NULL);
              PRAGMA user_version = 52;",
         )
         .unwrap();

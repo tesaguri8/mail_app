@@ -41,12 +41,14 @@ fn row_to_account(r: &Row) -> rusqlite::Result<GoogleAccount> {
         sync_contacts: r.get::<_, i64>(3)? != 0,
         last_calendar_sync_at: r.get(4)?,
         last_contacts_sync_at: r.get(5)?,
+        push_new_contacts: r.get::<_, i64>(6)? != 0,
     })
 }
 
 /// 一覧・単票で共通に使う選択列（row_to_account の並びと対応）。
 const ACCOUNT_COLUMNS: &str =
-    "id, email, sync_calendar, sync_contacts, last_calendar_sync_at, last_contacts_sync_at";
+    "id, email, sync_calendar, sync_contacts, last_calendar_sync_at, last_contacts_sync_at, \
+     push_new_contacts";
 
 impl Store {
     /// Google アカウントを登録（既存なら external_id と許可スコープを更新）し、行 id を返す。

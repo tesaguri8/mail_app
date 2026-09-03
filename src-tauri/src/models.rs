@@ -483,6 +483,8 @@ pub struct GoogleAccount {
     pub sync_calendar: bool,
     /// 連絡先同期を有効にしているか。
     pub sync_contacts: bool,
+    /// Rondine で新しく作った連絡先も Google 側に作るか（既定 false）。
+    pub push_new_contacts: bool,
     /// カレンダーの最終同期時刻（UTC 文字列）。未同期なら None。
     pub last_calendar_sync_at: Option<String>,
     /// 連絡先の最終同期時刻（UTC 文字列）。未同期なら None。
@@ -505,20 +507,26 @@ pub struct GcalSyncResult {
     pub calendars: i32,
 }
 
-/// Google 連絡先取り込みの結果サマリ。
+/// Google 連絡先同期（push → pull）の結果サマリ。
 ///
-/// 取り込みは `contact_identities`（台帳）までで、住所録には反映しない。`unlinked` は
-/// 「取り込んだが、まだローカルの誰とも結び付いていない」件数＝照合フェーズの対象数。
+/// 取り込んだ連絡先のうち**まだ住所録の誰とも結び付いていない**ものは `contact_identities`
+/// （台帳）に留まる。`unlinked` はその件数＝「住所録へ反映」（照合）の対象数。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]
 pub struct GcontactsSyncResult {
     /// Google から取り込んだ（新規＋更新）件数。
     pub pulled: i32,
+    /// Google へ送った（作成＋更新）件数。
+    pub pushed: i32,
     /// Google 側で削除された印を付けた件数。
     pub deleted_in: i32,
+    /// ローカルの削除を Google 側へ反映した件数。
+    pub deleted_out: i32,
     /// 連絡先として成立せず飛ばした件数（名前もメールも電話も無い等）。
     pub skipped: i32,
-    /// 未照合の件数（照合フェーズの対象数）。
+    /// etag 不一致で送れなかった件数（Google 側が先に更新されていた。次回に持ち越す）。
+    pub conflicts: i32,
+    /// 未照合の件数（「住所録へ反映」の対象数）。
     pub unlinked: i32,
 }
 

@@ -58,6 +58,7 @@ import { gcalSync } from '../services/gcal';
 import {
   gcontactsMatchApply,
   gcontactsMatchPreview,
+  gcontactsSetPushNew,
   gcontactsSync,
 } from '../services/gcontacts';
 import type { GcontactsMatchResult } from '@bindings/GcontactsMatchResult';
@@ -819,10 +820,14 @@ function GoogleCalendarSettings() {
       setMessage(
         t('settings.gcontactsSyncDone', {
           pulled: r.pulled,
+          pushed: r.pushed,
           deletedIn: r.deleted_in,
+          deletedOut: r.deleted_out,
           skipped: r.skipped,
           unlinked: r.unlinked,
-        }),
+        }) +
+          // 競合は稀なので、起きたときだけ言い添える（毎回 0 件と出しても読みにくい）。
+          (r.conflicts > 0 ? t('settings.gcontactsSyncConflicts', { count: r.conflicts }) : ''),
       );
       googleAccounts().then(setAccounts).catch(() => undefined);
     } catch (e) {
@@ -874,6 +879,17 @@ function GoogleCalendarSettings() {
       setError(String(e));
     } finally {
       setBusy('idle');
+    }
+  };
+
+  const togglePushNew = async (id: number, enabled: boolean) => {
+    if (!isTauri || busy !== 'idle') return;
+    setError(null);
+    try {
+      await gcontactsSetPushNew(id, enabled);
+      setAccounts(await googleAccounts());
+    } catch (e) {
+      setError(String(e));
     }
   };
 
@@ -976,77 +992,88 @@ function GoogleCalendarSettings() {
         ) : (
           <ul className="space-y-2">
             {accounts.map((a) => (
-              <li
-                key={a.id}
-                className="flex items-center justify-between gap-3 rounded-lg bg-white/5 px-3 py-2"
-              >
-                <div className="min-w-0">
-                  <div className="truncate text-sm text-white/90">{a.email}</div>
-                  <div className="text-xs text-white/40">
-                    {a.last_calendar_sync_at
-                      ? t('settings.gcalLastSync', {
-                          // SQLite の CURRENT_TIMESTAMP は 'YYYY-MM-DD HH:MM:SS'(UTC)。ISO 化して解釈。
-                          when: new Date(a.last_calendar_sync_at.replace(' ', 'T') + 'Z').toLocaleString(),
-                        })
-                      : t('settings.gcalNeverSynced')}
-                  </div>
-                  {a.sync_contacts && (
+              <li key={a.id} className="space-y-2 rounded-lg bg-white/5 px-3 py-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm text-white/90">{a.email}</div>
                     <div className="text-xs text-white/40">
-                      {a.last_contacts_sync_at
-                        ? t('settings.gcontactsLastSync', {
-                            when: new Date(
-                              a.last_contacts_sync_at.replace(' ', 'T') + 'Z',
-                            ).toLocaleString(),
+                      {a.last_calendar_sync_at
+                        ? t('settings.gcalLastSync', {
+                            // SQLite の CURRENT_TIMESTAMP は 'YYYY-MM-DD HH:MM:SS'(UTC)。ISO 化して解釈。
+                            when: new Date(a.last_calendar_sync_at.replace(' ', 'T') + 'Z').toLocaleString(),
                           })
-                        : t('settings.gcontactsNeverSynced')}
+                        : t('settings.gcalNeverSynced')}
                     </div>
-                  )}
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <button
-                    onClick={() => syncNow(a.id)}
-                    disabled={busy !== 'idle'}
-                    className="flex items-center gap-1 rounded-md bg-white/15 px-2.5 py-1.5 text-xs font-medium hover:bg-white/25 disabled:opacity-40"
-                  >
-                    <RefreshCw size={13} className={busy === 'syncing' ? 'animate-spin' : ''} />
-                    {busy === 'syncing' ? t('settings.gcalSyncing') : t('settings.gcalSyncNow')}
-                  </button>
-                  {a.sync_contacts && (
+                    {a.sync_contacts && (
+                      <div className="text-xs text-white/40">
+                        {a.last_contacts_sync_at
+                          ? t('settings.gcontactsLastSync', {
+                              when: new Date(
+                                a.last_contacts_sync_at.replace(' ', 'T') + 'Z',
+                              ).toLocaleString(),
+                            })
+                          : t('settings.gcontactsNeverSynced')}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
                     <button
-                      onClick={() => syncContacts(a.id)}
+                      onClick={() => syncNow(a.id)}
                       disabled={busy !== 'idle'}
                       className="flex items-center gap-1 rounded-md bg-white/15 px-2.5 py-1.5 text-xs font-medium hover:bg-white/25 disabled:opacity-40"
                     >
-                      <RefreshCw
-                        size={13}
-                        className={busy === 'syncingContacts' ? 'animate-spin' : ''}
-                      />
-                      {busy === 'syncingContacts'
-                        ? t('settings.gcontactsSyncing')
-                        : t('settings.gcontactsSyncNow')}
+                      <RefreshCw size={13} className={busy === 'syncing' ? 'animate-spin' : ''} />
+                      {busy === 'syncing' ? t('settings.gcalSyncing') : t('settings.gcalSyncNow')}
                     </button>
-                  )}
-                  {a.sync_contacts && (
+                    {a.sync_contacts && (
+                      <button
+                        onClick={() => syncContacts(a.id)}
+                        disabled={busy !== 'idle'}
+                        className="flex items-center gap-1 rounded-md bg-white/15 px-2.5 py-1.5 text-xs font-medium hover:bg-white/25 disabled:opacity-40"
+                      >
+                        <RefreshCw
+                          size={13}
+                          className={busy === 'syncingContacts' ? 'animate-spin' : ''}
+                        />
+                        {busy === 'syncingContacts'
+                          ? t('settings.gcontactsSyncing')
+                          : t('settings.gcontactsSyncNow')}
+                      </button>
+                    )}
+                    {a.sync_contacts && (
+                      <button
+                        onClick={() => previewMatch(a.id)}
+                        disabled={busy !== 'idle'}
+                        className="flex items-center gap-1 rounded-md bg-white/15 px-2.5 py-1.5 text-xs font-medium hover:bg-white/25 disabled:opacity-40"
+                      >
+                        <Users size={13} />
+                        {busy === 'matchingContacts'
+                          ? t('settings.gcontactsMatching')
+                          : t('settings.gcontactsMatchNow')}
+                      </button>
+                    )}
                     <button
-                      onClick={() => previewMatch(a.id)}
+                      onClick={() => disconnect(a.id)}
                       disabled={busy !== 'idle'}
-                      className="flex items-center gap-1 rounded-md bg-white/15 px-2.5 py-1.5 text-xs font-medium hover:bg-white/25 disabled:opacity-40"
+                      className="flex items-center gap-1 rounded-md border border-white/20 px-2.5 py-1.5 text-xs text-white/70 hover:bg-white/10 disabled:opacity-40"
                     >
-                      <Users size={13} />
-                      {busy === 'matchingContacts'
-                        ? t('settings.gcontactsMatching')
-                        : t('settings.gcontactsMatchNow')}
+                      <Unlink size={13} />
+                      {t('settings.gcalDisconnect')}
                     </button>
-                  )}
-                  <button
-                    onClick={() => disconnect(a.id)}
-                    disabled={busy !== 'idle'}
-                    className="flex items-center gap-1 rounded-md border border-white/20 px-2.5 py-1.5 text-xs text-white/70 hover:bg-white/10 disabled:opacity-40"
-                  >
-                    <Unlink size={13} />
-                    {t('settings.gcalDisconnect')}
-                  </button>
+                  </div>
                 </div>
+                {/* 住所録を Google へ上げるかは利用者が決めることなので、既定は無効。 */}
+                {a.sync_contacts && (
+                  <label className="flex items-center gap-2 text-xs text-white/60">
+                    <input
+                      type="checkbox"
+                      checked={a.push_new_contacts}
+                      onChange={(e) => togglePushNew(a.id, e.target.checked)}
+                      disabled={busy !== 'idle'}
+                    />
+                    {t('settings.gcontactsPushNew')}
+                  </label>
+                )}
               </li>
             ))}
           </ul>

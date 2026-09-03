@@ -19,6 +19,10 @@ sync_calendar: boolean,
  */
 sync_contacts: boolean, 
 /**
+ * Rondine で新しく作った連絡先も Google 側に作るか（既定 false）。
+ */
+push_new_contacts: boolean, 
+/**
  * カレンダーの最終同期時刻（UTC 文字列）。未同期なら None。
  */
 last_calendar_sync_at: string | null, 

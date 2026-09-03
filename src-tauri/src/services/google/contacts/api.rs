@@ -8,6 +8,8 @@ use serde::Deserialize;
 pub enum ApiError {
     /// syncToken が失効した（410 Gone / EXPIRED_SYNC_TOKEN）。フル同期し直す必要がある。
     SyncTokenExpired,
+    /// 送った etag が古い（Google 側が先に更新されている）。読み直してから送り直す。
+    EtagConflict,
     /// その他のエラー（メッセージ）。
     Message(String),
 }
@@ -16,6 +18,7 @@ impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ApiError::SyncTokenExpired => write!(f, "同期トークンが失効しました"),
+            ApiError::EtagConflict => write!(f, "Google 側が先に更新されています（etag 不一致）"),
             ApiError::Message(m) => write!(f, "{m}"),
         }
     }
@@ -217,6 +220,10 @@ async fn check(resp: reqwest::Response) -> Result<reqwest::Response, ApiError> {
     if status.as_u16() == 410 || body.contains("EXPIRED_SYNC_TOKEN") {
         return Err(ApiError::SyncTokenExpired);
     }
+    // 更新は読んだ版の etag を要求する。古いと 400/409/412 で etag に触れた本文が返る。
+    if matches!(status.as_u16(), 400 | 409 | 412) && body.contains("etag") {
+        return Err(ApiError::EtagConflict);
+    }
     Err(ApiError::Message(format!(
         "People API エラー (HTTP {}): {}",
         status.as_u16(),
@@ -280,4 +287,59 @@ pub async fn list_contact_groups(
         }
     }
     Ok(out)
+}
+
+/// 連絡先を 1 件作成する（`people:createContact`）。作成された Person（resourceName / etag つき）を返す。
+pub async fn create_contact(
+    client: &reqwest::Client,
+    token: &str,
+    body: &serde_json::Value,
+) -> Result<GPerson, ApiError> {
+    let resp = client
+        .post(format!("{}/people:createContact", super::API_BASE))
+        .bearer_auth(token)
+        .query(&[("personFields", super::PERSON_FIELDS)])
+        .json(body)
+        .send()
+        .await?;
+    Ok(check(resp).await?.json().await?)
+}
+
+/// 連絡先を 1 件更新する（`people/*:updateContact`）。
+///
+/// `body` には**読んだ版の etag を必ず含める**こと（含めないと People API に弾かれる）。
+/// `updatePersonFields` に挙げた項目だけが置き換わり、挙げなかった項目は Google 側で保持される
+/// （＝Rondine が扱わない写真・カスタム項目は触らない）。
+pub async fn update_contact(
+    client: &reqwest::Client,
+    token: &str,
+    resource_name: &str,
+    body: &serde_json::Value,
+) -> Result<GPerson, ApiError> {
+    let resp = client
+        .patch(format!("{}/{resource_name}:updateContact", super::API_BASE))
+        .bearer_auth(token)
+        .query(&[
+            ("updatePersonFields", super::WRITE_PERSON_FIELDS),
+            ("personFields", super::PERSON_FIELDS),
+        ])
+        .json(body)
+        .send()
+        .await?;
+    Ok(check(resp).await?.json().await?)
+}
+
+/// 連絡先を 1 件削除する（`people/*:deleteContact`）。
+pub async fn delete_contact(
+    client: &reqwest::Client,
+    token: &str,
+    resource_name: &str,
+) -> Result<(), ApiError> {
+    let resp = client
+        .delete(format!("{}/{resource_name}:deleteContact", super::API_BASE))
+        .bearer_auth(token)
+        .send()
+        .await?;
+    check(resp).await?;
+    Ok(())
 }

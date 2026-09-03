@@ -8,7 +8,7 @@
 //! **その結果を住所録と台帳へ書き込む**こと。
 
 use super::{ApplyOutcome, Store};
-use crate::models::GcontactsMatchResult;
+use crate::models::{ContactSummary, GcontactsMatchResult};
 use crate::services::contact_match::{self, MatchDecision, MatchOutcome};
 use crate::services::vcard::ImportedContact;
 use rusqlite::{params, OptionalExtension};
@@ -28,6 +28,23 @@ pub struct RemoteContact {
     pub contact: Option<ImportedContact>,
 }
 
+/// push 対象のローカル変更（`contacts.dirty = 1`）1 件。Google へ送る素材。
+#[derive(Debug, Clone)]
+pub struct ContactPush {
+    pub contact_id: i64,
+    /// 連携済みなら People API の resourceName。None＝Google 側にまだ無い（作成する）。
+    pub external_id: Option<String>,
+    /// 更新に必須の etag（読んだ版のものを送らないと People API に弾かれる）。
+    pub etag: Option<String>,
+    /// ローカルで論理削除された（Google 側も削除する）。
+    pub deleted: bool,
+    /// 送る中身（削除のときは使わない）。
+    pub contact: ContactSummary,
+}
+
+/// 照合の計画: （材料にした台帳, 1 件ずつの判定）。両者は同じ順・同じ数で並ぶ。
+type ContactMatchPlan = (Vec<(String, ImportedContact)>, Vec<MatchOutcome>);
+
 /// 台帳 1 件の読み出し結果。
 #[derive(Debug, Clone)]
 pub struct ContactIdentity {
@@ -42,44 +59,72 @@ pub struct ContactIdentity {
 }
 
 impl Store {
-    /// Google 側の連絡先 1 件を台帳へ反映する。
+    /// Google 側の連絡先 1 件を、台帳と（紐付いていれば）住所録へ反映する。
     ///
-    /// 既存行の `contact_id`（照合済みの紐付け）は保持する。削除通知は印を付けるだけで行を
-    /// 消さない（ローカル連絡先をどう扱うかは送信フェーズの判断で、取り込みでは決めない）。
+    /// 既存行の `contact_id`（照合済みの紐付け）は保持する。紐付いたローカル連絡先は、
+    /// **未送信のローカル変更（`dirty = 1`）が無いときだけ**上書きする。push → pull の順で
+    /// 走るので、送信に成功したものは既に `dirty = 0` になっている。送信に失敗して残った
+    /// 変更を取り込みで潰さないための条件。
     pub fn apply_remote_contact(
         &self,
         account_id: i64,
         remote: &RemoteContact,
     ) -> rusqlite::Result<ApplyOutcome> {
-        let conn = self.conn.lock().unwrap();
-        if remote.deleted {
-            let n = conn.execute(
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let outcome = if remote.deleted {
+            let n = tx.execute(
                 "UPDATE contact_identities SET remote_deleted = 1, fetched_at = CURRENT_TIMESTAMP \
                  WHERE provider = 'google' AND account_id = ?1 AND external_id = ?2",
                 params![account_id, remote.external_id],
             )?;
-            // 取り込んだ覚えのない ID の削除通知は無視する。
-            return Ok(if n > 0 {
+            if n > 0 {
+                // Google 側で消えたので、紐付いたローカル連絡先もゴミ箱へ（完全削除はしない）。
+                tx.execute(
+                    "UPDATE contacts SET deleted_at = CURRENT_TIMESTAMP \
+                     WHERE dirty = 0 AND deleted_at IS NULL AND id IN ( \
+                         SELECT contact_id FROM contact_identities \
+                         WHERE provider = 'google' AND account_id = ?1 AND external_id = ?2 \
+                           AND contact_id IS NOT NULL)",
+                    params![account_id, remote.external_id],
+                )?;
                 ApplyOutcome::Deleted
             } else {
+                // 取り込んだ覚えのない ID の削除通知は無視する。
                 ApplyOutcome::Skipped
-            });
-        }
-
-        let Some(contact) = remote.contact.as_ref() else {
-            return Ok(ApplyOutcome::Skipped);
+            }
+        } else if let Some(contact) = remote.contact.as_ref() {
+            // 保存に失敗する JSON は無いはずだが、失敗しても同期全体は止めない。
+            let snapshot = serde_json::to_string(contact).ok();
+            tx.execute(
+                "INSERT INTO contact_identities \
+                     (provider, account_id, external_id, etag, snapshot, remote_deleted, fetched_at) \
+                 VALUES ('google', ?1, ?2, ?3, ?4, 0, CURRENT_TIMESTAMP) \
+                 ON CONFLICT(provider, account_id, external_id) DO UPDATE SET \
+                     etag = ?3, snapshot = ?4, remote_deleted = 0, fetched_at = CURRENT_TIMESTAMP",
+                params![account_id, remote.external_id, remote.etag, snapshot],
+            )?;
+            // 紐付いたローカル連絡先があれば、Google の正本で更新する。
+            let linked: Option<i64> = tx
+                .query_row(
+                    "SELECT ci.contact_id FROM contact_identities ci \
+                     JOIN contacts c ON c.id = ci.contact_id \
+                     WHERE ci.provider = 'google' AND ci.account_id = ?1 \
+                       AND ci.external_id = ?2 AND c.dirty = 0",
+                    params![account_id, remote.external_id],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .flatten();
+            if let Some(cid) = linked {
+                super::contacts::update_from_import(&tx, cid, contact)?;
+            }
+            ApplyOutcome::Upserted
+        } else {
+            ApplyOutcome::Skipped
         };
-        // 保存に失敗する JSON は無いはずだが、失敗しても同期全体は止めない。
-        let snapshot = serde_json::to_string(contact).ok();
-        conn.execute(
-            "INSERT INTO contact_identities \
-                 (provider, account_id, external_id, etag, snapshot, remote_deleted, fetched_at) \
-             VALUES ('google', ?1, ?2, ?3, ?4, 0, CURRENT_TIMESTAMP) \
-             ON CONFLICT(provider, account_id, external_id) DO UPDATE SET \
-                 etag = ?3, snapshot = ?4, remote_deleted = 0, fetched_at = CURRENT_TIMESTAMP",
-            params![account_id, remote.external_id, remote.etag, snapshot],
-        )?;
-        Ok(ApplyOutcome::Upserted)
+        tx.commit()?;
+        Ok(outcome)
     }
 
     /// 次回の増分同期トークンを保存する（None でフル同期に戻す）。
@@ -164,7 +209,7 @@ impl Store {
     fn build_contact_match_plan(
         &self,
         account_id: i64,
-    ) -> rusqlite::Result<(Vec<(String, ImportedContact)>, Vec<MatchOutcome>)> {
+    ) -> rusqlite::Result<ContactMatchPlan> {
         // ロックは各ヘルパーの内側で完結させる（Mutex は非再入）。
         let remote = self.unlinked_identities(account_id)?;
         let already_linked = self.linked_contact_ids(account_id)?;
@@ -210,6 +255,140 @@ impl Store {
         }
         tx.commit()?;
         Ok(report)
+    }
+
+    /// 「Rondine で新しく作った連絡先も Google 側に作る」設定。
+    /// 既定は false。住所録を Google へ上げるかは利用者が決めることなので、明示的に
+    /// 有効にしたときだけローカル生まれの連絡先を送る。
+    pub fn push_new_contacts(&self, account_id: i64) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT push_new_contacts FROM google_accounts WHERE id = ?1",
+            params![account_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()
+        .map(|v| v.unwrap_or(0) != 0)
+    }
+
+    /// 上の設定を変える。
+    pub fn set_push_new_contacts(&self, account_id: i64, enabled: bool) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE google_accounts SET push_new_contacts = ?2 WHERE id = ?1",
+            params![account_id, enabled as i64],
+        )?;
+        Ok(())
+    }
+
+    /// 未送信のローカル変更（`contacts.dirty = 1`）を送信順に返す。
+    ///
+    /// 対象は 2 種類:
+    /// - このアカウントの台帳を持つ連絡先（更新・削除）
+    /// - どの台帳にも無いローカル生まれの連絡先（新規作成）。
+    ///   ただし `push_new_contacts` が有効なときだけ
+    pub fn list_contacts_to_push(&self, account_id: i64) -> rusqlite::Result<Vec<ContactPush>> {
+        let push_new = self.push_new_contacts(account_id)?;
+        // (contact_id, external_id, etag, deleted) をまず集め、ロックを離してから中身を読む
+        // （get_contact が再ロックするため。Mutex は非再入）。
+        let rows: Vec<(i64, Option<String>, Option<String>, bool)> = {
+            let conn = self.conn.lock().unwrap();
+            let mut out = Vec::new();
+            let mut stmt = conn.prepare(
+                "SELECT c.id, ci.external_id, ci.etag, c.deleted_at IS NOT NULL \
+                 FROM contact_identities ci JOIN contacts c ON c.id = ci.contact_id \
+                 WHERE ci.provider = 'google' AND ci.account_id = ?1 AND c.dirty = 1 \
+                 ORDER BY c.id",
+            )?;
+            let linked = stmt.query_map(params![account_id], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, i64>(3)? != 0,
+                ))
+            })?;
+            for row in linked {
+                out.push(row?);
+            }
+            if push_new {
+                // ローカル生まれ＝どのアカウントの台帳にも現れない連絡先。削除済みは送らない
+                // （Google 側に存在しないので消すものが無い）。
+                let mut stmt = conn.prepare(
+                    "SELECT c.id FROM contacts c \
+                     WHERE c.dirty = 1 AND c.deleted_at IS NULL \
+                       AND NOT EXISTS ( \
+                           SELECT 1 FROM contact_identities ci WHERE ci.contact_id = c.id) \
+                     ORDER BY c.id",
+                )?;
+                let fresh = stmt.query_map([], |r| r.get::<_, i64>(0))?;
+                for id in fresh {
+                    out.push((id?, None, None, false));
+                }
+            }
+            out
+        };
+
+        rows.into_iter()
+            .map(|(contact_id, external_id, etag, deleted)| {
+                Ok(ContactPush {
+                    contact_id,
+                    external_id,
+                    etag,
+                    deleted,
+                    contact: self.get_contact(contact_id)?,
+                })
+            })
+            .collect()
+    }
+
+    /// 送信に成功した連絡先を連携済みにする（台帳に resourceName/etag を保存し dirty を落とす）。
+    pub fn mark_contact_pushed(
+        &self,
+        account_id: i64,
+        contact_id: i64,
+        external_id: &str,
+        etag: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO contact_identities \
+                 (provider, account_id, external_id, contact_id, etag, remote_deleted, fetched_at) \
+             VALUES ('google', ?1, ?2, ?3, ?4, 0, CURRENT_TIMESTAMP) \
+             ON CONFLICT(provider, account_id, external_id) DO UPDATE SET \
+                 contact_id = ?3, etag = ?4, remote_deleted = 0",
+            params![account_id, external_id, contact_id, etag],
+        )?;
+        conn.execute(
+            "UPDATE contacts SET dirty = 0 WHERE id = ?1",
+            params![contact_id],
+        )?;
+        Ok(())
+    }
+
+    /// 送信すべきものが無かった／送信が済んだので未送信の印を落とす。
+    pub fn clear_contact_dirty(&self, contact_id: i64) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE contacts SET dirty = 0 WHERE id = ?1",
+            params![contact_id],
+        )?;
+        Ok(())
+    }
+
+    /// Google 側で削除した連絡先の台帳に印を付ける（行は消さない）。
+    pub fn mark_identity_pushed_delete(
+        &self,
+        account_id: i64,
+        external_id: &str,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE contact_identities SET remote_deleted = 1, fetched_at = CURRENT_TIMESTAMP \
+             WHERE provider = 'google' AND account_id = ?1 AND external_id = ?2",
+            params![account_id, external_id],
+        )?;
+        Ok(())
     }
 
     /// 台帳 1 件を読み出す（照合フェーズ・送信フェーズ用）。
@@ -543,5 +722,188 @@ mod tests {
             Some(keep)
         );
         assert_eq!(s.count_unlinked_identities(acct).unwrap(), 0);
+    }
+
+    /// 台帳に取り込み、照合して紐付けたローカル連絡先の ID を返す（送信テストの下ごしらえ）。
+    fn linked_contact(s: &Store, acct: i64, rid: &str, name: &str, email: &str) -> i64 {
+        s.apply_remote_contact(acct, &remote_with_email(rid, name, email))
+            .unwrap();
+        s.apply_contact_matches(acct).unwrap();
+        s.contact_identity(acct, rid)
+            .unwrap()
+            .unwrap()
+            .contact_id
+            .expect("照合で紐付いているはず")
+    }
+
+    #[test]
+    fn editing_a_linked_contact_queues_it_for_push() {
+        let s = mem_store();
+        let acct = account(&s);
+        let id = linked_contact(&s, acct, "people/c1", "山田太郎", "t@y.jp");
+        // 取り込み直後は送るものが無い（Google から来たままなので）。
+        assert!(s.list_contacts_to_push(acct).unwrap().is_empty());
+
+        s.upsert_contact(&crate::models::ContactInput {
+            id: Some(id as i32),
+            display_name: "山田 太郎".into(),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let push = s.list_contacts_to_push(acct).unwrap();
+        assert_eq!(push.len(), 1);
+        assert_eq!(push[0].contact_id, id);
+        assert_eq!(push[0].external_id.as_deref(), Some("people/c1"));
+        assert_eq!(push[0].etag.as_deref(), Some("e1"), "更新には読んだ版の etag が要る");
+        assert!(!push[0].deleted);
+
+        // 送信できたら未送信の印が落ち、新しい etag が台帳に載る。
+        s.mark_contact_pushed(acct, id, "people/c1", Some("etag-new"))
+            .unwrap();
+        assert!(s.list_contacts_to_push(acct).unwrap().is_empty());
+        assert_eq!(
+            s.contact_identity(acct, "people/c1").unwrap().unwrap().etag.as_deref(),
+            Some("etag-new")
+        );
+    }
+
+    #[test]
+    fn deleting_a_linked_contact_queues_a_remote_delete() {
+        let s = mem_store();
+        let acct = account(&s);
+        let id = linked_contact(&s, acct, "people/c1", "山田太郎", "t@y.jp");
+        s.delete_contact(id).unwrap();
+
+        let push = s.list_contacts_to_push(acct).unwrap();
+        assert_eq!(push.len(), 1);
+        assert!(push[0].deleted);
+        assert_eq!(push[0].external_id.as_deref(), Some("people/c1"));
+    }
+
+    #[test]
+    fn locally_born_contacts_are_pushed_only_when_enabled() {
+        let s = mem_store();
+        let acct = account(&s);
+        s.upsert_contact(&crate::models::ContactInput {
+            display_name: "手元で作った人".into(),
+            email: Some("local@x.jp".into()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        // 既定では住所録を Google へ上げない。
+        assert!(!s.push_new_contacts(acct).unwrap());
+        assert!(s.list_contacts_to_push(acct).unwrap().is_empty());
+
+        s.set_push_new_contacts(acct, true).unwrap();
+        let push = s.list_contacts_to_push(acct).unwrap();
+        assert_eq!(push.len(), 1);
+        assert_eq!(push[0].external_id, None, "Google 側にまだ無いので作成する");
+        assert_eq!(push[0].contact.display_name, "手元で作った人");
+    }
+
+    #[test]
+    fn pulling_refreshes_a_linked_contact() {
+        let s = mem_store();
+        let acct = account(&s);
+        let id = linked_contact(&s, acct, "people/c1", "山田太郎", "t@y.jp");
+
+        // Google 側で組織が入った → 紐付いたローカル連絡先にも反映される。
+        let mut updated = remote_with_email("people/c1", "山田太郎", "t@y.jp");
+        if let Some(c) = updated.contact.as_mut() {
+            c.organization = Some("株式会社ヤマダ".into());
+        }
+        s.apply_remote_contact(acct, &updated).unwrap();
+        assert_eq!(
+            s.get_contact(id).unwrap().organization.as_deref(),
+            Some("株式会社ヤマダ")
+        );
+    }
+
+    #[test]
+    fn pulling_does_not_clobber_unsent_local_changes() {
+        let s = mem_store();
+        let acct = account(&s);
+        let id = linked_contact(&s, acct, "people/c1", "山田太郎", "t@y.jp");
+        // ローカルで編集（未送信）。
+        s.upsert_contact(&crate::models::ContactInput {
+            id: Some(id as i32),
+            display_name: "山田 太郎（編集済み）".into(),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let mut updated = remote_with_email("people/c1", "山田太郎", "t@y.jp");
+        if let Some(c) = updated.contact.as_mut() {
+            c.display_name = "Google 側の名前".into();
+        }
+        s.apply_remote_contact(acct, &updated).unwrap();
+
+        // 送れていない変更を取り込みで潰さない（次の送信で Google 側へ出る）。
+        assert_eq!(
+            s.get_contact(id).unwrap().display_name,
+            "山田 太郎（編集済み）"
+        );
+        // 台帳の内容と etag は更新されている（次の送信で新しい etag を使える）。
+        assert_eq!(
+            s.contact_identity(acct, "people/c1")
+                .unwrap()
+                .unwrap()
+                .snapshot
+                .unwrap()
+                .display_name,
+            "Google 側の名前"
+        );
+    }
+
+    #[test]
+    fn a_contact_deleted_on_google_goes_to_the_local_trash() {
+        let s = mem_store();
+        let acct = account(&s);
+        let id = linked_contact(&s, acct, "people/c1", "山田太郎", "t@y.jp");
+
+        let del = RemoteContact {
+            external_id: "people/c1".into(),
+            etag: None,
+            deleted: true,
+            contact: None,
+        };
+        s.apply_remote_contact(acct, &del).unwrap();
+
+        // 完全削除はしない（ゴミ箱に落とすだけ。誤削除から戻せるように）。
+        let conn = s.conn.lock().unwrap();
+        let deleted_at: Option<String> = conn
+            .query_row("SELECT deleted_at FROM contacts WHERE id = ?1", params![id], |r| r.get(0))
+            .unwrap();
+        assert!(deleted_at.is_some());
+    }
+
+    #[test]
+    fn a_remote_delete_leaves_unsent_local_changes_alone() {
+        let s = mem_store();
+        let acct = account(&s);
+        let id = linked_contact(&s, acct, "people/c1", "山田太郎", "t@y.jp");
+        s.upsert_contact(&crate::models::ContactInput {
+            id: Some(id as i32),
+            display_name: "まだ送っていない編集".into(),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let del = RemoteContact {
+            external_id: "people/c1".into(),
+            etag: None,
+            deleted: true,
+            contact: None,
+        };
+        s.apply_remote_contact(acct, &del).unwrap();
+
+        // ローカルに未送信の変更がある間は消さない（消してよいかは人が決める）。
+        let conn = s.conn.lock().unwrap();
+        let deleted_at: Option<String> = conn
+            .query_row("SELECT deleted_at FROM contacts WHERE id = ?1", params![id], |r| r.get(0))
+            .unwrap();
+        assert!(deleted_at.is_none());
     }
 }

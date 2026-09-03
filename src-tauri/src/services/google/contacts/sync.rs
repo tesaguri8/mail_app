@@ -1,15 +1,126 @@
-//! 同期エンジン: 連絡先グループ（ラベル）を引いてから、連絡先を取り込む（pull）。
+//! 同期エンジン: ローカルの変更を送り（push）、Google の正本を取り込む（pull）。
 //!
-//! **取り込みは台帳止まり。** 取り込んだ内容は `contact_identities` に溜まるだけで、住所録
-//! （`contacts`）には現れない。既存の住所録と全件重複させないためで、「ローカルの誰と同じ人か」
-//! を決めるのは照合（`services::contact_match`。利用者が「住所録へ反映」を押したとき）の役目。
-//! ローカル変更の送信（push）は後続。
+//! 順序はカレンダーと同じ **push → pull**。ローカルの変更を先に送ってから取り込むことで、
+//! 双方の状態が収束する（競合は概ね後勝ち）。
+//!
+//! **まだ住所録の誰とも結び付いていない連絡先は `contact_identities`（台帳）に留まる。**
+//! 初回は Google 側と住所録に同じ人が別 ID で並ぶので、そのまま住所録へ入れると丸ごと二重に
+//! なるため。「ローカルの誰と同じ人か」を決めるのは照合（`services::contact_match`。利用者が
+//! 「住所録へ反映」を押したとき）の役目で、取り込みでは決めない。
 
 use super::api::{self, ApiError};
 use super::convert;
 use crate::models::GcontactsSyncResult;
 use crate::services::store::{ApplyOutcome, GoogleService, RemoteContact, Store};
 use std::collections::HashMap;
+use std::sync::OnceLock;
+use tokio::sync::Mutex;
+
+/// Google への送信（作成／更新／削除）をプロセス全体で直列化するロック。
+///
+/// 同じアカウントの同期が重なると、同一の未送信連絡先（dirty=1）を二重に作成してしまう
+/// （カレンダーの `push_lock` と同じ理由）。ここで直列化すると、先の送信が
+/// `mark_contact_pushed` で dirty を落としてから後続が `list_contacts_to_push` を読む。
+fn push_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+/// 未送信のローカル変更（`contacts.dirty = 1`）を Google へ送る。
+///
+/// 1 件の失敗で全体を止めない（ログして次へ）。壊れた 1 件が他の送信や後続の取り込みを
+/// 阻害しないようにするため。etag 不一致は**送らずに未送信のまま残す**: 次の取り込みで
+/// 新しい etag を受け取り、その次の送信で通る（結果として後勝ち）。
+async fn push_contacts(
+    store: &Store,
+    client: &reqwest::Client,
+    token: &str,
+    account_id: i64,
+    result: &mut GcontactsSyncResult,
+) -> Result<(), String> {
+    let _guard = push_lock().lock().await;
+    let changes = store
+        .list_contacts_to_push(account_id)
+        .map_err(|e| e.to_string())?;
+    log::info!("push_contacts: account {account_id} 未送信 {} 件", changes.len());
+
+    for ch in changes {
+        match (ch.deleted, ch.external_id.as_deref()) {
+            // ローカルで削除 → Google 側も削除。未連携なら送るものは無い。
+            (true, gid) => {
+                if let Some(gid) = gid {
+                    if let Err(e) = api::delete_contact(client, token, gid).await {
+                        log::warn!(
+                            "push_contacts: DELETE 失敗 id={} gid={gid}（スキップ）: {e}",
+                            ch.contact_id
+                        );
+                        continue;
+                    }
+                    let _ = store.mark_identity_pushed_delete(account_id, gid);
+                    result.deleted_out += 1;
+                }
+                let _ = store.clear_contact_dirty(ch.contact_id);
+            }
+            // 連携済み → 更新（etag 必須）。
+            (false, Some(gid)) => {
+                let body = convert::person_write_from_contact(&ch.contact, ch.etag.as_deref());
+                match api::update_contact(client, token, gid, &body).await {
+                    Ok(g) => {
+                        let _ = store.mark_contact_pushed(
+                            account_id,
+                            ch.contact_id,
+                            g.resource_name.as_deref().unwrap_or(gid),
+                            g.etag.as_deref(),
+                        );
+                        result.pushed += 1;
+                    }
+                    Err(ApiError::EtagConflict) => {
+                        // Google 側が先に更新されている。未送信のまま残して次回に持ち越す。
+                        log::warn!(
+                            "push_contacts: etag 不一致 id={} gid={gid}（次回に持ち越し）",
+                            ch.contact_id
+                        );
+                        result.conflicts += 1;
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "push_contacts: UPDATE 失敗 id={} gid={gid}（スキップ）: {e}",
+                            ch.contact_id
+                        );
+                    }
+                }
+            }
+            // ローカル生まれ → 新規作成（push_new_contacts が有効なときだけここへ来る）。
+            (false, None) => match api::create_contact(client, token, &convert::person_write_from_contact(&ch.contact, None)).await {
+                Ok(g) => {
+                    match g.resource_name.as_deref() {
+                        Some(rn) => {
+                            let _ = store.mark_contact_pushed(
+                                account_id,
+                                ch.contact_id,
+                                rn,
+                                g.etag.as_deref(),
+                            );
+                        }
+                        // resourceName が返らないことは無いはずだが、返らなければ
+                        // 紐付けようが無いので未送信の印だけ落として二重作成を防ぐ。
+                        None => {
+                            let _ = store.clear_contact_dirty(ch.contact_id);
+                        }
+                    }
+                    result.pushed += 1;
+                }
+                Err(e) => {
+                    log::warn!(
+                        "push_contacts: CREATE 失敗 id={}（スキップ）: {e}",
+                        ch.contact_id
+                    );
+                }
+            },
+        }
+    }
+    Ok(())
+}
 
 /// 連絡先グループ ID → 名前の対応を作る。システムグループ（myContacts 等）はタグにしても
 /// 意味が無いので除く。
@@ -46,6 +157,12 @@ pub async fn sync_account(
             HashMap::new()
         }
     };
+
+    // 取り込みの前にローカルの変更を送る（送信に成功した分は dirty が落ち、直後の取り込みで
+    // Google の正本に上書きされる＝双方が収束する）。送信の失敗で取り込みまで止めない。
+    if let Err(e) = push_contacts(store, &client, access_token, account_id, &mut result).await {
+        log::warn!("gcontacts: 送信に失敗しました（取り込みは続行）: {e}");
+    }
 
     let mut sync_token = store.contacts_sync_token(account_id).map_err(|e| e.to_string())?;
     let mut page_token: Option<String> = None;

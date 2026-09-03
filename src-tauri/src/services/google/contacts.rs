@@ -19,3 +19,11 @@ pub const API_BASE: &str = "https://people.googleapis.com/v1";
 /// 写真・カスタム項目・関係などは扱わないので取らない（送信時も触らないため保持される）。
 pub const PERSON_FIELDS: &str = "names,emailAddresses,phoneNumbers,addresses,organizations,\
 biographies,birthdays,memberships,metadata";
+
+/// 送信時に置き換える項目（`updatePersonFields`）。
+///
+/// **挙げた項目は「本文に無ければ消える」**ので、Rondine が持っている項目だけを挙げる。
+/// `memberships`（ラベル）は挙げない — ラベル同期は後続の段で、いま送ると Google 側の
+/// ラベル分けを消してしまう。`metadata` は読み取り専用なので挙げられない。
+pub const WRITE_PERSON_FIELDS: &str =
+    "names,emailAddresses,phoneNumbers,addresses,organizations,biographies,birthdays";

@@ -1599,6 +1599,32 @@ fn add_contact_tag(conn: &Connection, cid: i64, name: &str) -> rusqlite::Result<
 }
 
 /// 連絡先のタグ集合を names にそろえる（既存を消して張り直す）。
+/// 外部サービス（Google のラベル）由来のタグだけを付け外しする。
+///
+/// `managed` は「その外部サービスが持っているタグ名」の集合。この集合に載っている名前だけを
+/// 外す対象にし、載っていない名前（利用者がアプリ内だけで付けたタグ）は Google 側の状態に
+/// 関わらず**触らない**。付けるほうは `wanted` をそのまま反映する（冪等）。
+pub(super) fn reconcile_managed_tags(
+    conn: &Connection,
+    cid: i64,
+    wanted: &[String],
+    managed: &std::collections::HashSet<String>,
+) -> rusqlite::Result<()> {
+    for name in load_tags(conn, cid)? {
+        if managed.contains(&name) && !wanted.iter().any(|w| w.trim() == name) {
+            conn.execute(
+                "DELETE FROM contact_tags WHERE contact_id = ?1 \
+                 AND tag_id IN (SELECT id FROM tags WHERE name = ?2)",
+                params![cid, name],
+            )?;
+        }
+    }
+    for name in wanted {
+        add_contact_tag(conn, cid, name)?;
+    }
+    Ok(())
+}
+
 fn set_contact_tags(conn: &Connection, cid: i64, names: &[String]) -> rusqlite::Result<()> {
     conn.execute(
         "DELETE FROM contact_tags WHERE contact_id = ?1",

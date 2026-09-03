@@ -118,6 +118,10 @@ impl Store {
                 .flatten();
             if let Some(cid) = linked {
                 super::contacts::update_from_import(&tx, cid, contact)?;
+                // ラベル（Google のグループ）を付け外しする。Google が持っている名前だけを
+                // 対象にし、アプリ内だけで付けたタグは触らない。
+                let managed = managed_group_names(&tx, account_id)?;
+                super::contacts::reconcile_managed_tags(&tx, cid, &contact.labels, &managed)?;
             }
             ApplyOutcome::Upserted
         } else {
@@ -255,6 +259,66 @@ impl Store {
         }
         tx.commit()?;
         Ok(report)
+    }
+
+    /// Google の連絡先グループ（ラベル）一覧で台帳を洗い替える。
+    ///
+    /// 取り込みのたびに Google の一覧そのままに置き換える。Google 側で消えたラベルの行が
+    /// 残っていると、そのタグが「Google の持ち物」と誤判定され、取り込みで外されてしまう。
+    pub fn replace_contact_groups(
+        &self,
+        account_id: i64,
+        groups: &[(String, String)],
+    ) -> rusqlite::Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM contact_group_identities WHERE provider = 'google' AND account_id = ?1",
+            params![account_id],
+        )?;
+        for (external_id, name) in groups {
+            tx.execute(
+                "INSERT OR REPLACE INTO contact_group_identities \
+                     (provider, account_id, external_id, name, fetched_at) \
+                 VALUES ('google', ?1, ?2, ?3, CURRENT_TIMESTAMP)",
+                params![account_id, external_id, name],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// ラベル名 → Google のグループ ID。未知の名前は None（送信側が作る）。
+    pub fn contact_group_id(
+        &self,
+        account_id: i64,
+        name: &str,
+    ) -> rusqlite::Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT external_id FROM contact_group_identities \
+             WHERE provider = 'google' AND account_id = ?1 AND name = ?2",
+            params![account_id, name],
+            |r| r.get(0),
+        )
+        .optional()
+    }
+
+    /// Google 側に作ったラベルを台帳へ覚える（次の取り込みまで ID を引けるように）。
+    pub fn remember_contact_group(
+        &self,
+        account_id: i64,
+        external_id: &str,
+        name: &str,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO contact_group_identities \
+                 (provider, account_id, external_id, name, fetched_at) \
+             VALUES ('google', ?1, ?2, ?3, CURRENT_TIMESTAMP)",
+            params![account_id, external_id, name],
+        )?;
+        Ok(())
     }
 
     /// 「Rondine で新しく作った連絡先も Google 側に作る」設定。
@@ -416,6 +480,19 @@ impl Store {
         )
         .optional()
     }
+}
+
+/// このアカウントで Google が持っているラベル名の集合。
+/// 取り込みで「外してよいタグ」を見分けるために使う（ここに無い名前は触らない）。
+fn managed_group_names(
+    conn: &rusqlite::Connection,
+    account_id: i64,
+) -> rusqlite::Result<HashSet<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT name FROM contact_group_identities WHERE provider = 'google' AND account_id = ?1",
+    )?;
+    let rows = stmt.query_map(params![account_id], |r| r.get::<_, String>(0))?;
+    rows.collect()
 }
 
 /// 計画を UI 向けの件数にまとめる。
@@ -905,5 +982,150 @@ mod tests {
             .query_row("SELECT deleted_at FROM contacts WHERE id = ?1", params![id], |r| r.get(0))
             .unwrap();
         assert!(deleted_at.is_none());
+    }
+    /// ラベル付きの Google 連絡先。
+    fn remote_with_labels(id: &str, name: &str, labels: &[&str]) -> RemoteContact {
+        RemoteContact {
+            external_id: id.into(),
+            etag: Some("e1".into()),
+            deleted: false,
+            contact: Some(ImportedContact {
+                display_name: name.into(),
+                email: Some("t@y.jp".into()),
+                labels: labels.iter().map(|l| l.to_string()).collect(),
+                source: "google".into(),
+                external_id: Some(id.into()),
+                ..Default::default()
+            }),
+        }
+    }
+
+    fn tags_of(s: &Store, id: i64) -> Vec<String> {
+        s.get_contact(id).unwrap().tags
+    }
+
+    #[test]
+    fn the_group_ledger_round_trips_and_is_replaced_wholesale() {
+        let s = mem_store();
+        let acct = account(&s);
+        s.replace_contact_groups(acct, &[("g1".into(), "取引先".into())])
+            .unwrap();
+        assert_eq!(s.contact_group_id(acct, "取引先").unwrap().as_deref(), Some("g1"));
+
+        // 洗い替え: Google 側で消えたラベルの行は残さない（残すと取り込みで誤って外れる）。
+        s.replace_contact_groups(acct, &[("g2".into(), "友人".into())])
+            .unwrap();
+        assert_eq!(s.contact_group_id(acct, "取引先").unwrap(), None);
+        assert_eq!(s.contact_group_id(acct, "友人").unwrap().as_deref(), Some("g2"));
+
+        // 送信で作ったラベルは、次の取り込みまで台帳に覚えておく。
+        s.remember_contact_group(acct, "g3", "新しいラベル").unwrap();
+        assert_eq!(
+            s.contact_group_id(acct, "新しいラベル").unwrap().as_deref(),
+            Some("g3")
+        );
+    }
+
+    #[test]
+    fn google_labels_arrive_as_tags() {
+        let s = mem_store();
+        let acct = account(&s);
+        s.replace_contact_groups(acct, &[("g1".into(), "取引先".into())])
+            .unwrap();
+        s.apply_remote_contact(acct, &remote_with_labels("people/c1", "山田太郎", &["取引先"]))
+            .unwrap();
+        s.apply_contact_matches(acct).unwrap();
+        let id = s
+            .contact_identity(acct, "people/c1")
+            .unwrap()
+            .unwrap()
+            .contact_id
+            .unwrap();
+        assert_eq!(tags_of(&s, id), vec!["取引先"]);
+    }
+
+    #[test]
+    fn a_label_removed_on_google_is_removed_locally() {
+        let s = mem_store();
+        let acct = account(&s);
+        s.replace_contact_groups(acct, &[("g1".into(), "取引先".into())])
+            .unwrap();
+        s.apply_remote_contact(acct, &remote_with_labels("people/c1", "山田太郎", &["取引先"]))
+            .unwrap();
+        s.apply_contact_matches(acct).unwrap();
+        let id = s
+            .contact_identity(acct, "people/c1")
+            .unwrap()
+            .unwrap()
+            .contact_id
+            .unwrap();
+
+        // Google 側でラベルを外した → ローカルのタグも外れる。
+        s.apply_remote_contact(acct, &remote_with_labels("people/c1", "山田太郎", &[]))
+            .unwrap();
+        assert!(tags_of(&s, id).is_empty());
+    }
+
+    #[test]
+    fn tags_that_google_does_not_know_survive_a_pull() {
+        let s = mem_store();
+        let acct = account(&s);
+        s.replace_contact_groups(acct, &[("g1".into(), "取引先".into())])
+            .unwrap();
+        s.apply_remote_contact(acct, &remote_with_labels("people/c1", "山田太郎", &["取引先"]))
+            .unwrap();
+        s.apply_contact_matches(acct).unwrap();
+        let id = s
+            .contact_identity(acct, "people/c1")
+            .unwrap()
+            .unwrap()
+            .contact_id
+            .unwrap();
+        // アプリ内だけで付けたタグ（Google は知らない）。
+        {
+            let conn = s.conn.lock().unwrap();
+            conn.execute("INSERT INTO tags (name) VALUES ('自分用')", []).unwrap();
+            conn.execute(
+                "INSERT INTO contact_tags (contact_id, tag_id) \
+                 SELECT ?1, id FROM tags WHERE name = '自分用'",
+                params![id],
+            )
+            .unwrap();
+        }
+
+        // Google 側から全ラベルが消えても、Google が知らないタグは触らない。
+        s.apply_remote_contact(acct, &remote_with_labels("people/c1", "山田太郎", &[]))
+            .unwrap();
+        assert_eq!(tags_of(&s, id), vec!["自分用"]);
+    }
+
+    #[test]
+    fn labels_are_left_alone_while_local_changes_are_unsent() {
+        let s = mem_store();
+        let acct = account(&s);
+        s.replace_contact_groups(acct, &[("g1".into(), "取引先".into())])
+            .unwrap();
+        s.apply_remote_contact(acct, &remote_with_labels("people/c1", "山田太郎", &["取引先"]))
+            .unwrap();
+        s.apply_contact_matches(acct).unwrap();
+        let id = s
+            .contact_identity(acct, "people/c1")
+            .unwrap()
+            .unwrap()
+            .contact_id
+            .unwrap();
+        // ローカルで編集（未送信）。
+        s.upsert_contact(&crate::models::ContactInput {
+            id: Some(id as i32),
+            display_name: "山田 太郎".into(),
+            tags: vec!["取引先".into()],
+            ..Default::default()
+        })
+        .unwrap();
+
+        // 送れていない間は取り込みでタグを動かさない（次の送信で Google 側へ出る）。
+        s.apply_remote_contact(acct, &remote_with_labels("people/c1", "山田太郎", &[]))
+            .unwrap();
+        assert_eq!(tags_of(&s, id), vec!["取引先"]);
     }
 }

@@ -343,3 +343,49 @@ pub async fn delete_contact(
     check(resp).await?;
     Ok(())
 }
+
+/// 連絡先グループ（ラベル）を 1 つ作る（`contactGroups.create`）。
+pub async fn create_contact_group(
+    client: &reqwest::Client,
+    token: &str,
+    name: &str,
+) -> Result<GContactGroup, ApiError> {
+    let resp = client
+        .post(format!("{}/contactGroups", super::API_BASE))
+        .bearer_auth(token)
+        .json(&serde_json::json!({ "contactGroup": { "name": name } }))
+        .send()
+        .await?;
+    Ok(check(resp).await?.json().await?)
+}
+
+/// グループの所属を変更する（`contactGroups/*/members:modify`）。
+///
+/// 連絡先の所属は `people:updateContact` では変えられない（`updatePersonFields` に
+/// `memberships` を挙げても通らない）ので、こちらの専用エンドポイントを使う。
+/// `group_id` は resourceName の 'contactGroups/' を除いた部分。
+pub async fn modify_contact_group_members(
+    client: &reqwest::Client,
+    token: &str,
+    group_id: &str,
+    add: &[String],
+    remove: &[String],
+) -> Result<(), ApiError> {
+    if add.is_empty() && remove.is_empty() {
+        return Ok(());
+    }
+    let resp = client
+        .post(format!(
+            "{}/contactGroups/{group_id}/members:modify",
+            super::API_BASE
+        ))
+        .bearer_auth(token)
+        .json(&serde_json::json!({
+            "resourceNamesToAdd": add,
+            "resourceNamesToRemove": remove,
+        }))
+        .send()
+        .await?;
+    check(resp).await?;
+    Ok(())
+}

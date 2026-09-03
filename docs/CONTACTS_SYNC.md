@@ -2,13 +2,14 @@
 
 Rondine の住所録と Google 連絡先を同期する機能の設計・使い方。
 
-**ステータス: 送信（push）まで実装済み。ラベル同期のみ後続。** 取り込みは台帳止まりで、そこから
-住所録へ入れるのは**照合**の役目（利用者が「住所録へ反映」を押したとき）。以後は同期のたびに
-**push → pull** が走る。
+**ステータス: 全 5 段とも実装済み（取り込み・照合・送信・ラベル同期）。** 取り込みは台帳止まりで、
+そこから住所録へ入れるのは**照合**の役目（利用者が「住所録へ反映」を押したとき）。以後は同期の
+たびに **push → pull** が走る。
 
 > **`[要確認]` 実 API での往復はまだ確かめていない。** 開発機（raytrek）に有効な Google 資格情報が
 > 無いため、送信は単体テスト（本文の組み立て・台帳の更新）までしか通していない。実アカウントを
-> 繋いだ確認が要る（とくに `names` の書き込み可否と、カスタム種別の受け付け）。
+> 繋いだ確認が要る（とくに `names` の書き込み可否、カスタム種別の受け付け、
+> `contactGroups/*/members:modify` の挙動）。
 
 認証は Google カレンダーと**共通**（同じアカウント・同じ refresh_token）。連携まわりの詳細は
 [CALENDAR_SYNC.md](CALENDAR_SYNC.md) §3-0／§3-1 を参照。
@@ -71,15 +72,16 @@ Google (People API)
 ```
 services/google/contacts.rs              API ベース URL・personFields
 services/google/contacts/api.rs          People API v1 の薄いラッパー
-services/google/contacts/convert.rs      Person → ImportedContact
-services/google/contacts/sync.rs         取り込み（pull）エンジン
-services/store/contact_sync.rs           台帳の操作（RemoteContact / ContactIdentity）
+services/google/contacts/convert.rs      Person ⇄ Rondine の連絡先（取り込み・送信の両方向）
+services/google/contacts/sync.rs         同期エンジン（push → pull ＋ ラベル）
+services/store/contact_sync.rs           台帳の操作（取り込み・照合の保存・送信の下ごしらえ）
+services/contact_match.rs                照合の判定（DB も API も見ない）
 ```
 
 中間表現は **vCard / Google CSV の取り込みと同じ `vcard::ImportedContact`** を使う。同じ型に
 落としておけば、照合も保存も取り込み元を問わず同じ道を通る。
 
-### 3-2. データモデル（`migrations/0054_contact_identities.sql` / `0055_contact_push.sql`）
+### 3-2. データモデル（マイグレーション 0054〜0056）
 
 `contact_identities` は 0017 が「提供元 ID の対応表は API 同期の実装時に追加する」と予告していた
 もの。`contacts.external_id` は 1 プロバイダ分しか持てないので、同期の突き合わせはこちらを正とする。
@@ -93,6 +95,10 @@ services/store/contact_sync.rs           台帳の操作（RemoteContact / Conta
 | `remote_deleted` | Google 側で削除された印 |
 
 `contact_id` は `ON DELETE SET NULL`。ローカル連絡先を消しても台帳は未照合として残る。
+
+0055 は送信のための列 —— `contacts.dirty`（未送信のローカル変更）と
+`google_accounts.push_new_contacts`（ローカル生まれの連絡先を Google にも作るか。既定オフ）。
+0056 は `contact_group_identities`（Google のラベル ID ⇄ 名前の対応表。§3-7）。
 
 増分同期トークンは **アカウント単位**（`google_accounts.contacts_sync_token`）。カレンダーが
 カレンダー単位で持つのとは異なる。
@@ -199,15 +205,41 @@ Rondine が扱わない項目（写真・カスタム項目・関係）は**そ�
 **二重送信の防止。** 同じアカウントの同期が重なると同一の未送信連絡先を二重に作成しうるので、
 送信はプロセス全体で直列化する（`push_lock`。カレンダーの同名ロックと同じ理由）。
 
+### 3-7. ラベル同期（contactGroups ⇄ タグ）
+
+Google の「ラベル」（contactGroups）と Rondine のタグ（`tags` / `contact_tags`）を双方向に
+合わせる。Rondine のタグはメールと共通（`tags.name` が一意）なので、**連絡先に付いたタグだけ**が
+対象になる。
+
+**対応表を持つ**（マイグレーション 0056 の `contact_group_identities`）。People API はグループを
+`contactGroups/{id}` で指し、所属の変更も ID で行うため、名前だけでは足りない。取り込みのたびに
+Google の一覧で**丸ごと洗い替える**（消えたラベルの行を残すと、そのタグが「Google の持ち物」と
+誤判定されて次の取り込みで外れてしまう）。
+
+**取り込み（Google → Rondine）。** 紐付いた連絡先のタグを、Google の所属に合わせる。ただし
+**外す対象は対応表に載っている名前だけ**。載っていない名前（利用者がアプリ内だけで付けたタグ）は
+Google 側の状態に関わらず触らない。これが無いと、Google を知らないタグが同期のたびに消える。
+
+**送信（Rondine → Google）。** 連絡先本体の送信が通った後に、差分だけを送る。
+
+| 差分 | 動作 |
+|---|---|
+| Rondine にあって Google に無い | ラベルが無ければ `contactGroups.create` で作り、`members:modify` で所属させる |
+| Google にあって Rondine に無い | `members:modify` で外す |
+
+差分の基準（「Google に付いている所属」）は**台帳の snapshot**（前回の取り込み時点）を使う。
+送信は取り込みの前に走るので、これが Google の現在の状態にあたる。
+
+> **所属は `people:updateContact` では変えられない。**`updatePersonFields` に `memberships` を
+> 挙げても通らないので、`contactGroups/*/members:modify` を使う。`WRITE_PERSON_FIELDS` に
+> `memberships` を入れていないのはこのため（入れると Google 側のラベル分けを消す）。
+
+**システムグループ（`myContacts` 等）は対象外。**タグにしても意味が無いので一覧から除いている。
+
+
 ---
 
-## 4. 残っている段
-
-| 段 | 内容 |
-|---|---|
-| ラベル同期 | contactGroups ⇄ Rondine のタグの双方向 |
-
-### 既知の制限（v1）
+## 4. 既知の制限（v1）
 
 - **実 API での往復が未検証**（上記 `[要確認]`）。とくに `names` は People API の `displayName`
   が読み取り専用なので、姓名に分けて送っている。表示名しか持たない連絡先は**表示名を姓に**
@@ -229,6 +261,9 @@ Rondine が扱わない項目（写真・カスタム項目・関係）は**そ�
   付け替えるので、1 つのローカル連絡先に同じアカウントの外部 ID が複数ぶら下がりうる。この
   連絡先を編集すると、**Google 側の両方の連絡先が同じ内容に更新される**（消しはしない）。
   Google 側も 1 件に寄せたい場合は Google 連絡先側で統合する。
+- **ラベルの送信に失敗すると、そのタグ変更は次の取り込みで巻き戻る。**本体の送信が通った時点で
+  `dirty` が落ちるため、ラベルだけ失敗しても再送されない。直後の取り込みが Google の所属を
+  正としてローカルのタグを戻す。稀だが、起きたときは付け直しが要る。
 - **写真・カスタム項目・関係・チャットは同期しない**（取得も送信もしない＝ Google 側で保持）。
 
 > **`otherContacts`（Gmail から自動収集された連絡先）は同期しない。** 件数が膨大でノイズになる。

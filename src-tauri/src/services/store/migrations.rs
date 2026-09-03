@@ -243,6 +243,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 55,
         sql: include_str!("migrations/0055_contact_push.sql"),
     },
+    Migration {
+        // 56 は Google の連絡先グループ（ラベル）と Rondine のタグの対応表。
+        version: 56,
+        sql: include_str!("migrations/0056_contact_group_identities.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

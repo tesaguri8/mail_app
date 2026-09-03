@@ -138,6 +138,8 @@ pub struct MailSummary {
     pub is_vip: bool,
     /// 差出人がグリーン（本人 or 認定ドメイン）か。フィルタ・バッジ用。docs/GREEN_DOMAINS.md。
     pub is_green: bool,
+    /// 差出人に自分から送ったことがある（返信歴あり）か。フィルタ用。docs/FILTERING.md §2。
+    pub is_replied: bool,
     /// このメールが属する論理スレッドの総件数（全フォルダ横断）。「N通」バッジ用。
     /// スレッド未割当（旧データ）は 1。検索結果でもスレッドの通数を出すために持つ。
     pub message_count: i32,
@@ -826,6 +828,8 @@ pub struct ThreadListItem {
     pub message_count: i32,
     /// このフォルダの未読件数。
     pub unread_count: i32,
+    /// 差出人に自分から送ったことがある（返信歴あり）か。フィルタ用。docs/FILTERING.md §2。
+    pub is_replied: bool,
     /// このフォルダに属するスレッド内メール id 群（既読/削除/迷惑の一括操作用）。
     pub email_ids: Vec<i32>,
 }

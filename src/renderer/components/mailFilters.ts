@@ -1,4 +1,14 @@
-import { Flag, Gem, LeafyGreen, Mail, Paperclip, Star, UserRound, type LucideIcon } from 'lucide-react';
+import {
+  Flag,
+  Gem,
+  LeafyGreen,
+  Mail,
+  Paperclip,
+  Reply,
+  Star,
+  UserRound,
+  type LucideIcon,
+} from 'lucide-react';
 import type { MailSummary } from '@bindings/MailSummary';
 
 /** メール一覧の絞り込みトグル（メール画面・ホームの展開で共用）。
@@ -9,6 +19,7 @@ export const MAIL_FILTERS: { key: string; Icon: LucideIcon }[] = [
   { key: 'green', Icon: LeafyGreen },
   { key: 'vip', Icon: Gem },
   { key: 'known', Icon: UserRound },
+  { key: 'replied', Icon: Reply },
   { key: 'attachment', Icon: Paperclip },
   { key: 'flag', Icon: Flag },
 ];
@@ -16,7 +27,13 @@ export const MAIL_FILTERS: { key: string; Icon: LucideIcon }[] = [
 /** matchesFilters が参照する最小フィールド（一覧の行＝メール/スレッドどちらでも可）。 */
 type FilterableRow = Pick<
   MailSummary,
-  'is_read' | 'has_real_attachments' | 'is_starred' | 'is_green' | 'is_vip' | 'is_known'
+  | 'is_read'
+  | 'has_real_attachments'
+  | 'is_starred'
+  | 'is_green'
+  | 'is_vip'
+  | 'is_known'
+  | 'is_replied'
 >;
 
 /** 選択中のトグルにメールが一致するか（AND）。 */
@@ -27,6 +44,7 @@ export function matchesFilters(m: FilterableRow, filters: Set<string>): boolean 
   if (filters.has('green') && !m.is_green) return false; // 差出人がグリーン（認定ドメイン/本人）
   if (filters.has('vip') && !m.is_vip) return false; // 差出人が住所録のお気に入り(Gem)
   if (filters.has('known') && !m.is_known) return false; // 差出人が住所録に登録済み
+  if (filters.has('replied') && !m.is_replied) return false; // 差出人に自分から送ったことがある
   // flag（要再確認）はマーク手段が入るまでフィルタしない（空表示で混乱させない）
   return true;
 }
@@ -47,6 +65,7 @@ export function matchesNoneOfFilters(m: FilterableRow, filters: Set<string>): bo
   if (filters.has('green') && m.is_green) return false;
   if (filters.has('vip') && m.is_vip) return false;
   if (filters.has('known') && m.is_known) return false;
+  if (filters.has('replied') && m.is_replied) return false;
   // flag は matchesFilters と同じく非適用（反転でも対象にしない）
   return true;
 }

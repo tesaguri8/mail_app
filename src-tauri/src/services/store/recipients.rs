@@ -1,42 +1,9 @@
 use super::Store;
 use crate::models::RecipientSuggestion;
+use crate::services::addr::split_header_addrs;
 use crate::services::name_norm::match_rank;
 use rusqlite::params;
 use std::collections::HashMap;
-
-/// "Some Name <a@b.com>" -> (Some("Some Name"), "a@b.com")、素の "a@b.com" -> (None, "a@b.com")。
-/// メールらしくない（'@' を含まない）ものは None。表示名の前後の引用符は剥がす。
-fn parse_addr(raw: &str) -> Option<(Option<String>, String)> {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return None;
-    }
-    let (name, email) = match (raw.rfind('<'), raw.rfind('>')) {
-        (Some(lt), Some(gt)) if gt > lt => {
-            let email = raw[lt + 1..gt].trim();
-            let name = raw[..lt].trim().trim_matches('"').trim();
-            let name = if name.is_empty() {
-                None
-            } else {
-                Some(name.to_string())
-            };
-            (name, email.to_string())
-        }
-        _ => (None, raw.to_string()),
-    };
-    if email.contains('@') && !email.is_empty() {
-        Some((name, email))
-    } else {
-        None
-    }
-}
-
-/// ヘッダのアドレス列 "A <a@b>, c@d" をカンマ/改行/セミコロンで分割し、各要素を解析する。
-fn split_header_addrs(raw: &str) -> Vec<(Option<String>, String)> {
-    raw.split([',', '\n', ';'])
-        .filter_map(parse_addr)
-        .collect()
-}
 
 /// 候補の作業用エントリ（重複排除・並び替え前）。
 struct Cand {
@@ -229,30 +196,6 @@ mod tests {
             params![key, from, to],
         )
         .unwrap();
-    }
-
-    #[test]
-    fn parse_addr_handles_named_and_bare() {
-        assert_eq!(
-            parse_addr("Alice <alice@corp.com>"),
-            Some((Some("Alice".into()), "alice@corp.com".into()))
-        );
-        assert_eq!(
-            parse_addr("\"Bob B\" <bob@x.com>"),
-            Some((Some("Bob B".into()), "bob@x.com".into()))
-        );
-        assert_eq!(parse_addr("carol@y.com"), Some((None, "carol@y.com".into())));
-        assert_eq!(parse_addr("not-an-email"), None);
-        assert_eq!(parse_addr("   "), None);
-    }
-
-    #[test]
-    fn split_header_addrs_splits_multiple() {
-        let v = split_header_addrs("Alice <a@x>, b@y ; C <c@z>");
-        assert_eq!(v.len(), 3);
-        assert_eq!(v[0], (Some("Alice".into()), "a@x".into()));
-        assert_eq!(v[1], (None, "b@y".into()));
-        assert_eq!(v[2], (Some("C".into()), "c@z".into()));
     }
 
     #[test]

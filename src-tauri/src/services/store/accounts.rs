@@ -331,6 +331,9 @@ impl Store {
         ] {
             tx.execute(sql, params![id])?;
         }
+        // 送信履歴の索引はアドレス単位でアカウントに紐づかないので、消したアカウントの分
+        // だけを抜けない。残ったメールから作り直す（アカウント削除は稀な操作）。
+        super::sent_addresses::rebuild(&tx)?;
         tx.commit()
     }
 
@@ -518,6 +521,41 @@ mod tests {
         assert_eq!(count("SELECT count(*) FROM accounts"), 1);
         assert_eq!(count("SELECT count(*) FROM emails WHERE account_id = 2"), 1);
         assert_eq!(count("SELECT count(*) FROM message_quotes"), 1);
+    }
+
+    /// アカウントを消したら、そのアカウントの送信履歴も「返信歴あり」の索引から消える
+    /// （索引はアドレス単位なので、残ったメールから作り直す）。
+    #[test]
+    fn delete_account_rebuilds_sent_address_index() {
+        let store = test_store();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO accounts (id, email, imap_host, smtp_host)
+                 VALUES (1,'a@b','i','s'), (2,'c@d','i','s')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO emails (id, account_id, canonical_key, folder, to_addresses)
+                 VALUES (10, 1, 'k1', 'sent', 'gone@x.com'), (11, 2, 'k1', 'sent', 'kept@x.com')",
+                [],
+            )
+            .unwrap();
+            super::super::sent_addresses::rebuild(&conn).unwrap();
+        }
+
+        store.delete_account(1).unwrap();
+
+        let conn = store.conn.lock().unwrap();
+        let addrs: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT address FROM sent_addresses ORDER BY address")
+                .unwrap();
+            let rows = stmt.query_map([], |r| r.get(0)).unwrap();
+            rows.collect::<rusqlite::Result<_>>().unwrap()
+        };
+        assert_eq!(addrs, vec!["kept@x.com".to_string()]);
     }
 
     /// 二重登録の確認は大文字小文字を無視する（同じ受信箱を別物として扱わない）。

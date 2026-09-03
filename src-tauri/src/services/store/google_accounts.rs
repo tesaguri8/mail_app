@@ -1,7 +1,7 @@
 //! Google 連携アカウント（カレンダー・連絡先で共有）。
 //!
 //! アカウント 1 件 = refresh_token 1 本。カレンダーと連絡先で同じ Google アカウントを
-//! 使い回し、サービスごとに有効フラグと最終同期時刻だけを分けて持つ（マイグレーション 0053）。
+//! 使い回し、サービスごとに有効フラグと最終同期時刻だけを分けて持つ（マイグレーション 0054）。
 //! refresh_token 自体は keyring 側にあり、この層はメタデータのみを扱う。
 
 use super::Store;
@@ -114,7 +114,7 @@ impl Store {
         .optional()
     }
 
-    /// 許可済みスコープ（スペース区切り）。未記録（0053 以前の連携）なら None。
+    /// 許可済みスコープ（スペース区切り）。未記録（0054 以前の連携）なら None。
     pub fn google_account_scopes(&self, account_id: i64) -> rusqlite::Result<Option<String>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
@@ -211,7 +211,7 @@ mod tests {
         let accts = s.list_google_accounts().unwrap();
         assert_eq!(accts.len(), 1);
         assert_eq!(accts[0].email, "a@gmail.com");
-        // 既存アカウントはカレンダー有効・連絡先無効が既定（マイグレーション 0053）。
+        // 既存アカウントはカレンダー有効・連絡先無効が既定（マイグレーション 0054）。
         assert!(accts[0].sync_calendar);
         assert!(!accts[0].sync_contacts);
     }

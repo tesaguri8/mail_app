@@ -281,6 +281,16 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
             }
         }
     }
+    // 送信済みメールの宛先は「自分から送ったことがある相手」の索引へ加える
+    // （一覧の「返信歴あり」フィルタ。docs/FILTERING.md §2）。
+    if e.folder == "sent" {
+        super::sent_addresses::record_sent(
+            conn,
+            e.to_addresses.as_deref(),
+            e.cc_addresses.as_deref(),
+            e.date_ts,
+        )?;
+    }
     // 取り込み（download＋保存）はここまで。スレッド割当・代表フラグ（＝他メール参照が要る
     // クロス処理）は接続を閉じた後のローカル加工パス process_pending で行う（docs/THREADING.md §5）。
     // ここで logical_thread_id は NULL のまま＝一覧では 1 通ずつ即表示され、加工後に束ねられる。
@@ -626,7 +636,8 @@ fn build_fts_query(input: &str) -> Option<String> {
 /// MailSummary を組み立てる共通行マッパ（list_emails / search_emails で共有）。
 /// SELECT の列順は 0:id 1:subject 2:from_address 3:date 4:is_read 5:has_attachments
 /// 6:preview 7:is_flagged 8:is_bookmarked 9:tag_ids 10:has_real 11:to_addresses
-/// 12:is_known 13:is_vip 14:from_name 15:to_name 16:account_id 17:message_count。
+/// 12:is_known 13:is_vip 14:from_name 15:to_name 16:account_id 17:message_count
+/// 18:is_replied。
 fn map_mail_summary(r: &rusqlite::Row) -> rusqlite::Result<MailSummary> {
     // group_concat はカンマ区切り文字列。空（タグ無し）は None。
     let tag_ids = r
@@ -654,6 +665,7 @@ fn map_mail_summary(r: &rusqlite::Row) -> rusqlite::Result<MailSummary> {
         // グリーンは行取得後にまとめて算出する（グリーン集合を 1 回だけ引くため）。
         is_green: false,
         message_count: r.get::<_, i64>(17)? as i32,
+        is_replied: r.get::<_, i64>(18)? != 0,
     })
 }
 
@@ -696,6 +708,15 @@ fn contact_name_for(conn: &Connection, address: Option<&str>) -> rusqlite::Resul
     .map(Option::flatten)
 }
 
+/// 差出人（from）に自分から送ったことがあるか＝返信歴ありを判定する SELECT 断片。
+/// 送信履歴の索引（sent_addresses）へアドレス完全一致で当てるだけなので、行数に依存しない
+/// （emails.to_addresses を LIKE で舐めると一覧クエリが全走査になる）。docs/FILTERING.md §2。
+fn replied_col(from_col: &str) -> String {
+    format!(
+        "EXISTS (SELECT 1 FROM sent_addresses sa WHERE sa.address = lower({from_col})) AS is_replied"
+    )
+}
+
 /// 差出人（from）が住所録の連絡先かを判定する SELECT 断片（is_known, is_vip）。
 /// `from_col` は各クエリの from_address 列（list=emails.from_address / search=e.from_address）。
 /// from_address は素のメールアドレスなので、小文字化の完全一致（式インデックス）で高速に照合する。
@@ -736,10 +757,12 @@ impl Store {
                     to_addresses, {known_vip}, from_name, to_name, account_id,
                     CASE WHEN emails.logical_thread_id IS NULL THEN 1
                          ELSE (SELECT count(*) FROM emails t WHERE t.logical_thread_id = emails.logical_thread_id)
-                    END AS message_count
+                    END AS message_count,
+                    {replied}
              FROM emails WHERE {acct}{fp}
              ORDER BY date_ts DESC, id DESC LIMIT ?2 OFFSET ?3",
             known_vip = known_vip_cols("emails.from_address"),
+            replied = replied_col("emails.from_address"),
             fp = folder_predicate(folder, "", "?1"),
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -796,11 +819,13 @@ impl Store {
                     e.to_addresses, {known_vip}, e.from_name, e.to_name, e.account_id,
                     CASE WHEN e.logical_thread_id IS NULL THEN 1
                          ELSE (SELECT count(*) FROM emails t WHERE t.logical_thread_id = e.logical_thread_id)
-                    END AS message_count
+                    END AS message_count,
+                    {replied}
              FROM matched m JOIN emails e ON e.id = m.id
              WHERE m.rn = 1
              ORDER BY e.date_ts DESC, e.id DESC LIMIT ?3",
             known_vip = known_vip_cols("e.from_address"),
+            replied = replied_col("e.from_address"),
             fp = folder_predicate(folder, "e.", "?2"),
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -868,11 +893,13 @@ impl Store {
                                WHERE t.logical_thread_id = r.logical_thread_id AND {fp_sub} AND t.is_read = 0) END AS unread_cnt,
                     CASE WHEN r.logical_thread_id IS NULL THEN CAST(r.id AS TEXT)
                          ELSE (SELECT group_concat(t.id) FROM emails t INDEXED BY idx_emails_thread_folder
-                               WHERE t.logical_thread_id = r.logical_thread_id AND {fp_sub}) END AS folder_ids
+                               WHERE t.logical_thread_id = r.logical_thread_id AND {fp_sub}) END AS folder_ids,
+                    {replied}
              FROM page JOIN emails r ON r.id = page.id
              LEFT JOIN logical_threads lt ON lt.id = r.logical_thread_id
              ORDER BY page.date_ts DESC, page.id DESC",
             known_vip = known_vip_cols("r.from_address"),
+            replied = replied_col("r.from_address"),
             fp_page = folder_predicate(folder, "", "?1"),
             fp_sub = folder_predicate(folder, "t.", "?1"),
             // 件数バッジ（msg_count）は会話ビューの表示内容に合わせる。下書きは常に数えない。
@@ -889,7 +916,7 @@ impl Store {
                 s.map(|s| s.split(',').filter_map(|p| p.parse::<i32>().ok()).collect())
                     .unwrap_or_default()
             };
-            // 列: 16=msg_count, 17=unread_cnt, 18=folder_ids。
+            // 列: 16=msg_count, 17=unread_cnt, 18=folder_ids, 19=is_replied。
             let unread_count = row.get::<_, i64>(17)? as i32;
             Ok(ThreadListItem {
                 id: row.get::<_, i64>(0)? as i32,
@@ -913,6 +940,7 @@ impl Store {
                 unread_count,
                 is_read: unread_count == 0,
                 email_ids: parse_ids(row.get(18)?),
+                is_replied: row.get::<_, i64>(19)? != 0,
             })
         };
         let mut rows: Vec<ThreadListItem> = match account_id {

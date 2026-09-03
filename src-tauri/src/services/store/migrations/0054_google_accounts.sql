@@ -9,7 +9,7 @@ ALTER TABLE calendar_accounts RENAME TO google_accounts;
 
 -- 許可済みスコープ（スペース区切り）。カレンダーだけで連携済みのアカウントに連絡先を
 -- 追加する際、refresh_token に contacts スコープが無いため再同意が要る。その判定材料。
--- NULL は「不明」（0053 以前に連携した旧レコード）＝カレンダーのみと見なす。
+-- NULL は「不明」（0054 以前に連携した旧レコード）＝カレンダーのみと見なす。
 ALTER TABLE google_accounts ADD COLUMN granted_scopes TEXT;
 
 -- サービスごとの同期有効フラグ。既存レコードはカレンダー連携済みなので calendar=1。

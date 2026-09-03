@@ -539,6 +539,13 @@ pub async fn mail_send(
         .await
         .map_err(|e| e.to_string())??;
 
+    // 送った相手を「返信歴あり」の索引へ加える（docs/FILTERING.md §2）。送信控えは次回同期で
+    // 取り込まれるが、それを待たずにフィルタへ反映するためここでも記録する（同じ相手は
+    // 通数が増えるだけで判定は変わらない）。索引の更新失敗で送信をエラーにはしない。
+    if let Err(e) = store.record_sent_recipients(&message.to, &message.cc) {
+        log::warn!("送信履歴の索引更新に失敗: {e}");
+    }
+
     // ドロップ由来の一時添付は送信後に掃除する（picker で選んだ実ファイルは消さない）。
     let stage_root = drop_stage_root();
     for path in &input.attachments {
@@ -2029,10 +2036,10 @@ pub fn ics_export(store: State<Store>, path: String) -> Result<(), String> {
 
 /// keyring 内の Client Secret のキー（OAuth アプリは 1 つなので固定）。
 const GOOGLE_CLIENT_SECRET_KEY: &str = "google:client_secret";
-/// 0053 以前のキー。読み出し時に見つかったら新キーへ移す（再連携させないため）。
+/// 0054 以前のキー。読み出し時に見つかったら新キーへ移す（再連携させないため）。
 const LEGACY_CLIENT_SECRET_KEY: &str = "gcal:client_secret";
 
-/// app_settings 内の Client ID のキー（と、0053 以前のキー）。
+/// app_settings 内の Client ID のキー（と、0054 以前のキー）。
 const GOOGLE_CLIENT_ID_SETTING: &str = "google_client_id";
 const LEGACY_CLIENT_ID_SETTING: &str = "gcal_client_id";
 
@@ -2041,7 +2048,7 @@ fn google_refresh_key(email: &str) -> String {
     format!("google:refresh:{email}")
 }
 
-/// 0053 以前の refresh_token キー。
+/// 0054 以前の refresh_token キー。
 fn legacy_refresh_key(email: &str) -> String {
     format!("gcal:refresh:{email}")
 }

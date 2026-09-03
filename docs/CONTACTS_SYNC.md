@@ -81,7 +81,7 @@ services/contact_match.rs                照合の判定（DB も API も見な�
 中間表現は **vCard / Google CSV の取り込みと同じ `vcard::ImportedContact`** を使う。同じ型に
 落としておけば、照合も保存も取り込み元を問わず同じ道を通る。
 
-### 3-2. データモデル（マイグレーション 0054〜0056）
+### 3-2. データモデル（マイグレーション 0055〜0057）
 
 `contact_identities` は 0017 が「提供元 ID の対応表は API 同期の実装時に追加する」と予告していた
 もの。`contacts.external_id` は 1 プロバイダ分しか持てないので、同期の突き合わせはこちらを正とする。
@@ -96,9 +96,9 @@ services/contact_match.rs                照合の判定（DB も API も見な�
 
 `contact_id` は `ON DELETE SET NULL`。ローカル連絡先を消しても台帳は未照合として残る。
 
-0055 は送信のための列 —— `contacts.dirty`（未送信のローカル変更）と
+0056 は送信のための列 —— `contacts.dirty`（未送信のローカル変更）と
 `google_accounts.push_new_contacts`（ローカル生まれの連絡先を Google にも作るか。既定オフ）。
-0056 は `contact_group_identities`（Google のラベル ID ⇄ 名前の対応表。§3-7）。
+0057 は `contact_group_identities`（Google のラベル ID ⇄ 名前の対応表。§3-7）。
 
 増分同期トークンは **アカウント単位**（`google_accounts.contacts_sync_token`）。カレンダーが
 カレンダー単位で持つのとは異なる。
@@ -172,7 +172,7 @@ services/contact_match.rs                照合の判定（DB も API も見な�
 カレンダーと同じ **push → pull** の順。ローカルの変更を先に送ってから取り込むことで、双方の
 状態が収束する。
 
-**未送信の印は `contacts.dirty`**（マイグレーション 0055）。利用者の操作（`upsert_contact` /
+**未送信の印は `contacts.dirty`**（マイグレーション 0056）。利用者の操作（`upsert_contact` /
 `delete_contact` / `restore_contact` / `merge_contacts` / vCard・CSV 取り込み）で 1 が立ち、
 送信に成功した時点で 0 に戻る。取り込み（`apply_remote_contact`）は `dirty` を立てない。
 
@@ -211,7 +211,7 @@ Google の「ラベル」（contactGroups）と Rondine のタグ（`tags` / `co
 合わせる。Rondine のタグはメールと共通（`tags.name` が一意）なので、**連絡先に付いたタグだけ**が
 対象になる。
 
-**対応表を持つ**（マイグレーション 0056 の `contact_group_identities`）。People API はグループを
+**対応表を持つ**（マイグレーション 0057 の `contact_group_identities`）。People API はグループを
 `contactGroups/{id}` で指し、所属の変更も ID で行うため、名前だけでは足りない。取り込みのたびに
 Google の一覧で**丸ごと洗い替える**（消えたラベルの行を残すと、そのタグが「Google の持ち物」と
 誤判定されて次の取り込みで外れてしまう）。

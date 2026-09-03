@@ -1,3 +1,4 @@
+pub mod addr;
 pub mod autoconfig;
 pub mod bodyfetch;
 pub mod bodystructure;

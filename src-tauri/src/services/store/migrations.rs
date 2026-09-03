@@ -228,25 +228,30 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0052_org_fields.sql"),
     },
     Migration {
-        // 53 は Google 連携アカウントの共通化（calendar_accounts → google_accounts）。
-        // カレンダーと連絡先で 1 アカウント・1 refresh_token を共有する（docs/CALENDAR_SYNC.md）。
+        // 53 は送信履歴の索引（「返信歴あり」フィルタ。中身は Rust 側で構築）。
         version: 53,
-        sql: include_str!("migrations/0053_google_accounts.sql"),
+        sql: include_str!("migrations/0053_sent_addresses.sql"),
     },
     Migration {
-        // 54 は Google 連絡先（People API）の取り込み台帳 contact_identities。
+        // 54 は Google 連携アカウントの共通化（calendar_accounts → google_accounts）。
+        // カレンダーと連絡先で 1 アカウント・1 refresh_token を共有する（docs/CALENDAR_SYNC.md）。
         version: 54,
-        sql: include_str!("migrations/0054_contact_identities.sql"),
+        sql: include_str!("migrations/0054_google_accounts.sql"),
     },
     Migration {
-        // 55 は Google 連絡先の送信（push）。contacts.dirty と、新規をどう扱うかの既定。
+        // 55 は Google 連絡先（People API）の取り込み台帳 contact_identities。
         version: 55,
-        sql: include_str!("migrations/0055_contact_push.sql"),
+        sql: include_str!("migrations/0055_contact_identities.sql"),
     },
     Migration {
-        // 56 は Google の連絡先グループ（ラベル）と Rondine のタグの対応表。
+        // 56 は Google 連絡先の送信（push）。contacts.dirty と、新規をどう扱うかの既定。
         version: 56,
-        sql: include_str!("migrations/0056_contact_group_identities.sql"),
+        sql: include_str!("migrations/0056_contact_push.sql"),
+    },
+    Migration {
+        // 57 は Google の連絡先グループ（ラベル）と Rondine のタグの対応表。
+        version: 57,
+        sql: include_str!("migrations/0057_contact_group_identities.sql"),
     },
 ];
 
@@ -357,7 +362,7 @@ mod tests {
                name_kana TEXT, note TEXT,
                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, deleted_at TEXT);
-             -- 住所録（0016 で作成）。0055(contacts.dirty 追加)が動くよう用意する。
+             -- 住所録（0016 で作成）。0056(contacts.dirty 追加)が動くよう用意する。
              CREATE TABLE contacts (id INTEGER PRIMARY KEY, display_name TEXT NOT NULL);
              PRAGMA user_version = 35;",
         )
@@ -507,11 +512,11 @@ mod tests {
         assert_eq!(n, 0);
     }
 
-    /// 0053（calendar_accounts → google_accounts）の更新パス。既に Google カレンダーを
+    /// 0054（calendar_accounts → google_accounts）の更新パス。既に Google カレンダーを
     /// 連携済みの DB で、アカウントと同期実績が失われない（＝再連携・全予定の再取得を
     /// 強いない）ことを確かめる。
     #[test]
-    fn migration_0053_preserves_linked_google_accounts() {
+    fn migration_0054_preserves_linked_google_accounts() {
         let conn = Connection::open_in_memory().unwrap();
         // 0041 が作る当時の calendar_accounts をそのまま再現し、連携済み 1 件を入れる。
         conn.execute_batch(
@@ -525,7 +530,7 @@ mod tests {
                  UNIQUE(provider, email));
              INSERT INTO calendar_accounts (email, external_id, last_sync_at)
                  VALUES ('a@gmail.com', 'sub123', '2026-08-20 01:23:45');
-             -- 0054(contact_identities の外部キー)・0055(contacts.dirty 追加)が動くよう用意する。
+             -- 0055(contact_identities の外部キー)・0056(contacts.dirty 追加)が動くよう用意する。
              CREATE TABLE contacts (id INTEGER PRIMARY KEY, display_name TEXT NOT NULL);
              PRAGMA user_version = 52;",
         )

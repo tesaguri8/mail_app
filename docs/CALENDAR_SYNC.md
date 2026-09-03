@@ -125,10 +125,10 @@ services/google/calendar/{api,convert,sync}.rs
   client_secret は秘匿性を前提としない種別なので同梱してよい。
 - 同期のたびに refresh token → access token を取り直す（アクセストークンは保存しない）。
 
-### 3-2. データモデル（`migrations/0041_calendar_sync.sql` / `0053_google_accounts.sql`）
+### 3-2. データモデル（`migrations/0041_calendar_sync.sql` / `0054_google_accounts.sql`）
 
 - `google_accounts`: 連携した Google アカウント（複数対応。メタのみ、資格情報は keyring）。
-  0041 では `calendar_accounts` だったものを 0053 でサービス共通へ改称し、
+  0041 では `calendar_accounts` だったものを 0054 でサービス共通へ改称し、
   `granted_scopes` / `sync_calendar` / `sync_contacts` /
   `last_calendar_sync_at` / `last_contacts_sync_at` を追加した。
 - `calendars` に追加: `account_id` / `sync_token`（増分同期）/ `access_role` / `sync_enabled`。

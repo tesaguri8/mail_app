@@ -75,11 +75,12 @@ const iconBtn =
   'flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80 disabled:opacity-40';
 
 // サイドバー（メール一覧）の幅。ドラッグで可変。ここを変えれば最小幅/初期幅を一括変更できる。
-// 最小幅は絞り込みツールバーのアイコン（32px × 10 個 ＋ gap ＋ px-2 ≒ 372px）が
-// 1 行に収まるサイズにする（折り返して見切れないように）。
-export const MIN_SIDEBAR_WIDTH = 380;
+// 最小幅は絞り込みツールバーのアイコン（トグル 8 個 ＋ 期間・タグ・反転の 3 個 ＝
+// 32px × 11 個 ＋ gap-1 × 10 ＋ px-2 ≒ 408px）が 1 行に収まるサイズにする
+// （折り返して見切れないように）。トグルを増やしたらこの値も一緒に上げる。
+export const MIN_SIDEBAR_WIDTH = 416;
 export const MAX_SIDEBAR_WIDTH = 640;
-export const DEFAULT_SIDEBAR_WIDTH = 380;
+export const DEFAULT_SIDEBAR_WIDTH = 416;
 
 // 住所録の編集パネル（メールを見ながら編集する右サイドバー）の幅。ドラッグで可変。
 const MIN_CONTACT_PANEL_WIDTH = 320;
@@ -114,6 +115,7 @@ function searchRowToThread(m: MailSummary): ThreadListItem {
     is_known: m.is_known,
     is_vip: m.is_vip,
     is_green: m.is_green,
+    is_replied: m.is_replied,
     message_count: m.message_count,
     unread_count: m.is_read ? 0 : 1,
     email_ids: [m.id],

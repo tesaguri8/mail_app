@@ -9,6 +9,7 @@ const row = (over: Partial<Parameters<typeof matchesFilters>[0]> = {}) => ({
   is_green: false,
   is_vip: false,
   is_known: false,
+  is_replied: false,
   ...over,
 });
 
@@ -76,6 +77,14 @@ describe('matchesNoneOfFilters（反転＝どれにも当てはまらない）',
     expect(matchesNoneOfFilters(row({ has_real_attachments: true }), keys)).toBe(false);
     expect(matchesNoneOfFilters(row({ is_green: true }), keys)).toBe(false);
     expect(matchesNoneOfFilters(row({ is_vip: true }), keys)).toBe(false);
+  });
+
+  it('返信歴（replied）も同じ規則で効く', () => {
+    // 通常＝返信歴のある相手だけ、反転＝返信歴の無い相手だけ。
+    expect(matchesFilters(row({ is_replied: true }), f('replied'))).toBe(true);
+    expect(matchesFilters(row({ is_replied: false }), f('replied'))).toBe(false);
+    expect(matchesNoneOfFilters(row({ is_replied: false }), f('replied'))).toBe(true);
+    expect(matchesNoneOfFilters(row({ is_replied: true }), f('replied'))).toBe(false);
   });
 
   it('flag は通常・反転ともに非適用（マーク手段が無いため）', () => {

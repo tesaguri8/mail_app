@@ -7,6 +7,7 @@ mod events;
 mod greendomain;
 mod migrations;
 mod recipients;
+mod sent_addresses;
 mod server_accounts;
 mod settings;
 mod signatures;
@@ -63,6 +64,11 @@ impl Store {
             Ok(n) if n > 0 => log::info!("purged {n} freemail green domains"),
             Ok(_) => {}
             Err(e) => log::warn!("freemail green domain purge skipped: {e}"),
+        }
+        // 「自分から送ったことがある相手」の索引を初回だけ構築する（docs/FILTERING.md §2）。
+        // 失敗しても起動は続ける（フィルタが効かないだけで、次回起動で作り直しを試みる）。
+        if let Err(e) = sent_addresses::ensure_built(&conn) {
+            log::warn!("sent address index build skipped: {e}");
         }
         // 参照専用の別接続。WAL の読み取りは書き込みと並行できるので、UI の読み取りが
         // 背景の書き込みに待たされない。query_only で誤って書き込まないよう保護する。

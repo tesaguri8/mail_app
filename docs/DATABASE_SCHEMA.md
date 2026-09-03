@@ -518,6 +518,15 @@ CREATE TABLE app_settings (
     value TEXT NOT NULL
 );
 
+-- 「自分から送ったことがある相手」の索引（0053。docs/FILTERING.md §2.1）。
+-- 一覧の「返信歴あり」フィルタ用。送信済みメールの To/Cc から Rust 側が投入する
+-- （ヘッダのアドレス列の分解は SQL では書けないため、既存分の再構築も Rust が行う）。
+CREATE TABLE sent_addresses (
+    address      TEXT PRIMARY KEY,           -- 小文字化した素のメールアドレス
+    sent_count   INTEGER NOT NULL DEFAULT 0, -- 送った通数（参考値）
+    last_sent_ts INTEGER                     -- 最後に送った日時（epoch 秒。emails.date_ts と同基準）
+);
+
 -- グリーンドメイン／警告ドメイン（0028。docs/GREEN_DOMAINS.md）。
 CREATE TABLE green_domains (
     domain TEXT PRIMARY KEY,

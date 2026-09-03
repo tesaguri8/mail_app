@@ -227,6 +227,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 52,
         sql: include_str!("migrations/0052_org_fields.sql"),
     },
+    Migration {
+        // 53 は送信履歴の索引（「返信歴あり」フィルタ。中身は Rust 側で構築）。
+        version: 53,
+        sql: include_str!("migrations/0053_sent_addresses.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

@@ -34,6 +34,10 @@ message_count: number,
  */
 unread_count: number, 
 /**
+ * 差出人に自分から送ったことがある（返信歴あり）か。フィルタ用。docs/FILTERING.md §2。
+ */
+is_replied: boolean, 
+/**
  * このフォルダに属するスレッド内メール id 群（既読/削除/迷惑の一括操作用）。
  */
 email_ids: Array<number>, };

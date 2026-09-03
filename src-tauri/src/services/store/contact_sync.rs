@@ -172,7 +172,7 @@ impl Store {
     /// 未照合の台帳を（外部 ID, 取り込んだ内容）で返す（照合フェーズの入力）。
     /// 内容を読み戻せない行は判定材料が無いので飛ばす。順序は external_id 昇順で固定し、
     /// 同じ台帳からは何度計画しても同じ結果が出るようにする。
-    pub fn unlinked_identities(
+    fn unlinked_identities(
         &self,
         account_id: i64,
     ) -> rusqlite::Result<Vec<(String, ImportedContact)>> {
@@ -324,7 +324,7 @@ impl Store {
     /// 「Rondine で新しく作った連絡先も Google 側に作る」設定。
     /// 既定は false。住所録を Google へ上げるかは利用者が決めることなので、明示的に
     /// 有効にしたときだけローカル生まれの連絡先を送る。
-    pub fn push_new_contacts(&self, account_id: i64) -> rusqlite::Result<bool> {
+    fn push_new_contacts(&self, account_id: i64) -> rusqlite::Result<bool> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
             "SELECT push_new_contacts FROM google_accounts WHERE id = ?1",

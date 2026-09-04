@@ -17,6 +17,9 @@ src/renderer/config/appIdentity.ts
 # 雛形（実値は含めない）はコミットする
 !.env.example
 
+# エージェントの機械ごとの設定（hook のパスが機械依存。takibi から配られる）
+.claude/
+
 # OS / editor
 .DS_Store
 Thumbs.db

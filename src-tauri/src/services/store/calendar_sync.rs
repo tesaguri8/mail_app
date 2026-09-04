@@ -2,6 +2,9 @@ use super::Store;
 use crate::models::GoogleAccount;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
+/// 同期対象の Google カレンダー 1 件（local_id, external_id, sync_token, access_role）。
+type SyncedGoogleCalendar = (i64, String, Option<String>, String);
+
 /// 予定のリマインダーを与えられた集合へ全置き換えする（同期の取り込み用。dirty は触らない）。
 fn replace_event_reminders(
     conn: &Connection,
@@ -215,7 +218,7 @@ impl Store {
     pub fn list_synced_google_calendars(
         &self,
         account_id: i64,
-    ) -> rusqlite::Result<Vec<(i64, String, Option<String>, String)>> {
+    ) -> rusqlite::Result<Vec<SyncedGoogleCalendar>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, external_id, sync_token, COALESCE(access_role, 'reader') \

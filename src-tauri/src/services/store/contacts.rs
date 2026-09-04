@@ -1632,6 +1632,60 @@ fn set_primary_address(conn: &Connection, cid: i64, street: Option<&str>) -> rus
     Ok(())
 }
 
+/// 既存連絡先へインポート値を反映。新値が NULL の項目は既存を残す（COALESCE）。
+/// is_favorite / is_business / allow_remote_images は触らない（ユーザー設定を温存）。
+fn update_from_import(
+    tx: &rusqlite::Transaction,
+    id: i64,
+    c: &ImportedContact,
+) -> rusqlite::Result<()> {
+    tx.execute(
+        "UPDATE contacts SET \
+             display_name    = ?1, \
+             family_name     = COALESCE(?2, family_name), \
+             given_name      = COALESCE(?3, given_name), \
+             phonetic_family = COALESCE(?4, phonetic_family), \
+             phonetic_given  = COALESCE(?5, phonetic_given), \
+             name_kana       = COALESCE(?6, name_kana), \
+             email           = COALESCE(?7, email), \
+             phone           = COALESCE(?8, phone), \
+             organization    = COALESCE(?9, organization), \
+             org_title       = COALESCE(?10, org_title), \
+             org_department  = COALESCE(?11, org_department), \
+             address         = COALESCE(?12, address), \
+             birthday        = COALESCE(?13, birthday), \
+             note            = COALESCE(?14, note), \
+             source          = ?15, \
+             external_id     = COALESCE(?16, external_id), \
+             updated_at      = CURRENT_TIMESTAMP \
+         WHERE id = ?17",
+        params![
+            c.display_name,
+            c.family_name,
+            c.given_name,
+            c.phonetic_family,
+            c.phonetic_given,
+            c.name_kana,
+            c.email,
+            c.phone,
+            c.organization,
+            c.org_title,
+            c.org_department,
+            c.address,
+            c.birthday,
+            c.note,
+            c.source,
+            c.external_id,
+            id,
+        ],
+    )?;
+    // 子テーブルは取り込み値で作り直す（このソースの最新値を反映）。
+    if !c.all_emails.is_empty() || !c.all_phones.is_empty() || !c.all_addresses.is_empty() {
+        write_import_children(tx, id, c)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2408,58 +2462,4 @@ mod tests {
         // 無関係な語は当たらない。
         assert!(s.list_contacts(Some("山田"), &[], false).unwrap().is_empty());
     }
-}
-
-/// 既存連絡先へインポート値を反映。新値が NULL の項目は既存を残す（COALESCE）。
-/// is_favorite / is_business / allow_remote_images は触らない（ユーザー設定を温存）。
-fn update_from_import(
-    tx: &rusqlite::Transaction,
-    id: i64,
-    c: &ImportedContact,
-) -> rusqlite::Result<()> {
-    tx.execute(
-        "UPDATE contacts SET \
-             display_name    = ?1, \
-             family_name     = COALESCE(?2, family_name), \
-             given_name      = COALESCE(?3, given_name), \
-             phonetic_family = COALESCE(?4, phonetic_family), \
-             phonetic_given  = COALESCE(?5, phonetic_given), \
-             name_kana       = COALESCE(?6, name_kana), \
-             email           = COALESCE(?7, email), \
-             phone           = COALESCE(?8, phone), \
-             organization    = COALESCE(?9, organization), \
-             org_title       = COALESCE(?10, org_title), \
-             org_department  = COALESCE(?11, org_department), \
-             address         = COALESCE(?12, address), \
-             birthday        = COALESCE(?13, birthday), \
-             note            = COALESCE(?14, note), \
-             source          = ?15, \
-             external_id     = COALESCE(?16, external_id), \
-             updated_at      = CURRENT_TIMESTAMP \
-         WHERE id = ?17",
-        params![
-            c.display_name,
-            c.family_name,
-            c.given_name,
-            c.phonetic_family,
-            c.phonetic_given,
-            c.name_kana,
-            c.email,
-            c.phone,
-            c.organization,
-            c.org_title,
-            c.org_department,
-            c.address,
-            c.birthday,
-            c.note,
-            c.source,
-            c.external_id,
-            id,
-        ],
-    )?;
-    // 子テーブルは取り込み値で作り直す（このソースの最新値を反映）。
-    if !c.all_emails.is_empty() || !c.all_phones.is_empty() || !c.all_addresses.is_empty() {
-        write_import_children(tx, id, c)?;
-    }
-    Ok(())
 }

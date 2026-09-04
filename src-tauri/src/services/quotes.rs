@@ -168,6 +168,7 @@ fn none_if_empty(s: &str) -> Option<String> {
 /// - RFC の署名区切り "-- "（末尾スペース）／実運用の "--" 単独
 /// - "□□□" だけの見出し行（純粋な □ の連なり）
 /// - 携帯/クライアント定型（"Sent from my …" / "iPhoneから送信" 等）
+///
 /// ※ 記号区切り "=====…" は newsletter の本文区切りと紛れるため、ここには含めず
 ///   strip_signature 側で「以降が短い＝署名/フッタ」ときだけ落とす。
 fn is_signature_delimiter_line(line: &str) -> bool {
@@ -272,7 +273,7 @@ pub fn split_reply(plain: &str) -> Split {
     // 2) 本文の終端＝引用開始。署名は後段の strip_signature で落とす（原文 body_plain は温存）。
     // ※ メール末尾（引用より後ろ）に付く署名は、引用ごと落ちるのでここで扱う必要はない。
     let body_end = quote_start.unwrap_or(lines.len());
-    let clean = strip_signature(&lines[..body_end].join("\n").trim().to_string());
+    let clean = strip_signature(lines[..body_end].join("\n").trim());
 
     // 3) 引用ブロック（引用開始〜末尾）をまとめて 1 ブロックにする。
     let mut quotes = Vec::new();

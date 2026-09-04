@@ -686,12 +686,15 @@ pub fn process_pending_at(
     Ok(total)
 }
 
+/// reprocess_all_conn が読み出す 1 行（id, body_plain, raw_headers, body_html_z）。
+type ReprocessRow = (i64, Option<String>, Option<String>, Option<Vec<u8>>);
+
 /// reprocess_all の本体（接続を受け取る版。テストからも使う）。
 pub fn reprocess_all_conn(conn: &mut Connection, account_id: i64) -> rusqlite::Result<usize> {
     // (1) 保存済み body_plain から clean_body / body_fingerprint / FTS / message_quotes を再生成（200件ずつ）。
     //     併せて保存済み raw_headers から reply_to を後付けし、HTML 専用メールで 1 行に潰れた
     //     body_plain は保存済み HTML から改行を復元して貼り直す（機能追加前の既存メール向け）。
-    let rows: Vec<(i64, Option<String>, Option<String>, Option<Vec<u8>>)> = {
+    let rows: Vec<ReprocessRow> = {
         let mut stmt = conn.prepare(
             "SELECT id, body_plain, raw_headers, body_html_z FROM emails WHERE account_id = ?1",
         )?;

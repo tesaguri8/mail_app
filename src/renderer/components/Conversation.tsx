@@ -53,6 +53,13 @@ import type { CalendarPanelInitial } from './CalendarPanel';
 /** 全文展開時、本文カードの先頭を表示域の上端から少しだけ下げて置くための余白（px）。 */
 const EXPAND_TOP_GAP = 8;
 
+/** 返信系の操作（バブルのヘッダとフッターで同じ並び・同じ意味で使う）。 */
+const COMPOSE_ACTIONS = [
+  { key: 'reply', Icon: Reply },
+  { key: 'replyAll', Icon: ReplyAll },
+  { key: 'forward', Icon: Forward },
+] as const;
+
 /** 選択テキストを引用文に整形する（各行の先頭に「> 」を付与。空行は「>」のみ）。 */
 const toQuoted = (text: string): string =>
   text
@@ -560,6 +567,25 @@ function Bubble({
                 <ThumbsDown size={11} />
               </button>
             ))}
+          {/* 返信・全員に返信・転送。ラベルはスレッドヘッダ直下に貼り付く（sticky）ので、
+              長いバブルを読んでいる途中でも上端に留まり、フッターまで送らずに押せる。
+              普段はチャットのラベルを汚さないよう、スターや迷惑と同じくホバーで出す。
+              全文表示中は MailBody の固定ヘッダに同じ操作があるので出さない。 */}
+          {!expanded &&
+            COMPOSE_ACTIONS.map(({ key, Icon }) => (
+              <button
+                key={key}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handlers.onReply(key, m.id);
+                }}
+                title={t(`compose.${key}`)}
+                aria-label={t(`compose.${key}`)}
+                className="flex shrink-0 items-center text-white/40 opacity-0 transition-opacity hover:text-sky-300 group-hover/bubble:opacity-100"
+              >
+                <Icon size={11} />
+              </button>
+            ))}
         </div>
 
         {expanded && detail ? (
@@ -667,40 +693,23 @@ function Bubble({
                 out ? 'justify-end' : 'justify-start'
               }`}
             >
-              {/* 折りたたみバブルのまま返信・転送を押せるようにする（「…」メニューにも同じ操作あり）。 */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handlers.onReply('reply', m.id);
-                }}
-                title={t('compose.reply')}
-                aria-label={t('compose.reply')}
-                className="inline-flex items-center gap-0.5 hover:text-sky-300"
-              >
-                <Reply size={12} />
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handlers.onReply('replyAll', m.id);
-                }}
-                title={t('compose.replyAll')}
-                aria-label={t('compose.replyAll')}
-                className="inline-flex items-center gap-0.5 hover:text-sky-300"
-              >
-                <ReplyAll size={12} />
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handlers.onReply('forward', m.id);
-                }}
-                title={t('compose.forward')}
-                aria-label={t('compose.forward')}
-                className="inline-flex items-center gap-0.5 hover:text-sky-300"
-              >
-                <Forward size={12} />
-              </button>
+              {/* 折りたたみバブルのまま返信・転送を押せるようにする（「…」メニューにも同じ操作あり）。
+                  長いバブルではフッターまで送らないと押せないので、同じ操作を上端の
+                  固定ラベルにも出している（下の onReply と同一の呼び出し）。 */}
+              {COMPOSE_ACTIONS.map(({ key, Icon }) => (
+                <button
+                  key={key}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handlers.onReply(key, m.id);
+                  }}
+                  title={t(`compose.${key}`)}
+                  aria-label={t(`compose.${key}`)}
+                  className="inline-flex items-center gap-0.5 hover:text-sky-300"
+                >
+                  <Icon size={12} />
+                </button>
+              ))}
               {!renderHtml && m.has_quotes && (
                 <button
                   onClick={(e) => {

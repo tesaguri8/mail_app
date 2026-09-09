@@ -91,6 +91,8 @@ mail_app/
 
 アプリ識別子（identifier）規則: **`tesaguri.<app_name>.app`**（Tesaguri アプリ共通）。
 **暫定値: `tesaguri.rondine.dev`**（**Rondine**、`.dev` は暫定。正式確定時に `tesaguri.<確定名>.app` へ）。
+Tauri は identifier がデータ保存フォルダ名と macOS の bundle id を兼ねるため、**正式確定時に
+逆 DNS にするかどうかも一緒に決める**（未決。[docs/APP_IDENTITY.md](docs/APP_IDENTITY.md) §5.1）。
 データディレクトリはこの identifier をフォルダ名として各 OS 標準場所に配置（詳細: [docs/DATA_STORAGE.md](docs/DATA_STORAGE.md)）。
 
 > **ハードコード排除**: 製品名・identifier は `config/app-identity.json`（単一ソース）に集約し、`tauri.conf.json` / TS / Expo へ生成・実行時参照で配る。直書きしない（詳細: [docs/APP_IDENTITY.md](docs/APP_IDENTITY.md)）。

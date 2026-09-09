@@ -579,7 +579,8 @@ tesaguri.takibi.dev         ← 手元ビルド
 | | |
 |---|---|
 | **これは「置き場」の名前** | **データディレクトリ**（`%APPDATA%\<識別子>` / `~/.config/<識別子>`）**と、OS キーチェーンのサービス名** |
-| **`[要注意]` OS の bundle id は別の欄** | **macOS の launchd の Label / bundle id / `electron-builder` の `appId` は逆 DNS**（`tech.tesaguri.<app>`）。**OS がその形を要求する**ので、**1 つの綴りで両方を賄おうとしない。****env を足すなら段で**（`tech.tesaguri.takibid.preview`。`_dev` のように繋がない） |
+| **`[要注意]` OS の bundle id は別の欄**（**欄が 2 つある側**） | **macOS の launchd の Label / bundle id / `electron-builder` の `appId` は逆 DNS**（`tech.tesaguri.<app>`）。**OS がその形を要求する**ので、**1 つの綴りで両方を賄おうとしない。****env を足すなら段で**（`tech.tesaguri.takibid.preview`。`_dev` のように繋がない）。**eframe（`with_app_id`）と electron-builder（`appId`）はこちら** |
+| **`[要注意]` Tauri は欄が 1 つ**（2026-09-10 / `rondine` の指摘） | **`tauri.conf.json` の `identifier` が、置き場と bundle id を兼ねる** — 公式に **「it is used in system configurations like **the bundle ID and path to the webview data directory**」**とある（[Tauri 2 の設定](https://v2.tauri.app/reference/config/)）。**別の欄が無いので、上の「1 つの綴りで両方を賄おうとしない」は Tauri では守れない。****公式は逆 DNS 記法を前提にしている**ので、**`tesaguri.<slug>.<env>` は既にその形から外れている**（Windows / Linux では実害が出ないだけ）。**macOS を出すときに Apple の要求とぶつかる**ので、**出す前に決める** — **出したあとで変えると、下の「古い置き場は孤児になる」がそのまま効く。****`[実測]` `rondine` は `tesaguri.rondine.dev` を bundle id としても使っている**（`primadoc` / `doculator` / `cocore` も Tauri なので同じ） |
 | **`staging` は使わない** | **`preview`（チャネル）と `staging`（共有基盤）は別語**（Primadoc の決め）。**`[実測]` Doculator が識別子だけ `staging` になっていた** — ドメイン名に引きずられた揃え損ね |
 | **env を持たないアプリ** | **`tesaguri.<slug>.app`（常に本番扱い）**にしておくと、**後から env を足すときにデータの引っ越しが要らない** |
 | **表示名は別に持つ** | **識別子と窓の題を分ける**（eframe なら `with_app_id` と `with_title`、Tauri なら identifier と productName） |

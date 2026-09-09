@@ -1,7 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
-import { Copy, Paperclip, Quote, Save, Scissors, Send, Trash2, X } from 'lucide-react';
+import {
+  Clipboard,
+  ClipboardType,
+  Copy,
+  Paperclip,
+  Quote,
+  Save,
+  Scissors,
+  Send,
+  Trash2,
+  X,
+} from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { DraftContent } from '@bindings/DraftContent';
@@ -29,7 +40,7 @@ import {
 import { playFlySound } from '../utils/flySound';
 import { RecipientInput } from './RecipientInput';
 import { ContextMenu } from './ContextMenu';
-import { copyText } from '../utils/clipboard';
+import { copyText, readText } from '../utils/clipboard';
 import { FlySwallow, type FlySwallowHandle } from './FlySwallow';
 import swallowUrl from '../assets/swallow.png';
 
@@ -357,7 +368,7 @@ export function Compose({
   const composedBody = useCallback(() => body + quotedRef.current, [body]);
 
   // 本文テキストエリアと、選択テキストの右クリックメニュー（引用文にする/コピー/切り取り）。
-  // 選択があるときだけネイティブメニューを差し替え、無いときは貼り付け等のネイティブを残す。
+  // 右クリックはネイティブメニューを差し替える（選択が無くても貼り付け系を出す）。
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const [bodyMenu, setBodyMenu] = useState<{
     x: number;
@@ -476,6 +487,29 @@ export function Compose({
       if (!ta) return;
       ta.focus();
       ta.setSelectionRange(start, start + q.length);
+    });
+  };
+
+  /**
+   * クリップボードのテキストを挿入する。asQuote なら各行に「> 」を付けて引用として貼る
+   * （返信で相手の文面を引きながら書くとき、貼ってから整形し直さずに済む）。
+   * 選択範囲があればそれを置き換え、無ければキャレット位置に差し込む。
+   */
+  const pasteAt = async (start: number, end: number, asQuote: boolean) => {
+    const text = await readText();
+    if (text === null) return;
+    // 改行コードは本文の流儀（LF）に揃えてから引用符を付ける。
+    const normalized = text.replace(/\r\n?/g, '\n');
+    const insert = asQuote ? `${quote(normalized)}\n` : normalized;
+    const src = bodyRef.current?.value ?? body;
+    setBody(src.slice(0, start) + insert + src.slice(end));
+    markDirty();
+    requestAnimationFrame(() => {
+      const ta = bodyRef.current;
+      if (!ta) return;
+      ta.focus();
+      // 貼り付けた末尾へキャレットを置く（続けて書ける）。
+      ta.setSelectionRange(start + insert.length, start + insert.length);
     });
   };
 
@@ -1038,8 +1072,8 @@ export function Compose({
         )}
 
         {/* 本文（引用は編集欄に入れず、送信時に付ける）。ペインの残り高さいっぱいに広げる。
-            文字選択中の右クリックは「引用文にする」等の小メニューに差し替える（選択が無ければ
-            貼り付け等のネイティブメニューを残す）。 */}
+            右クリックは独自メニューに差し替える。選択中は「引用文にする」等、選択が無くても
+            「貼り付け」「引用として貼り付け」を出す（相手の文面を引きながら書けるように）。 */}
         <textarea
           ref={bodyRef}
           className="min-h-[10rem] w-full flex-1 resize-none rounded-md bg-white/10 px-3 py-2 text-sm leading-relaxed outline-none placeholder:text-white/30 focus:bg-white/15"
@@ -1050,12 +1084,13 @@ export function Compose({
           }}
           onContextMenu={(e) => {
             const ta = e.currentTarget;
-            const start = ta.selectionStart;
-            const end = ta.selectionEnd;
-            if (end > start) {
-              e.preventDefault();
-              setBodyMenu({ x: e.clientX, y: e.clientY, start, end });
-            }
+            e.preventDefault();
+            setBodyMenu({
+              x: e.clientX,
+              y: e.clientY,
+              start: ta.selectionStart,
+              end: ta.selectionEnd,
+            });
           }}
           placeholder={t('compose.bodyPlaceholder')}
         />
@@ -1134,24 +1169,43 @@ export function Compose({
           x={bodyMenu.x}
           y={bodyMenu.y}
           items={[
+            // 選択があるときだけ出す（選択に対する操作なので、無いときは意味を成さない）。
+            ...(bodyMenu.end > bodyMenu.start
+              ? [
+                  {
+                    key: 'quote',
+                    label: t('compose.makeQuote'),
+                    Icon: Quote,
+                    onClick: () => quoteSelection(bodyMenu.start, bodyMenu.end),
+                  },
+                  {
+                    key: 'copy',
+                    label: t('ctx.copy'),
+                    Icon: Copy,
+                    onClick: () =>
+                      void copyText(
+                        (bodyRef.current?.value ?? body).slice(bodyMenu.start, bodyMenu.end),
+                      ),
+                  },
+                  {
+                    key: 'cut',
+                    label: t('ctx.cut'),
+                    Icon: Scissors,
+                    onClick: () => cutSelection(bodyMenu.start, bodyMenu.end),
+                  },
+                ]
+              : []),
             {
-              key: 'quote',
-              label: t('compose.makeQuote'),
-              Icon: Quote,
-              onClick: () => quoteSelection(bodyMenu.start, bodyMenu.end),
+              key: 'paste',
+              label: t('ctx.paste'),
+              Icon: Clipboard,
+              onClick: () => void pasteAt(bodyMenu.start, bodyMenu.end, false),
             },
             {
-              key: 'copy',
-              label: t('ctx.copy'),
-              Icon: Copy,
-              onClick: () =>
-                void copyText((bodyRef.current?.value ?? body).slice(bodyMenu.start, bodyMenu.end)),
-            },
-            {
-              key: 'cut',
-              label: t('ctx.cut'),
-              Icon: Scissors,
-              onClick: () => cutSelection(bodyMenu.start, bodyMenu.end),
+              key: 'pasteQuote',
+              label: t('ctx.pasteQuote'),
+              Icon: ClipboardType,
+              onClick: () => void pasteAt(bodyMenu.start, bodyMenu.end, true),
             },
           ]}
           onClose={() => setBodyMenu(null)}

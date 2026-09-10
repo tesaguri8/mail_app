@@ -189,6 +189,32 @@ pub enum InsertOutcome {
 /// 新規なら挿入して Inserted を返す。重複（account_id, canonical_key）の場合は
 /// 新規挿入はしないが、機能追加前に取り込んだ古いメールでも添付が使えるよう、
 /// uid と添付メタが未設定なら埋め戻して（バックフィル）Backfilled を返す。
+/// HTML 本文に中身があるか。
+///
+/// mail_parser は text/plain のメールを**ヘッダだけ**渡されると、空本文から
+/// `<html><body></body></html>` を合成する。これを本文と数えると `body_state='present'` に
+/// なり、開いても本文を取りに行かないので永久に空のままになる（実データで発生）。
+///
+/// 文字が残るかどうかでは判定しない。画像だけの HTML メールもタグを剥がすと空になるが、
+/// そちらは**取得済みの本文**なので 'present' のままにする必要がある。判定するのは
+/// 「中身の入る場所が空の骨組みか」だけ。
+fn has_html_body(html: &str) -> bool {
+    let t = html.trim();
+    if t.is_empty() {
+        return false;
+    }
+    // 骨組みからタグと空白を取り除いて何も残らなければ、合成された空本文とみなす。
+    let stripped: String = t
+        .to_ascii_lowercase()
+        .replace("<html>", "")
+        .replace("</html>", "")
+        .replace("<head>", "")
+        .replace("</head>", "")
+        .replace("<body>", "")
+        .replace("</body>", "");
+    !stripped.trim().is_empty()
+}
+
 pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertOutcome> {
     // フォルダごとに別レコードにするため canonical_key はフォルダ接頭辞付きで保存する。
     let key = folder_key(&e.folder, &e.canonical_key);
@@ -209,12 +235,17 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
         .as_deref()
         .filter(|s| !s.trim().is_empty())
         .map(crate::services::quotes::fingerprint);
-    // 本文の取得状態を本文列の有無から導出する（docs/SYNC.md §3.6）。本文3列がすべて空＝
+    // 本文の取得状態を本文列の中身から導出する（docs/SYNC.md §3.6）。読める中身が無い＝
     // ヘッダのみ取り込んだ「メタのみ行」＝'absent'（開いた時にサーバから本文取得）。本文が
     // あれば 'present'。※要約落ち('evicted')は挿入ではなく storage.rs の更新側で付ける。
-    let has_body = e.clean_body.as_deref().is_some_and(|s| !s.trim().is_empty())
-        || e.body_plain.as_deref().is_some_and(|s| !s.is_empty())
-        || e.body_html.as_deref().is_some_and(|s| !s.is_empty());
+    //
+    // 「空でない文字列か」で見てはいけない。mail_parser は text/plain のメールをヘッダだけ
+    // 渡されると、空本文から `<html><body></body></html>` を合成する。これを本文と数えると
+    // 'present' になり、開いても本文を取りに行かないので永久に空のままになる（実データで発生）。
+    let has_text = |s: &str| !s.trim().is_empty();
+    let has_body = e.clean_body.as_deref().is_some_and(has_text)
+        || e.body_plain.as_deref().is_some_and(has_text)
+        || e.body_html.as_deref().is_some_and(has_html_body);
     let body_state = if has_body { "present" } else { "absent" };
     let changed = conn.execute(
         "INSERT OR IGNORE INTO emails
@@ -1674,6 +1705,82 @@ mod tests {
             )
             .unwrap();
         store
+    }
+
+    /// ヘッダだけを取り込んだ「メタのみ行」を作る（Pass1.5 が渡してくる形）。
+    /// mail_parser は text/plain の空本文から `<html><body></body></html>` を合成するので、
+    /// 本文が無くても body_html だけは空にならない。
+    fn insert_header_only(store: &Store, key: &str, body_html: Option<&str>) -> String {
+        let conn = store.conn.lock().unwrap();
+        let e = NewEmail {
+            account_id: 1,
+            message_id: None,
+            canonical_key: key.to_string(),
+            subject: Some("ヘッダのみ".to_string()),
+            from_address: Some("a@b".to_string()),
+            from_name: None,
+            to_addresses: None,
+            to_name: None,
+            reply_to: None,
+            cc_addresses: None,
+            date: Some("2026-01-01 00:00:00".to_string()),
+            date_ts: Some(1_767_225_600),
+            body_plain: Some(String::new()),
+            clean_body: Some(String::new()),
+            body_html: body_html.map(str::to_string),
+            auth_result: None,
+            list_id: None,
+            in_reply_to: None,
+            references_ids: None,
+            thread_index: None,
+            raw_headers: None,
+            has_attachments: false,
+            uid: Some(1),
+            folder: "inbox".to_string(),
+            is_read: false,
+            attachments: Vec::new(),
+            quotes: Vec::new(),
+            verified_self: false,
+        };
+        insert_email(&conn, &e).unwrap();
+        conn.query_row(
+            "SELECT body_state FROM emails WHERE canonical_key = ?1",
+            params![folder_key("inbox", key)],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_header_only_plain_text_mail_is_marked_absent() {
+        // text/plain のメールをヘッダだけ取り込むと、mail_parser が空の HTML 骨組みを作る。
+        // これを「本文あり」と数えると body_state='present' になり、開いても本文が
+        // 取りに行かれず永久に空のままになる（実データで発生。docs/SYNC.md §3.6）。
+        let store = test_store();
+        assert_eq!(
+            insert_header_only(&store, "shell@x", Some("<html><body></body></html>")),
+            "absent",
+            "中身の無い HTML 骨組みを本文と数えてはならない"
+        );
+        // multipart は body_html 自体が付かない（こちらは元から absent）。
+        assert_eq!(insert_header_only(&store, "none@x", None), "absent");
+        // 改行だけの本文も「取得済み」にしない。
+        assert_eq!(insert_header_only(&store, "ws@x", Some("<html><body>\n \n</body></html>")), "absent");
+    }
+
+    #[test]
+    fn an_image_only_html_mail_stays_present() {
+        // 画像だけの HTML メールはタグを剥がすと文字が残らないが、**取得済みの本文**なので
+        // 'present' のままにする。ここを取り違えると、開くたびに本文を取り直しに行く。
+        let store = test_store();
+        assert_eq!(
+            insert_header_only(
+                &store,
+                "img@x",
+                Some("<html><body><img src=\"cid:a\"></body></html>")
+            ),
+            "present"
+        );
     }
 
     fn seed(store: &Store, subject: &str, from: &str, body: &str, folder: &str, key: &str) {

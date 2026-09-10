@@ -232,6 +232,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 53,
         sql: include_str!("migrations/0053_sent_addresses.sql"),
     },
+    Migration {
+        // 54 は本文が空なのに 'present' になっていた行の修復（メタ先行取り込みの取りこぼし）。
+        version: 54,
+        sql: include_str!("migrations/0054_repair_empty_bodies.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
@@ -325,7 +330,9 @@ mod tests {
         // 実在の v35 DB を忠実に模す: from_address(0001)・body_compacted(0011) と
         // folder_sync(0015) は 35 より前に存在する。reply_to だけ「別枝で既存」の状態を作る。
         conn.execute_batch(
-            "CREATE TABLE emails (id INTEGER PRIMARY KEY, folder TEXT, from_address TEXT, body_compacted INTEGER DEFAULT 0, has_attachments INTEGER DEFAULT 0);
+            "CREATE TABLE emails (id INTEGER PRIMARY KEY, folder TEXT, from_address TEXT, body_compacted INTEGER DEFAULT 0, has_attachments INTEGER DEFAULT 0,
+               -- 本文列（0001 から存在）。0054(空本文の修復)が動くよう用意する。
+               body_plain TEXT, clean_body TEXT);
              ALTER TABLE emails ADD COLUMN reply_to TEXT;
              CREATE TABLE folder_sync (
                account_id INTEGER NOT NULL, folder TEXT NOT NULL,

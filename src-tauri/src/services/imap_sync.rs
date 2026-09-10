@@ -1172,6 +1172,18 @@ fn fetch_light_chunk(
     store_bodies(session, conn, account_id, folder, self_secret, metas, c, cancel)
 }
 
+/// ヘッダだけを渡して作った行から、本文 3 列を落とす。
+///
+/// mail_parser は text/plain のメールをヘッダだけ渡されると、空本文から
+/// `<html><body></body></html>` を合成する。そのまま保存すると中身の無い HTML が
+/// 本文列に残るので、「本文はまだ無い」ことを明示して Pass2 の埋め戻しに任せる。
+fn without_body(mut ne: NewEmail) -> NewEmail {
+    ne.body_plain = None;
+    ne.clean_body = None;
+    ne.body_html = None;
+    ne
+}
+
 /// Pass1.5: Pass1 のメタ（ヘッダ＋BODYSTRUCTURE）だけで行を作る。本文3列は空なので
 /// insert_email 側で `body_state='absent'` になり、Pass2 の本文が同じ行へ統合される。
 /// 戻り値は新規に作られた行数（＝一覧に出せるようになった新着の件数）。
@@ -1192,7 +1204,9 @@ fn store_header_metas(
         // att_parts は Pass2 が所有権を取るので、ここでは複製して添付メタを作る
         // （1 通あたり数個。ファイル名は Pass2 で MIME ヘッダから復号し直される）。
         let atts = attachments_from_parts(meta.att_parts.clone());
-        let ne = parsed_to_new_email(p, account_id, folder, meta.seen, meta.uid, verified, atts);
+        let ne = without_body(parsed_to_new_email(
+            p, account_id, folder, meta.seen, meta.uid, verified, atts,
+        ));
         if let InsertOutcome::Inserted(_) = insert_email(conn, &ne).map_err(|e| e.to_string())? {
             listed += 1;
             // 新着の件数はここで数える（Pass2 は同じ行の埋め戻しになる）。
@@ -1226,7 +1240,9 @@ fn store_header_fetches<'a>(
         if let Some(p) = parser::parse_message(raw) {
             let verified = is_verified_self(&self_secret, &p);
             let atts = attachments_from_fetch(m, &p);
-            let ne = parsed_to_new_email(p, account_id, folder, seen, uid, verified, atts);
+            let ne = without_body(parsed_to_new_email(
+                p, account_id, folder, seen, uid, verified, atts,
+            ));
             if let InsertOutcome::Inserted(_) = insert_email(conn, &ne).map_err(|e| e.to_string())? {
                 result.backfilled += 1;
             }

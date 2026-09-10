@@ -189,6 +189,16 @@ pub enum InsertOutcome {
 /// 新規なら挿入して Inserted を返す。重複（account_id, canonical_key）の場合は
 /// 新規挿入はしないが、機能追加前に取り込んだ古いメールでも添付が使えるよう、
 /// uid と添付メタが未設定なら埋め戻して（バックフィル）Backfilled を返す。
+/// 本文 3 列に「読める中身」があるか。挿入と埋め戻しで同じ物差しを使う。
+fn has_readable_body(
+    plain: Option<&str>,
+    html: Option<&str>,
+    clean: Option<&str>,
+) -> bool {
+    let has_text = |s: &str| !s.trim().is_empty();
+    clean.is_some_and(has_text) || plain.is_some_and(has_text) || html.is_some_and(has_html_body)
+}
+
 /// HTML 本文に中身があるか。
 ///
 /// mail_parser は text/plain のメールを**ヘッダだけ**渡されると、空本文から
@@ -242,10 +252,11 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
     // 「空でない文字列か」で見てはいけない。mail_parser は text/plain のメールをヘッダだけ
     // 渡されると、空本文から `<html><body></body></html>` を合成する。これを本文と数えると
     // 'present' になり、開いても本文を取りに行かないので永久に空のままになる（実データで発生）。
-    let has_text = |s: &str| !s.trim().is_empty();
-    let has_body = e.clean_body.as_deref().is_some_and(has_text)
-        || e.body_plain.as_deref().is_some_and(has_text)
-        || e.body_html.as_deref().is_some_and(has_html_body);
+    let has_body = has_readable_body(
+        e.body_plain.as_deref(),
+        e.body_html.as_deref(),
+        e.clean_body.as_deref(),
+    );
     let body_state = if has_body { "present" } else { "absent" };
     let changed = conn.execute(
         "INSERT OR IGNORE INTO emails
@@ -607,9 +618,11 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
     }
     // 本文が未取得（absent）の既存行に全文取得できたときは、全文(body_plain)・HTML・状態を
     // 復元する（本文バックフィル）。clean_body/FTS は上のブロック、添付は下のブロックで揃う。
-    let new_has_body = e.body_plain.as_deref().is_some_and(|s| !s.is_empty())
-        || e.body_html.as_deref().is_some_and(|s| !s.is_empty())
-        || e.clean_body.as_deref().is_some_and(|s| !s.trim().is_empty());
+    let new_has_body = has_readable_body(
+        e.body_plain.as_deref(),
+        e.body_html.as_deref(),
+        e.clean_body.as_deref(),
+    );
     let stored_absent = conn
         .query_row(
             "SELECT COALESCE(body_state,'present')='absent' FROM emails WHERE id = ?1",
@@ -629,6 +642,15 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
                  has_attachments = ?3, body_compacted = 0, body_state = 'present'
              WHERE id = ?4",
             params![e.body_plain, body_html_z, e.has_attachments as i64, id],
+        )?;
+        touched = true;
+    } else if stored_absent {
+        // 取りに行ったのに読める本文が無かった＝**本当に空のメール**（件名だけ・添付だけ）。
+        // 'absent'（未取得）のままにすると、開くたびにサーバーへ取りに行ってしまうので、
+        // 「取ったが空だった」を記録して打ち止めにする（docs/SYNC.md §3.6）。
+        conn.execute(
+            "UPDATE emails SET body_state = 'empty', has_attachments = ?1 WHERE id = ?2",
+            params![e.has_attachments as i64, id],
         )?;
         touched = true;
     }
@@ -1766,6 +1788,60 @@ mod tests {
         assert_eq!(insert_header_only(&store, "none@x", None), "absent");
         // 改行だけの本文も「取得済み」にしない。
         assert_eq!(insert_header_only(&store, "ws@x", Some("<html><body>\n \n</body></html>")), "absent");
+    }
+
+    #[test]
+    fn a_body_that_comes_back_empty_is_marked_so_we_stop_asking() {
+        // 取りに行ったのに本文が無いメール（件名だけ・添付だけ）は、'absent' のままにすると
+        // 開くたびにサーバーへ行く。「取ったが空だった」を記録して打ち止めにする。
+        let store = test_store();
+        let key = "empty@x";
+        assert_eq!(insert_header_only(&store, key, None), "absent");
+
+        let conn = store.conn.lock().unwrap();
+        let id: i64 = conn
+            .query_row(
+                "SELECT id FROM emails WHERE canonical_key = ?1",
+                params![folder_key("inbox", key)],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // 全文取得の結果が空だった、という更新をかける。
+        let e = NewEmail {
+            account_id: 1,
+            message_id: None,
+            canonical_key: key.to_string(),
+            subject: Some("件名だけ".to_string()),
+            from_address: Some("a@b".to_string()),
+            from_name: None,
+            to_addresses: None,
+            to_name: None,
+            reply_to: None,
+            cc_addresses: None,
+            date: Some("2026-01-01 00:00:00".to_string()),
+            date_ts: Some(1_767_225_600),
+            body_plain: Some(String::new()),
+            clean_body: Some(String::new()),
+            body_html: None,
+            auth_result: None,
+            list_id: None,
+            in_reply_to: None,
+            references_ids: None,
+            thread_index: None,
+            raw_headers: None,
+            has_attachments: false,
+            uid: Some(1),
+            folder: "inbox".to_string(),
+            is_read: false,
+            attachments: Vec::new(),
+            quotes: Vec::new(),
+            verified_self: false,
+        };
+        backfill_existing(&conn, &e).unwrap();
+        let state: String = conn
+            .query_row("SELECT body_state FROM emails WHERE id = ?1", params![id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(state, "empty");
     }
 
     #[test]

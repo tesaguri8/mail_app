@@ -8,7 +8,7 @@ use crate::models::{
     RebuildAction,
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSenderConflict, SpamSettings, SpamVerdict,
-    StorageInfo, SyncProgress,
+    StorageInfo, SyncListed, SyncProgress,
     SyncResult, TagSummary, ThreadListItem, ThreadView,
 };
 use crate::services::autoconfig;
@@ -335,6 +335,17 @@ pub async fn mail_sync(
                 },
             );
         };
+        // ヘッダだけ DB に入って一覧に出せるようになったら "sync:listed" で知らせる
+        // （本文のダウンロードを待たずに一覧を更新するため。docs/SYNC.md §3.6）。
+        let listed = |folder: &str, count: i32| {
+            let _ = app_ev.emit(
+                "sync:listed",
+                SyncListed {
+                    folder: folder.to_string(),
+                    count,
+                },
+            );
+        };
         let res = imap_sync::sync_account(
             &db_path,
             account_id,
@@ -343,6 +354,7 @@ pub async fn mail_sync(
             &login_user,
             &password,
             &progress,
+            &listed,
             &cancel_task,
             &session_slot,
         );
@@ -2850,6 +2862,17 @@ pub async fn mail_resync(
                 },
             );
         };
+        // ヘッダだけ DB に入って一覧に出せるようになったら "sync:listed" で知らせる
+        // （本文のダウンロードを待たずに一覧を更新するため。docs/SYNC.md §3.6）。
+        let listed = |folder: &str, count: i32| {
+            let _ = app_ev.emit(
+                "sync:listed",
+                SyncListed {
+                    folder: folder.to_string(),
+                    count,
+                },
+            );
+        };
         imap_sync::sync_account(
             &db_path,
             account_id,
@@ -2858,6 +2881,7 @@ pub async fn mail_resync(
             &login_user,
             &password,
             &progress,
+            &listed,
             &cancel_task,
             &session_slot,
         )

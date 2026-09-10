@@ -50,6 +50,7 @@ import {
 } from '../services/mail';
 import { recipientSuggest } from '../services/recipients';
 import { MAIL_SYNCED_EVENT } from '../hooks/useAutoSync';
+import type { SyncListed } from '@bindings/SyncListed';
 import { RecipientSuggestList } from './RecipientSuggestList';
 import { mailAddTag, mailRemoveTag, tagCreate, tagList } from '../services/tags';
 import { pickTagColor, DEFAULT_TAG_COLOR } from '../utils/tagColors';
@@ -70,6 +71,10 @@ import { DateFilter, matchesDate, type DateRange } from './DateFilter';
 import { SpamConflictAlert } from './SpamConflictAlert';
 import { TagFilter, matchesTags } from './TagFilter';
 import { TagPicker } from './TagPicker';
+
+/** 取り込み途中の "sync:listed" をまとめる待ち時間（ms）。チャンクごとの連続発火で
+ *  一覧を何度も読み直さないよう、最後の 1 回だけ実行する。 */
+const LISTED_RELOAD_DELAY_MS = 400;
 
 const iconBtn =
   'flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80 disabled:opacity-40';
@@ -710,6 +715,28 @@ export function MailboxView({
     return () => window.removeEventListener(MAIL_SYNCED_EVENT, onSynced);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncing, selected, folder]);
+
+  // 取り込みの途中でも、ヘッダが DB に入った時点で一覧へ出す（本文は後から届く。
+  // docs/SYNC.md §3.6）。チャンクごとに来るので、まとめて 1 回だけ読み直す。
+  useEffect(() => {
+    if (selected == null) return;
+    let timer: number | null = null;
+    let stopped = false;
+    const unlisten = listen<SyncListed>('sync:listed', (e) => {
+      if (e.payload.count <= 0 || stopped) return;
+      if (timer != null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = null;
+        void loadMails({ keepScroll: true });
+      }, LISTED_RELOAD_DELAY_MS);
+    });
+    return () => {
+      stopped = true;
+      if (timer != null) window.clearTimeout(timer);
+      void unlisten.then((off) => off());
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, folder]);
 
   // 全文検索: 入力を 250ms デバウンスして呼ぶ。アカウント/フォルダ切替でも再実行。
   useEffect(() => {

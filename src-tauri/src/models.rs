@@ -1046,6 +1046,17 @@ pub struct SyncProgress {
     pub total: i32,
 }
 
+/// 新着が一覧に出せる状態になったこと（Tauri イベント "sync:listed" のペイロード）。
+/// 本文のダウンロードを待たずにヘッダだけ DB へ入れた時点で発火する（docs/SYNC.md §3.6）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct SyncListed {
+    /// 'inbox' | 'sent' | 'drafts' | 'trash' | 'spam'。
+    pub folder: String,
+    /// 今回一覧に出せるようになった件数（新規に作られた行）。
+    pub count: i32,
+}
+
 /// データ保存先（mail.db と添付キャッシュのフォルダ）と使用量。
 /// バイト数は f64（TS の number）で大きな値も安全に渡す。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

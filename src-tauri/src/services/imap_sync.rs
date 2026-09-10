@@ -254,6 +254,7 @@ fn run_sync(
     window: &str,
     result: &mut SyncResult,
     progress: &dyn Fn(&str, i32, i32),
+    listed: &dyn Fn(&str, i32),
     cancel: &AtomicBool,
 ) -> Result<(), String> {
     // 同期対象フォルダ（受信箱＋存在する標準フォルダ）を一覧する。
@@ -287,7 +288,7 @@ fn run_sync(
             return Ok(());
         }
         if let Err(e) = sync_folder(
-            session, conn, account_id, mbox, tag, window, result, progress, cancel,
+            session, conn, account_id, mbox, tag, window, result, progress, listed, cancel,
         ) {
             log::warn!("フォルダ '{mbox}' ({tag}) の同期に失敗: {e}");
         }
@@ -350,6 +351,7 @@ pub fn sync_account(
     user: &str,
     password: &str,
     progress: &dyn Fn(&str, i32, i32),
+    listed: &dyn Fn(&str, i32),
     cancel: &AtomicBool,
     slot: &Mutex<Option<ImapSession>>,
 ) -> Result<SyncResult, String> {
@@ -384,6 +386,7 @@ pub fn sync_account(
         &window,
         &mut result,
         progress,
+        listed,
         cancel,
     ) {
         Ok(()) => Ok(result), // セッションは slot に残して使い回す（ログアウトしない）。
@@ -506,6 +509,7 @@ fn sync_folder(
     window: &str,
     result: &mut SyncResult,
     progress: &dyn Fn(&str, i32, i32),
+    listed: &dyn Fn(&str, i32),
     cancel: &AtomicBool,
 ) -> Result<(), String> {
     let mailbox = session.select(imap_name).map_err(|e| e.to_string())?;
@@ -545,7 +549,7 @@ fn sync_folder(
         uids.sort_unstable();
         uids.reverse(); // 降順（新しい UID から）
         fetch_uids(
-            session, conn, account_id, tag, &uids, &mut c, progress, cancel,
+            session, conn, account_id, tag, &uids, &mut c, progress, listed, cancel,
         )?;
     } else {
         match parse_scope(window) {
@@ -565,8 +569,12 @@ fn sync_folder(
                         tag,
                         &self_secret,
                         &seq,
-                        false,
-                        true,
+                        &ChunkOpts {
+                            by_uid: false,
+                            reverse: true,
+                            headers_first: true,
+                            listed: &|n| listed(tag, n),
+                        },
                         &mut c,
                         cancel,
                     )?;
@@ -591,7 +599,7 @@ fn sync_folder(
                 }
                 uids.reverse(); // 降順（新しい UID から取得・表示）
                 fetch_uids(
-                    session, conn, account_id, tag, &uids, &mut c, progress, cancel,
+                    session, conn, account_id, tag, &uids, &mut c, progress, listed, cancel,
                 )?;
             }
         }
@@ -638,6 +646,7 @@ fn fetch_uids(
     uids: &[u32],
     c: &mut Counters,
     progress: &dyn Fn(&str, i32, i32),
+    listed: &dyn Fn(&str, i32),
     cancel: &AtomicBool,
 ) -> Result<(), String> {
     let total = uids.len() as i32;
@@ -653,7 +662,7 @@ fn fetch_uids(
             .map(|u| u.to_string())
             .collect::<Vec<_>>()
             .join(",");
-        // 添付本体を落とさない軽量取得（Pass1 メタ → Pass2 本文だけ）。取得順のまま保存。
+        // 添付本体を落とさない軽量取得。ヘッダ先行で一覧に出し、本文は同じチャンクの後段で入れる。
         fetch_light_chunk(
             session,
             conn,
@@ -661,8 +670,12 @@ fn fetch_uids(
             folder,
             &self_secret,
             &set,
-            true,
-            false,
+            &ChunkOpts {
+                by_uid: true,
+                reverse: false,
+                headers_first: true,
+                listed: &|n| listed(folder, n),
+            },
             c,
             cancel,
         )?;
@@ -701,7 +714,13 @@ fn is_verified_self(secret: &Option<String>, p: &parser::ParsedEmail) -> bool {
 
 /// BODYSTRUCTURE（本体なし）から添付メタ一覧を section 付きで作る。ネスト添付にも section で届く。
 fn attachments_from_bodystructure(bs: &imap_proto::types::BodyStructure) -> Vec<NewAttachment> {
-    crate::services::bodystructure::attachments(bs)
+    attachments_from_parts(crate::services::bodystructure::attachments(bs))
+}
+
+/// BODYSTRUCTURE 由来のパート一覧を添付メタへ写す。ファイル名は Pass2 で MIME ヘッダから
+/// 復号し直すため、ここでは BODYSTRUCTURE の値（無ければ連番）を仮に入れる。
+fn attachments_from_parts(parts: Vec<crate::services::bodystructure::StructPart>) -> Vec<NewAttachment> {
+    parts
         .into_iter()
         .enumerate()
         .map(|(i, sp)| {
@@ -1099,8 +1118,24 @@ fn store_bodies(
     Ok(())
 }
 
-/// 軽量取得の 1 チャンク: Pass1（メタ）→ Pass2（本文だけ）。`BODY[]` を発行しない（＝添付本体を落とさない）。
-/// `by_uid=false` はシーケンス範囲取得（初回 Count 用）。`reverse=true` は新しい順に保存する。
+/// チャンク取得の取り方。引数を増やさずに意味を持たせる（docs/SYNC.md §3.6）。
+struct ChunkOpts<'a> {
+    /// UID 指定で取るか（false はシーケンス範囲＝初回 Count 用）。
+    by_uid: bool,
+    /// 新しい順に保存するか。
+    reverse: bool,
+    /// ヘッダだけで先に行を作って一覧に出すか。新着の取り込みは true、
+    /// 本文だけの埋め戻し（行が既にある）は false。
+    headers_first: bool,
+    /// ヘッダが DB に入った直後に呼ぶ（UI へ「この件数は一覧に出せる」合図）。
+    listed: &'a dyn Fn(i32),
+}
+
+/// 軽量取得の 1 チャンク: Pass1（メタ）→ Pass1.5（ヘッダだけで行を作る）→ Pass2（本文だけ）。
+/// `BODY[]` を発行しない（＝添付本体を落とさない）。
+///
+/// Pass1.5 を挟むことで、本文のダウンロードを待たずに一覧へ出せる。本文は Pass2 で
+/// 同じ行へ入る（canonical_key が一致するので重複しない）。docs/SYNC.md §3.6。
 #[allow(clippy::too_many_arguments)]
 fn fetch_light_chunk(
     session: &mut ImapSession,
@@ -1109,26 +1144,62 @@ fn fetch_light_chunk(
     folder: &str,
     self_secret: &Option<String>,
     set: &str,
-    by_uid: bool,
-    reverse: bool,
+    opts: &ChunkOpts,
     c: &mut Counters,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
     // Pass1: FLAGS/BODYSTRUCTURE/HEADER のみ（本体なし）。owned メタに写してから借用を解放。
     let query = "(UID FLAGS BODYSTRUCTURE BODY.PEEK[HEADER])";
     let mut metas = {
-        let fetches = if by_uid {
+        let fetches = if opts.by_uid {
             session.uid_fetch(set, query).map_err(|e| e.to_string())?
         } else {
             session.fetch(set, query).map_err(|e| e.to_string())?
         };
         collect_metas(fetches.iter(), c)
     };
-    if reverse {
+    if opts.reverse {
         metas.reverse();
     }
-    // Pass2: 本文だけ取得して保存。
+    // Pass1.5: ヘッダだけの行を先に作る（一覧に出す）。
+    if opts.headers_first {
+        let listed = store_header_metas(conn, account_id, folder, self_secret, &metas, c)?;
+        if listed > 0 {
+            (opts.listed)(listed);
+        }
+    }
+    // Pass2: 本文だけ取得して、同じ行へ入れる。
     store_bodies(session, conn, account_id, folder, self_secret, metas, c, cancel)
+}
+
+/// Pass1.5: Pass1 のメタ（ヘッダ＋BODYSTRUCTURE）だけで行を作る。本文3列は空なので
+/// insert_email 側で `body_state='absent'` になり、Pass2 の本文が同じ行へ統合される。
+/// 戻り値は新規に作られた行数（＝一覧に出せるようになった新着の件数）。
+fn store_header_metas(
+    conn: &Connection,
+    account_id: i64,
+    folder: &str,
+    self_secret: &Option<String>,
+    metas: &[MsgMeta],
+    c: &mut Counters,
+) -> Result<i32, String> {
+    let mut listed = 0;
+    for meta in metas {
+        let Some(p) = parser::parse_message(&meta.header) else {
+            continue;
+        };
+        let verified = is_verified_self(self_secret, &p);
+        // att_parts は Pass2 が所有権を取るので、ここでは複製して添付メタを作る
+        // （1 通あたり数個。ファイル名は Pass2 で MIME ヘッダから復号し直される）。
+        let atts = attachments_from_parts(meta.att_parts.clone());
+        let ne = parsed_to_new_email(p, account_id, folder, meta.seen, meta.uid, verified, atts);
+        if let InsertOutcome::Inserted(_) = insert_email(conn, &ne).map_err(|e| e.to_string())? {
+            listed += 1;
+            // 新着の件数はここで数える（Pass2 は同じ行の埋め戻しになる）。
+            c.stored += 1;
+        }
+    }
+    Ok(listed)
 }
 
 /// メタのみ行の書き込み（BODY.PEEK[HEADER] をそのまま parse_message へ）。ヘッダのみなので
@@ -1352,8 +1423,13 @@ fn backfill_folder_bodies(
             tag,
             &self_secret,
             &set,
-            true,
-            false,
+            &ChunkOpts {
+                by_uid: true,
+                reverse: false,
+                // 行は既にある（absent）ので、ヘッダを入れ直さず本文だけ埋める。
+                headers_first: false,
+                listed: &|_| {},
+            },
             &mut c,
             cancel,
         )?;

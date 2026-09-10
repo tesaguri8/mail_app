@@ -66,6 +66,7 @@ import { FolderIcons } from './FolderIcons';
 import { MAIL_FILTERS, matchesFilters, matchesNoneOfFilters } from './mailFilters';
 import { Tooltip } from './Tooltip';
 import { ContextMenu, type MenuItem } from './ContextMenu';
+import { Dropdown } from './Dropdown';
 import { PrintMail } from './PrintMail';
 import { DateFilter, matchesDate, type DateRange } from './DateFilter';
 import { SpamConflictAlert } from './SpamConflictAlert';
@@ -1378,23 +1379,19 @@ export function MailboxView({
       )}
       {/* アカウント選択＋フォルダ選択（アイコンボタン）を同じ行に置く */}
       <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-2 py-1.5">
-        <select
-          className="min-w-0 flex-1 rounded-md bg-white/10 px-2 py-1 text-xs outline-none"
-          value={selected ?? ''}
-          onChange={(e) => setSelected(e.target.value === 'all' ? 'all' : Number(e.target.value))}
-        >
-          {/* 全アカウント横断表示。既定は「全て」。複数アカウントがある時のみ選べる。 */}
-          {accounts.length > 1 && (
-            <option value="all">
-              {t('mailbox.allAccounts')}
-            </option>
-          )}
-          {accounts.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.email}
-            </option>
-          ))}
-        </select>
+        {/* アカウント選択。ネイティブ <select> は候補リストを OS が描くため、環境によって
+            背景と文字が同系色になって読めなくなる（Windows で実測）。自前描画の Dropdown に
+            置き換えて OS 依存を無くす。全アカウント横断表示は複数アカウントがある時だけ。 */}
+        <Dropdown
+          value={String(selected ?? '')}
+          options={[
+            ...(accounts.length > 1 ? [{ value: 'all', label: t('mailbox.allAccounts') }] : []),
+            ...accounts.map((a) => ({ value: String(a.id), label: a.email })),
+          ]}
+          onChange={(v) => setSelected(v === 'all' ? 'all' : Number(v))}
+          className="min-w-0 flex-1 text-xs"
+          ariaLabel={t('mailbox.account')}
+        />
         <FolderIcons value={folder} onChange={setFolder} />
         {/* 迷惑登録の矛盾（住所録/グリーンなのに迷惑）を知らせる情報アイコン。矛盾が無ければ非表示。 */}
         <SpamConflictAlert onResolved={() => loadMails({ keepScroll: true })} />

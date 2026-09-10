@@ -245,6 +245,8 @@
     "copy": "Copy",
     "copyQuote": "Copy as quote",
     "cut": "Cut",
+    "paste": "Paste",
+    "pasteQuote": "Paste as quote",
     "markRead": "Mark as read",
     "markUnread": "Mark as unread",
     "star": "Add to favorites",

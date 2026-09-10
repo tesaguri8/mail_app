@@ -245,6 +245,8 @@
     "copy": "コピー",
     "copyQuote": "引用としてコピー",
     "cut": "切り取り",
+    "paste": "貼り付け",
+    "pasteQuote": "引用として貼り付け",
     "markRead": "既読にする",
     "markUnread": "未読にする",
     "star": "お気に入りに追加",

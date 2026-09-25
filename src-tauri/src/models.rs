@@ -774,6 +774,10 @@ pub struct ThreadMessage {
     pub has_attachments: bool,
     /// 引用が畳まれている（clean より全文が長い）＝「引用を表示」を出すか。
     pub has_quotes: bool,
+    /// 引用を含む返信か（引用ブロックがある、または In-Reply-To がある）。
+    /// バブルを HTML で描くかの判断に使う。has_quotes は「clean より全文が長い」だけなので、
+    /// 署名を剥がしただけのニュースレターでも立ってしまい、返信かどうかの判定には使えない。
+    pub is_reply: bool,
     pub is_read: bool,
     /// スター付きか（折りたたみバブルの★バッジ用）。
     pub is_starred: bool,

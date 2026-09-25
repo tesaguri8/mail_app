@@ -273,11 +273,16 @@ function Bubble({
   const full = (m.body_plain ?? '').trim();
   const body = showQuotes ? full : clean || full;
   // 設定オンで HTML 本文があるときは HtmlText で描画（外部画像は取得せずプレースホルダのまま）。
-  // ただし HTML には引用除去版が無いので、引用のある返信（has_quotes）はチャット感を保つため
-  // プレーン（新規部分のみ）にフォールバックする。実質「引用のないメールだけ HTML 描画」。
+  // ただし HTML には引用除去版が無いので、引用を含む返信（is_reply）はチャット感を保つため
+  // プレーン（新規部分のみ）にフォールバックする。実質「返信でないメールだけ HTML 描画」。
+  //
+  // 判定に has_quotes（clean より全文が長い）を使わない。署名を剥がしただけでも立つので、
+  // ニュースレターまでプレーンに落ちてしまう。プレーン側が「HTML形式でご覧ください」の
+  // 一行だけというメールは多く、そうなると**その一行しか読めない**（実データ 2026-09-25）。
+  //
   // 中身の無い骨組み（`<html><body></body></html>`）は HTML 本文として扱わない。扱うと
   // HtmlText が何も描かず、本文があるのにバブルが空になる（2026-09-11 の不具合の残り）。
-  const renderHtml = !!htmlBody && htmlHasContent(m.body_html) && !m.has_quotes;
+  const renderHtml = !!htmlBody && htmlHasContent(m.body_html) && !m.is_reply;
 
   // 本文（HTML）が cid: で参照している Content-ID。埋め込み画像の解決と、
   // 「本文に出ない inline パートは添付として扱う」判定の両方に使う。

@@ -317,6 +317,7 @@ pub fn assign_thread(conn: &Connection, email_id: i64) -> rusqlite::Result<Optio
 /// 列順: 0:id 1:account_id 2:message_id 3:from_address 4:from_name 5:to_addresses
 /// 6:subject 7:date 8:direction 9:clean_body 10:body_plain 11:body_html 12:body_html_z
 /// 13:has_attachments 14:has_quotes 15:is_read 16:folder 17:thread_assignment 18:is_flagged
+/// 19:verified_self 20:is_reply
 fn map_thread_message(r: &rusqlite::Row) -> rusqlite::Result<ThreadMessage> {
     let html_z: Option<Vec<u8>> = r.get(12)?;
     let body_html = match html_z {
@@ -338,6 +339,7 @@ fn map_thread_message(r: &rusqlite::Row) -> rusqlite::Result<ThreadMessage> {
         body_html,
         has_attachments: r.get::<_, i64>(13)? != 0,
         has_quotes: r.get::<_, i64>(14)? != 0,
+        is_reply: r.get::<_, i64>(20)? != 0,
         is_read: r.get::<_, i64>(15)? != 0,
         is_starred: r.get::<_, i64>(18)? != 0,
         verified_self: r.get::<_, i64>(19)? != 0,
@@ -424,7 +426,9 @@ impl Store {
                           e.has_attachments,
                           (length(COALESCE(e.body_plain,'')) > length(COALESCE(e.clean_body,''))) AS has_quotes,
                           e.is_read, e.folder, COALESCE(e.thread_assignment,'auto'), e.is_flagged,
-                          COALESCE(e.verified_self,0)
+                          COALESCE(e.verified_self,0),
+                          (EXISTS(SELECT 1 FROM message_quotes q WHERE q.email_id = e.id)
+                           OR COALESCE(TRIM(e.in_reply_to),'') <> '') AS is_reply
                    FROM emails e
                    WHERE e.logical_thread_id = ?1
                      AND e.folder <> 'drafts'

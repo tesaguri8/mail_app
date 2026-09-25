@@ -508,6 +508,27 @@ Date: Mon, 30 Jun 2025 10:00:00 +0900\r\n\
     }
 
     #[test]
+    fn header_only_plain_text_yields_a_content_free_html_shell() {
+        // `[要注意]` mail_parser は text/plain のメールを**ヘッダだけ**渡されると、
+        // 空本文から `<html><body></body></html>` を合成する。これを「本文あり」と
+        // 数えると、メタ先行取り込みの行が 'present' になって本文を取りに行かなくなる
+        // （services/store/emails.rs の has_html_body。実データで発生した）。
+        // ライブラリ側の挙動が変わったら気づけるよう、ここで固定しておく。
+        let raw = b"Message-ID: <a@example.com>\r\nSubject: t\r\nFrom: a@example.com\r\n\
+Content-Type: text/plain; charset=UTF-8\r\n\r\n";
+        let p = parse_message(raw).expect("ヘッダだけでも解析できる");
+        assert_eq!(p.body_plain.as_deref(), Some(""));
+        assert_eq!(p.clean_body.as_deref(), Some(""));
+        assert_eq!(p.body_html.as_deref(), Some("<html><body></body></html>"));
+
+        // multipart は本文パートが無いので、そもそも body_html が付かない。
+        let raw = b"Message-ID: <b@example.com>\r\nSubject: t\r\nFrom: a@example.com\r\n\
+Content-Type: multipart/alternative; boundary=\"bd\"\r\n\r\n";
+        let p = parse_message(raw).expect("ヘッダだけでも解析できる");
+        assert_eq!(p.body_html, None);
+    }
+
+    #[test]
     fn html_to_text_breaks_on_block_elements() {
         // Apple Mail 系の <div> 1 行構造を改行付きで復元する。
         let html = "<div>末松　さま</div><div>お世話になっております。伊佐です。</div>\

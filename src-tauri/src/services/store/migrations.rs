@@ -232,6 +232,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 53,
         sql: include_str!("migrations/0053_sent_addresses.sql"),
     },
+    Migration {
+        // 54 は本文が空なのに 'present' になっていた行の修復（メタ先行取り込みの取りこぼし）。
+        version: 54,
+        sql: include_str!("migrations/0054_repair_empty_bodies.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
@@ -317,6 +322,37 @@ mod tests {
         run(&conn).unwrap();
     }
 
+    /// 0054: 本文が空なのに 'present' になっていた行を取り直し対象へ戻す。
+    /// alpha.13 で壊れた実データが、更新するだけで読めるようになることを確かめる。
+    #[test]
+    fn migration_0054_repairs_bodies_that_were_never_fetched() {
+        let conn = Connection::open_in_memory().unwrap();
+        run(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1,'a@b','i','s');
+             INSERT INTO emails (account_id, canonical_key, body_plain, clean_body, body_state)
+                 VALUES (1, 'broken', '', '', 'present'),      -- 本文が無いのに取得済み
+                        (1, 'ok',     '本文あり', '本文あり', 'present'),
+                        (1, 'absent', NULL, NULL, 'absent');",
+        )
+        .unwrap();
+        // 0054 だけをもう一度当てる（マイグレーションは冪等な UPDATE）。
+        conn.execute_batch(include_str!("migrations/0054_repair_empty_bodies.sql"))
+            .unwrap();
+
+        let state = |key: &str| -> String {
+            conn.query_row(
+                "SELECT body_state FROM emails WHERE canonical_key = ?1",
+                [key],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(state("broken"), "absent", "空の行は取り直しに回す");
+        assert_eq!(state("ok"), "present", "本文がある行は触らない");
+        assert_eq!(state("absent"), "absent");
+    }
+
     /// 別枝で先に列を追加済みの DB（user_version=35 で reply_to だけ既存＝旧 fix 枝の DB を模す）でも、
     /// run() が「既存の列は許容し、無い列だけ追加」して最新版へ到達する（ゴミ箱/Reply-To 衝突対策）。
     #[test]
@@ -325,7 +361,9 @@ mod tests {
         // 実在の v35 DB を忠実に模す: from_address(0001)・body_compacted(0011) と
         // folder_sync(0015) は 35 より前に存在する。reply_to だけ「別枝で既存」の状態を作る。
         conn.execute_batch(
-            "CREATE TABLE emails (id INTEGER PRIMARY KEY, folder TEXT, from_address TEXT, body_compacted INTEGER DEFAULT 0, has_attachments INTEGER DEFAULT 0);
+            "CREATE TABLE emails (id INTEGER PRIMARY KEY, folder TEXT, from_address TEXT, body_compacted INTEGER DEFAULT 0, has_attachments INTEGER DEFAULT 0,
+               -- 本文列（0001 から存在）。0054(空本文の修復)が動くよう用意する。
+               body_plain TEXT, clean_body TEXT);
              ALTER TABLE emails ADD COLUMN reply_to TEXT;
              CREATE TABLE folder_sync (
                account_id INTEGER NOT NULL, folder TEXT NOT NULL,

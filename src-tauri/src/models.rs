@@ -717,8 +717,10 @@ pub struct MailDetail {
     pub has_attachments: bool,
     /// 容量節約のため本文を要約保存に落としてある（clean_body のみ）。全文はサーバー再取得可。
     pub body_compacted: bool,
-    /// 本文の取得状態: 'present'（全文あり）/ 'evicted'（要約のみ）/ 'absent'（メタのみ・未取得）。
-    /// 'absent' は開いた時にサーバから本文を取得する（docs/SYNC.md §3.6）。
+    /// 本文の取得状態: 'present'（全文あり）/ 'evicted'（要約のみ）/ 'absent'（メタのみ・未取得）/
+    /// 'empty'（取りに行ったが本文が無かった＝件名だけ・添付だけのメール）。
+    /// 'absent' は開いた時にサーバから本文を取得する。'empty' は取りに行かない（打ち止め）。
+    /// 表示側は状態を鵜呑みにせず**本文が実際に空か**も見る（docs/SYNC.md §3.6）。
     pub body_state: String,
     /// 差出人がグリーン（本人 or 認定ドメイン）か。バッジ・認定ボタン用。docs/GREEN_DOMAINS.md。
     pub is_green: bool,

@@ -602,14 +602,20 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
         touched = true;
     }
 
-    // 添付行が無ければ挿入する（重複防止）。
+    // 添付行が無ければ挿入する（重複防止）。既にあるときは、後から分かった正しいファイル名へ
+    // 寄せる（メタ先行で入った仮名・未復号の生値を本文取得時の名前で差し替える。行は消さない
+    // ので取得済み本体への参照は切れない。services/store/attachnames.rs）。
     let existing: i64 = conn.query_row(
         "SELECT count(*) FROM attachments WHERE email_id = ?1",
         params![id],
         |r| r.get(0),
     )?;
-    if existing == 0 && !e.attachments.is_empty() {
-        insert_attachments(conn, id, &e.attachments)?;
+    if existing == 0 {
+        if !e.attachments.is_empty() {
+            insert_attachments(conn, id, &e.attachments)?;
+            touched = true;
+        }
+    } else if super::attachnames::refresh_names(conn, id, &e.attachments)? {
         touched = true;
     }
     Ok(touched)

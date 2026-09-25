@@ -1,4 +1,5 @@
 pub mod addr;
+pub mod attachname;
 pub mod autoconfig;
 pub mod bodyfetch;
 pub mod bodystructure;

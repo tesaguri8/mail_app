@@ -1,4 +1,5 @@
 use crate::models::SyncResult;
+use crate::services::attachname;
 use crate::services::parser;
 use crate::services::store::{
     insert_email, mark_remote_deleted, pending_remote_deletes, purge_old_tombstones,
@@ -717,8 +718,9 @@ fn attachments_from_bodystructure(bs: &imap_proto::types::BodyStructure) -> Vec<
     attachments_from_parts(crate::services::bodystructure::attachments(bs))
 }
 
-/// BODYSTRUCTURE 由来のパート一覧を添付メタへ写す。ファイル名は Pass2 で MIME ヘッダから
-/// 復号し直すため、ここでは BODYSTRUCTURE の値（無ければ連番）を仮に入れる。
+/// BODYSTRUCTURE 由来のパート一覧を添付メタへ写す。ファイル名は BODYSTRUCTURE の値を復号した
+/// もの（無ければ連番の仮名）で、拡張子が無ければ Content-Type から補う。より確実な名前は
+/// Pass2 が各パートの MIME ヘッダから取り直す（[`resolve_attachments`]）。
 fn attachments_from_parts(parts: Vec<crate::services::bodystructure::StructPart>) -> Vec<NewAttachment> {
     parts
         .into_iter()
@@ -729,11 +731,13 @@ fn attachments_from_parts(parts: Vec<crate::services::bodystructure::StructPart>
             } else {
                 "attachment"
             };
+            let filename = attachname::ensure_extension(
+                &sp.filename.unwrap_or_else(|| attachname::placeholder(i)),
+                Some(&sp.content_type),
+            );
             NewAttachment {
                 part_index: i as i64,
-                filename: sp
-                    .filename
-                    .unwrap_or_else(|| format!("attachment-{}", i + 1)),
+                filename,
                 content_type: Some(sp.content_type),
                 size: sp.size,
                 kind,
@@ -788,10 +792,15 @@ fn new_attachment_from(
             Some((name, ct))
         })
         .unwrap_or((None, None));
-    let filename = decoded_name
-        .or_else(|| sp.filename.clone().filter(|s| !s.trim().is_empty()))
-        .unwrap_or_else(|| format!("attachment-{}", i + 1));
     let content_type = decoded_ct.or_else(|| Some(sp.content_type.clone()));
+    // 名前が取れないパート（Content-Disposition: attachment だけで filename 無し等）は連番の
+    // 仮名になるため、拡張子だけでも Content-Type から補って開けるようにする。
+    let filename = attachname::ensure_extension(
+        &decoded_name
+            .or_else(|| sp.filename.clone().filter(|s| !s.trim().is_empty()))
+            .unwrap_or_else(|| attachname::placeholder(i)),
+        content_type.as_deref(),
+    );
     let is_image = content_type
         .as_deref()
         .map(|c| c.starts_with("image/"))
@@ -1980,10 +1989,11 @@ Content-Disposition: attachment";
     }
 
     // MIME ヘッダが取れない場合は BODYSTRUCTURE のフォールバック名（無ければ attachment-N）。
+    // 名前が無いときも拡張子は Content-Type から補い、保存してそのまま開けるようにする。
     #[test]
     fn attachment_name_falls_back_without_mime() {
         let sp = struct_part("2", "application/pdf", None);
         let a = new_attachment_from(0, sp, None);
-        assert_eq!(a.filename, "attachment-1");
+        assert_eq!(a.filename, "attachment-1.pdf");
     }
 }

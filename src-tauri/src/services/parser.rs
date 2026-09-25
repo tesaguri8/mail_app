@@ -151,11 +151,14 @@ pub fn part_content_type(part: &mail_parser::MessagePart) -> Option<String> {
     })
 }
 
-/// 添付パートの表示用ファイル名（名前が無ければ序数から合成）。
+/// 添付パートの表示用ファイル名（名前が無ければ序数から合成し、拡張子は Content-Type から補う）。
 pub fn part_filename(part: &mail_parser::MessagePart, index: usize) -> String {
-    part.attachment_name()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| format!("attachment-{}", index + 1))
+    let name = part
+        .attachment_name()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| crate::services::attachname::placeholder(index));
+    crate::services::attachname::ensure_extension(&name, part_content_type(part).as_deref())
 }
 
 /// メッセージの全パート（`parts` はネストも含めて平坦化されている）から「本来の添付」だけを

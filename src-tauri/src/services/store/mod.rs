@@ -1,4 +1,5 @@
 mod accounts;
+mod attachnames;
 mod calendar_sync;
 mod calendars;
 mod contacts;
@@ -64,6 +65,13 @@ impl Store {
             Ok(n) if n > 0 => log::info!("purged {n} freemail green domains"),
             Ok(_) => {}
             Err(e) => log::warn!("freemail green domain purge skipped: {e}"),
+        }
+        // 過去に未復号のまま保存された添付ファイル名を一度だけ直す（`=?UTF-8?B?…?=` /
+        // `utf-8''%E5…` のまま保存名になっていたもの。通信不要・冪等）。
+        match attachnames::repair_stored(&conn) {
+            Ok(n) if n > 0 => log::info!("repaired {n} attachment filenames"),
+            Ok(_) => {}
+            Err(e) => log::warn!("attachment filename repair skipped: {e}"),
         }
         // 「自分から送ったことがある相手」の索引を初回だけ構築する（docs/FILTERING.md §2）。
         // 失敗しても起動は続ける（フィルタが効かないだけで、次回起動で作り直しを試みる）。

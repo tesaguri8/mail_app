@@ -45,7 +45,7 @@ import { parseDateTime, type ParsedDate } from '../utils/dateparse';
 import { formatDateTime } from '../utils/datetime';
 import { saveAllAttachments, saveAttachment } from '../utils/attachmentSave';
 import { withActivity } from '../stores/activity';
-import { hasReadableBody } from '../utils/mailBody';
+import { hasReadableBody, htmlHasContent } from '../utils/mailBody';
 
 /** 「表示名 <メール>」に整形。表示名が無ければアドレスのみ。 */
 function formatAddress(name: string | null, address: string | null): string {
@@ -742,7 +742,10 @@ export function MailBody({
   const clean = d.clean_body ?? '';
   const full = d.body_plain ?? '';
   const html = d.body_html?.trim() ?? '';
-  const hasHtml = html.length > 0;
+  // 中身の無い骨組み（`<html><body></body></html>`）を「HTML 本文あり」と数えない。
+  // 数えると HtmlText が何も描かず、本文（clean_body/body_plain）があるのに空に見える
+  // （2026-09-11 の不具合の残り。取り直し済みの行でも骨組みが残っていることがある）。
+  const hasHtml = htmlHasContent(html);
   const hasQuotedExtra = !hasHtml && full.trim().length > clean.trim().length;
   const body = showQuotes ? full : clean || full;
 

@@ -208,6 +208,33 @@ fn has_readable_body(
 /// 文字が残るかどうかでは判定しない。画像だけの HTML メールもタグを剥がすと空になるが、
 /// そちらは**取得済みの本文**なので 'present' のままにする必要がある。判定するのは
 /// 「中身の入る場所が空の骨組みか」だけ。
+/// 保存済みの行に「全文」（body_plain か中身のある HTML）が入っていないか。
+///
+/// `body_state` の記録ではなく**実体**を見る。記録が 'present' でも、合成された空の骨組み
+/// （`<html><body></body></html>`）しか入っておらず、本文が永久に埋まらない行が実在した
+/// （2026-09-11。docs/SYNC.md §3.6）。要約落ち（'evicted'）は容量のために意図して本文を
+/// 落とした行なので対象外にする（勝手に戻さない）。
+fn stored_lacks_full_body(conn: &Connection, id: i64) -> rusqlite::Result<bool> {
+    let (state, plain, html, html_z): (String, Option<String>, Option<String>, Option<Vec<u8>>) =
+        conn.query_row(
+            "SELECT COALESCE(body_state,'present'), body_plain, body_html, body_html_z
+             FROM emails WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?;
+    if state == "evicted" {
+        return Ok(false);
+    }
+    if plain.as_deref().is_some_and(|s| !s.trim().is_empty()) {
+        return Ok(false);
+    }
+    let stored_html = match html_z {
+        Some(z) => crate::services::compress::decompress_text(&z).ok(),
+        None => html,
+    };
+    Ok(!stored_html.as_deref().is_some_and(has_html_body))
+}
+
 fn has_html_body(html: &str) -> bool {
     let t = html.trim();
     if t.is_empty() {
@@ -630,7 +657,9 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
             |r| r.get::<_, i64>(0).map(|v| v != 0),
         )
         .unwrap_or(false);
-    if stored_absent && new_has_body {
+    // 記録が 'present' でも、実体は空（合成された骨組みだけ）という行が実在した。記録ではなく
+    // 中身を見て、全文が入っていなければ埋める（docs/SYNC.md §3.6）。
+    if stored_lacks_full_body(conn, id)? && new_has_body {
         let body_html_z = e
             .body_html
             .as_deref()
@@ -1848,6 +1877,86 @@ mod tests {
             .query_row("SELECT body_state FROM emails WHERE id = ?1", params![id], |r| r.get(0))
             .unwrap();
         assert_eq!(state, "empty");
+    }
+
+    #[test]
+    fn a_row_poisoned_as_present_still_gets_its_body() {
+        // alpha.13 が作ってしまった行の形: 記録は 'present' なのに、実体は空の骨組みだけ。
+        // clean_body だけは後から入るので一覧のプレビューには本文が出るが、全文
+        // （body_plain / HTML）が空のままなので、バブルも詳細も空に見えていた。
+        // 記録ではなく実体を見て埋め直す（2026-09-25 の実データ）。
+        let store = test_store();
+        let key = "poisoned@x";
+        insert_header_only(&store, key, Some("<html><body></body></html>"));
+        let conn = store.conn.lock().unwrap();
+        let id: i64 = conn
+            .query_row(
+                "SELECT id FROM emails WHERE canonical_key = ?1",
+                params![folder_key("inbox", key)],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "UPDATE emails SET body_state = 'present', body_html = '<html><body></body></html>',
+                               clean_body = '末松さま お世話になっております。'
+             WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+
+        // 本文取得（Pass2）が同じ行へ届く。
+        let mut e = new_email_for_test(key);
+        e.body_plain = Some("末松さま お世話になっております。\n> 引用".to_string());
+        e.clean_body = Some("末松さま お世話になっております。".to_string());
+        backfill_existing(&conn, &e).unwrap();
+
+        let (plain, state): (Option<String>, String) = conn
+            .query_row(
+                "SELECT body_plain, body_state FROM emails WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            plain.as_deref(),
+            Some("末松さま お世話になっております。\n> 引用"),
+            "記録が 'present' でも、実体が空なら全文を埋める"
+        );
+        assert_eq!(state, "present");
+    }
+
+    /// 取り込み 1 通ぶんの雛形（本文は呼び出し側で差し替える）。
+    fn new_email_for_test(key: &str) -> NewEmail {
+        NewEmail {
+            account_id: 1,
+            message_id: None,
+            canonical_key: key.to_string(),
+            subject: Some("ヘッダのみ".to_string()),
+            from_address: Some("a@b".to_string()),
+            from_name: None,
+            to_addresses: None,
+            to_name: None,
+            reply_to: None,
+            cc_addresses: None,
+            date: Some("2026-01-01 00:00:00".to_string()),
+            date_ts: Some(1_767_225_600),
+            body_plain: None,
+            clean_body: None,
+            body_html: None,
+            auth_result: None,
+            list_id: None,
+            in_reply_to: None,
+            references_ids: None,
+            thread_index: None,
+            raw_headers: None,
+            has_attachments: false,
+            uid: Some(1),
+            folder: "inbox".to_string(),
+            is_read: false,
+            attachments: Vec::new(),
+            quotes: Vec::new(),
+            verified_self: false,
+        }
     }
 
     #[test]

@@ -42,6 +42,7 @@ import { copyText } from '../utils/clipboard';
 import { getBubbleHtml, getInlineImages, PREFS_EVENT } from '../config/prefs';
 import { formatDateTime } from '../utils/datetime';
 import { saveAllAttachments, saveAttachment } from '../utils/attachmentSave';
+import { htmlHasContent } from '../utils/mailBody';
 import { withActivity } from '../stores/activity';
 import { MailBody, makeRenderDate } from './MailBody';
 import { AutoLinkText, HtmlText, inlineCidRefs } from './HtmlText';
@@ -274,7 +275,9 @@ function Bubble({
   // 設定オンで HTML 本文があるときは HtmlText で描画（外部画像は取得せずプレースホルダのまま）。
   // ただし HTML には引用除去版が無いので、引用のある返信（has_quotes）はチャット感を保つため
   // プレーン（新規部分のみ）にフォールバックする。実質「引用のないメールだけ HTML 描画」。
-  const renderHtml = !!htmlBody && !!m.body_html?.trim() && !m.has_quotes;
+  // 中身の無い骨組み（`<html><body></body></html>`）は HTML 本文として扱わない。扱うと
+  // HtmlText が何も描かず、本文があるのにバブルが空になる（2026-09-11 の不具合の残り）。
+  const renderHtml = !!htmlBody && htmlHasContent(m.body_html) && !m.has_quotes;
 
   // 本文（HTML）が cid: で参照している Content-ID。埋め込み画像の解決と、
   // 「本文に出ない inline パートは添付として扱う」判定の両方に使う。

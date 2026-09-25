@@ -322,10 +322,21 @@ export function MailboxView({
   // 作成セッション（compose）は App 側で保持する（上の props）。メール画面はビュー切替で
   // アンマウントされるが、compose は App にあるため未編集の返信/新規もそのまま残り、戻ると再表示される。
   // 作成画面に入ったら編集/カレンダーパネルは閉じる（全幅で作成に集中）。
+  // 作成に入る前の一覧サイドバーの開閉を覚えておき、作成を終えたら（送信・下書き保存・破棄の
+  // いずれでも）元に戻す。作成中はサイドバーを描かないので、その間に状態が変わっても画面では
+  // 分からず、戻ったときだけ閉じて見える。
+  const sidebarBeforeComposeRef = useRef<boolean | null>(null);
   useEffect(() => {
     if (compose) {
+      // パネルを開いている最中に作成へ入ったら、戻すべきなのは「パネルを開く前」の状態。
+      if (sidebarBeforeComposeRef.current == null) {
+        sidebarBeforeComposeRef.current = sidebarBeforePanelRef.current ?? sidebarOpen;
+      }
       closeContactPanel();
       closeCalendarPanel();
+    } else if (sidebarBeforeComposeRef.current != null) {
+      setSidebarOpen(sidebarBeforeComposeRef.current);
+      sidebarBeforeComposeRef.current = null;
     }
     // close* は毎回同じ挙動。compose の変化だけをトリガにする。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -438,8 +449,12 @@ export function MailboxView({
   }, [selectedIds.size, menu, tagPicker, compose]);
 
   // Ctrl+S（Mac は Cmd+S）でサイドバー（一覧ペイン）の表示を切替。ブラウザの保存は抑止。
+  // 作成中は受け付けない。Compose で「保存」のつもりで Ctrl+S を押すと、画面に出ていない
+  // サイドバーの開閉だけが変わり、送信・下書き保存のあと一覧が閉じたままになるため
+  // （利用者報告 2026-09-25。下書きは自動保存なので Compose 側に Ctrl+S の処理は無い）。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (compose) return;
       if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 's' || e.key === 'S')) {
         e.preventDefault();
         setSidebarOpen((v) => !v);
@@ -447,7 +462,7 @@ export function MailboxView({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [compose]);
 
   // Del / Ctrl+D（Mac は Cmd+D）で、選択中（未選択なら閲覧中）のメールを削除する。
   // 重なり UI（メニュー/タグピッカー/作成モーダル/候補）や入力欄フォーカス中は対象外。

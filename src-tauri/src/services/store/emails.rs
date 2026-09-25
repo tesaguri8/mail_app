@@ -235,7 +235,7 @@ fn stored_lacks_full_body(conn: &Connection, id: i64) -> rusqlite::Result<bool> 
     Ok(!stored_html.as_deref().is_some_and(has_html_body))
 }
 
-fn has_html_body(html: &str) -> bool {
+pub(super) fn has_html_body(html: &str) -> bool {
     let t = html.trim();
     if t.is_empty() {
         return false;

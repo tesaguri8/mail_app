@@ -706,7 +706,11 @@ export function MailBody({
   // これ以上試さない（開くたびにサーバーへ行くのを防ぐ）。要約(evicted)は clean_body があるので
   // ここには来ない（必要時に「全文を再取得」ボタンで取る）。
   useEffect(() => {
-    const missing = !hasReadableBody(detail) && detail.body_state !== 'empty';
+    // 「実体が空」に加えて、記録が 'absent'（未取得）のときも取りに行く。修復で 'absent' へ
+    // 戻した行は clean_body だけ入っていることがあり、実体だけ見ると取りに行かないため
+    // （全文・HTML が欠けたままになる。docs/SYNC.md §3.6）。
+    const missing =
+      (!hasReadableBody(detail) || detail.body_state === 'absent') && detail.body_state !== 'empty';
     if (missing && !refreshed && !refetching) {
       void handleRefetch();
     }

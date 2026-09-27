@@ -317,7 +317,7 @@ pub fn assign_thread(conn: &Connection, email_id: i64) -> rusqlite::Result<Optio
 /// 列順: 0:id 1:account_id 2:message_id 3:from_address 4:from_name 5:to_addresses
 /// 6:subject 7:date 8:direction 9:clean_body 10:body_plain 11:body_html 12:body_html_z
 /// 13:has_attachments 14:has_quotes 15:is_read 16:folder 17:thread_assignment 18:is_flagged
-/// 19:verified_self 20:is_reply
+/// 19:verified_self 20:is_reply 21:body_state
 fn map_thread_message(r: &rusqlite::Row) -> rusqlite::Result<ThreadMessage> {
     let html_z: Option<Vec<u8>> = r.get(12)?;
     let body_html = match html_z {
@@ -348,6 +348,7 @@ fn map_thread_message(r: &rusqlite::Row) -> rusqlite::Result<ThreadMessage> {
         is_vip: false,
         folder: r.get(16)?,
         thread_assignment: r.get(17)?,
+        body_state: r.get(21)?,
     })
 }
 
@@ -428,7 +429,8 @@ impl Store {
                           e.is_read, e.folder, COALESCE(e.thread_assignment,'auto'), e.is_flagged,
                           COALESCE(e.verified_self,0),
                           (EXISTS(SELECT 1 FROM message_quotes q WHERE q.email_id = e.id)
-                           OR COALESCE(TRIM(e.in_reply_to),'') <> '') AS is_reply
+                           OR COALESCE(TRIM(e.in_reply_to),'') <> '') AS is_reply,
+                          COALESCE(e.body_state,'present')
                    FROM emails e
                    WHERE e.logical_thread_id = ?1
                      AND e.folder <> 'drafts'

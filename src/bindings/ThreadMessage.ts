@@ -61,4 +61,9 @@ folder: string | null,
 /**
  * スレッド割当が手動か（'auto' | 'manual'）。
  */
-thread_assignment: string, };
+thread_assignment: string, 
+/**
+ * 本文の取得状態（'present' | 'absent' | 'empty' | 'evicted'）。
+ * バブルが本文を取りに行くかの判断に使う（'empty' は取りに行かない。docs/SYNC.md §3.6）。
+ */
+body_state: string, };

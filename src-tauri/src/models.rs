@@ -791,6 +791,9 @@ pub struct ThreadMessage {
     pub folder: Option<String>,
     /// スレッド割当が手動か（'auto' | 'manual'）。
     pub thread_assignment: String,
+    /// 本文の取得状態（'present' | 'absent' | 'empty' | 'evicted'）。
+    /// バブルが本文を取りに行くかの判断に使う（'empty' は取りに行かない。docs/SYNC.md §3.6）。
+    pub body_state: String,
 }
 
 /// 会話ビュー（スレッド情報＋時系列のメッセージ）。

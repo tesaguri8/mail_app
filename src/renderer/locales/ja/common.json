@@ -656,6 +656,7 @@
     "selecting": "選択中…",
     "selectMailCheckbox": "このメールを選択",
     "noBody": "本文がありません",
+    "fetchingBody": "本文をサーバから取得しています…",
     "attachments": "添付ファイル",
     "print": "印刷",
     "printDate": "日時",

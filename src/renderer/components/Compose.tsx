@@ -238,12 +238,15 @@ export function Compose({
   defaultAccountId,
   target,
   onClose,
+  onSent,
   onDraftId,
 }: {
   accounts: AccountSummary[];
   defaultAccountId: number | null;
   target: ComposeTarget;
   onClose: () => void;
+  /** 送信に成功した（onClose の直前に呼ぶ）。下書き保存・破棄では呼ばない。 */
+  onSent?: () => void;
   /** 現在編集中の下書き id を親へ通知する（未保存/破棄後は null）。
    * ビュー切替で作成画面が閉じても、戻った時に同じ下書きを復元するために使う。 */
   onDraftId?: (id: number | null) => void;
@@ -844,6 +847,7 @@ export function Compose({
         }
         draftIdRef.current = null;
       }
+      onSent?.();
       close();
     } catch (e) {
       setError(String(e));

@@ -39,9 +39,10 @@ import {
   ValueRows,
   addressToFlat,
 } from './ContactValueEditor';
-import { OrgCardDialog, OrgCardInfo } from './OrgCard';
+import { OrgCardDialog, OrgCardInfo, OrgOverlapNotice } from './OrgCard';
 import { OrgCombobox } from './OrgCombobox';
 import { toE164 } from '../utils/phone';
+import { findOrgOverlap, hasOrgOverlap, mergeOrgOverlap } from '../utils/orgOverlap';
 import { formatPostal } from '../utils/postal';
 import { getPhoneRegion, getPostalAutoformat } from '../config/prefs';
 import { joinPersonName, splitPersonName } from '../utils/name';
@@ -203,6 +204,8 @@ export function ContactEditor({
   const [org, setOrg] = useState<OrganizationSummary | null>(null);
   // 組織カードの編集ダイアログの表示。
   const [editOrg, setEditOrg] = useState(false);
+  // 「組織に登録されています。統合しますか？」を「このままにする」で閉じた組織（編集中だけ覚える）。
+  const [overlapKept, setOverlapKept] = useState<number | null>(null);
 
   const loadTags = useCallback(() => {
     if (!isTauri) return;
@@ -239,6 +242,7 @@ export function ContactEditor({
     setMatches([]);
     setConfirmDup(false);
     setEditOrg(false);
+    setOverlapKept(null);
     if (!request) {
       setDraft(null);
       setBaseline('');
@@ -267,6 +271,14 @@ export function ContactEditor({
     // openDraft は安定。request の変化だけをトリガにする。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [request]);
+
+  // 個人の値のうち、所属組織のカードと同じもの（代表電話・FAX・代表メール・所在地）。
+  const overlap = useMemo(() => {
+    if (!draft || !org || org.id !== draft.org_id || overlapKept === org.id) return null;
+    const region = getPhoneRegion() as CountryCode;
+    const o = findOrgOverlap(draft, org, (v) => toE164(v, region));
+    return hasOrgOverlap(o) ? o : null;
+  }, [draft, org, overlapKept]);
 
   const dirty = useMemo(
     () => (draft ? JSON.stringify(draft) !== baseline : false),
@@ -540,6 +552,17 @@ export function ContactEditor({
               変更は所属する全員に効くので、［編集］で組織カードを開いて行う。 */}
           {org && org.id === draft.org_id && (
             <OrgCardInfo org={org} onEdit={() => setEditOrg(true)} />
+          )}
+          {org && overlap && (
+            <OrgOverlapNotice
+              org={org}
+              overlap={overlap}
+              onMerge={() => {
+                setDraft((d) => (d ? mergeOrgOverlap(d, overlap) : d));
+                setSaved(false);
+              }}
+              onKeep={() => setOverlapKept(org.id)}
+            />
           )}
           <div className="flex gap-2">
             <Field icon={<Briefcase size={15} />} label={t('contact.orgTitle')}>

@@ -1844,6 +1844,11 @@ export function MailboxView({
       }
       target={compose}
       onDraftId={onComposeDraftChange}
+      // 送信したら、作成前に閉じていても一覧サイドバーを開いて戻す（送ったメールを一覧で
+      // 確かめられるように。利用者の要望 2026-10-03）。下書き保存・破棄は作成前の状態へ戻す。
+      onSent={() => {
+        sidebarBeforeComposeRef.current = true;
+      }}
       onClose={() => {
         setCompose(null);
         // 作成画面を閉じたら復元対象もクリア（次にメールへ戻っても勝手に開かない）。

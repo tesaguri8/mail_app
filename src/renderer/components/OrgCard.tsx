@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import {
   Building2,
+  Combine,
   Globe,
   Mail,
   MapPin,
@@ -18,6 +19,7 @@ import type { OrgAddress } from '@bindings/OrgAddress';
 import type { OrganizationInput } from '@bindings/OrganizationInput';
 import type { OrganizationSummary } from '@bindings/OrganizationSummary';
 import { organizationUpsert } from '../services/organizations';
+import type { OrgOverlap } from '../utils/orgOverlap';
 import { Field } from './ContactValueEditor';
 import { displayPhone, parseStored, toE164 } from '../utils/phone';
 import { formatPostal } from '../utils/postal';
@@ -274,6 +276,54 @@ export function OrgCardInfo({ org, onEdit }: { org: OrganizationSummary; onEdit?
       ) : (
         <p className="px-1 py-1 text-xs text-white/40">{t('org.cardEmpty')}</p>
       )}
+    </div>
+  );
+}
+
+/**
+ * 個人の連絡先に組織カードと同じ値があるときの確認（「組織に登録されています。統合しますか？」）。
+ * 統合の中身は utils/orgOverlap の mergeOrgOverlap（電話・住所は外し、メールは共有の印を付ける）。
+ */
+export function OrgOverlapNotice({
+  org,
+  overlap,
+  onMerge,
+  onKeep,
+}: {
+  org: OrganizationSummary;
+  overlap: OrgOverlap;
+  onMerge: () => void;
+  onKeep: () => void;
+}) {
+  const { t } = useTranslation();
+  const kinds = [
+    overlap.phones.length > 0 ? t('contact.phone') : null,
+    overlap.addresses.length > 0 ? t('contact.address') : null,
+    overlap.emails.length > 0 ? t('contact.email') : null,
+  ]
+    .filter(Boolean)
+    .join('・');
+  return (
+    <div className="rounded-md border border-sky-300/30 bg-sky-300/10 px-3 py-2.5">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-sky-100">
+        <Combine size={14} className="shrink-0" />
+        {t('org.overlapTitle', { name: org.name, kinds })}
+      </div>
+      <p className="mt-1 text-[11px] leading-relaxed text-white/55">{t('org.overlapHint')}</p>
+      <div className="mt-2 flex justify-end gap-2">
+        <button
+          onClick={onKeep}
+          className="rounded-full px-3 py-1 text-xs text-white/60 hover:bg-white/10 hover:text-white"
+        >
+          {t('org.overlapKeep')}
+        </button>
+        <button
+          onClick={onMerge}
+          className="rounded-full bg-sky-500/80 px-3 py-1 text-xs text-white hover:bg-sky-500"
+        >
+          {t('org.overlapMerge')}
+        </button>
+      </div>
     </div>
   );
 }

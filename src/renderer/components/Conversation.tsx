@@ -33,7 +33,7 @@ import type { ThreadMessage } from '@bindings/ThreadMessage';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { TagSummary } from '@bindings/TagSummary';
 import type { AttachmentSummary } from '@bindings/AttachmentSummary';
-import { mailGet, mailAttachments, attachmentOpen } from '../services/mail';
+import { mailGet, mailAttachments, attachmentOpen, mailRefetch } from '../services/mail';
 import { attachmentImage } from '../utils/imageCache';
 import { greenDomainAdd, greenDomainWarn } from '../services/green';
 import { threadRename, threadSplit, threadView } from '../services/threads';
@@ -42,7 +42,7 @@ import { copyText } from '../utils/clipboard';
 import { getBubbleHtml, getInlineImages, PREFS_EVENT } from '../config/prefs';
 import { formatDateTime } from '../utils/datetime';
 import { saveAllAttachments, saveAttachment } from '../utils/attachmentSave';
-import { htmlHasContent } from '../utils/mailBody';
+import { hasReadableBody, htmlHasContent } from '../utils/mailBody';
 import { withActivity } from '../stores/activity';
 import { MailBody, makeRenderDate } from './MailBody';
 import { AutoLinkText, HtmlText, inlineCidRefs } from './HtmlText';
@@ -130,6 +130,7 @@ function Bubble({
   highlight,
   htmlBody,
   inlineImagesOn,
+  fetchingBody,
 }: {
   m: ThreadMessage;
   you: string;
@@ -142,6 +143,8 @@ function Bubble({
   htmlBody?: boolean;
   /** 設定オン時、本文が cid: で参照する埋め込み画像を取得して表示する。 */
   inlineImagesOn?: boolean;
+  /** 本文をサーバから取得中（「本文がありません」の代わりに取得中と出す）。 */
+  fetchingBody?: boolean;
 }) {
   const { t } = useTranslation();
   const out = m.direction === 'out';
@@ -677,6 +680,8 @@ function Bubble({
               />
             ) : body ? (
               <AutoLinkText text={body} highlight={highlight} renderDate={renderDate} />
+            ) : fetchingBody ? (
+              <span className="text-white/40">{t('mailbox.fetchingBody')}</span>
             ) : bubbleImages.length === 0 ? (
               <span className="text-white/40">{t('mailbox.noBody')}</span>
             ) : null}
@@ -950,6 +955,9 @@ export function Conversation({
     [match.idx, matchEls, applyActive],
   );
 
+  // 本文の取得を一度試したメール（取れなかったものを開き直すたびに繰り返さない）。
+  const triedIds = useRef<Set<number>>(new Set());
+
   const load = useCallback(() => {
     setLoading(true);
     return threadView(openedId)
@@ -963,8 +971,47 @@ export function Conversation({
 
   useEffect(() => {
     setExpandedIds(new Set());
+    triedIds.current = new Set();
     load();
   }, [openedId, load]);
+
+  // 本文が未取得のバブルは、会話を開いた時点でサーバから取りに行く（docs/SYNC.md §3.6）。
+  // 新着は見出しだけ先に入り、本文は後から届く。会話は開いた時に 1 回読むだけなので、
+  // 取りに行かないと本文が DB に入った後も「本文がありません」のまま残る（2026-09-27）。
+  // 全文表示（MailBody）の自動再取得と同じ条件だが、バブルは表示できる本文があれば足りるので
+  // 'absent' でも clean_body があるものは取りに行かない。'empty'（取ったが本文が無い）は試さない。
+  // mail_refetch は 1 通ごとに IMAP 接続を張るので、並列にせず新しい順に 1 通ずつ取る。
+  const [fetchingIds, setFetchingIds] = useState<Set<number>>(new Set());
+  const openedRef = useRef(openedId);
+  openedRef.current = openedId;
+  useEffect(() => {
+    if (!view) return;
+    const missing = view.messages
+      .filter(
+        (m) => !hasReadableBody(m) && m.body_state !== 'empty' && !triedIds.current.has(m.id),
+      )
+      .map((m) => m.id)
+      .reverse();
+    if (missing.length === 0) return;
+    missing.forEach((id) => triedIds.current.add(id));
+    const forId = openedId;
+    setFetchingIds((prev) => new Set([...prev, ...missing]));
+    void (async () => {
+      for (const id of missing) {
+        try {
+          await mailRefetch(id);
+        } catch {
+          /* 取れなければ「本文がありません」に戻る（全文を開けば理由が出る） */
+        }
+        setFetchingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      }
+      if (openedRef.current === forId) await load();
+    })();
+  }, [view, openedId, load]);
 
   // バブルの HTML 表示・埋め込み画像の設定変更に追従する。
   useEffect(() => {
@@ -1225,6 +1272,7 @@ export function Conversation({
                 highlight={terms}
                 htmlBody={htmlBubbles}
                 inlineImagesOn={inlineImagesOn}
+                fetchingBody={fetchingIds.has(m.id)}
               />
             </div>
           ))}

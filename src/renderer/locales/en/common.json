@@ -656,6 +656,7 @@
     "selecting": "Selecting…",
     "selectMailCheckbox": "Select this email",
     "noBody": "No body",
+    "fetchingBody": "Fetching the message body from the server…",
     "attachments": "Attachments",
     "print": "Print",
     "printDate": "Date",

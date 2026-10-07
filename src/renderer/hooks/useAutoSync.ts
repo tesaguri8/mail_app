@@ -29,6 +29,13 @@ const AUTOSYNC_COOLDOWN_MS = 5 * 60 * 1000;
 export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => void {
   const { t } = useTranslation();
   const busy = useRef(false);
+  // 巡回中に来た同期の依頼。捨てると次の定期同期（既定 30 秒後）まで取りに行かないので、
+  // 覚えておいて巡回が終わったらすぐ回し直す。
+  // 起動直後がこれに当たる: アカウント一覧が届く前（空）の巡回がカレンダー同期で塞がっている間に、
+  // 一覧が届いてからの即時同期が来て弾かれ、メールを 30 秒取りに行かなかった（利用者報告 2026-10-07）。
+  const again = useRef(false);
+  // 回し直しは最新のアカウント一覧で行うため、最新の syncNow を指しておく。
+  const syncNowRef = useRef<() => void>(() => undefined);
   // 直近の一括失敗でクールダウン中なら、この時刻まで自動（定期）同期を止める。
   const cooldownUntil = useRef(0);
   // フッター表示のアカウント名解決用に最新の一覧を保持（syncNow を作り直さずに参照する）。
@@ -38,7 +45,11 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
   const idsKey = accounts.map((a) => a.id).join(',');
 
   const syncNow = useCallback(() => {
-    if (!isTauri || busy.current) return;
+    if (!isTauri) return;
+    if (busy.current) {
+      again.current = true;
+      return;
+    }
     const ids = idsKey ? idsKey.split(',').map(Number) : [];
     busy.current = true;
     (async () => {
@@ -104,8 +115,13 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
       cooldownUntil.current = failed && !synced ? Date.now() + AUTOSYNC_COOLDOWN_MS : 0;
       // 新着件数を載せて通知（購読側は新着ゼロなら一覧の再取得を省ける）。
       if (synced) window.dispatchEvent(new CustomEvent(MAIL_SYNCED_EVENT, { detail: { stored } }));
+      if (again.current) {
+        again.current = false;
+        syncNowRef.current();
+      }
     })();
   }, [idsKey, t]);
+  syncNowRef.current = syncNow;
 
   // 設定変更（間隔）に追従する。
   const [intervalSec, setIntervalSec] = useState(getAutoSyncInterval());

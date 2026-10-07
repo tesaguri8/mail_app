@@ -991,7 +991,10 @@ export function Conversation({
         (m) => !hasReadableBody(m) && m.body_state !== 'empty' && !triedIds.current.has(m.id),
       )
       .map((m) => m.id)
-      .reverse();
+      .reverse()
+      // 開いたメール（一覧でクリックしたもの）を最優先にする。会話の最新とは限らないため、
+      // 新しい順のままだと他の未取得メールの後ろに並ぶ（利用者報告 2026-10-07）。
+      .sort((a, b) => Number(b === openedId) - Number(a === openedId));
     if (missing.length === 0) return;
     missing.forEach((id) => triedIds.current.add(id));
     const forId = openedId;

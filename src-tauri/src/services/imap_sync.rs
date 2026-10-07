@@ -1925,15 +1925,21 @@ pub fn fetch_message(
     folder: &str,
     uid: u32,
 ) -> Result<parser::ParsedEmail, String> {
+    // 段階ごとの所要時間をログに残す。開いたメールの本文がなかなか出ないとき、
+    // 接続・ログイン・選択・取得のどこで待っているかを実機のログで見分けるため（2026-10-07）。
+    let started = std::time::Instant::now();
     let tls = native_tls::TlsConnector::builder()
         .build()
         .map_err(|e| e.to_string())?;
     let client = imap::connect((host, port), host, &tls).map_err(|e| e.to_string())?;
+    let connected = started.elapsed();
     let mut session = client
         .login(user, password)
         .map_err(|(e, _)| e.to_string())?;
+    let logged_in = started.elapsed();
     let mailbox = imap_mailbox_for_tag(&mut session, folder)?;
     session.select(&mailbox).map_err(|e| e.to_string())?;
+    let selected = started.elapsed();
 
     let msgs = session
         .uid_fetch(uid.to_string(), "(BODY[])")
@@ -1943,6 +1949,14 @@ pub fn fetch_message(
         .next()
         .and_then(|m| m.body())
         .ok_or_else(|| "メッセージが見つかりませんでした".to_string())?;
+    log::info!(
+        "fetch_message uid={uid} {folder}: 接続 {}ms / ログイン {}ms / 選択 {}ms / 取得 {}ms（{} バイト）",
+        connected.as_millis(),
+        (logged_in - connected).as_millis(),
+        (selected - logged_in).as_millis(),
+        (started.elapsed() - selected).as_millis(),
+        raw.len()
+    );
     let parsed =
         parser::parse_message(raw).ok_or_else(|| "メッセージを解析できませんでした".to_string())?;
     let _ = session.logout();

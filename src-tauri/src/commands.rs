@@ -2474,6 +2474,8 @@ pub async fn mail_refetch(
     store: State<'_, Store>,
     id: i64,
 ) -> Result<MailDetail, String> {
+    // 所要時間のログ（DB の鍵待ちと IMAP のどちらで待つかを見分ける。段階の内訳は fetch_message）。
+    let started = std::time::Instant::now();
     let (account_id, uid, folder) = store
         .email_refetch_info(id)
         .map_err(|e| e.to_string())?
@@ -2491,11 +2493,13 @@ pub async fn mail_refetch(
         .and_then(|e| e.get_password())
         .map_err(|e| format!("資格情報を取得できません: {e}"))?;
 
+    let looked_up = started.elapsed();
     let parsed = tauri::async_runtime::spawn_blocking(move || {
         imap_sync::fetch_message(&host, port, &login_user, &password, &folder, uid as u32)
     })
     .await
     .map_err(|e| e.to_string())??;
+    let fetched = started.elapsed();
 
     store
         .update_email_body(
@@ -2521,6 +2525,12 @@ pub async fn mail_refetch(
         })
         .collect();
     store.ensure_attachments(id, &atts).map_err(|e| e.to_string())?;
+    log::info!(
+        "mail_refetch id={id}: 準備 {}ms / IMAP {}ms / 保存 {}ms",
+        looked_up.as_millis(),
+        (fetched - looked_up).as_millis(),
+        (started.elapsed() - fetched).as_millis()
+    );
 
     store
         .get_email(id)

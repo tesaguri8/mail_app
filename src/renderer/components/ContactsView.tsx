@@ -388,6 +388,7 @@ export function ContactsView({
               key={f}
               onClick={() => setSource(f)}
               aria-pressed={source === f}
+              title={t(`contact.sourceHint.${f}`)}
               className={`min-w-0 flex-1 truncate rounded px-1.5 py-1 text-[11px] ${
                 source === f ? 'bg-white/20 text-white' : 'text-white/55 hover:text-white/80'
               }`}

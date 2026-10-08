@@ -89,7 +89,7 @@ export function OrgRows({
               />
             </Field>
           )}
-          <div className="flex gap-2">
+          <div className="grid grid-cols-2 gap-2">
             <Field icon={<Briefcase size={15} />} label={t('contact.orgTitle')}>
               <input
                 className={INPUT}

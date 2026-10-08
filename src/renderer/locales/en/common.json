@@ -396,13 +396,19 @@
       "all": "All",
       "google": "Google",
       "icloud": "iCloud",
-      "rondine": "Rondine only"
+      "rondine": "Rondine"
     },
     "sourceEmpty": "No contacts match this filter.",
     "link": {
       "google": "Google",
       "icloud": "iCloud",
       "rondineOnly": "Rondine only (not synced with any service)"
+    },
+    "sourceHint": {
+      "all": "All contacts",
+      "google": "Contacts synced with Google",
+      "icloud": "Contacts synced with iCloud",
+      "rondine": "Contacts not synced with any service (Rondine only)"
     }
   },
   "org": {
@@ -410,7 +416,7 @@
     "tabContacts": "Contacts",
     "search": "Search organizations…",
     "new": "Add organization",
-    "empty": "No organizations yet. They are created automatically when you set a company on a contact.",
+    "empty": "No organizations yet. Use the wand button (Tidy up) to make cards from your contacts’ company names.",
     "noSelection": "Select an organization or add one.",
     "namePlaceholder": "Company / organization name",
     "mainPhone": "Main phone",

@@ -396,13 +396,19 @@
       "all": "すべて",
       "google": "Google",
       "icloud": "iCloud",
-      "rondine": "Rondine のみ"
+      "rondine": "Rondine"
     },
     "sourceEmpty": "この絞り込みに当たる連絡先はありません。",
     "link": {
       "google": "Google",
       "icloud": "iCloud",
       "rondineOnly": "Rondine のみ（どのサービスとも同期していません）"
+    },
+    "sourceHint": {
+      "all": "すべての連絡先",
+      "google": "Google と同期している連絡先",
+      "icloud": "iCloud と同期している連絡先",
+      "rondine": "どのサービスとも同期していない（Rondine のみの）連絡先"
     }
   },
   "org": {
@@ -410,7 +416,7 @@
     "tabContacts": "連絡先",
     "search": "組織を検索…",
     "new": "組織を追加",
-    "empty": "組織がありません。連絡先に会社名を入れると自動で作成されます。",
+    "empty": "組織がありません。右上の杖のボタン（整理）で、連絡先の会社名から組織カードを作れます。",
     "noSelection": "組織を選択するか、追加してください。",
     "namePlaceholder": "会社・組織名",
     "mainPhone": "代表電話",

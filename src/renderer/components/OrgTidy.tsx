@@ -45,7 +45,7 @@ function OrgTidyToggle({
         <button
           key={m}
           onClick={() => onChange(m)}
-          className={`truncate rounded-full px-2 py-1 text-xs ${
+          className={`whitespace-nowrap rounded-full px-2 py-1 text-[11px] ${
             mode === m ? 'bg-white/25 text-white' : 'text-white/55 hover:bg-white/10'
           }`}
         >

@@ -128,8 +128,8 @@ export function OrgDuplicates({
 
   return (
     <div className="flex h-full min-h-0">
-      {/* 左：グループ一覧 */}
-      <aside className="flex w-72 shrink-0 flex-col border-r border-white/10">
+      {/* 左：グループ一覧（整理の切替が入るので、整理の画面と同じ幅） */}
+      <aside className="flex w-80 shrink-0 flex-col border-r border-white/10">
         <div className="flex items-center gap-2 p-3">
           <button
             onClick={onExit}

@@ -757,7 +757,8 @@ function GoogleCalendarSettings() {
   const matching = busy === 'matchingContacts';
   useEffect(() => {
     if (pendingMatch || message || error || matching) {
-      statusRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      // 画面の下端には背景操作のバーが重なるので、端ではなく中央へ寄せる。
+      statusRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }, [pendingMatch, message, error, matching]);
 

@@ -2,7 +2,8 @@
 
 Rondine の住所録と Google 連絡先を同期する機能の設計・使い方。
 
-**ステータス: 全 5 段とも実装済み（取り込み・照合・送信・ラベル同期）。** 取り込みは台帳止まりで、
+**ステータス: 全 5 段とも実装済み（取り込み・照合・送信・ラベル同期）。連絡先モデルは 0059 で
+作り直した（[CONTACT_MODEL.md](CONTACT_MODEL.md)）。** 取り込みは台帳止まりで、
 そこから住所録へ入れるのは**照合**の役目（利用者が「住所録へ反映」を押したとき）。以後は同期の
 たびに **push → pull** が走る。
 
@@ -80,38 +81,42 @@ Google (People API)
 ### 3-1. モジュール構成
 
 ```
-services/google/contacts.rs              API ベース URL・personFields
-services/google/contacts/api.rs          People API v1 の薄いラッパー
-services/google/contacts/convert.rs      Person ⇄ Rondine の連絡先（取り込み・送信の両方向）
-services/google/contacts/sync.rs         同期エンジン（push → pull ＋ ラベル）
-services/store/contact_sync.rs           台帳の操作（取り込み・照合の保存・送信の下ごしらえ）
+services/google/contacts.rs              API ベース URL・personFields / updatePersonFields
+services/google/contacts/api.rs          People API v1 の薄いラッパー（people.get を含む）
+services/google/contacts/incoming.rs     Person → 連絡先の中身（ContactFields）
+services/google/contacts/outgoing.rs     連絡先の中身 → 書き込み本文（読み直した Person を土台に上書き）
+services/google/contacts/sync.rs         同期エンジン（push → pull ＋ ラベル・スター）
+services/store/contact_sync.rs           つながり表の操作（取り込み・照合の保存・送信の下ごしらえ）
+services/store/contact_groups.rs         ラベル（contactGroups）とタグ名の対応表
 services/contact_match.rs                照合の判定（DB も API も見ない）
+services/contact_fields.rs               中身どうしの合成（取り込みの上書き・統合の和集合）
+services/contact_labels.rs               ラベルの語彙（vCard / iCloud / Google の種別 ⇄ 表記）
 ```
 
-中間表現は **vCard / Google CSV の取り込みと同じ `vcard::ImportedContact`** を使う。同じ型に
-落としておけば、照合も保存も取り込み元を問わず同じ道を通る。
+中間表現は **vCard / Google CSV の取り込みと同じ `models::ContactFields`**（境界型の連絡先の
+中身そのもの）を使う。同じ型に落としておけば、照合も保存も取り込み元を問わず同じ道を通る。
 
-### 3-2. データモデル（マイグレーション 0056〜0058）
+### 3-2. データモデル（マイグレーション 0059）
 
-`contact_identities` は 0017 が「提供元 ID の対応表は API 同期の実装時に追加する」と予告していた
-もの。`contacts.external_id` は 1 プロバイダ分しか持てないので、同期の突き合わせはこちらを正とする。
+連絡先の表は 0059 で作り直した（[CONTACT_MODEL.md](CONTACT_MODEL.md)）。つながり表
+`contact_identities` は 1 人の連絡先に複数のサービス・アカウントの行が並んでよい。
 
 | 列 | 意味 |
 |---|---|
 | `provider` / `account_id` / `external_id` | どのアカウントの、どの `resourceName` か（UNIQUE） |
 | `contact_id` | 紐付いたローカル連絡先。**NULL＝未照合** |
-| `etag` | People API の更新に**必須**（読んだ版の etag を送らないと弾かれる） |
-| `snapshot` | 取り込んだ内容（`ImportedContact` の JSON）。照合と差分判定の材料 |
-| `remote_deleted` | Google 側で削除された印 |
+| `etag` | 取り込んだ版の etag（送信は送る直前に読み直した版の etag を使う） |
+| `snapshot` | 取り込んだ内容（`ContactFields` の JSON）。照合の材料 |
+| `dirty` | **このつながりへ**未送信のローカル変更がある |
 
 `contact_id` は `ON DELETE SET NULL`。ローカル連絡先を消しても台帳は未照合として残る。
-
-0057 は送信のための列 —— `contacts.dirty`（未送信のローカル変更）と
-`google_accounts.push_new_contacts`（ローカル生まれの連絡先を Google にも作るか。既定オフ）。
-0058 は `contact_group_identities`（Google のラベル ID ⇄ 名前の対応表。§3-7）。
+`contacts.dirty` は「つながりの `dirty` のどれかが 1（または未連携の新規）」に保つ。
+`google_accounts.push_new_contacts` はローカル生まれの連絡先を Google にも作るか（既定オフ）。
+`contact_group_identities` は Google のラベル ID ⇄ 名前の対応表（§3-7）。
 
 増分同期トークンは **アカウント単位**（`google_accounts.contacts_sync_token`）。カレンダーが
-カレンダー単位で持つのとは異なる。
+カレンダー単位で持つのとは異なる。0059 で全アカウントのトークンを消したので、次の同期は
+フル同期になる。
 
 ### 3-3. 取り込みアルゴリズム（`contacts/sync.rs`）
 
@@ -119,8 +124,8 @@ services/contact_match.rs                照合の判定（DB も API も見な�
    **失敗しても取り込みは続ける**（タグが付かないだけ）。
 2. `people/me/connections` をページングしながら取得。`syncToken` があれば増分、無ければフル。
    フル・増分どちらでも `requestSyncToken=true` を付け、最終ページで次回用トークンを保存する。
-3. `metadata.deleted` の連絡先は台帳に**削除印を付けるだけ**（行は消さない）。ローカル連絡先を
-   どうするかは送信フェーズの判断で、取り込みでは決めない。
+3. `metadata.deleted` の連絡先は**そのつながりだけを外す**（台帳の行を消す）。ローカルの連絡先と、
+   他のサービス・アカウントとのつながりは残す（削除を連鎖させない）。
 4. 名前もメールも電話も無い Person は連絡先として成立しないので飛ばす（`skipped`）。
 5. **トークン失効**（410 または本文の `EXPIRED_SYNC_TOKEN`）はトークンを捨ててフル同期へ。
    台帳は upsert なので再適用は安全。
@@ -129,23 +134,28 @@ services/contact_match.rs                照合の判定（DB も API も見な�
 
 | Google (People API) | Rondine |
 |---|---|
-| `names[primary]` の displayName / familyName / givenName | `display_name` / `family_name` / `given_name` |
-| `phoneticFamilyName` / `phoneticGivenName` | `phonetic_family` / `phonetic_given`（結合して `name_kana`） |
+| `names[primary]` の displayName / honorificPrefix / familyName / middleName / givenName / honorificSuffix | `display_name` / `name_prefix` / `family_name` / `middle_name` / `given_name` / `name_suffix` |
+| `phoneticFamilyName` / `phoneticMiddleName` / `phoneticGivenName` | `phonetic_family` / `phonetic_middle` / `phonetic_given` |
+| `nicknames[0]` | `nickname` |
 | `emailAddresses` / `phoneNumbers` | `contact_emails` / `contact_phones`（ラベル付き複数） |
-| `addresses` | `contact_addresses`（構造化） |
-| `organizations[primary]` | `organization` / `org_title` / `org_department` |
-| `birthdays` | `birthday`（年が無ければ vCard 4.0 と同じ `--MM-DD`） |
+| `addresses` | `contact_addresses`（構造化・私書箱・国コード） |
+| `organizations`（複数） | `contact_organizations`（名前・よみ・役職・部署） |
+| `birthdays[0]` | `birthday`（年が無ければ vCard 4.0 と同じ `--MM-DD`） |
 | `biographies[0]` | `note` |
-| `memberships` → contactGroup | タグ（`labels`） |
+| `urls` / `events` / `relations` | `contact_urls` / `contact_dates` / `contact_relations` |
+| `imClients` | `contact_handles`（`kind = im`） |
+| `userDefined` | `contact_custom_fields` |
+| `memberships` → contactGroup | タグ（ユーザーのラベル）／お気に入り（システムグループ `starred`） |
 
-ラベルは vCard 取り込みと同じ語彙に揃える（`home`→自宅 / `work`→職場 / `mobile`→携帯 /
-`*Fax`→FAX / `main`→代表）。Google の既定値 `other` は無ラベル、ユーザーのカスタム名はそのまま使う。
+ラベルの語彙は `services::contact_labels` の表に揃える（`home`→自宅 / `work`→職場 / `mobile`→携帯 /
+`*Fax`→FAX / `main`→代表 / `homePage`→ホームページ / `anniversary`→記念日 / `spouse`→配偶者 …）。
+Google の既定値 `other` は無ラベル、ユーザーのカスタム名はそのまま使う。
 
-**取らないもの**: 写真・カスタム項目・関係・チャットなど。`personFields` に挙げていないので
-取得せず、送信時も `updatePersonFields` に挙げなければ Google 側で保持される。
+**取らないもの**: 写真（後続）。
 
-**送らないもの（Rondine 固有）**: `is_business` / `allow_remote_images` / 組織レコードへのリンク
-（代表電話・FAX・代表メール）。Google 側に対応概念が無く、往復で落ちるため同期対象外とする。
+**送らないもの（Rondine 固有）**: `is_business` / `allow_remote_images` / 共有の印（`is_shared`。
+値そのものは送る）/ 組織カードへのつながり（代表電話・FAX・代表メール）/ 旧姓・会社として表示・
+SNS のハンドル（Google に対応する項目が無い）。取り込みでも、これらは Rondine 側の値を残す。
 
 ### 3-5. 照合（`services/contact_match.rs` ＋ `store/contact_sync.rs`）
 
@@ -182,35 +192,36 @@ services/contact_match.rs                照合の判定（DB も API も見な�
 カレンダーと同じ **push → pull** の順。ローカルの変更を先に送ってから取り込むことで、双方の
 状態が収束する。
 
-**未送信の印は `contacts.dirty`**（マイグレーション 0057）。利用者の操作（`upsert_contact` /
-`delete_contact` / `restore_contact` / `merge_contacts` / vCard・CSV 取り込み）で 1 が立ち、
-送信に成功した時点で 0 に戻る。取り込み（`apply_remote_contact`）は `dirty` を立てない。
+**未送信の印はつながりごと**（`contact_identities.dirty`）。利用者の操作（`upsert_contact` /
+`delete_contact` / `restore_contact` / `merge_contacts` / 組織カードの改名 / vCard・CSV 取り込み）で
+その連絡先の**全つながり**に 1 が立ち、そのつながりへ送れた時点で 0 に戻る。2 つのアカウント
+（や将来の iCloud）につながった人は、それぞれへ送る。取り込み（`apply_remote_contact`）は印を立てない。
 
 送るものは 2 種類。
 
 | 対象 | 動作 |
 |---|---|
-| このアカウントの台帳を持つ連絡先 | 更新（`people/*:updateContact`）／論理削除なら削除（`:deleteContact`） |
-| どの台帳にも無いローカル生まれの連絡先 | 作成（`people:createContact`）。**`push_new_contacts` が有効なときだけ** |
+| このアカウントへのつながりが未送信の連絡先 | 更新（`people/*:updateContact`）／論理削除なら削除（`:deleteContact`）してつながりを外す |
+| どのサービスにもつながっていないローカル生まれの連絡先 | 作成（`people:createContact`）。**`push_new_contacts` が有効なときだけ** |
 
 `push_new_contacts`（`google_accounts` の列・既定 0）は「Rondine で作った連絡先も Google に作る」
 設定。住所録を Google へ上げるかは利用者が決めることなので、明示的に有効にしたときだけ送る。
 
 **取り込みは未送信の変更を潰さない。** `apply_remote_contact` は、紐付いたローカル連絡先が
-`dirty = 0` のときだけ Google の正本で上書きする。push に失敗して残った変更を取り込みが
-消してしまわないための条件。Google 側で削除された連絡先も、`dirty = 0` のときだけローカルを
-ゴミ箱へ落とす（完全削除はしない）。
+`dirty = 0` のときだけ、Google が扱う項目を Google の正本で置き換える。push に失敗して残った
+変更を取り込みが消してしまわないための条件。
 
-**etag。** People API の更新は読んだ版の etag を要求する（`contact_identities.etag`）。古いと
-`ApiError::EtagConflict` が返る。このとき**送らずに未送信のまま残す**: 続く取り込みで新しい
-etag を受け取り、次回の送信で通る（結果として後勝ち＝ローカルの変更が Google 側の変更を
-上書きする）。件数は同期結果の `conflicts` に出る。
+**送る直前に読み直す。** 更新は `people.get` で読み直した Person を土台に、Rondine が扱う部分だけを
+上書きして送る（`contacts/outgoing.rs`。[CONTACT_MODEL.md](CONTACT_MODEL.md) §3・§8）。Rondine が
+知らない項目・付帯情報（会社の `location` など）を消さないため。etag は読み直した版のものを使う
+（結果として後勝ち＝ローカルの変更が Google 側の変更を上書きする）。読み直しから送信までの間に
+Google 側が変わると `ApiError::EtagConflict` が返り、**送らずに未送信のまま残す**（件数は同期結果の
+`conflicts`）。
 
 **`updatePersonFields` の意味に注意。** 挙げた項目は**本文に無ければ Google 側で消える**。
-そこで送信本文は空でもキーを必ず入れ（ローカルで消した項目が Google 側でも消えるように）、
-Rondine が扱わない項目（写真・カスタム項目・関係）は**そもそも挙げない**ので保持される。
-`memberships`（ラベル）も挙げない — ラベル同期は後続の段で、いま送ると Google 側のラベル分けを
-消してしまう。
+そこで送信本文は空でもキーを必ず入れる（ローカルで消した項目が Google 側でも消えるように）。
+写真は挙げないので保持される。`memberships`（ラベル・スター）は `updateContact` では変えられない
+ので挙げず、§3-7 の `members:modify` で送る。
 
 **二重送信の防止。** 同じアカウントの同期が重なると同一の未送信連絡先を二重に作成しうるので、
 送信はプロセス全体で直列化する（`push_lock`。カレンダーの同名ロックと同じ理由）。
@@ -237,14 +248,17 @@ Google 側の状態に関わらず触らない。これが無いと、Google を
 | Rondine にあって Google に無い | ラベルが無ければ `contactGroups.create` で作り、`members:modify` で所属させる |
 | Google にあって Rondine に無い | `members:modify` で外す |
 
-差分の基準（「Google に付いている所属」）は**台帳の snapshot**（前回の取り込み時点）を使う。
-送信は取り込みの前に走るので、これが Google の現在の状態にあたる。
+差分の基準（「Google に付いている所属」）は**送る直前に読み直した Person** の所属を使う。
+
+**お気に入り（スター）も同じ道で送る。**システムグループ `contactGroups/starred` の所属を
+`is_favorite` に合わせる（取り込みでは `starred` の所属をお気に入りにする）。
 
 > **所属は `people:updateContact` では変えられない。**`updatePersonFields` に `memberships` を
 > 挙げても通らないので、`contactGroups/*/members:modify` を使う。`WRITE_PERSON_FIELDS` に
 > `memberships` を入れていないのはこのため（入れると Google 側のラベル分けを消す）。
 
-**システムグループ（`myContacts` 等）は対象外。**タグにしても意味が無いので一覧から除いている。
+**システムグループ（`myContacts` 等）はタグにしない。**意味が無いので一覧から除いている
+（`starred` だけはお気に入りとして扱う）。
 
 
 ---
@@ -255,26 +269,21 @@ Google 側の状態に関わらず触らない。これが無いと、Google を
   が読み取り専用なので、姓名に分けて送っている。表示名しか持たない連絡先は**表示名を姓に**
   入れており、Google 側の見え方は実アカウントで確かめる必要がある。
 - **競合は後勝ち。**フィールド単位のマージも競合 UI も無い（カレンダーと同じ）。
-- **Google 側で空にした項目が、ローカルでは消えない。**取り込みの更新は `COALESCE` で既存値を
-  温存する（vCard 取り込みと同じ規則）。安全側だが、消去は伝わらない。
 - **電話の正規化は日本前提の簡易実装**（`dedupe::mobile_number` は 070/080/090 の 11 桁と
   `+81` だけを扱う）。国際的な連絡先を強く突き合わせるなら E.164 正規化が要る。現状は
   「迷ったら紐付けない」側に倒れるだけなので実害は小さい。
 - **Rondine 固有の項目だけを変えても送信対象になる。**取引先フラグや外部画像許可を切り替えると
   `dirty` が立ち、次の同期で（内容は変わらないのに）1 回更新が飛ぶ。害は無いが無駄ではある。
-- **`[要注意]` 子テーブルに値を持たない連絡先を編集画面で保存すると、主値が消える。**
-  住所録の編集画面はラベル付きの子テーブル（`contact_emails` 等）を編集するので、そこが空の
-  連絡先を開くとメール欄が空に見え、保存すると `contacts.email` も消える。**push が入った今、
-  この消去は Google 側にも伝わる。**Google 由来の連絡先は取り込み時に子テーブルが埋まるので
-  通常は起きないが、フラット値だけを書く取り込み経路を足すときは注意する。
 - **重複整理で統合しても、Google 側は 1 件にまとまらない。**統合は消える側の台帳を残す側へ
   付け替えるので、1 つのローカル連絡先に同じアカウントの外部 ID が複数ぶら下がりうる。この
   連絡先を編集すると、**Google 側の両方の連絡先が同じ内容に更新される**（消しはしない）。
   Google 側も 1 件に寄せたい場合は Google 連絡先側で統合する。
-- **ラベルの送信に失敗すると、そのタグ変更は次の取り込みで巻き戻る。**本体の送信が通った時点で
-  `dirty` が落ちるため、ラベルだけ失敗しても再送されない。直後の取り込みが Google の所属を
-  正としてローカルのタグを戻す。稀だが、起きたときは付け直しが要る。
-- **写真・カスタム項目・関係・チャットは同期しない**（取得も送信もしない＝ Google 側で保持）。
+- **ラベル・スターの送信に失敗すると、その変更は次の取り込みで巻き戻る。**本体の送信が通った
+  時点で `dirty` が落ちるため、ラベルだけ失敗しても再送されない。直後の取り込みが Google の所属を
+  正としてローカルのタグ・お気に入りを戻す。稀だが、起きたときは付け直しが要る。
+- **写真は同期しない**（取得も送信もしない＝ Google 側で保持。後続）。
+- **2 つ以上のサービスにつながった人は、最後に取り込んだサービスの値になる。**取り込みは
+  そのサービスが扱う項目をそのサービスの正本で置き換えるため（後勝ち）。
 
 > **`otherContacts`（Gmail から自動収集された連絡先）は同期しない。** 件数が膨大でノイズになる。
 

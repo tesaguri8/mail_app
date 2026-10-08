@@ -19,7 +19,8 @@ sync_calendar: boolean,
  */
 sync_contacts: boolean, 
 /**
- * Rondine で新しく作った連絡先も Google 側に作るか（既定 false）。
+ * 新しく作る連絡先の同期先に、既定でこのアカウントを入れるか（既定 false。新規作成の画面の
+ * 最初のチェックにだけ効く。どこにもつながっていない連絡先を勝手に作ることはしない）。
  */
 push_new_contacts: boolean, 
 /**

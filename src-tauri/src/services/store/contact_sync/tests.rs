@@ -330,21 +330,6 @@ fn deleting_a_linked_contact_queues_a_remote_delete_and_forgets_the_link() {
 }
 
 #[test]
-fn locally_born_contacts_are_pushed_only_when_enabled() {
-    let s = mem_store();
-    let acct = account(&s);
-    s.upsert_contact(&person("手元で作った人", &["local@x.jp"]))
-        .unwrap();
-    assert!(!s.push_new_contacts(acct).unwrap());
-    assert!(s.list_contacts_to_push(acct).unwrap().is_empty());
-    s.set_push_new_contacts(acct, true).unwrap();
-    let push = s.list_contacts_to_push(acct).unwrap();
-    assert_eq!(push.len(), 1);
-    assert_eq!(push[0].external_id, None);
-    assert_eq!(push[0].contact.display_name, "手元で作った人");
-}
-
-#[test]
 fn pulling_refreshes_google_fields_and_keeps_local_marks() {
     let s = mem_store();
     let acct = account(&s);

@@ -104,6 +104,13 @@ export function ContactLinkChips({ links }: { links: ContactLink[] }) {
               {t('contact.link.disconnected')}
             </span>
           )}
+          {l.state !== 'synced' && (
+            <span className="rounded bg-sky-400/20 px-1 text-[10px] text-sky-100">
+              {l.state === 'pending_create'
+                ? t('contact.syncPendingCreate')
+                : t('contact.syncPendingDelete')}
+            </span>
+          )}
         </span>
       ))}
     </div>

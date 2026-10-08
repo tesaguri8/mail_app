@@ -52,3 +52,12 @@ export const contactFindMatches = (
 /** 複数連絡先を 1 件（keepId）に統合。 */
 export const contactMerge = (keepId: number, dropIds: number[]) =>
   invoke<ContactSummary>('contact_merge', { keepId, dropIds });
+
+/** 連絡先の同期先に Google アカウントを加える（作成待ちを置き、次の同期で作る）。 */
+export const contactSyncTargetAdd = (contactId: number, accountId: number) =>
+  invoke<void>('contact_sync_target_add', { contactId, accountId });
+
+/** 連絡先とそのアカウントの同期をやめる。deleteRemote なら次の同期で向こうの連絡先も削除する
+ *  （偽ならつながりだけ外し、向こうは残る）。Rondine の連絡先はどちらでも残る。 */
+export const contactSyncStop = (contactId: number, accountId: number, deleteRemote: boolean) =>
+  invoke<void>('contact_sync_stop', { contactId, accountId, deleteRemote });

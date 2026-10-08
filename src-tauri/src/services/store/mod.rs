@@ -8,6 +8,7 @@ mod contact_groups;
 mod contact_lookup;
 mod contact_rows;
 mod contact_sync;
+mod contact_targets;
 mod contact_tags;
 mod contact_write;
 mod contacts;

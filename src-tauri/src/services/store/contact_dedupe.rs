@@ -5,6 +5,7 @@
 
 use super::contact_rows::{load_all_full, load_contact};
 use super::contact_tags::set_tags;
+use super::contact_targets::drop_redundant_create_requests;
 use super::contact_write::{write_contact, OrgLinking, WriteOptions};
 use super::Store;
 use crate::models::{ContactMatch, ContactSummary, DuplicateGroup};
@@ -240,6 +241,11 @@ impl Store {
                 "UPDATE contact_identities SET contact_id = ?1 WHERE contact_id = ?2",
                 params![keep_id, id],
             )?;
+            // 作成待ちも残す側へ寄せる（同じアカウントの重なりは主キーで 1 つになる）。
+            tx.execute(
+                "UPDATE OR IGNORE contact_create_requests SET contact_id = ?1 WHERE contact_id = ?2",
+                params![keep_id, id],
+            )?;
             tx.execute("DELETE FROM contacts WHERE id = ?1", params![id])?;
         }
         write_contact(
@@ -252,6 +258,7 @@ impl Store {
             },
         )?;
         set_tags(&tx, keep_id, &merged.tags)?;
+        drop_redundant_create_requests(&tx, keep_id)?;
         tx.commit()?;
         load_contact(&conn, keep_id)
     }

@@ -334,7 +334,8 @@ pub struct GoogleAccount {
     pub sync_calendar: bool,
     /// 連絡先同期を有効にしているか。
     pub sync_contacts: bool,
-    /// Rondine で新しく作った連絡先も Google 側に作るか（既定 false）。
+    /// 新しく作る連絡先の同期先に、既定でこのアカウントを入れるか（既定 false。新規作成の画面の
+    /// 最初のチェックにだけ効く。どこにもつながっていない連絡先を勝手に作ることはしない）。
     pub push_new_contacts: bool,
     /// カレンダーの最終同期時刻（UTC 文字列）。未同期なら None。
     pub last_calendar_sync_at: Option<String>,

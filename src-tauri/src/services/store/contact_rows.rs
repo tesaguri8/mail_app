@@ -6,8 +6,8 @@
 
 use crate::models::{
     ContactAddress, ContactCustomField, ContactDate, ContactFields, ContactHandle, ContactLink,
-    ContactOrganization, ContactProvider, ContactRelation, ContactSummary, ContactUrl,
-    ContactValue, HandleKind,
+    ContactLinkState, ContactOrganization, ContactProvider, ContactRelation, ContactSummary,
+    ContactUrl, ContactValue, HandleKind,
 };
 use rusqlite::{params, Connection, Row, ToSql};
 use std::collections::HashMap;
@@ -305,19 +305,30 @@ pub(super) fn tags_of(conn: &Connection, id: i64) -> rusqlite::Result<Vec<String
 }
 
 /// つながり（サービスとアカウント）を読む。同じアカウントへの重複（統合で 2 本になった等）は 1 つにする。
+///
+/// 作成待ち（`contact_create_requests`）も「作成待ち」の印として並べる。向こうも消す外し方の
+/// 印が立ったつながりは「削除待ち」。
 fn load_links(conn: &Connection, scope: Scope) -> rusqlite::Result<HashMap<i64, Vec<ContactLink>>> {
-    let (where_sql, bind) = scope.filter("ci.contact_id");
+    let (where_sql, bind) = scope.filter("t.contact_id");
     let cond = if where_sql.is_empty() {
-        "WHERE ci.contact_id IS NOT NULL".to_string()
+        "WHERE t.contact_id IS NOT NULL".to_string()
     } else {
         where_sql
     };
+    // state: 0 = 同期中 / 1 = 作成待ち / 2 = 削除待ち（同じアカウントに複数あれば大きいほう）。
     let sql = format!(
-        "SELECT DISTINCT ci.contact_id, ci.provider, ci.account_id, ga.email, \
-                ga.disconnected_at IS NOT NULL \
-         FROM contact_identities ci \
-         LEFT JOIN google_accounts ga ON ci.provider = 'google' AND ga.id = ci.account_id \
-         {cond} ORDER BY ci.contact_id, ci.provider, ci.account_id"
+        "SELECT t.contact_id, t.provider, t.account_id, ga.email, \
+                ga.disconnected_at IS NOT NULL, MAX(t.state) \
+         FROM ( \
+             SELECT contact_id, provider, account_id, \
+                    CASE WHEN unlink_requested = 1 THEN 2 ELSE 0 END AS state \
+             FROM contact_identities \
+             UNION ALL \
+             SELECT contact_id, provider, account_id, 1 FROM contact_create_requests \
+         ) t \
+         LEFT JOIN google_accounts ga ON t.provider = 'google' AND ga.id = t.account_id \
+         {cond} GROUP BY t.contact_id, t.provider, t.account_id \
+         ORDER BY t.contact_id, t.provider, t.account_id"
     );
     let mut stmt = conn.prepare(&sql)?;
     let binds: Vec<&dyn ToSql> = bind.iter().map(|b| b as &dyn ToSql).collect();
@@ -329,16 +340,22 @@ fn load_links(conn: &Connection, scope: Scope) -> rusqlite::Result<HashMap<i64, 
             r.get::<_, i64>(2)?,
             r.get::<_, Option<String>>(3)?,
             r.get::<_, Option<bool>>(4)?.unwrap_or(false),
+            r.get::<_, i64>(5)?,
         ))
     })?;
     for row in rows {
-        let (cid, provider, account_id, account_email, disconnected) = row?;
+        let (cid, provider, account_id, account_email, disconnected, state) = row?;
         if let Some(provider) = ContactProvider::from_db(&provider) {
             out.entry(cid).or_default().push(ContactLink {
                 provider,
                 account_id: account_id as i32,
                 account_email,
                 disconnected,
+                state: match state {
+                    1 => ContactLinkState::PendingCreate,
+                    2 => ContactLinkState::PendingDelete,
+                    _ => ContactLinkState::Synced,
+                },
             });
         }
     }

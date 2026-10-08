@@ -33,6 +33,7 @@ import {
   contactDelete,
   contactFindMatches,
   contactGet,
+  contactSyncTargetAdd,
   contactUpsert,
 } from '../services/contacts';
 import { organizationGet } from '../services/organizations';
@@ -47,6 +48,7 @@ import {
 } from './ContactValueEditor';
 import { HandleRows, PairRows } from './ContactExtraRows';
 import { ContactLinkChips } from './ContactLinks';
+import { ContactSyncTargets } from './ContactSyncTargets';
 import { ConfirmDialog } from './ConfirmDialog';
 import { OrgRows } from './ContactOrgRows';
 import { OrgCardDialog, OrgCardInfo, OrgOverlapNotice } from './OrgCard';
@@ -231,6 +233,8 @@ export function ContactEditor({
   const [savedOrgNames, setSavedOrgNames] = useState<Set<string>>(new Set());
   // 開いている連絡先がつながっているサービス（見出しの印。新規は空＝Rondine のみ）。
   const [links, setLinks] = useState<ContactLink[]>([]);
+  // 新規のときに選んだ同期先（保存のあとに加える）。null＝アカウントの既定で埋める前。
+  const [newTargets, setNewTargets] = useState<Set<number> | null>(null);
 
   const loadTags = useCallback(() => {
     if (!isTauri) return;
@@ -279,6 +283,7 @@ export function ContactEditor({
     setShown(new Set());
     setAddMenu(false);
     setLinks(request?.kind === 'existing' ? (request.seed?.links ?? []) : []);
+    setNewTargets(null);
     if (!request) {
       setDraft(null);
       setBaseline('');
@@ -387,6 +392,14 @@ export function ContactEditor({
     setSaved(false);
   };
 
+  // 同期先を変えたあとなど、つながり（印）だけを読み直す。
+  const reloadLinks = (id: number) => {
+    if (!isTauri) return;
+    contactGet(id)
+      .then((full) => setLinks(full.links))
+      .catch(() => undefined);
+  };
+
   // 空文字は NULL に寄せてから送る（検索・並び替えの一貫性のため）。
   const nullify = (s: string) => (s.trim() === '' ? null : s);
 
@@ -394,10 +407,18 @@ export function ContactEditor({
     if (!draft || draft.display_name.trim() === '') return;
     setConfirmDup(false);
     try {
+      const created = draft.id === null;
       const result = await contactUpsert(normalizeForSave(draft));
       setSaved(true);
       openDraft(toDraft(result));
       setLinks(result.links);
+      // 新規なら、選んだ同期先を加える（作成待ち。次の同期で作る）。
+      if (created && newTargets && newTargets.size > 0) {
+        for (const accountId of newTargets) {
+          await contactSyncTargetAdd(result.id, accountId);
+        }
+        reloadLinks(result.id);
+      }
       loadTags();
       onSaved?.(result);
     } catch {
@@ -846,6 +867,17 @@ export function ContactEditor({
               )}
             </div>
           )}
+        </div>
+
+        {/* 同期先（1 人ずつ選ぶ。まず Rondine の連絡先として登録し、選んだサービスにだけ保存する） */}
+        <div className="mt-4">
+          <ContactSyncTargets
+            contactId={draft.id}
+            links={links}
+            selected={newTargets}
+            onSelectedChange={setNewTargets}
+            onChanged={() => draft.id !== null && reloadLinks(draft.id)}
+          />
         </div>
 
         <div className="mt-4 space-y-2">

@@ -40,13 +40,17 @@ impl Store {
         let mut by_email: HashMap<String, Cand> = HashMap::new();
         let conn = self.conn.lock().unwrap();
 
-        // 1) 住所録: 主メールを持つ連絡先を全件取り、正規化＋あいまいで照合する
+        // 1) 住所録: 連絡先のメールを全件取り、正規化＋あいまいで照合する
         //    （異体字・カナ差を吸収するため SQL の LIKE ではなく Rust 側で判定）。
         {
             let mut stmt = conn.prepare(
-                "SELECT id, display_name, name_kana, email, organization, is_favorite
-                 FROM contacts
-                 WHERE email IS NOT NULL AND email <> '' AND deleted_at IS NULL",
+                "SELECT c.id, c.display_name, c.sort_name, ce.value,
+                        (SELECT name FROM contact_organizations
+                         WHERE contact_id = c.id ORDER BY position, id LIMIT 1),
+                        c.is_favorite
+                 FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id
+                 WHERE c.deleted_at IS NULL
+                 ORDER BY c.id, ce.position, ce.id",
             )?;
             let rows = stmt.query_map([], |r| {
                 Ok((
@@ -59,9 +63,9 @@ impl Store {
                 ))
             })?;
             for row in rows {
-                let (id, display_name, name_kana, email, organization, is_favorite) = row?;
+                let (id, display_name, sort_name, email, organization, is_favorite) = row?;
                 let name = display_name.as_deref().unwrap_or_default();
-                let kana = name_kana.as_deref().unwrap_or_default();
+                let kana = sort_name.as_deref().unwrap_or_default();
                 let org = organization.as_deref().unwrap_or_default();
                 let Some(rank) = match_rank(q, &[name, kana, &email, org], &[name, kana]) else {
                     continue;
@@ -182,8 +186,13 @@ mod tests {
     fn add_contact(store: &Store, name: &str, email: &str, favorite: bool) {
         let conn = store.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO contacts (display_name, email, is_favorite) VALUES (?1, ?2, ?3)",
-            params![name, email, favorite as i64],
+            "INSERT INTO contacts (display_name, is_favorite) VALUES (?1, ?2)",
+            params![name, favorite as i64],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO contact_emails (contact_id, value) VALUES (?1, ?2)",
+            params![conn.last_insert_rowid(), email],
         )
         .unwrap();
     }

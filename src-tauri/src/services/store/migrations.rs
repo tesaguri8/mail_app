@@ -237,6 +237,34 @@ const MIGRATIONS: &[Migration] = &[
         version: 54,
         sql: include_str!("migrations/0054_repair_empty_bodies.sql"),
     },
+    Migration {
+        // 55 は Google 連携アカウントの共通化（calendar_accounts → google_accounts）。
+        // カレンダーと連絡先で 1 アカウント・1 refresh_token を共有する（docs/CALENDAR_SYNC.md）。
+        // 枝の上では 54〜57 だったが、dev の 54（本文の修復）と重なったので 55〜58 にずらした。
+        version: 55,
+        sql: include_str!("migrations/0055_google_accounts.sql"),
+    },
+    Migration {
+        // 56 は Google 連絡先（People API）の取り込み台帳 contact_identities。
+        version: 56,
+        sql: include_str!("migrations/0056_contact_identities.sql"),
+    },
+    Migration {
+        // 57 は Google 連絡先の送信（push）。contacts.dirty と、新規をどう扱うかの既定。
+        version: 57,
+        sql: include_str!("migrations/0057_contact_push.sql"),
+    },
+    Migration {
+        // 58 は Google の連絡先グループ（ラベル）と Rondine のタグの対応表。
+        version: 58,
+        sql: include_str!("migrations/0058_contact_group_identities.sql"),
+    },
+    Migration {
+        // 59 は連絡先モデルの作り直し（docs/CONTACT_MODEL.md）。個人の連絡先は一度消して
+        // 同期で入れ直す。組織カードとタグは残す。
+        version: 59,
+        sql: include_str!("migrations/0059_contact_model.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
@@ -247,9 +275,14 @@ fn is_already_applied(e: &rusqlite::Error) -> bool {
 }
 
 pub fn run(conn: &Connection) -> rusqlite::Result<()> {
+    run_until(conn, i64::MAX)
+}
+
+/// `target` 以下のバージョンまで未適用のマイグレーションを当てる（テストで途中の版を作るのにも使う）。
+fn run_until(conn: &Connection, target: i64) -> rusqlite::Result<()> {
     let current: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     for m in MIGRATIONS {
-        if m.version <= current {
+        if m.version <= current || m.version > target {
             continue;
         }
         let tx = conn.unchecked_transaction()?;
@@ -379,6 +412,8 @@ mod tests {
                name_kana TEXT, note TEXT,
                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, deleted_at TEXT);
+             -- 住所録（0016 で作成）。0057(contacts.dirty 追加)が動くよう用意する。
+             CREATE TABLE contacts (id INTEGER PRIMARY KEY, display_name TEXT NOT NULL);
              PRAGMA user_version = 35;",
         )
         .unwrap();
@@ -443,13 +478,26 @@ mod tests {
     }
 
     #[test]
-    fn contacts_tables_exist_and_cascade_membership() {
+    fn contact_tables_exist_and_children_cascade() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
         run(&conn).unwrap();
 
-        // contacts / contact_groups / contact_group_members が作成されている
-        for name in ["contacts", "contact_groups", "contact_group_members"] {
+        for name in [
+            "contacts",
+            "contact_organizations",
+            "contact_emails",
+            "contact_phones",
+            "contact_addresses",
+            "contact_urls",
+            "contact_dates",
+            "contact_relations",
+            "contact_handles",
+            "contact_custom_fields",
+            "contact_tags",
+            "contact_identities",
+            "contact_group_identities",
+        ] {
             let n: i64 = conn
                 .query_row(
                     "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
@@ -459,31 +507,100 @@ mod tests {
                 .unwrap();
             assert_eq!(n, 1, "table {name} missing");
         }
+        // 使われていなかったグループ表は消えている。
+        for name in ["contact_groups", "contact_group_members"] {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    [name],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 0, "table {name} should be dropped");
+        }
 
-        // 連絡先をグループに入れ、連絡先削除で所属が CASCADE で外れる
-        conn.execute(
-            "INSERT INTO contacts (id, display_name) VALUES (1, '山田太郎')",
-            [],
+        // 連絡先を消すと子テーブルは CASCADE で消え、つながりは未照合（NULL）に戻る。
+        conn.execute_batch(
+            "INSERT INTO contacts (id, display_name) VALUES (1, '山田太郎');
+             INSERT INTO contact_emails (contact_id, value) VALUES (1, 'taro@x.jp');
+             INSERT INTO contact_identities (provider, account_id, external_id, contact_id)
+                 VALUES ('google', 1, 'people/c1', 1);
+             DELETE FROM contacts WHERE id = 1;",
         )
         .unwrap();
-        conn.execute(
-            "INSERT INTO contact_groups (id, name) VALUES (5, '取引先')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO contact_group_members (contact_id, group_id) VALUES (1, 5)",
-            [],
-        )
-        .unwrap();
-        conn.execute("DELETE FROM contacts WHERE id = 1", [])
+        let emails: i64 = conn
+            .query_row("SELECT count(*) FROM contact_emails", [], |r| r.get(0))
             .unwrap();
-        let n: i64 = conn
-            .query_row("SELECT count(*) FROM contact_group_members", [], |r| {
+        assert_eq!(emails, 0);
+        let linked: Option<i64> = conn
+            .query_row("SELECT contact_id FROM contact_identities", [], |r| {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(n, 0);
+        assert_eq!(linked, None);
+    }
+
+    /// 0059: 既存の連絡先・組織カード・タグがある DB に当てると、連絡先は空になり、
+    /// 組織カードとタグは残り、Google の連絡先同期はフル同期からやり直しになる。
+    #[test]
+    fn migration_0059_rebuilds_contacts_and_keeps_orgs_and_tags() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        // 0058 までを当てた DB（作り直し前のスキーマ）を用意する。
+        run_until(&conn, 58).unwrap();
+        conn.execute_batch(
+            "INSERT INTO organizations (id, name, phone) VALUES (1, '株式会社テスト', '+81311112222');
+             INSERT INTO tags (id, name) VALUES (10, '取引先');
+             INSERT INTO contacts (id, display_name, email, organization, org_id)
+                 VALUES (1, '山田太郎', 'taro@x.jp', '株式会社テスト', 1);
+             INSERT INTO contact_emails (contact_id, value, is_primary) VALUES (1, 'taro@x.jp', 1);
+             INSERT INTO contact_tags (contact_id, tag_id) VALUES (1, 10);
+             INSERT INTO contact_groups (id, name) VALUES (5, '旧グループ');
+             INSERT INTO contact_group_members (contact_id, group_id) VALUES (1, 5);
+             INSERT INTO google_accounts (email, contacts_sync_token, last_contacts_sync_at)
+                 VALUES ('a@gmail.com', 'tok', '2026-10-01 00:00:00');
+             INSERT INTO contact_identities (provider, account_id, external_id, contact_id)
+                 VALUES ('google', 1, 'people/c1', 1);
+             INSERT INTO events (id, title, start_at) VALUES (7, '打ち合わせ', '2026-10-08T10:00');
+             INSERT INTO event_attendees (event_id, contact_id, email)
+                 VALUES (7, 1, 'taro@x.jp');",
+        )
+        .unwrap();
+
+        run(&conn).unwrap();
+
+        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        assert_eq!(count("SELECT count(*) FROM contacts"), 0, "連絡先は空");
+        assert_eq!(count("SELECT count(*) FROM contact_identities"), 0);
+        assert_eq!(count("SELECT count(*) FROM contact_tags"), 0);
+        assert_eq!(
+            count("SELECT count(*) FROM organizations"),
+            1,
+            "組織カードは残る"
+        );
+        assert_eq!(count("SELECT count(*) FROM tags"), 1, "タグは残る");
+        let phone: String = conn
+            .query_row("SELECT phone FROM organizations WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(phone, "+81311112222", "組織カードの手入力は残る");
+        // 予定の参加者はメールだけのゲストとして残る。
+        assert_eq!(
+            count("SELECT count(*) FROM event_attendees WHERE contact_id IS NULL"),
+            1
+        );
+        // 次の取り込みはフル同期になる。
+        let (token, last): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT contacts_sync_token, last_contacts_sync_at FROM google_accounts",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((token, last), (None, None));
+        // 外部キーの整合が取れている。
+        assert_eq!(count("SELECT count(*) FROM pragma_foreign_key_check"), 0);
     }
 
     #[test]
@@ -525,5 +642,50 @@ mod tests {
             .query_row("SELECT count(*) FROM event_attendees", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0);
+    }
+
+    /// 0055（calendar_accounts → google_accounts）の更新パス。既に Google カレンダーを
+    /// 連携済みの DB で、アカウントと同期実績が失われない（＝再連携・全予定の再取得を
+    /// 強いない）ことを確かめる。
+    #[test]
+    fn migration_0055_preserves_linked_google_accounts() {
+        let conn = Connection::open_in_memory().unwrap();
+        // 0041 が作る当時の calendar_accounts をそのまま再現し、連携済み 1 件を入れる。
+        conn.execute_batch(
+            "CREATE TABLE calendar_accounts (
+                 id INTEGER PRIMARY KEY,
+                 provider TEXT NOT NULL DEFAULT 'google',
+                 email TEXT NOT NULL,
+                 external_id TEXT,
+                 last_sync_at TIMESTAMP,
+                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                 UNIQUE(provider, email));
+             INSERT INTO calendar_accounts (email, external_id, last_sync_at)
+                 VALUES ('a@gmail.com', 'sub123', '2026-08-20 01:23:45');
+             -- 0056(contact_identities の外部キー)・0057(contacts.dirty 追加)が動くよう用意する。
+             CREATE TABLE contacts (id INTEGER PRIMARY KEY, display_name TEXT NOT NULL);
+             -- 0054(空本文の修復)が動くよう、触る列だけを持つ emails を用意する。
+             CREATE TABLE emails (id INTEGER PRIMARY KEY, body_state TEXT,
+               body_plain TEXT, clean_body TEXT);
+             PRAGMA user_version = 52;",
+        )
+        .unwrap();
+        run(&conn).unwrap();
+
+        let (email, ext, last, cal, con): (String, String, String, i64, i64) = conn
+            .query_row(
+                "SELECT email, external_id, last_calendar_sync_at, sync_calendar, sync_contacts \
+                 FROM google_accounts",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(email, "a@gmail.com");
+        assert_eq!(ext, "sub123");
+        // 最終同期時刻はカレンダー側へ引き継ぐ。
+        assert_eq!(last, "2026-08-20 01:23:45");
+        // 既存アカウントはカレンダー有効・連絡先は未有効。
+        assert_eq!(cal, 1);
+        assert_eq!(con, 0);
     }
 }

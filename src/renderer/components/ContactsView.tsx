@@ -9,12 +9,18 @@ import { contactFindDuplicates, contactImport, contactList, contactRestore } fro
 import { trashRetentionGet } from '../services/trash';
 import { trashDaysLeft } from '../utils/trash';
 import { ContactDuplicates } from './ContactDuplicates';
-import { OrgDuplicates } from './OrgDuplicates';
+import { DupModeToggle, OrgDuplicates } from './OrgDuplicates';
 import { ContactEditor, type EditorRequest, type ContactPrefill } from './ContactEditor';
 import { TagFilter } from './TagFilter';
 import { tagList } from '../services/tags';
 import type { TagSummary } from '@bindings/TagSummary';
 import { DEFAULT_TAG_COLOR } from '../utils/tagColors';
+import {
+  CONTACT_SOURCE_FILTERS,
+  ContactLinkMarks,
+  matchesSource,
+  type ContactSourceFilter,
+} from './ContactLinks';
 
 // メール等からの＋追加の初期値。編集フォーム側で定義し、ここでは再輸出する。
 export type { ContactPrefill };
@@ -57,6 +63,9 @@ export function ContactsView({
   // 削除済み（ゴミ箱）を表示するか、と保持日数（残り日数表示用）。
   const [showDeleted, setShowDeleted] = useState(false);
   const [retention, setRetention] = useState(7);
+  // 同期先での絞り込み（一覧が links を持つので画面側で絞る）。
+  const [source, setSource] = useState<ContactSourceFilter>('all');
+  const shownItems = items.filter((c) => matchesSource(c.links, source));
 
   useEffect(() => {
     if (!isTauri) return;
@@ -207,8 +216,7 @@ export function ContactsView({
     };
     return dupMode === 'orgs' ? (
       <OrgDuplicates
-        mode={dupMode}
-        onModeChange={setDupMode}
+        modeToggle={<DupModeToggle mode={dupMode} onChange={setDupMode} />}
         onMerged={() => load(query, tagFilter)}
         onExit={exitCleanup}
       />
@@ -373,13 +381,33 @@ export function ContactsView({
             {t('contact.trashHint', { days: retention })}
           </div>
         )}
+        {/* 同期先での絞り込み（すべて / Google / iCloud / Rondine のみ） */}
+        <div className="mx-3 mb-2 flex rounded-md bg-white/5 p-0.5" role="group">
+          {CONTACT_SOURCE_FILTERS.map((f) => (
+            <button
+              key={f}
+              onClick={() => setSource(f)}
+              aria-pressed={source === f}
+              title={t(`contact.sourceHint.${f}`)}
+              className={`min-w-0 flex-1 truncate rounded px-1.5 py-1 text-[11px] ${
+                source === f ? 'bg-white/20 text-white' : 'text-white/55 hover:text-white/80'
+              }`}
+            >
+              {t(`contact.source.${f}`)}
+            </button>
+          ))}
+        </div>
         <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-          {items.length === 0 ? (
+          {shownItems.length === 0 ? (
             <li className="px-2 py-6 text-center text-sm text-white/45">
-              {showDeleted ? t('contact.trashEmpty') : t('contact.empty')}
+              {showDeleted
+                ? t('contact.trashEmpty')
+                : items.length > 0
+                  ? t('contact.sourceEmpty')
+                  : t('contact.empty')}
             </li>
           ) : (
-            items.map((c) =>
+            shownItems.map((c) =>
               c.deleted_at ? (
                 // 削除済み（ゴミ箱）: 赤字＋残り日数＋復元。
                 <li key={c.id}>
@@ -425,12 +453,13 @@ export function ContactsView({
                         )}
                         {c.display_name || t('contact.untitled')}
                       </span>
-                      {(c.organization || c.email) && (
-                        <span className="truncate text-xs text-white/45">
-                          {c.organization || c.email}
+                      {(c.primary_organization || c.primary_email) && (
+                        <span className="block truncate text-xs text-white/45">
+                          {c.primary_organization || c.primary_email}
                         </span>
                       )}
                     </span>
+                    <ContactLinkMarks links={c.links} />
                   </button>
                 </li>
               ),

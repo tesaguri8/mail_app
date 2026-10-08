@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Building2, Check, ChevronDown, Plus, RotateCcw } from 'lucide-react';
+import { Building2, Check, ChevronDown, Plus, RotateCcw, Unlink } from 'lucide-react';
 import type { OrganizationSummary } from '@bindings/OrganizationSummary';
 import { organizationList, organizationRestore } from '../services/organizations';
 import { trashRetentionGet } from '../services/trash';
@@ -190,15 +190,23 @@ export function OrgAutocomplete({
 /**
  * 連絡先編集の「会社・組織」欄。組織DB検索のオートコンプリートで、既存を選べば org_id を
  * 確定（照合はID）、一覧に無い名前は新規登録扱い（保存時に組織を作成）。
+ * ただし保存済みの会社名（同期・取り込みで入った名前）は保存してもカードにならない
+ * （docs/CONTACT_MODEL.md §8）ので、`saved` のときはその旨を出す。
  */
 export function OrgCombobox({
   orgId,
   name,
   onChange,
+  saved = false,
+  label,
 }: {
   orgId: number | null;
   name: string;
   onChange: (orgId: number | null, name: string) => void;
+  /** この会社名がこの連絡先に保存済み（＝保存してもカードを作らない）。 */
+  saved?: boolean;
+  /** 見出し（既定は「組織・会社」）。 */
+  label?: string;
 }) {
   const { t } = useTranslation();
   const [results, setResults] = useState<OrganizationSummary[]>([]);
@@ -210,7 +218,7 @@ export function OrgCombobox({
     <div>
       <span className="mb-1 flex items-center gap-1.5 text-xs text-white/50">
         <Building2 size={15} />
-        {t('contact.organization')}
+        {label ?? t('contact.organization')}
       </span>
       <OrgAutocomplete
         value={name}
@@ -222,20 +230,26 @@ export function OrgCombobox({
         }}
         onSelect={(o) => onChange(o.id, o.name)}
       />
-      {query !== '' && (
-        <span
-          className={`mt-1 flex items-center gap-1 text-[11px] ${
-            isExisting ? 'text-emerald-300' : 'text-sky-300'
-          }`}
-        >
-          {isExisting ? <Check size={12} /> : <Plus size={12} />}
-          {isExisting
-            ? exact
-              ? t('contact.orgExistingN', { count: exact.member_count })
-              : t('contact.orgExisting')
-            : t('contact.orgNew')}
-        </span>
-      )}
+      {query !== '' &&
+        (isExisting || !saved ? (
+          <span
+            className={`mt-1 flex items-center gap-1 text-[11px] ${
+              isExisting ? 'text-emerald-300' : 'text-sky-300'
+            }`}
+          >
+            {isExisting ? <Check size={12} /> : <Plus size={12} />}
+            {isExisting
+              ? exact
+                ? t('contact.orgExistingN', { count: exact.member_count })
+                : t('contact.orgExisting')
+              : t('contact.orgNew')}
+          </span>
+        ) : (
+          <span className="mt-1 flex items-center gap-1 text-[11px] text-white/45">
+            <Unlink size={12} />
+            {t('contact.orgNoCard')}
+          </span>
+        ))}
     </div>
   );
 }

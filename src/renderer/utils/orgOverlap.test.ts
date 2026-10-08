@@ -22,12 +22,14 @@ const phoneKey = (v: string) => v.replace(/\D/g, '').replace(/^81/, '0');
 
 const addr = (postal: string, region: string, city: string, street: string) => ({
   label: null,
+  po_box: null,
   postal,
   region,
   city,
   street,
   extended: null,
   country: null,
+  country_code: null,
 });
 
 describe('findOrgOverlap', () => {

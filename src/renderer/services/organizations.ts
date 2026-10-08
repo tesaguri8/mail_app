@@ -3,6 +3,9 @@ import type { OrganizationSummary } from '@bindings/OrganizationSummary';
 import type { OrganizationInput } from '@bindings/OrganizationInput';
 import type { OrganizationDetail } from '@bindings/OrganizationDetail';
 import type { OrgDuplicateGroup } from '@bindings/OrgDuplicateGroup';
+import type { OrgChangeImpact } from '@bindings/OrgChangeImpact';
+import type { OrgLinkSuggestion } from '@bindings/OrgLinkSuggestion';
+import type { UnlinkedOrgName } from '@bindings/UnlinkedOrgName';
 
 /** 組織一覧（所属件数つき）。query があれば名前で部分一致。組織コンボボックスの候補に使う。
  *  includeDeleted=true で論理削除済み（ゴミ箱）も含める。 */
@@ -36,3 +39,29 @@ export const organizationFindDuplicates = () =>
 /** 複数の組織を 1 件（keepId）に統一（name が統一名）。 */
 export const organizationMerge = (keepId: number, dropIds: number[], name: string) =>
   invoke<OrganizationSummary>('organization_merge', { keepId, dropIds, name });
+
+// ── 整理（docs/CONTACT_MODEL.md §4-1）。どれも候補を出すだけで、作る・つなぐは人が選ぶ。
+
+/** 組織カードになっていない会社名（正規化名でまとめ、人数の多い順）。 */
+export const organizationUnlinkedNames = () =>
+  invoke<UnlinkedOrgName[]>('organization_unlinked_names');
+
+/** 会社名から組織カードを作り、同じ会社名（正規化後）の人を全員つなぐ。 */
+export const organizationCreateFromName = (name: string) =>
+  invoke<OrganizationSummary>('organization_create_from_name', { name });
+
+/** 組織カードごとの「つながっていないが同じ組織らしい人」（理由つき）。 */
+export const organizationLinkSuggestions = () =>
+  invoke<OrgLinkSuggestion[]>('organization_link_suggestions');
+
+/** 選んだ人を組織カードにつなぐ。 */
+export const organizationLinkContacts = (orgId: number, contactIds: number[]) =>
+  invoke<OrganizationSummary>('organization_link_contacts', { orgId, contactIds });
+
+/** 「組織カードにする」の下見（次の同期で送り直しになる人数）。何も書き換えない。 */
+export const organizationCreateFromNameImpact = (name: string) =>
+  invoke<OrgChangeImpact>('organization_create_from_name_impact', { name });
+
+/** 「つなぐ」の下見（次の同期で送り直しになる人数）。何も書き換えない。 */
+export const organizationLinkContactsImpact = (orgId: number, contactIds: number[]) =>
+  invoke<OrgChangeImpact>('organization_link_contacts_impact', { orgId, contactIds });

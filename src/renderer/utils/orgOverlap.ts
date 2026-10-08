@@ -7,7 +7,7 @@
 // メールが誰のものか分からなくなる。電話・FAX・住所は照合に使わないので、個人側から外してよい。
 
 import type { ContactInput } from '@bindings/ContactInput';
-import type { ContactAddressInput } from '@bindings/ContactAddressInput';
+import type { ContactAddress } from '@bindings/ContactAddress';
 import type { OrgAddress } from '@bindings/OrgAddress';
 import type { OrganizationSummary } from '@bindings/OrganizationSummary';
 
@@ -26,7 +26,7 @@ const digits = (s?: string | null) => (s ?? '').replace(/\D/g, '');
 
 const ADDRESS_KEYS = ['region', 'city', 'street', 'extended', 'country'] as const;
 
-const sameAddress = (a: ContactAddressInput, o: OrgAddress): boolean =>
+const sameAddress = (a: ContactAddress, o: OrgAddress): boolean =>
   digits(a.postal) === digits(o.postal) && ADDRESS_KEYS.every((k) => norm(a[k]) === norm(o[k]));
 
 const isEmptyAddress = (o: OrgAddress): boolean =>

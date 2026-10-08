@@ -2,16 +2,31 @@ import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, GripVertical, Plus, Tag, Users, X } from 'lucide-react';
 import type { CountryCode } from 'libphonenumber-js';
-import type { ContactValueInput } from '@bindings/ContactValueInput';
-import type { ContactAddressInput } from '@bindings/ContactAddressInput';
+import type { ContactValue } from '@bindings/ContactValue';
+import type { ContactAddress } from '@bindings/ContactAddress';
 import { countryOptions, parseStored, toE164 } from '../utils/phone';
 import { formatPostal } from '../utils/postal';
 import { getPhoneRegion, getPostalAutoformat } from '../config/prefs';
+import { LABEL_LIST_IDS, LABEL_LISTS, type LabelListKind } from '../utils/contactLabels';
 
-const LABELS = ['自宅', '職場', '携帯', 'FAX', '代表'];
+/** ラベル・サービス名の候補（datalist）。各行の input が list で参照するので、
+ *  これらの行エディタを置く画面に 1 度だけ置く。 */
+export function LabelDatalists() {
+  return (
+    <>
+      {(Object.keys(LABEL_LIST_IDS) as LabelListKind[]).map((k) => (
+        <datalist key={k} id={LABEL_LIST_IDS[k]}>
+          {LABEL_LISTS[k].map((l) => (
+            <option key={l} value={l} />
+          ))}
+        </datalist>
+      ))}
+    </>
+  );
+}
 
 /** 構造化住所を 1 行の文字列へ（flat 保存・一覧用。バックエンドと同じ並び）。 */
-export function addressToFlat(a: ContactAddressInput): string {
+export function addressToFlat(a: ContactAddress): string {
   return [a.postal, a.region, a.city, a.street, a.extended, a.country]
     .map((s) => (s ?? '').trim())
     .filter(Boolean)
@@ -27,7 +42,7 @@ function reorder<T>(list: T[], from: number, to: number): T[] {
 }
 
 /** ネイティブ DnD の並べ替え。ハンドルからドラッグし、行を drop 先にする。 */
-function useDnd<T>(list: T[], onChange: (l: T[]) => void) {
+export function useDnd<T>(list: T[], onChange: (l: T[]) => void) {
   const [drag, setDrag] = useState<number | null>(null);
   return {
     dragging: drag,
@@ -74,7 +89,7 @@ export function Field({
 }
 
 /** ドラッグハンドル。 */
-function DragHandle(props: React.HTMLAttributes<HTMLSpanElement> & { draggable?: boolean }) {
+export function DragHandle(props: React.HTMLAttributes<HTMLSpanElement> & { draggable?: boolean }) {
   const { t } = useTranslation();
   return (
     <span
@@ -88,15 +103,17 @@ function DragHandle(props: React.HTMLAttributes<HTMLSpanElement> & { draggable?:
   );
 }
 
-const emptyValue = (): ContactValueInput => ({ label: null, value: '', is_shared: false });
-const emptyAddress = (): ContactAddressInput => ({
+const emptyValue = (): ContactValue => ({ label: null, value: '', is_shared: false });
+const emptyAddress = (): ContactAddress => ({
   label: null,
+  po_box: null,
   postal: null,
   region: null,
   city: null,
   street: null,
   extended: null,
   country: null,
+  country_code: null,
 });
 
 /** メール/電話などラベル付き複数値の編集（＋追加・−削除・ラベル候補）。
@@ -113,15 +130,15 @@ export function ValueRows({
 }: {
   icon: React.ReactNode;
   label: string;
-  values: ContactValueInput[];
-  onChange: (v: ContactValueInput[]) => void;
+  values: ContactValue[];
+  onChange: (v: ContactValue[]) => void;
   inputType?: string;
   shareable?: boolean;
   conflicts?: (value: string) => boolean;
 }) {
   const { t } = useTranslation();
   const dnd = useDnd(values, onChange);
-  const set = (i: number, patch: Partial<ContactValueInput>) =>
+  const set = (i: number, patch: Partial<ContactValue>) =>
     onChange(values.map((v, idx) => (idx === i ? { ...v, ...patch } : v)));
   return (
     <div>
@@ -142,7 +159,7 @@ export function ValueRows({
               <input
                 className="w-16 shrink-0 rounded bg-white/10 px-2 py-1.5 text-xs outline-none focus:bg-white/15"
                 placeholder={t('contact.labelPlaceholder')}
-                list="contact-label-options"
+                list={LABEL_LIST_IDS.value}
                 value={v.label ?? ''}
                 onChange={(e) =>
                   set(i, { label: e.target.value.trim() === '' ? null : e.target.value })
@@ -195,11 +212,6 @@ export function ValueRows({
         <Plus size={13} />
         {t('contact.addRow')}
       </button>
-      <datalist id="contact-label-options">
-        {LABELS.map((l) => (
-          <option key={l} value={l} />
-        ))}
-      </datalist>
     </div>
   );
 }
@@ -215,8 +227,8 @@ export function PhoneRows({
 }: {
   icon: React.ReactNode;
   label: string;
-  values: ContactValueInput[];
-  onChange: (v: ContactValueInput[]) => void;
+  values: ContactValue[];
+  onChange: (v: ContactValue[]) => void;
   shareable?: boolean;
   conflicts?: (value: string) => boolean;
 }) {
@@ -224,7 +236,7 @@ export function PhoneRows({
   const dnd = useDnd(values, onChange);
   const region = getPhoneRegion() as CountryCode;
   const countries = useMemo(() => countryOptions(i18n.language), [i18n.language]);
-  const set = (i: number, patch: Partial<ContactValueInput>) =>
+  const set = (i: number, patch: Partial<ContactValue>) =>
     onChange(values.map((v, idx) => (idx === i ? { ...v, ...patch } : v)));
   return (
     <div>
@@ -246,7 +258,7 @@ export function PhoneRows({
               <input
                 className="w-16 shrink-0 rounded bg-white/10 px-2 py-1.5 text-xs outline-none focus:bg-white/15"
                 placeholder={t('contact.labelPlaceholder')}
-                list="contact-label-options"
+                list={LABEL_LIST_IDS.value}
                 value={v.label ?? ''}
                 onChange={(e) =>
                   set(i, { label: e.target.value.trim() === '' ? null : e.target.value })
@@ -314,11 +326,6 @@ export function PhoneRows({
         <Plus size={13} />
         {t('contact.addRow')}
       </button>
-      <datalist id="contact-label-options">
-        {LABELS.map((l) => (
-          <option key={l} value={l} />
-        ))}
-      </datalist>
     </div>
   );
 }
@@ -400,16 +407,16 @@ export function AddressRows({
 }: {
   icon: React.ReactNode;
   label: string;
-  addresses: ContactAddressInput[];
-  onChange: (a: ContactAddressInput[]) => void;
+  addresses: ContactAddress[];
+  onChange: (a: ContactAddress[]) => void;
 }) {
   const { t } = useTranslation();
   const dnd = useDnd(addresses, onChange);
   // 郵便番号の整形基準は既定の国（自動整形オフなら素通し）。
   const postalRegion = getPostalAutoformat() ? getPhoneRegion() : '';
-  const set = (i: number, patch: Partial<ContactAddressInput>) =>
+  const set = (i: number, patch: Partial<ContactAddress>) =>
     onChange(addresses.map((a, idx) => (idx === i ? { ...a, ...patch } : a)));
-  const field = (i: number, key: keyof ContactAddressInput, ph: string, w = '') => (
+  const field = (i: number, key: keyof ContactAddress, ph: string, w = '') => (
     <input
       className={`rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15 ${w}`}
       placeholder={ph}
@@ -437,7 +444,7 @@ export function AddressRows({
               <input
                 className="w-20 rounded bg-white/10 px-2 py-1 text-xs outline-none focus:bg-white/15"
                 placeholder={t('contact.labelPlaceholder')}
-                list="contact-label-options"
+                list={LABEL_LIST_IDS.value}
                 value={a.label ?? ''}
                 onChange={(e) =>
                   set(i, { label: e.target.value.trim() === '' ? null : e.target.value })

@@ -9,6 +9,7 @@
 //!   取得順に依存せず同じスレッドに集まる。
 //! - ユーザーの手動操作（分割/結合/再割当）は thread_assignment='manual' で固定し、再解析で動かさない。
 
+use super::contact_lookup::contact_name_for;
 use super::Store;
 use crate::models::{ThreadMessage, ThreadSummary, ThreadView};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -984,26 +985,6 @@ pub fn process_pending_conn(conn: &Connection, account_id: i64) -> rusqlite::Res
         super::emails::maintain_folder_rep_on_insert(conn, *id)?;
     }
     Ok(ids.len())
-}
-
-/// アドレスに一致する住所録の表示名（emails.rs の同名ヘルパと同等の軽量版）。
-fn contact_name_for(conn: &Connection, address: Option<&str>) -> rusqlite::Result<Option<String>> {
-    let Some(addr) = address.map(str::trim).filter(|s| !s.is_empty()) else {
-        return Ok(None);
-    };
-    let lower = addr.to_lowercase();
-    conn.query_row(
-        "SELECT display_name FROM contacts c
-         WHERE c.deleted_at IS NULL
-            AND (lower(c.email) = ?1
-                 OR EXISTS (SELECT 1 FROM contact_emails ce
-                            WHERE ce.contact_id = c.id AND lower(ce.value) = ?1))
-         ORDER BY c.is_favorite DESC LIMIT 1",
-        params![lower],
-        |r| r.get::<_, Option<String>>(0),
-    )
-    .optional()
-    .map(Option::flatten)
 }
 
 #[cfg(test)]

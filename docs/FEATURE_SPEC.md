@@ -172,7 +172,7 @@
 | タグ | `tag_list` / `tag_create` / `tag_update` / `tag_delete` | `/api/tags*` |
 | フィルタ | `inbox_filter`（ファセット）/ `message_set_flag`（ブックマーク・要再確認）/ `filter_save` / `filter_list` / `filter_delete` / `contact_set_business` / `category_list` / `category_assign` | （新規。[FILTERING.md](FILTERING.md)） |
 | 同期 | `sync_start` / `sync_status` / `sync_stop` / `account_set_sync_window` / `account_set_retention` / `message_fetch_body` / `attachment_download` / `server_search` | `/api/sync*`（＋範囲設定。[SYNC.md](SYNC.md)） |
-| 住所録 | `contact_list` / `contact_get` / `contact_upsert` / `contact_delete` / `contact_group_list` | （新規） |
+| 住所録 | `contact_list` / `contact_get` / `contact_upsert` / `contact_delete`（`contact_group_list` は 0059 で廃止） | （新規） |
 | カレンダー | `event_list`（期間指定）/ `event_get` / `event_upsert` / `event_delete` / `ics_import` | （新規） |
 | ウィンドウ | `window_set_always_on_top` / `window_set_mode`（dashboard / widget） | （新規） |
 | 背景画像 | `background_list` / `background_import` / `background_remove` / `background_set_active` / `background_set_mode` | （新規） |

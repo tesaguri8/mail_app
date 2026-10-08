@@ -1,3 +1,4 @@
+use super::contact_lookup::{contact_exists_sql, contact_name_for};
 use super::Store;
 use crate::models::{AttachmentSummary, MailDetail, MailSummary, ThreadListItem};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -775,27 +776,6 @@ fn fill_is_green(conn: &Connection, rows: &mut [MailSummary]) -> rusqlite::Resul
     Ok(())
 }
 
-/// アドレス（素のメールアドレス）に一致する住所録の表示名を返す。
-/// contacts.email（primary）と contact_emails.value を小文字で完全一致（式インデックス）で照合。
-fn contact_name_for(conn: &Connection, address: Option<&str>) -> rusqlite::Result<Option<String>> {
-    let Some(addr) = address.map(str::trim).filter(|s| !s.is_empty()) else {
-        return Ok(None);
-    };
-    let lower = addr.to_lowercase();
-    conn.query_row(
-        "SELECT display_name FROM contacts c
-         WHERE c.deleted_at IS NULL
-            AND (lower(c.email) = ?1
-                 OR EXISTS (SELECT 1 FROM contact_emails ce
-                            WHERE ce.contact_id = c.id AND lower(ce.value) = ?1))
-         ORDER BY c.is_favorite DESC LIMIT 1",
-        params![lower],
-        |r| r.get::<_, Option<String>>(0),
-    )
-    .optional()
-    .map(Option::flatten)
-}
-
 /// 差出人（from）に自分から送ったことがあるか＝返信歴ありを判定する SELECT 断片。
 /// 送信履歴の索引（sent_addresses）へアドレス完全一致で当てるだけなので、行数に依存しない
 /// （emails.to_addresses を LIKE で舐めると一覧クエリが全走査になる）。docs/FILTERING.md §2。
@@ -810,12 +790,9 @@ fn replied_col(from_col: &str) -> String {
 /// from_address は素のメールアドレスなので、小文字化の完全一致（式インデックス）で高速に照合する。
 fn known_vip_cols(from_col: &str) -> String {
     format!(
-        "(EXISTS (SELECT 1 FROM contacts c WHERE c.deleted_at IS NULL AND lower(c.email) = lower({from_col})) \
-          OR EXISTS (SELECT 1 FROM contact_emails ce JOIN contacts c3 ON c3.id = ce.contact_id \
-                     WHERE c3.deleted_at IS NULL AND lower(ce.value) = lower({from_col}))) AS is_known, \
-         (EXISTS (SELECT 1 FROM contacts c WHERE c.deleted_at IS NULL AND c.is_favorite = 1 AND lower(c.email) = lower({from_col})) \
-          OR EXISTS (SELECT 1 FROM contact_emails ce JOIN contacts c2 ON c2.id = ce.contact_id \
-                     WHERE c2.deleted_at IS NULL AND c2.is_favorite = 1 AND lower(ce.value) = lower({from_col}))) AS is_vip"
+        "{} AS is_known, {} AS is_vip",
+        contact_exists_sql(from_col, false),
+        contact_exists_sql(from_col, true)
     )
 }
 

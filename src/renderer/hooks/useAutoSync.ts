@@ -4,7 +4,8 @@ import { listen } from '@tauri-apps/api/event';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { SyncProgress } from '@bindings/SyncProgress';
 import { mailSync } from '../services/mail';
-import { gcalAccounts, gcalSync } from '../services/gcal';
+import { gcalSync } from '../services/gcal';
+import { googleAccounts } from '../services/google';
 import { getAutoSyncInterval, PREFS_EVENT } from '../config/prefs';
 import { activityStart, activityStop, activityUpdate } from '../stores/activity';
 
@@ -93,7 +94,8 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
         // 双方向同期し、Google 側の追加/更新/削除を取り込んだらカレンダー表示へ再読み込みを促す。
         try {
           let calChanged = false;
-          for (const g of await gcalAccounts()) {
+          for (const g of await googleAccounts()) {
+            if (!g.sync_calendar) continue;
             try {
               const r = await gcalSync(g.id);
               if (r.pulled + r.deleted_in > 0) calChanged = true;

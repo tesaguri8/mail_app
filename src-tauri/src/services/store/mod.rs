@@ -3,11 +3,21 @@ mod attachnames;
 mod bodyrepair;
 mod calendar_sync;
 mod calendars;
+mod contact_dedupe;
+mod contact_groups;
+mod contact_lookup;
+mod contact_rows;
+mod contact_sync;
+mod contact_tags;
+mod contact_write;
 mod contacts;
 mod emails;
 mod events;
+mod google_accounts;
 mod greendomain;
 mod migrations;
+mod org_tidy;
+mod organizations;
 mod recipients;
 mod sent_addresses;
 mod server_accounts;
@@ -16,11 +26,15 @@ mod signatures;
 mod spam;
 mod storage;
 mod tags;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod threads;
 mod tombstones;
 
 pub use accounts::{NewAccount, SmtpAccount};
-pub use calendar_sync::{ApplyOutcome, LocalChange, RemoteEvent};
+pub use calendar_sync::{ApplyOutcome, LocalChange, RemoteEvent, SyncedCalendar};
+pub use contact_sync::{ContactIdentity, ContactPush, RemoteContact};
+pub use google_accounts::GoogleService;
 pub use emails::{
     insert_email, rederive_attachments, AttachmentFetchInfo, InsertOutcome, NewAttachment, NewEmail,
     NewQuote, PurgeRef,

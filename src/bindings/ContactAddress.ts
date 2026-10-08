@@ -3,4 +3,32 @@
 /**
  * ラベル付きの構造化住所。
  */
-export type ContactAddress = { id: number, label: string | null, postal: string | null, region: string | null, city: string | null, street: string | null, extended: string | null, country: string | null, is_primary: boolean, };
+export type ContactAddress = { label: string | null, 
+/**
+ * 私書箱。
+ */
+po_box: string | null, 
+/**
+ * 郵便番号。
+ */
+postal: string | null, 
+/**
+ * 都道府県。
+ */
+region: string | null, 
+/**
+ * 市区町村。
+ */
+city: string | null, 
+/**
+ * 番地・建物。
+ */
+street: string | null, 
+/**
+ * 補足。
+ */
+extended: string | null, country: string | null, 
+/**
+ * 国コード（ISO 3166-1 alpha-2。iCloud の X-ABADR / Google の countryCode）。
+ */
+country_code: string | null, };

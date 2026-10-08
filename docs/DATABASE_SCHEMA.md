@@ -168,13 +168,11 @@ CREATE TABLE email_tags (
     assigned_at TEXT DEFAULT (datetime('now')),
     PRIMARY KEY (email_id, tag_id)
 );
--- 連絡先-タグ関連（0019。tags を共有）
+-- 連絡先-タグ関連（0019 → 0059 で作り直し。tags を共有）
 CREATE TABLE contact_tags (
-    contact_id INTEGER NOT NULL,
-    tag_id INTEGER NOT NULL,
-    PRIMARY KEY (contact_id, tag_id),
-    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
-    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+    contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (contact_id, tag_id)
 );
 
 -- 添付ファイル（0001 + 後続 ALTER）
@@ -194,93 +192,96 @@ CREATE TABLE attachments (
     FOREIGN KEY (email_id) REFERENCES emails(id)
 );
 
--- 連絡先（住所録。0016 + 後続 ALTER）
+-- 連絡先（住所録）。0059 で作り直した（docs/CONTACT_MODEL.md）。0016〜0058 の contacts /
+-- contact_groups / contact_group_members と本体の主値列（email / phone / organization / org_id …）、
+-- source / external_id / uid は廃止。複数値はすべて子テーブル（position = 0 が主）に置く。
 CREATE TABLE contacts (
     id INTEGER PRIMARY KEY,
     display_name TEXT NOT NULL,     -- FN（表示名）
-    name_kana TEXT,                 -- 読み（並び替え用）
-    email TEXT,                     -- 主メールアドレス（複数値は contact_emails へ移行＝0018）
-    emails TEXT,                    -- 追加アドレス（JSON。将来用）
-    phone TEXT,
-    organization TEXT,              -- 文字列（0026 で org_id と同期）
-    address TEXT,
-    birthday TEXT,                  -- 誕生日（ホーム/ウィジェット通知用）
+    name_prefix TEXT,               -- 敬称
+    family_name TEXT,
+    middle_name TEXT,
+    given_name TEXT,
+    name_suffix TEXT,               -- 接尾辞
+    phonetic_family TEXT,           -- よみ
+    phonetic_middle TEXT,
+    phonetic_given TEXT,
+    nickname TEXT,
+    maiden_name TEXT,               -- 旧姓（iCloud のみ）
+    sort_name TEXT,                 -- 並び替え用（よみ優先・無ければ表示名。保存時に組み立てる）
+    birthday TEXT,                  -- 'YYYY-MM-DD' / 年なし '--MM-DD'
     note TEXT,
-    avatar_path TEXT,
-    is_favorite INTEGER NOT NULL DEFAULT 0,
-    is_business INTEGER NOT NULL DEFAULT 0,      -- 取引先（docs/FILTERING.md）
-    allow_remote_images INTEGER NOT NULL DEFAULT 0,  -- 外部画像許可（docs/MAIL_SECURITY.md）
-    source TEXT NOT NULL DEFAULT 'local',        -- 'local' | 'google' | 'icloud' | ...
-    external_id TEXT,               -- 連携元のID（マージ・同期用）
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    -- 後続 ALTER
-    uid TEXT,                       -- 0017: 安定した正準 ID（UUIDv4。UNIQUE 索引・自動採番トリガあり）
-    family_name TEXT,               -- 0018: 姓
-    given_name TEXT,                -- 0018: 名
-    phonetic_family TEXT,           -- 0018: よみ姓
-    phonetic_given TEXT,            -- 0018: よみ名
-    org_title TEXT,                 -- 0018: 役職
-    org_department TEXT,            -- 0018: 部署
-    org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL,  -- 0026
-    deleted_at TEXT                 -- 0027: 論理削除（ゴミ箱）
+    avatar_path TEXT,               -- アバター（同期は後続）
+    show_as_company INTEGER NOT NULL DEFAULT 0,  -- 会社として表示（iCloud の X-ABShowAs）
+    is_favorite INTEGER NOT NULL DEFAULT 0,      -- Google の「スター付き」と同期
+    is_business INTEGER NOT NULL DEFAULT 0,      -- 取引先（Rondine 固有。docs/FILTERING.md）
+    allow_remote_images INTEGER NOT NULL DEFAULT 0,  -- 外部画像許可（Rondine 固有）
+    dirty INTEGER NOT NULL DEFAULT 0,            -- 未送信のローカル変更（つながりの dirty のどれか、または未連携の新規）
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TEXT                 -- 論理削除（ゴミ箱）
 );
 
--- 連絡先グループ（0016）。0019 でタグ機構（tags/contact_tags）へ統合され、以後は補助的。
-CREATE TABLE contact_groups (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    color TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+-- 子テーブル（0059）。すべて contact_id（CASCADE）＋ position（0 が主）を持つ。
+CREATE TABLE contact_organizations (   -- 会社（複数可）
+    id INTEGER PRIMARY KEY, contact_id INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0,
+    org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL,  -- 組織カード（無ければ NULL）
+    name TEXT, phonetic_name TEXT, title TEXT, department TEXT
 );
-
--- 連絡先-グループ関連（0016。CASCADE 削除）
-CREATE TABLE contact_group_members (
-    contact_id INTEGER NOT NULL,
-    group_id INTEGER NOT NULL,
-    PRIMARY KEY (contact_id, group_id),
-    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
-    FOREIGN KEY (group_id) REFERENCES contact_groups(id) ON DELETE CASCADE
+CREATE TABLE contact_emails (          -- is_shared は会社の共有アドレスの印（送らない）
+    id INTEGER PRIMARY KEY, contact_id INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0,
+    label TEXT, value TEXT NOT NULL, is_shared INTEGER NOT NULL DEFAULT 0
 );
-
--- ラベル付き複数メール（0018。0025 で is_shared 追加＝共有代表アドレス）
-CREATE TABLE contact_emails (
-    id INTEGER PRIMARY KEY,
-    contact_id INTEGER NOT NULL,
-    label TEXT,                     -- 自宅/職場/カスタム
-    value TEXT NOT NULL,
-    is_primary INTEGER NOT NULL DEFAULT 0,
-    position INTEGER NOT NULL DEFAULT 0,
-    is_shared INTEGER NOT NULL DEFAULT 0,   -- 0025: 複数名共有アドレス（info@… 等）
-    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
+CREATE TABLE contact_phones (          -- is_shared は代表電話・代表 FAX の印
+    id INTEGER PRIMARY KEY, contact_id INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0,
+    label TEXT, value TEXT NOT NULL, is_shared INTEGER NOT NULL DEFAULT 0
 );
-
--- ラベル付き複数電話（0018。0025 で is_shared 追加）
-CREATE TABLE contact_phones (
-    id INTEGER PRIMARY KEY,
-    contact_id INTEGER NOT NULL,
-    label TEXT,
-    value TEXT NOT NULL,
-    is_primary INTEGER NOT NULL DEFAULT 0,
-    position INTEGER NOT NULL DEFAULT 0,
-    is_shared INTEGER NOT NULL DEFAULT 0,   -- 0025
-    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
-);
-
--- ラベル付き複数住所（構造化。0018）
 CREATE TABLE contact_addresses (
+    id INTEGER PRIMARY KEY, contact_id INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0,
+    label TEXT, po_box TEXT, postal TEXT, region TEXT, city TEXT, street TEXT, extended TEXT,
+    country TEXT, country_code TEXT
+);
+CREATE TABLE contact_urls (
+    id INTEGER PRIMARY KEY, contact_id INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0,
+    label TEXT, value TEXT NOT NULL
+);
+CREATE TABLE contact_dates (           -- 記念日など（誕生日は本体）
+    id INTEGER PRIMARY KEY, contact_id INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0,
+    label TEXT, date TEXT NOT NULL
+);
+CREATE TABLE contact_relations (
+    id INTEGER PRIMARY KEY, contact_id INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0,
+    label TEXT, name TEXT NOT NULL
+);
+CREATE TABLE contact_handles (         -- kind: 'im'（チャット）/ 'social'（SNS）
+    id INTEGER PRIMARY KEY, contact_id INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL, service TEXT, value TEXT NOT NULL, label TEXT
+);
+CREATE TABLE contact_custom_fields (   -- Google の userDefined
+    id INTEGER PRIMARY KEY, contact_id INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0,
+    key TEXT NOT NULL, value TEXT NOT NULL
+);
+
+-- つながり表（0056 → 0059 で作り直し）。1 人の連絡先が複数のサービスに同時につながってよい。
+CREATE TABLE contact_identities (
     id INTEGER PRIMARY KEY,
-    contact_id INTEGER NOT NULL,
-    label TEXT,
-    postal TEXT,                    -- 郵便番号
-    region TEXT,                    -- 都道府県
-    city TEXT,                      -- 市区町村
-    street TEXT,                    -- 番地・建物
-    extended TEXT,                  -- 補足
-    country TEXT,
-    is_primary INTEGER NOT NULL DEFAULT 0,
-    position INTEGER NOT NULL DEFAULT 0,
-    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
+    provider TEXT NOT NULL,         -- 'google' | 'icloud'
+    account_id INTEGER NOT NULL,    -- 連携アカウント（Google は google_accounts.id）
+    external_id TEXT NOT NULL,      -- 'people/c…' / vCard の URL・UID
+    contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,  -- NULL＝未照合
+    etag TEXT,
+    snapshot TEXT,                  -- 取り込んだ内容（ContactFields の JSON）
+    dirty INTEGER NOT NULL DEFAULT 0,   -- このつながりへ未送信の変更がある
+    fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (provider, account_id, external_id)
+);
+
+-- Google のラベル（contactGroups）とタグ名の対応表（0058 → 0059 で作り直し。形は同じ）
+CREATE TABLE contact_group_identities (
+    id INTEGER PRIMARY KEY, provider TEXT NOT NULL DEFAULT 'google', account_id INTEGER NOT NULL,
+    external_id TEXT NOT NULL, name TEXT NOT NULL,
+    fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (provider, account_id, external_id)
 );
 
 -- 会社・組織（0026。連絡先は org_id で参照。0027 で deleted_at 追加）
@@ -560,7 +561,7 @@ CREATE TABLE ai_annotations (
 CREATE VIRTUAL TABLE email_fts USING fts5(subject, from_address, clean_body);
 
 -- 連絡先の検索インデックス【計画（未作成）】。住所録が大きくなった場合に追加予定。
--- CREATE VIRTUAL TABLE contact_fts USING fts5(display_name, name_kana, email, organization);
+-- CREATE VIRTUAL TABLE contact_fts USING fts5(display_name, sort_name);  -- 連絡先は 0059 で作り直し
 
 -- SNS メッセージの全文検索【計画（未作成）】。SNS 統合（メッセージハブ）実装時に追加予定。
 -- CREATE VIRTUAL TABLE sns_message_fts USING fts5(body_text, sender_name);
@@ -603,17 +604,17 @@ CREATE INDEX idx_contact_tags_tag      ON contact_tags(tag_id);                 
 -- 添付（0006）
 CREATE INDEX idx_attachments_email     ON attachments(email_id);                     -- 0006
 
--- 住所録・組織（0016 / 0018 / 0021 / 0026 / 0027）
-CREATE INDEX idx_contacts_name         ON contacts(name_kana, display_name);         -- 0016
-CREATE INDEX idx_contacts_email        ON contacts(email);                           -- 0016
-CREATE INDEX idx_contacts_birthday     ON contacts(birthday);                        -- 0016
-CREATE INDEX idx_contacts_business     ON contacts(is_business) WHERE is_business = 1;-- 0016
-CREATE UNIQUE INDEX idx_contacts_uid   ON contacts(uid);                             -- 0017
-CREATE INDEX idx_contacts_email_lower  ON contacts(lower(email));                    -- 0021
-CREATE INDEX idx_contact_emails_value_lower ON contact_emails(lower(value));         -- 0021
-CREATE INDEX idx_contacts_org_id       ON contacts(org_id);                          -- 0026
-CREATE INDEX idx_contacts_deleted_at   ON contacts(deleted_at);                      -- 0027
--- （contact_emails/phones/addresses の cid・値索引は 0018、org 論理削除索引は 0027 も参照）
+-- 住所録（0059）・組織（0027）
+CREATE INDEX idx_contacts_sort         ON contacts(sort_name, display_name);         -- 0059
+CREATE INDEX idx_contacts_birthday     ON contacts(birthday);                        -- 0059
+CREATE INDEX idx_contacts_deleted_at   ON contacts(deleted_at);                      -- 0059
+CREATE INDEX idx_contacts_dirty        ON contacts(dirty) WHERE dirty = 1;           -- 0059
+CREATE INDEX idx_contact_emails_value_lower ON contact_emails(lower(value));         -- 0059（差出人の照合）
+CREATE INDEX idx_contact_organizations_org  ON contact_organizations(org_id);        -- 0059
+-- 子テーブルはそれぞれ (contact_id, position) の索引を持つ（0059）。
+CREATE INDEX idx_contact_identities_contact ON contact_identities(contact_id);       -- 0059
+CREATE INDEX idx_contact_identities_unlinked ON contact_identities(account_id) WHERE contact_id IS NULL;  -- 0059
+CREATE INDEX idx_contact_identities_dirty ON contact_identities(provider, account_id) WHERE dirty = 1;  -- 0059
 ```
 
 【計画（マイグレーション未作成）】カレンダー・SNS・AI 注釈の索引は対応テーブルと同時に追加予定:

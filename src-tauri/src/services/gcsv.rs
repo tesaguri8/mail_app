@@ -3,9 +3,16 @@
 //! ファイル文法は通常の RFC 4180 CSV（UTF-8・カンマ区切り・`"` 引用・`""` エスケープ・
 //! セル内改行可）。Google 固有なのは列スキーマで、ヘッダ名が固定（`First Name` 等）、
 //! 1 セルに複数値を ` ::: ` で連結、`E-mail 1/2/3`・`Phone 1〜4` の番号付き列を持つ点。
-//! UID 列は無いので external_id は付かない（重複整理は氏名＋メール/電話で扱う）。
+//! UID 列は無いので、取り込んだ連絡先はどのサービスにもつながらない（重複整理は氏名＋
+//! メール/電話で扱う）。
 
-use super::vcard::{ImportedAddress, ImportedContact, ImportedValue, ParseResult};
+use super::contact_fields::address_is_empty;
+use super::contact_labels::label_from_term;
+use super::vcard::ParseResult;
+use crate::models::{
+    ContactAddress, ContactCustomField, ContactDate, ContactFields, ContactHandle,
+    ContactOrganization, ContactRelation, ContactUrl, ContactValue, HandleKind,
+};
 use std::collections::HashMap;
 
 const MULTI_SEP: &str = ":::"; // Google の複数値区切り（実際は " ::: "）
@@ -69,133 +76,180 @@ fn multi_positional(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn build_contact(idx: &HashMap<String, usize>, row: &[String]) -> Option<ImportedContact> {
-    let first = get(idx, row, "First Name");
-    let middle = get(idx, row, "Middle Name");
-    let last = get(idx, row, "Last Name");
-    let org = get(idx, row, "Organization Name");
+fn build_contact(idx: &HashMap<String, usize>, row: &[String]) -> Option<ContactFields> {
+    let cell = |key: &str| get(idx, row, key);
+    let first = cell("First Name");
+    let middle = cell("Middle Name");
+    let last = cell("Last Name");
 
-    // メール（E-mail 1..3、各セルは ::: で複数、対の Label 列あり）。
-    let mut all_emails: Vec<ImportedValue> = Vec::new();
-    for n in 1..=3 {
-        let label = non_empty(get(idx, row, &format!("E-mail {n} - Label")));
-        for v in multi(get(idx, row, &format!("E-mail {n} - Value"))) {
-            let v = v.to_lowercase();
-            if !all_emails.iter().any(|x| x.value == v) {
-                all_emails.push(ImportedValue {
-                    label: label.clone(),
-                    value: v,
-                    is_primary: all_emails.is_empty(),
-                });
+    let emails = labeled_values(idx, row, "E-mail", 3, |v| v.to_lowercase());
+    let phones = labeled_values(idx, row, "Phone", 4, |v| v.to_string());
+    let organization = ContactOrganization {
+        org_id: None,
+        name: non_empty(cell("Organization Name")),
+        phonetic_name: non_empty(cell("Organization Phonetic Name")),
+        title: non_empty(cell("Organization Title")),
+        department: non_empty(cell("Organization Department")),
+    };
+    let organizations: Vec<ContactOrganization> = (organization != ContactOrganization::default())
+        .then_some(organization)
+        .into_iter()
+        .collect();
+
+    // 表示名: 氏名 → File As → 組織 → メール → 電話。
+    let display_name = build_display_name(last, middle, first)
+        .or_else(|| non_empty(cell("File As")))
+        .or_else(|| organizations.first().and_then(|o| o.name.clone()))
+        .or_else(|| emails.first().map(|e| e.value.clone()))
+        .or_else(|| phones.first().map(|p| p.value.clone()))?;
+
+    Some(ContactFields {
+        display_name,
+        name_prefix: non_empty(cell("Name Prefix")),
+        family_name: non_empty(last),
+        middle_name: non_empty(middle),
+        given_name: non_empty(first),
+        name_suffix: non_empty(cell("Name Suffix")),
+        phonetic_family: non_empty(cell("Phonetic Last Name")),
+        phonetic_middle: non_empty(cell("Phonetic Middle Name")),
+        phonetic_given: non_empty(cell("Phonetic First Name")),
+        nickname: non_empty(cell("Nickname")),
+        birthday: non_empty(cell("Birthday")),
+        note: non_empty(cell("Notes")).map(|s| s.replace("\r\n", "\n")),
+        organizations,
+        emails,
+        phones,
+        addresses: addresses(idx, row),
+        urls: pairs(idx, row, "Website", 3)
+            .into_iter()
+            .map(|(label, value)| ContactUrl { label, value })
+            .collect(),
+        dates: pairs(idx, row, "Event", 3)
+            .into_iter()
+            .map(|(label, date)| ContactDate { label, date })
+            .collect(),
+        relations: pairs(idx, row, "Relation", 3)
+            .into_iter()
+            .map(|(label, name)| ContactRelation { label, name })
+            .collect(),
+        handles: handles(idx, row),
+        custom_fields: (1..=5)
+            .filter_map(|n| {
+                let key = non_empty(cell(&format!("Custom Field {n} - Label")))?;
+                let value = non_empty(cell(&format!("Custom Field {n} - Value")))?;
+                Some(ContactCustomField { key, value })
+            })
+            .collect(),
+        // Labels は ` ::: ` 区切り。Google のシステムラベル（"* myContacts" 等）は除外。
+        tags: multi(cell("Labels"))
+            .into_iter()
+            .filter(|l| !l.starts_with('*'))
+            .collect(),
+        ..Default::default()
+    })
+}
+
+/// Google CSV の見出し（"* Work" の `*` は主値の印）を Rondine の表記へ。
+fn csv_label(raw: &str) -> Option<String> {
+    label_from_term(raw.trim_start_matches('*').trim())
+}
+
+/// `{prefix} n - Label` / `{prefix} n - Value` の番号付き列から (見出し, 値) を集める
+/// （値のセルは ` ::: ` で複数。同じ値は 1 つにする）。
+fn pairs(
+    idx: &HashMap<String, usize>,
+    row: &[String],
+    prefix: &str,
+    count: usize,
+) -> Vec<(Option<String>, String)> {
+    let mut out: Vec<(Option<String>, String)> = Vec::new();
+    for n in 1..=count {
+        let label = csv_label(get(idx, row, &format!("{prefix} {n} - Label")));
+        for v in multi(get(idx, row, &format!("{prefix} {n} - Value"))) {
+            if !out.iter().any(|(_, x)| x == &v) {
+                out.push((label.clone(), v));
             }
         }
     }
-    let email = all_emails.first().map(|v| v.value.clone());
+    out
+}
 
-    // 電話（Phone 1..4）。
-    let mut all_phones: Vec<ImportedValue> = Vec::new();
-    for n in 1..=4 {
-        let label = non_empty(get(idx, row, &format!("Phone {n} - Label")));
-        for v in multi(get(idx, row, &format!("Phone {n} - Value"))) {
-            if !all_phones.iter().any(|x| x.value == v) {
-                all_phones.push(ImportedValue {
-                    label: label.clone(),
-                    value: v,
-                    is_primary: all_phones.is_empty(),
-                });
-            }
+/// メール・電話（番号付き列）。`norm` で値をそろえる（メールは小文字）。
+fn labeled_values(
+    idx: &HashMap<String, usize>,
+    row: &[String],
+    prefix: &str,
+    count: usize,
+    norm: fn(&str) -> String,
+) -> Vec<ContactValue> {
+    let mut out: Vec<ContactValue> = Vec::new();
+    for (label, raw) in pairs(idx, row, prefix, count) {
+        let value = norm(&raw);
+        if !out.iter().any(|x| x.value == value) {
+            out.push(ContactValue {
+                label,
+                value,
+                is_shared: false,
+            });
         }
     }
-    let phone = all_phones.first().map(|v| v.value.clone());
+    out
+}
 
-    // 住所（Address 1..2）。各サブ項目が ` ::: ` で複数詰めなので位置で対応づけて分解。
-    let mut all_addresses: Vec<ImportedAddress> = Vec::new();
+/// 住所（Address 1..2）。各サブ項目が ` ::: ` で複数詰めなので位置で対応づけて分解する。
+fn addresses(idx: &HashMap<String, usize>, row: &[String]) -> Vec<ContactAddress> {
+    let mut out: Vec<ContactAddress> = Vec::new();
     for n in 1..=2 {
-        let labels = multi_positional(get(idx, row, &format!("Address {n} - Label")));
-        let postals = multi_positional(get(idx, row, &format!("Address {n} - Postal Code")));
-        let regions = multi_positional(get(idx, row, &format!("Address {n} - Region")));
-        let cities = multi_positional(get(idx, row, &format!("Address {n} - City")));
-        let streets = multi_positional(get(idx, row, &format!("Address {n} - Street")));
-        let exts = multi_positional(get(idx, row, &format!("Address {n} - Extended Address")));
-        let countries = multi_positional(get(idx, row, &format!("Address {n} - Country")));
-        let count = [
-            &labels, &postals, &regions, &cities, &streets, &exts, &countries,
-        ]
-        .iter()
-        .map(|v| v.len())
-        .max()
-        .unwrap_or(0);
+        let col = |sub: &str| multi_positional(get(idx, row, &format!("Address {n} - {sub}")));
+        let labels = col("Label");
+        let po_boxes = col("PO Box");
+        let postals = col("Postal Code");
+        let regions = col("Region");
+        let cities = col("City");
+        let streets = col("Street");
+        let exts = col("Extended Address");
+        let countries = col("Country");
+        let cols = [
+            &labels, &po_boxes, &postals, &regions, &cities, &streets, &exts, &countries,
+        ];
+        let count = cols.iter().map(|v| v.len()).max().unwrap_or(0);
         let at = |v: &[String], i: usize| v.get(i).and_then(|s| non_empty(s));
         for i in 0..count {
-            let a = ImportedAddress {
-                label: at(&labels, i),
+            let a = ContactAddress {
+                label: labels.get(i).and_then(|l| csv_label(l)),
+                po_box: at(&po_boxes, i),
                 postal: at(&postals, i),
                 region: at(&regions, i),
                 city: at(&cities, i),
                 street: at(&streets, i),
                 extended: at(&exts, i),
                 country: at(&countries, i),
-                is_primary: all_addresses.is_empty(),
+                country_code: None,
             };
-            if a.postal.is_some()
-                || a.region.is_some()
-                || a.city.is_some()
-                || a.street.is_some()
-                || a.extended.is_some()
-                || a.country.is_some()
-            {
-                all_addresses.push(a);
+            if !address_is_empty(&a) {
+                out.push(a);
             }
         }
     }
-    let address = all_addresses
-        .first()
-        .map(crate::services::vcard::format_address);
+    out
+}
 
-    let name_kana = {
-        let kl = get(idx, row, "Phonetic Last Name");
-        let kf = get(idx, row, "Phonetic First Name");
-        match (kl.is_empty(), kf.is_empty()) {
-            (false, false) => Some(format!("{kl} {kf}")),
-            (false, true) => Some(kl.to_string()),
-            (true, false) => Some(kf.to_string()),
-            (true, true) => None,
-        }
-    };
-
-    // 表示名: 氏名 → File As → 組織 → メール → 電話。
-    let display_name = build_display_name(last, middle, first)
-        .or_else(|| non_empty(get(idx, row, "File As")))
-        .or_else(|| non_empty(org))
-        .or_else(|| email.clone())
-        .or_else(|| phone.clone())?;
-
-    Some(ImportedContact {
-        display_name,
-        family_name: non_empty(last),
-        given_name: non_empty(first),
-        phonetic_family: non_empty(get(idx, row, "Phonetic Last Name")),
-        phonetic_given: non_empty(get(idx, row, "Phonetic First Name")),
-        name_kana,
-        email,
-        phone,
-        organization: non_empty(org),
-        org_title: non_empty(get(idx, row, "Organization Title")),
-        org_department: non_empty(get(idx, row, "Organization Department")),
-        address,
-        all_emails,
-        all_phones,
-        all_addresses,
-        // Labels は ` ::: ` 区切り。Google のシステムラベル（"* myContacts" 等）は除外。
-        labels: multi(get(idx, row, "Labels"))
-            .into_iter()
-            .filter(|l| !l.starts_with('*'))
-            .collect(),
-        birthday: non_empty(get(idx, row, "Birthday")),
-        note: non_empty(get(idx, row, "Notes")).map(|s| s.replace("\r\n", "\n")),
-        source: "google".to_string(),
-        external_id: None,
-    })
+/// チャット（IM n - Label / Service / Value）。
+fn handles(idx: &HashMap<String, usize>, row: &[String]) -> Vec<ContactHandle> {
+    (1..=3)
+        .flat_map(|n| {
+            let label = csv_label(get(idx, row, &format!("IM {n} - Label")));
+            let service = non_empty(get(idx, row, &format!("IM {n} - Service")));
+            multi(get(idx, row, &format!("IM {n} - Value")))
+                .into_iter()
+                .map(move |value| ContactHandle {
+                    kind: HandleKind::Im,
+                    service: service.clone(),
+                    value,
+                    label: label.clone(),
+                })
+        })
+        .collect()
 }
 
 /// 姓・ミドル・名から表示名を作る。CJK のみなら詰め、そうでなければ空白区切り。
@@ -283,7 +337,7 @@ mod tests {
 
     const HEADER: &str = "First Name,Middle Name,Last Name,Phonetic First Name,Phonetic Middle Name,Phonetic Last Name,Name Prefix,Name Suffix,Nickname,File As,Organization Name,Organization Title,Organization Department,Birthday,Notes,Photo,Labels,E-mail 1 - Label,E-mail 1 - Value,E-mail 2 - Label,E-mail 2 - Value,E-mail 3 - Label,E-mail 3 - Value,Phone 1 - Label,Phone 1 - Value";
 
-    fn parse_one(data_row: &str) -> ImportedContact {
+    fn parse_one(data_row: &str) -> ContactFields {
         let text = format!("{HEADER}\n{data_row}\n");
         parse(&text).contacts.into_iter().next().unwrap()
     }
@@ -297,15 +351,12 @@ mod tests {
         assert_eq!(c.family_name.as_deref(), Some("愛川")); // Last Name
         assert_eq!(c.given_name.as_deref(), Some("翼")); // First Name
         assert_eq!(c.phonetic_given.as_deref(), Some("アイカワ")); // Phonetic First 列にある
-        assert_eq!(c.name_kana.as_deref(), Some("アイカワ"));
-        assert_eq!(c.email.as_deref(), Some("rabbit@key.ocn.ne.jp"));
-        assert_eq!(c.all_emails.len(), 2); // 1セル ::: の2件を保持
-        assert_eq!(c.all_emails[1].value, "second@x.jp");
-        assert_eq!(c.phone.as_deref(), Some("0997-52-4187"));
-        assert_eq!(c.organization.as_deref(), Some("有限会社愛建工業"));
+        assert_eq!(c.emails[0].value, "rabbit@key.ocn.ne.jp");
+        assert_eq!(c.emails.len(), 2); // 1セル ::: の2件を保持
+        assert_eq!(c.emails[1].value, "second@x.jp");
+        assert_eq!(c.phones[0].value, "0997-52-4187");
+        assert_eq!(c.organizations[0].name.as_deref(), Some("有限会社愛建工業"));
         assert_eq!(c.birthday.as_deref(), Some("1987-10-06"));
-        assert_eq!(c.source, "google");
-        assert!(c.external_id.is_none());
     }
 
     #[test]
@@ -317,11 +368,11 @@ mod tests {
             名護市 ::: 本部町,大西1-15-5 ::: 備瀬535";
         let text = format!("{header}\n{row}\n");
         let c = parse(&text).contacts.into_iter().next().unwrap();
-        assert_eq!(c.all_addresses.len(), 2);
-        assert_eq!(c.all_addresses[0].postal.as_deref(), Some("9050018"));
-        assert_eq!(c.all_addresses[0].city.as_deref(), Some("名護市"));
-        assert_eq!(c.all_addresses[1].postal.as_deref(), Some("9050207"));
-        assert_eq!(c.all_addresses[1].city.as_deref(), Some("本部町"));
+        assert_eq!(c.addresses.len(), 2);
+        assert_eq!(c.addresses[0].postal.as_deref(), Some("9050018"));
+        assert_eq!(c.addresses[0].city.as_deref(), Some("名護市"));
+        assert_eq!(c.addresses[1].postal.as_deref(), Some("9050207"));
+        assert_eq!(c.addresses[1].city.as_deref(), Some("本部町"));
     }
 
     #[test]
@@ -329,7 +380,7 @@ mod tests {
         let row = ",,,,,,,,,,浦添設計研究所,,,,,,* myContacts,,,,,,,,(03) 5287-3625";
         let c = parse_one(row);
         assert_eq!(c.display_name, "浦添設計研究所");
-        assert_eq!(c.phone.as_deref(), Some("(03) 5287-3625"));
+        assert_eq!(c.phones[0].value, "(03) 5287-3625");
     }
 
     #[test]
@@ -339,8 +390,30 @@ mod tests {
         let text = format!("{HEADER}\n{row}\n");
         let c = parse(&text).contacts.into_iter().next().unwrap();
         assert_eq!(c.display_name, "Smith John");
-        assert_eq!(c.organization.as_deref(), Some("Acme, Inc."));
+        assert_eq!(c.organizations[0].name.as_deref(), Some("Acme, Inc."));
         assert_eq!(c.note.as_deref(), Some("line1\nline2"));
+    }
+
+    #[test]
+    fn reads_the_union_columns() {
+        let header = "First Name,Last Name,Middle Name,Name Prefix,Nickname,\
+            Website 1 - Label,Website 1 - Value,Event 1 - Label,Event 1 - Value,\
+            Relation 1 - Label,Relation 1 - Value,IM 1 - Label,IM 1 - Service,IM 1 - Value,\
+            Custom Field 1 - Label,Custom Field 1 - Value,Address 1 - PO Box,Address 1 - City,\
+            Phone 1 - Label,Phone 1 - Value";
+        let row = "太郎,山田,一,Dr.,たろ,Work,https://example.com,Anniversary,2010-06-01,\
+            Spouse,山田花子,Home,Skype,taro,社員番号,123,私書箱1,那覇市,* Mobile,090-1111-2222";
+        let c = parse(&format!("{header}\n{row}\n")).contacts.remove(0);
+        assert_eq!(c.middle_name.as_deref(), Some("一"));
+        assert_eq!(c.name_prefix.as_deref(), Some("Dr."));
+        assert_eq!(c.nickname.as_deref(), Some("たろ"));
+        assert_eq!(c.urls[0].label.as_deref(), Some("職場"));
+        assert_eq!(c.dates[0].label.as_deref(), Some("記念日"));
+        assert_eq!(c.relations[0].label.as_deref(), Some("配偶者"));
+        assert_eq!(c.handles[0].service.as_deref(), Some("Skype"));
+        assert_eq!(c.custom_fields[0].value, "123");
+        assert_eq!(c.addresses[0].po_box.as_deref(), Some("私書箱1"));
+        assert_eq!(c.phones[0].label.as_deref(), Some("携帯"));
     }
 
     #[test]

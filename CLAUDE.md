@@ -335,7 +335,7 @@ Rust側コード（`src-tauri/`配下）は、以下を**例外なく**遵守す
 
 以下のドキュメントを熟読してから作業を行うこと（作業領域に応じて）
 
-- [docs/SYNC.md](docs/SYNC.md) / [docs/CALENDAR_SYNC.md](docs/CALENDAR_SYNC.md)（メール・カレンダー同期関連の作業時）
+- [docs/SYNC.md](docs/SYNC.md) / [docs/CALENDAR_SYNC.md](docs/CALENDAR_SYNC.md) / [docs/CONTACTS_SYNC.md](docs/CONTACTS_SYNC.md)（メール・カレンダー・連絡先同期関連の作業時）
 - [docs/AI_FEATURES.md](docs/AI_FEATURES.md)（AI 機能関連の作業時）
 - [docs/THREADING.md](docs/THREADING.md)（スレッド再構築・会話ビュー関連の作業時）
 - [docs/SPAM.md](docs/SPAM.md) / [docs/GREEN_DOMAINS.md](docs/GREEN_DOMAINS.md)（迷惑メール判定関連の作業時）

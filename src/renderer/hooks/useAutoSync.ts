@@ -95,7 +95,8 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
         try {
           let calChanged = false;
           for (const g of await googleAccounts()) {
-            if (!g.sync_calendar) continue;
+            // 解除中のアカウントは同期しない（再接続で再開する）。
+            if (!g.sync_calendar || g.disconnected_at != null) continue;
             try {
               const r = await gcalSync(g.id);
               if (r.pulled + r.deleted_in > 0) calChanged = true;

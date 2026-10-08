@@ -12,4 +12,8 @@ account_id: number,
 /**
  * 連携アカウントのメールアドレス（同じサービスに複数アカウントがありうるため添える）。
  */
-account_email: string | null, };
+account_email: string | null, 
+/**
+ * 連携アカウントが解除中（つながりは残るが同期されない。再接続すると戻る）。
+ */
+disconnected: boolean, };

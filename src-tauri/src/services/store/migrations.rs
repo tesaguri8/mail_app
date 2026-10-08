@@ -270,6 +270,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 60,
         sql: include_str!("migrations/0060_gcal_recurring_exceptions.sql"),
     },
+    Migration {
+        // 61 は Google 連携の「解除中」（行・つながり・未送信の変更を残して解除する）。
+        version: 61,
+        sql: include_str!("migrations/0061_google_account_disconnect.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

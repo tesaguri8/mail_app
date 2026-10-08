@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { GoogleAccount } from '@bindings/GoogleAccount';
+import type { GoogleDisconnectResult } from '@bindings/GoogleDisconnectResult';
 import type { GoogleCredentialsStatus } from '@bindings/GoogleCredentialsStatus';
 
 // Google アカウント連携（OAuth）。カレンダーと連絡先で同じアカウント・同じ認証情報を共有する。
@@ -26,5 +27,7 @@ export const googleConnect = (contacts: boolean) =>
   invoke<GoogleAccount>('google_connect', { contacts });
 
 /** 連携を解除する（取り込んだカレンダー/予定も削除）。 */
-export const googleDisconnect = (accountId: number) =>
-  invoke<void>('google_disconnect', { accountId });
+/** 連携の解除。purge=false は「解除中」（記録を残して同期を止める）、true は「完全に解除」
+ *  （Google 側の許可の取り消し・つながりと写しの削除）。どちらも Google 側の連絡先・予定は消えない。 */
+export const googleDisconnect = (accountId: number, purge: boolean) =>
+  invoke<GoogleDisconnectResult>('google_disconnect', { accountId, purge });

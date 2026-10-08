@@ -2,7 +2,7 @@ use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentMeta, AttachmentSummary, AutoconfigResult,
     AttendeeInput, CalendarInput, CalendarSummary, ContactInput, ContactMatch,
     ContactSummary, DataLocation, DbInfo, DraftContent, DraftInput, DuplicateGroup, EventAttendee,
-    EventInput, EventSummary, GcalSyncResult, GcontactsMatchResult, GcontactsSyncResult, GoogleAccount,
+    EventInput, EventSummary, GcalSyncResult, GcontactsMatchResult, GcontactsSyncResult, GoogleAccount, GoogleDisconnectResult,
     GoogleCredentialsStatus,
     GreenDomainEntry,
     HomeUnreadCounts, IcsImportReport, ImportReport, MailDetail,
@@ -2184,7 +2184,13 @@ fn google_resolve_credentials(app: &AppHandle, store: &Store) -> (Option<String>
 }
 
 /// アカウントのアクセストークンを取得（refresh_token → access_token）。失敗時は None。
+///
+/// 解除中のアカウントは None（同期も保存時の送信もしない。未送信の変更は再接続後に送る）。
 async fn google_account_access(app: &AppHandle, store: &Store, account_id: i64) -> Option<String> {
+    if store.google_account_disconnected(account_id).unwrap_or(true) {
+        log::info!("Google 連携: アカウント {account_id} は解除中のため送受信しません");
+        return None;
+    }
     let email = store.google_account_email(account_id).ok().flatten()?;
     let (client_id, client_secret) = google_read_credentials(app, store).ok()?;
     let service = app.config().identifier.clone();
@@ -2382,24 +2388,63 @@ pub async fn google_connect(
         .ok_or_else(|| "連携アカウントを保存できませんでした".into())
 }
 
-/// Google アカウントの連携を解除する（refresh_token と、取り込んだカレンダー/予定を削除）。
+/// 解除中のアカウントで同期を始めないための確認（分かる文言で止める）。
+fn google_ensure_connected(store: &Store, account_id: i64) -> Result<(), String> {
+    if store
+        .google_account_disconnected(account_id)
+        .map_err(|e| e.to_string())?
+    {
+        return Err("このアカウントは解除中です。「再接続」で連携し直すと同期を再開します".into());
+    }
+    Ok(())
+}
+
+/// Google アカウントの連携を解除する。どちらでも refresh token は消し、Google 側の連絡先・
+/// 予定そのものには触れない。
+///
+/// - `purge = false`（既定。一時的な解除）: 解除中にする。カレンダー・予定・連絡先のつながり・
+///   未送信の変更は残し、同じアカウントで連携し直すと再開する
+/// - `purge = true`（完全に解除）: Google 側の許可を取り消し（失敗しても続行し、理由を返す）、
+///   つながりを外してカレンダーと予定の写し・アカウントの行を消す
 #[tauri::command]
-pub fn google_disconnect(
+pub async fn google_disconnect(
     app: AppHandle,
-    store: State<Store>,
+    store: State<'_, Store>,
     account_id: i64,
-) -> Result<(), String> {
-    if let Ok(Some(email)) = store.google_account_email(account_id) {
-        let service = app.config().identifier.clone();
-        for key in [google_refresh_key(&email), legacy_refresh_key(&email)] {
-            if let Ok(entry) = keyring::Entry::new(&service, &key) {
-                let _ = entry.delete_credential();
-            }
+    purge: bool,
+) -> Result<GoogleDisconnectResult, String> {
+    let email = store
+        .google_account_email(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("連携アカウントが見つかりません")?;
+    let service = app.config().identifier.clone();
+    let keys = [google_refresh_key(&email), legacy_refresh_key(&email)];
+    let revoke_error = if purge {
+        match keyring_get_migrating(&service, &keys[0], &keys[1]) {
+            Some(token) => google::oauth::revoke_token(&token).await.err(),
+            // 一時的な解除のあとなど、手元にトークンが無ければ取り消しようがない。
+            None => Some(
+                "保存された認証情報が無いため、Google 側の許可は取り消していません\
+                 （Google アカウントの「サードパーティのアクセス」から取り消せます）"
+                    .into(),
+            ),
+        }
+    } else {
+        None
+    };
+    for key in &keys {
+        if let Ok(entry) = keyring::Entry::new(&service, key) {
+            // 無いキーの削除は失敗するが、目的（残さない）は果たしている。
+            let _ = entry.delete_credential();
         }
     }
-    store
-        .delete_google_account(account_id)
-        .map_err(|e| e.to_string())
+    let done = if purge {
+        store.purge_google_account(account_id)
+    } else {
+        store.disconnect_google_account(account_id)
+    };
+    done.map_err(|e| e.to_string())?;
+    Ok(GoogleDisconnectResult { revoke_error })
 }
 
 /// 指定アカウントのカレンダーを同期する（push → pull の双方向）。
@@ -2409,6 +2454,7 @@ pub async fn gcal_sync(
     store: State<'_, Store>,
     account_id: i64,
 ) -> Result<GcalSyncResult, String> {
+    google_ensure_connected(store.inner(), account_id)?;
     let access = google_account_access(&app, store.inner(), account_id)
         .await
         .ok_or("保存された認証情報がありません。もう一度連携してください")?;
@@ -2425,6 +2471,7 @@ pub async fn gcontacts_sync(
     store: State<'_, Store>,
     account_id: i64,
 ) -> Result<GcontactsSyncResult, String> {
+    google_ensure_connected(store.inner(), account_id)?;
     let scopes = store
         .google_account_scopes(account_id)
         .map_err(|e| e.to_string())?;

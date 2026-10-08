@@ -109,7 +109,9 @@
     "searchPlaceholder": "予定を検索…",
     "searchClear": "検索をクリア",
     "searchResults": "「{{query}}」の検索結果：{{count}} 件",
-    "searchEmpty": "一致する予定はありません"
+    "searchEmpty": "一致する予定はありません",
+    "accountDisconnected": "解除中",
+    "accountDisconnectedHint": "このアカウントの連携は解除中です。予定は残っていますが、Google とは同期されません（設定の「再接続」で再開）。"
   },
   "comingSoon": "準備中です",
   "filter": {
@@ -403,7 +405,9 @@
     "link": {
       "google": "Google",
       "icloud": "iCloud",
-      "rondineOnly": "Rondine のみ（どのサービスとも同期していません）"
+      "rondineOnly": "Rondine のみ（どのサービスとも同期していません）",
+      "disconnected": "解除中",
+      "disconnectedHint": "このアカウントの連携は解除中です。つながりは残っていますが、同期されません（再接続すると戻ります）。"
     },
     "sourceHint": {
       "all": "すべての連絡先",
@@ -614,7 +618,6 @@
     "gcalSyncNow": "今すぐ同期",
     "gcalSyncing": "同期中…",
     "gcalDisconnect": "解除",
-    "gcalDisconnectConfirm": "この連携を解除しますか？取り込んだ Google カレンダーと予定は Rondine から削除されます（Google 側の予定は消えません）。",
     "gcalLastSync": "最終同期: {{when}}",
     "gcalNeverSynced": "未同期",
     "gcalSyncDone": "同期完了: 取込 {{pulled}} 件 / 送信 {{pushed}} 件 / 取込削除 {{deletedIn}} 件 / 送信削除 {{deletedOut}} 件",
@@ -637,7 +640,23 @@
     "gcontactsMatchRun": "実行する",
     "gcontactsMatchCancel": "やめる",
     "gcontactsMatchDone": "住所録へ反映しました: 紐付け {{linked}} 件 / 新規 {{created}} 件（うち {{ambiguous}} 件は「重複整理」でご確認ください）",
-    "trashPurgeRun": "完全に削除する"
+    "trashPurgeRun": "完全に削除する",
+    "gcalReconnect": "再接続",
+    "gcalDisconnectedBadge": "解除中",
+    "gcalDisconnectedHint": "解除中です。取り込んだカレンダー・予定・連絡先のつながり・未送信の変更は残っています。同じアカウントで「再接続」すると同期を再開します。",
+    "gcalDisconnectTitle": "{{email}} の連携を解除",
+    "gcalDisconnectBody": "どちらの場合も、Google 側の連絡先・予定そのものは消えません。",
+    "gcalDisconnectOption": "一時的に解除（記録を残す）",
+    "gcalDisconnectOptionHint": "同期を止めます。取り込んだカレンダー・予定、連絡先と Google のつながり、未送信の変更は残り、同じアカウントで再接続すると続きから同期します。",
+    "gcalPurgeOption": "完全に解除",
+    "gcalPurgeOptionHint": "Google 側の許可を取り消し、連絡先と Google のつながりを外し（連絡先は Rondine のみとして残ります）、取り込んだカレンダーと予定の写しを消します。",
+    "gcalDisconnectKeepNote": "Rondine で変更してまだ Google へ送っていない予定・連絡先は、再接続後の同期で送られます。",
+    "gcalPurgeNote": "まだ Google へ送っていない予定の変更は失われます。Google 側の許可を取り消すと、同じアカウントのほかの端末の Rondine の連携も切れることがあります。",
+    "gcalDisconnectRun": "一時的に解除する",
+    "gcalPurgeRun": "完全に解除する",
+    "gcalDisconnected": "{{email}} の連携を一時的に解除しました。「再接続」で再開できます。",
+    "gcalPurged": "{{email}} の連携を完全に解除しました。",
+    "gcalRevokeFailed": "Google 側の許可は取り消せませんでした（解除は済んでいます）: {{message}}"
   },
   "dataloc": {
     "title": "データの保存先",

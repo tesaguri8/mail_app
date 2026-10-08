@@ -264,6 +264,8 @@ pub struct CalendarSummary {
     pub source: String,
     /// Google 連携カレンダーの場合の連携アカウント（メール）。ローカルは None。
     pub account_email: Option<String>,
+    /// 連携アカウントが解除中（写しは残るが同期されない）。ローカルは false。
+    pub account_disconnected: bool,
     /// Google の権限。'owner' | 'writer' | 'reader' | 'freeBusyReader'。書き込み可否の表示に使う。
     /// ローカルカレンダーは None（暗黙的に編集可）。
     pub access_role: Option<String>,
@@ -338,6 +340,17 @@ pub struct GoogleAccount {
     pub last_calendar_sync_at: Option<String>,
     /// 連絡先の最終同期時刻（UTC 文字列）。未同期なら None。
     pub last_contacts_sync_at: Option<String>,
+    /// 解除中になった時刻（UTC 文字列）。None＝連携中。解除中は同期せず、記録は残す。
+    pub disconnected_at: Option<String>,
+}
+
+/// Google 連携の解除の結果。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct GoogleDisconnectResult {
+    /// 「完全に解除」で Google 側の許可を取り消せなかったときの理由（解除そのものは済んでいる）。
+    /// 一時的な解除・取り消せたときは None。
+    pub revoke_error: Option<String>,
 }
 
 /// Google カレンダー同期の結果サマリ（docs/CALENDAR_SYNC.md）。

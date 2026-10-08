@@ -6,6 +6,7 @@ import { AlertTriangle } from 'lucide-react';
  *
  * window.confirm は Linux の WebView で素通りする（`[実測]`）ので、破壊的な操作の確認は
  * これで行う。`notes` は本文の下に並べる補足（「Google の連絡先からも削除されます」など）。
+ * `children` は本文と補足のあいだに置く選択肢など（解除の種類を選ぶラジオなど）。
  */
 export function ConfirmDialog({
   title,
@@ -16,6 +17,7 @@ export function ConfirmDialog({
   busy = false,
   onConfirm,
   onCancel,
+  children,
 }: {
   title: string;
   body: string;
@@ -26,6 +28,7 @@ export function ConfirmDialog({
   busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  children?: React.ReactNode;
 }) {
   const { t } = useTranslation();
   return (
@@ -47,6 +50,7 @@ export function ConfirmDialog({
           <h3 className="text-base font-semibold">{title}</h3>
         </div>
         <p className="text-sm text-white/70">{body}</p>
+        {children}
         {notes.length > 0 && (
           <ul className="mt-2 space-y-1">
             {notes.map((n) => (

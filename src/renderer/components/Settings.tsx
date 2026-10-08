@@ -753,8 +753,19 @@ function GoogleCalendarSettings() {
   const [clientSecret, setClientSecret] = useState('');
   const [accounts, setAccounts] = useState<GoogleAccount[]>([]);
   const [busy, setBusy] = useState<
-    'idle' | 'saving' | 'connecting' | 'syncing' | 'syncingContacts' | 'matchingContacts'
+    | 'idle'
+    | 'saving'
+    | 'connecting'
+    | 'syncing'
+    | 'syncingContacts'
+    | 'matchingContacts'
+    | 'disconnecting'
   >('idle');
+  // 解除の確認ダイアログ（null＝出していない）と、選んだ解除の種類。
+  const [disconnecting, setDisconnecting] = useState<{
+    account: GoogleAccount;
+    purge: boolean;
+  } | null>(null);
   // 照合の下見の結果。確認待ちのあいだだけ入る。
   const [pendingMatch, setPendingMatch] = useState<{
     accountId: number;
@@ -800,7 +811,8 @@ function GoogleCalendarSettings() {
     }
   };
 
-  const connect = async () => {
+  // 連携（再接続も同じ。同じアカウントを選べば解除中の記録を使い直す）。
+  const connect = async (contacts: boolean = withContacts) => {
     if (!isTauri || busy !== 'idle') return;
     if (!creds?.configured) {
       setError(t('settings.gcalNeedCredentials'));
@@ -810,7 +822,7 @@ function GoogleCalendarSettings() {
     setError(null);
     setMessage(null);
     try {
-      await googleConnect(withContacts);
+      await googleConnect(contacts);
       refresh();
     } catch (e) {
       setError(String(e));
@@ -925,16 +937,28 @@ function GoogleCalendarSettings() {
     }
   };
 
-  const disconnect = async (id: number) => {
-    if (!isTauri || busy !== 'idle') return;
-    if (!window.confirm(t('settings.gcalDisconnectConfirm'))) return;
+  // 解除は画面内で確認し、「一時的に解除（記録を残す・既定）」か「完全に解除」かを選ぶ。
+  const disconnect = async () => {
+    if (!isTauri || busy !== 'idle' || !disconnecting) return;
+    const { account, purge } = disconnecting;
+    setBusy('disconnecting');
     setError(null);
     setMessage(null);
     try {
-      await googleDisconnect(id);
+      const r = await googleDisconnect(account.id, purge);
+      setDisconnecting(null);
+      setMessage(
+        purge
+          ? t('settings.gcalPurged', { email: account.email })
+          : t('settings.gcalDisconnected', { email: account.email }),
+      );
+      // 許可の取り消しに失敗しても解除は済んでいる。理由を添えて知らせる。
+      if (r.revoke_error) setError(t('settings.gcalRevokeFailed', { message: r.revoke_error }));
       refresh();
     } catch (e) {
       setError(String(e));
+    } finally {
+      setBusy('idle');
     }
   };
 
@@ -1006,7 +1030,7 @@ function GoogleCalendarSettings() {
           </span>
         </label>
         <button
-          onClick={connect}
+          onClick={() => void connect()}
           disabled={busy !== 'idle' || !creds?.configured}
           className="flex items-center gap-1.5 rounded-md bg-sky-500/90 px-3 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-40"
         >
@@ -1027,7 +1051,17 @@ function GoogleCalendarSettings() {
               <li key={a.id} className="space-y-2 rounded-lg bg-white/5 px-3 py-2">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="truncate text-sm text-white/90">{a.email}</div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate text-sm text-white/90">{a.email}</span>
+                      {a.disconnected_at != null && (
+                        <span
+                          className="shrink-0 rounded bg-amber-400/20 px-1.5 py-0.5 text-[10px] text-amber-200"
+                          title={t('settings.gcalDisconnectedHint')}
+                        >
+                          {t('settings.gcalDisconnectedBadge')}
+                        </span>
+                      )}
+                    </div>
                     <div className="text-xs text-white/40">
                       {a.last_calendar_sync_at
                         ? t('settings.gcalLastSync', {
@@ -1049,47 +1083,66 @@ function GoogleCalendarSettings() {
                     )}
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    <button
-                      onClick={() => syncNow(a.id)}
-                      disabled={busy !== 'idle'}
-                      className="flex items-center gap-1 rounded-md bg-white/15 px-2.5 py-1.5 text-xs font-medium hover:bg-white/25 disabled:opacity-40"
-                    >
-                      <RefreshCw size={13} className={busy === 'syncing' ? 'animate-spin' : ''} />
-                      {busy === 'syncing' ? t('settings.gcalSyncing') : t('settings.gcalSyncNow')}
-                    </button>
-                    {a.sync_contacts && (
+                    {a.disconnected_at != null ? (
+                      // 解除中: 同期はせず、再接続だけを出す（同じアカウントを選べば記録を使い直す）。
                       <button
-                        onClick={() => syncContacts(a.id)}
+                        onClick={() => void connect(a.sync_contacts)}
                         disabled={busy !== 'idle'}
-                        className="flex items-center gap-1 rounded-md bg-white/15 px-2.5 py-1.5 text-xs font-medium hover:bg-white/25 disabled:opacity-40"
+                        className="flex items-center gap-1 rounded-md bg-sky-500/70 px-2.5 py-1.5 text-xs font-medium hover:bg-sky-500 disabled:opacity-40"
                       >
-                        <RefreshCw
-                          size={13}
-                          className={busy === 'syncingContacts' ? 'animate-spin' : ''}
-                        />
-                        {busy === 'syncingContacts'
-                          ? t('settings.gcontactsSyncing')
-                          : t('settings.gcontactsSyncNow')}
+                        <Link2 size={13} />
+                        {busy === 'connecting'
+                          ? t('settings.gcalConnecting')
+                          : t('settings.gcalReconnect')}
                       </button>
-                    )}
-                    {a.sync_contacts && (
-                      <button
-                        onClick={() => previewMatch(a.id)}
-                        disabled={busy !== 'idle'}
-                        className="flex items-center gap-1 rounded-md bg-white/15 px-2.5 py-1.5 text-xs font-medium hover:bg-white/25 disabled:opacity-40"
-                      >
-                        {matching ? (
-                          <Loader2 size={13} className="animate-spin" />
-                        ) : (
-                          <Users size={13} />
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => syncNow(a.id)}
+                          disabled={busy !== 'idle'}
+                          className="flex items-center gap-1 rounded-md bg-white/15 px-2.5 py-1.5 text-xs font-medium hover:bg-white/25 disabled:opacity-40"
+                        >
+                          <RefreshCw size={13} className={busy === 'syncing' ? 'animate-spin' : ''} />
+                          {busy === 'syncing' ? t('settings.gcalSyncing') : t('settings.gcalSyncNow')}
+                        </button>
+                        {a.sync_contacts && (
+                          <button
+                            onClick={() => syncContacts(a.id)}
+                            disabled={busy !== 'idle'}
+                            className="flex items-center gap-1 rounded-md bg-white/15 px-2.5 py-1.5 text-xs font-medium hover:bg-white/25 disabled:opacity-40"
+                          >
+                            <RefreshCw
+                              size={13}
+                              className={busy === 'syncingContacts' ? 'animate-spin' : ''}
+                            />
+                            {busy === 'syncingContacts'
+                              ? t('settings.gcontactsSyncing')
+                              : t('settings.gcontactsSyncNow')}
+                          </button>
                         )}
-                        {matching
-                          ? t('settings.gcontactsMatching')
-                          : t('settings.gcontactsMatchNow')}
-                      </button>
+                        {a.sync_contacts && (
+                          <button
+                            onClick={() => previewMatch(a.id)}
+                            disabled={busy !== 'idle'}
+                            className="flex items-center gap-1 rounded-md bg-white/15 px-2.5 py-1.5 text-xs font-medium hover:bg-white/25 disabled:opacity-40"
+                          >
+                            {matching ? (
+                              <Loader2 size={13} className="animate-spin" />
+                            ) : (
+                              <Users size={13} />
+                            )}
+                            {matching
+                              ? t('settings.gcontactsMatching')
+                              : t('settings.gcontactsMatchNow')}
+                          </button>
+                        )}
+                      </>
                     )}
                     <button
-                      onClick={() => disconnect(a.id)}
+                      onClick={() =>
+                        // 解除中なら残る選択肢は「完全に解除」だけ。
+                        setDisconnecting({ account: a, purge: a.disconnected_at != null })
+                      }
                       disabled={busy !== 'idle'}
                       className="flex items-center gap-1 rounded-md border border-white/20 px-2.5 py-1.5 text-xs text-white/70 hover:bg-white/10 disabled:opacity-40"
                     >
@@ -1123,7 +1176,59 @@ function GoogleCalendarSettings() {
             {t('settings.gcontactsMatching')}
           </p>
         )}
-        {pendingMatch && (
+        {disconnecting && (
+        <ConfirmDialog
+          title={t('settings.gcalDisconnectTitle', { email: disconnecting.account.email })}
+          body={t('settings.gcalDisconnectBody')}
+          notes={[
+            disconnecting.purge
+              ? t('settings.gcalPurgeNote')
+              : t('settings.gcalDisconnectKeepNote'),
+          ]}
+          confirmLabel={
+            disconnecting.purge ? t('settings.gcalPurgeRun') : t('settings.gcalDisconnectRun')
+          }
+          danger={disconnecting.purge}
+          busy={busy === 'disconnecting'}
+          onConfirm={() => void disconnect()}
+          onCancel={() => setDisconnecting(null)}
+        >
+          <div className="mt-3 space-y-1.5" role="radiogroup">
+            {[false, true].map((purge) => {
+              // 解除中のアカウントは、もう一時的な解除を選べない。
+              const unavailable = !purge && disconnecting.account.disconnected_at != null;
+              return (
+                <label
+                  key={String(purge)}
+                  className={`flex items-start gap-2 rounded-md px-2.5 py-2 text-sm ${
+                    disconnecting.purge === purge ? 'bg-white/10' : 'hover:bg-white/5'
+                  } ${unavailable ? 'opacity-40' : 'cursor-pointer'}`}
+                >
+                  <input
+                    type="radio"
+                    name="gcal-disconnect-kind"
+                    className="mt-1"
+                    checked={disconnecting.purge === purge}
+                    disabled={unavailable}
+                    onChange={() => setDisconnecting({ ...disconnecting, purge })}
+                  />
+                  <span>
+                    <span className="block text-white/90">
+                      {purge ? t('settings.gcalPurgeOption') : t('settings.gcalDisconnectOption')}
+                    </span>
+                    <span className="block text-xs text-white/45">
+                      {purge
+                        ? t('settings.gcalPurgeOptionHint')
+                        : t('settings.gcalDisconnectOptionHint')}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </ConfirmDialog>
+      )}
+      {pendingMatch && (
           <div className="space-y-2 rounded-lg border border-white/20 bg-white/5 p-3">
             <p className="text-sm text-white/80">
               {t('settings.gcontactsMatchConfirm', {

@@ -20,12 +20,14 @@ describe('matchesSource', () => {
     account_id: 1,
     account_email: 'a@x.jp',
     disconnected: false,
+    state: 'synced',
   };
   const icloud: ContactLink = {
     provider: 'icloud',
     account_id: 2,
     account_email: null,
     disconnected: false,
+    state: 'synced',
   };
   it('すべては常に当たる', () => {
     expect(matchesSource([], 'all')).toBe(true);

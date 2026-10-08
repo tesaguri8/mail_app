@@ -416,7 +416,19 @@
       "rondine": "どのサービスとも同期していない（Rondine のみの）連絡先"
     },
     "deleteTitle": "連絡先を削除",
-    "deleteAlsoRemote": "{{service}} の連絡先からも削除されます（次の同期で削除を送ります）。"
+    "deleteAlsoRemote": "{{service}} の連絡先からも削除されます（次の同期で削除を送ります）。",
+    "syncTargets": "同期先",
+    "syncSaveTo": "{{service}}（{{account}}）にも保存",
+    "syncTargetsHint": "連絡先はまず Rondine に登録されます。チェックを入れたサービスにだけ、次の同期で保存します。",
+    "syncPendingCreate": "作成待ち",
+    "syncPendingDelete": "削除待ち",
+    "syncStopTitle": "{{account}} との同期をやめる",
+    "syncStopBody": "Rondine の連絡先は残ります。",
+    "syncStopKeep": "Google 側の連絡先は残す（つながりだけ外す）",
+    "syncStopDelete": "Google 側の連絡先も削除する",
+    "syncStopKeepNote": "すぐにつながりを外します。Google 側の連絡先はそのまま残ります。",
+    "syncStopDeleteNote": "次の同期で Google 側の連絡先を削除します（Google のゴミ箱に 30 日残ります）。",
+    "syncStopRun": "同期をやめる"
   },
   "org": {
     "tab": "組織",
@@ -624,7 +636,7 @@
     "gcontactsOptInHint": "有効にすると連携時に連絡先の権限も要求します。「今すぐ同期」のたびに、取り込んだ連絡先を住所録と照合して反映します（同じ人と確かなら既存の連絡先につなぎ、それ以外は新しく登録）。住所録側の編集・削除は同期のたびに Google へ送られます。",
     "gcontactsLastSync": "連絡先の最終取り込み: {{when}}",
     "gcontactsNeverSynced": "連絡先は未取り込み",
-    "gcontactsPushNew": "Rondine で作った連絡先も Google に作る",
+    "gcontactsPushNew": "新しく作る連絡先は、既定で Google にも保存する（作成の画面で最初からチェックが入ります）",
     "trashPurgeRun": "完全に削除する",
     "gcalReconnect": "再接続",
     "gcalDisconnectedBadge": "解除中",

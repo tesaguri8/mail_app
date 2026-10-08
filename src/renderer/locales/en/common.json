@@ -416,7 +416,19 @@
       "rondine": "Contacts not synced with any service (Rondine only)"
     },
     "deleteTitle": "Delete contact",
-    "deleteAlsoRemote": "It will also be deleted from your {{service}} contacts (the deletion is sent on the next sync)."
+    "deleteAlsoRemote": "It will also be deleted from your {{service}} contacts (the deletion is sent on the next sync).",
+    "syncTargets": "Sync to",
+    "syncSaveTo": "Also save to {{service}} ({{account}})",
+    "syncTargetsHint": "Contacts are saved in Rondine first. They are saved to the checked services on the next sync.",
+    "syncPendingCreate": "To be created",
+    "syncPendingDelete": "To be deleted",
+    "syncStopTitle": "Stop syncing with {{account}}",
+    "syncStopBody": "The contact stays in Rondine.",
+    "syncStopKeep": "Keep the contact on Google (just unlink)",
+    "syncStopDelete": "Also delete the contact on Google",
+    "syncStopKeepNote": "Unlinks right away. The contact on Google is left as is.",
+    "syncStopDeleteNote": "Deletes the contact on Google on the next sync (it stays in Google’s trash for 30 days).",
+    "syncStopRun": "Stop syncing"
   },
   "org": {
     "tab": "Organizations",
@@ -624,7 +636,7 @@
     "gcontactsOptInHint": "Requests the contacts permission when connecting. Every “Sync now” matches imported contacts against your address book and adds them (linked to an existing entry when it is clearly the same person, otherwise added as new). Edits and deletions in your address book are sent to Google on every sync.",
     "gcontactsLastSync": "Contacts last imported: {{when}}",
     "gcontactsNeverSynced": "Contacts never imported",
-    "gcontactsPushNew": "Also create Rondine-made contacts in Google",
+    "gcontactsPushNew": "Save new contacts to Google by default (pre-checked when creating a contact)",
     "trashPurgeRun": "Delete permanently",
     "gcalReconnect": "Reconnect",
     "gcalDisconnectedBadge": "Disconnected",

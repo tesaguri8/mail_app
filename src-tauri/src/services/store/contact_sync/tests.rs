@@ -110,11 +110,20 @@ fn identities_are_scoped_per_account_and_tokens_round_trip() {
 fn matching_links_the_known_one_and_creates_the_rest() {
     let s = mem_store();
     let acct = account(&s);
-    let known = s
-        .upsert_contact(&person("末松 信吾", &["s@x.jp"]))
+    // Rondine にしか無い項目（旧姓・取引先）を持つ既存の連絡先。
+    let mut mine = person("末松 信吾", &["s@x.jp"]);
+    mine.fields.maiden_name = Some("旧姓".into());
+    mine.fields.is_business = true;
+    let known = s.upsert_contact(&mine).unwrap().id as i64;
+    // 送信待ちを落としておく（Rondine で作った人は未連携の新規として送信待ちになっている）。
+    s.conn
+        .lock()
         .unwrap()
-        .id as i64;
-    s.apply_remote_contact(acct, &remote("people/c1", fields("末松信吾", &["s@x.jp"])))
+        .execute("UPDATE contacts SET dirty = 0 WHERE id = ?1", [known])
+        .unwrap();
+    let mut theirs = fields("末松信吾", &["s@x.jp"]);
+    theirs.nickname = Some("しんご".into());
+    s.apply_remote_contact(acct, &remote("people/c1", theirs))
         .unwrap();
     s.apply_remote_contact(acct, &remote("people/c2", fields("山田太郎", &["t@y.jp"])))
         .unwrap();
@@ -146,13 +155,27 @@ fn matching_links_the_known_one_and_creates_the_rest() {
             .dirty
     );
     assert!(!contact_dirty(&s, created));
-    // 既存へつないだ人は、まとめた中身を送り直す（以前の「住所録へ反映」と同じ規則）。
+    // 既存へつないだ人も送信待ちにしない（確認なしに Google を書き換えない）。Google の内容は
+    // 取り込み、Rondine にしか無い項目は残す（通常の取り込みと同じ規則）。
     assert!(
-        s.contact_identity(acct, "people/c1")
+        !s.contact_identity(acct, "people/c1")
             .unwrap()
             .unwrap()
             .dirty
     );
+    assert!(!contact_dirty(&s, known));
+    let k = s.get_contact(known).unwrap().fields;
+    assert_eq!(
+        k.nickname.as_deref(),
+        Some("しんご"),
+        "Google の値を取り込む"
+    );
+    assert_eq!(
+        k.maiden_name.as_deref(),
+        Some("旧姓"),
+        "Rondine にしか無い項目は残す"
+    );
+    assert!(k.is_business);
     assert_eq!(
         s.get_contact(created).unwrap().fields.display_name,
         "山田太郎"
@@ -162,10 +185,38 @@ fn matching_links_the_known_one_and_creates_the_rest() {
     let c = s.get_contact(created).unwrap();
     assert_eq!(c.links.len(), 1);
     assert_eq!(c.links[0].account_email.as_deref(), Some("a@gmail.com"));
-    // 新規に起こした分は Google から来たままなので送らない。既存へ寄せた分はまとめた内容を送る。
-    let push = s.list_contacts_to_push(acct).unwrap();
-    assert_eq!(push.len(), 1);
-    assert_eq!(push[0].contact_id, known);
+    // 照合の反映だけでは、Google へ送るものは何も増えない。
+    assert!(s.list_contacts_to_push(acct).unwrap().is_empty());
+}
+
+#[test]
+fn linking_does_not_overwrite_unsent_local_edits() {
+    let s = mem_store();
+    let acct = account(&s);
+    let mut mine = person("末松 信吾", &["s@x.jp"]);
+    mine.fields.nickname = Some("手元で直した".into());
+    // Rondine で作った（または編集した）まま送っていない連絡先は送信待ちのまま。
+    let known = s.upsert_contact(&mine).unwrap().id as i64;
+    assert!(contact_dirty(&s, known));
+    let mut theirs = fields("末松信吾", &["s@x.jp"]);
+    theirs.nickname = Some("Google の値".into());
+    s.apply_remote_contact(acct, &remote("people/c1", theirs))
+        .unwrap();
+
+    let applied = s.apply_contact_matches(acct).unwrap();
+    assert_eq!(applied.linked, 1);
+    // つなぐだけで、手元の未送信の変更は上書きしない（通常の取り込みと同じ）。
+    assert_eq!(
+        s.get_contact(known).unwrap().fields.nickname.as_deref(),
+        Some("手元で直した")
+    );
+    assert!(
+        !s.contact_identity(acct, "people/c1")
+            .unwrap()
+            .unwrap()
+            .dirty,
+        "つながりは送信待ちにしない"
+    );
 }
 
 #[test]

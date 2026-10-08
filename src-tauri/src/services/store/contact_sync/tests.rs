@@ -57,6 +57,18 @@ fn edit(s: &Store, id: i64, change: impl FnOnce(&mut ContactFields)) {
     .unwrap();
 }
 
+/// 本体の送信待ちの印。
+fn contact_dirty(s: &Store, id: i64) -> bool {
+    s.conn
+        .lock()
+        .unwrap()
+        .query_row("SELECT dirty FROM contacts WHERE id = ?1", [id], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap()
+        != 0
+}
+
 #[test]
 fn upsert_keeps_the_row_unique_and_refreshes_etag() {
     let s = mem_store();
@@ -107,17 +119,6 @@ fn matching_links_the_known_one_and_creates_the_rest() {
     s.apply_remote_contact(acct, &remote("people/c2", fields("山田太郎", &["t@y.jp"])))
         .unwrap();
 
-    let preview = s.preview_contact_matches(acct).unwrap();
-    assert_eq!(
-        (preview.linked, preview.created, preview.ambiguous),
-        (1, 1, 0)
-    );
-    assert_eq!(
-        s.count_unlinked_identities(acct).unwrap(),
-        2,
-        "下見は DB を変えない"
-    );
-
     let applied = s.apply_contact_matches(acct).unwrap();
     assert_eq!(
         (applied.linked, applied.created, applied.ambiguous),
@@ -136,6 +137,22 @@ fn matching_links_the_known_one_and_creates_the_rest() {
         .unwrap()
         .contact_id
         .unwrap();
+    // 同期のたびに自動で反映するので、反映が Google へ送る変更を増やさないこと:
+    // 取り込みから起こした人は送信待ちにしない（Google から来たままなので送るものが無い）。
+    assert!(
+        !s.contact_identity(acct, "people/c2")
+            .unwrap()
+            .unwrap()
+            .dirty
+    );
+    assert!(!contact_dirty(&s, created));
+    // 既存へつないだ人は、まとめた中身を送り直す（以前の「住所録へ反映」と同じ規則）。
+    assert!(
+        s.contact_identity(acct, "people/c1")
+            .unwrap()
+            .unwrap()
+            .dirty
+    );
     assert_eq!(
         s.get_contact(created).unwrap().fields.display_name,
         "山田太郎"

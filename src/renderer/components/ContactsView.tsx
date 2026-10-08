@@ -15,6 +15,7 @@ import { TagFilter } from './TagFilter';
 import { tagList } from '../services/tags';
 import type { TagSummary } from '@bindings/TagSummary';
 import { DEFAULT_TAG_COLOR } from '../utils/tagColors';
+import { CONTACTS_SYNCED_EVENT } from '../hooks/useAutoSync';
 import {
   CONTACT_SOURCE_FILTERS,
   ContactLinkMarks,
@@ -98,6 +99,16 @@ export function ContactsView({
     const h = setTimeout(() => load(query, tagFilter), 150);
     return () => clearTimeout(h);
   }, [query, tagFilter, load]);
+
+  // 自動同期が Google の連絡先を住所録へ反映したら、一覧を取り直す（タグも増えうる）。
+  useEffect(() => {
+    const onSynced = () => {
+      load(query, tagFilter);
+      reloadTags();
+    };
+    window.addEventListener(CONTACTS_SYNCED_EVENT, onSynced);
+    return () => window.removeEventListener(CONTACTS_SYNCED_EVENT, onSynced);
+  }, [query, tagFilter, load, reloadTags]);
 
   const openContact = (c: ContactSummary) => {
     setSelectedId(c.id);

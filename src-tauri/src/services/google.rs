@@ -3,12 +3,14 @@
 //! - `oauth`    : デスクトップ用 OAuth（ループバック + PKCE）。トークン取得・更新。
 //! - `calendar` : Google カレンダー双方向同期（docs/CALENDAR_SYNC.md）。
 //! - `contacts` : Google 連絡先の取り込み（People API）。
+//! - `account`  : アカウント 1 件ぶんの同期（カレンダー＋連絡先＋住所録への反映）。
 //!
 //! カレンダーと連絡先は **同じ Google アカウント・同じ refresh_token** を共有する。
 //! そのため要求スコープは固定文字列にせず、有効にするサービスから組み立てる（`scopes`）。
 //! 資格情報（refresh_token / client_secret）は keyring に保存し、この層は素の文字列で
 //! 受け取る（keyring とアプリ識別子の扱いは commands 層に閉じる）。
 
+pub mod account;
 pub mod calendar;
 pub mod contacts;
 pub mod oauth;

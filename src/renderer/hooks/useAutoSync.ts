@@ -4,8 +4,8 @@ import { listen } from '@tauri-apps/api/event';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { SyncProgress } from '@bindings/SyncProgress';
 import { mailSync } from '../services/mail';
-import { gcalSync } from '../services/gcal';
-import { googleAccounts } from '../services/google';
+import { googleAccounts, googleSync } from '../services/google';
+import { contactsDue } from '../utils/googleSyncSchedule';
 import { getAutoSyncInterval, PREFS_EVENT } from '../config/prefs';
 import { activityStart, activityStop, activityUpdate } from '../stores/activity';
 
@@ -16,6 +16,9 @@ export const MAIL_SYNCED_EVENT = 'rondine:mail-synced';
 
 /** 自動同期で Google カレンダーに変更を取り込んだら発火する（カレンダー表示の再読み込み合図）。 */
 export const CALENDAR_SYNCED_EVENT = 'rondine:calendar-synced';
+
+/** 自動同期で Google の連絡先を取り込んで住所録が変わったら発火する（住所録の再読み込み合図）。 */
+export const CONTACTS_SYNCED_EVENT = 'rondine:contacts-synced';
 
 /**
  * 自動同期（docs 仕様: ホーム/メールボタン押下時＋ホーム・メールモード滞在中の定期同期）。
@@ -35,6 +38,8 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
   // 起動直後がこれに当たる: アカウント一覧が届く前（空）の巡回がカレンダー同期で塞がっている間に、
   // 一覧が届いてからの即時同期が来て弾かれ、メールを 30 秒取りに行かなかった（利用者報告 2026-10-07）。
   const again = useRef(false);
+  // 起動してから連絡先を同期した Google アカウント（起動直後の 1 回を必ず回すため）。
+  const contactsSynced = useRef<Set<number>>(new Set());
   // 回し直しは最新のアカウント一覧で行うため、最新の syncNow を指しておく。
   const syncNowRef = useRef<() => void>(() => undefined);
   // 直近の一括失敗でクールダウン中なら、この時刻まで自動（定期）同期を止める。
@@ -90,21 +95,34 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
             failed = true;
           }
         }
-        // Google カレンダーも同じ間隔で取り込む（メールの成否とは独立）。連携済みアカウントごとに
-        // 双方向同期し、Google 側の追加/更新/削除を取り込んだらカレンダー表示へ再読み込みを促す。
+        // Google も同じ間隔で同期する（メールの成否とは独立）。カレンダーは毎回、連絡先は起動直後と
+        // 前回から間が空いたときだけ（重いため）。連絡先は取り込みに続けて住所録へ反映する
+        // （「今すぐ同期」と同じ）。変化があればカレンダー表示・住所録へ再読み込みを促す。
         try {
           let calChanged = false;
+          let contactsChanged = false;
           for (const g of await googleAccounts()) {
             // 解除中のアカウントは同期しない（再接続で再開する）。
-            if (!g.sync_calendar || g.disconnected_at != null) continue;
+            if (g.disconnected_at != null) continue;
+            const withContacts = contactsDue(g, Date.now(), contactsSynced.current.has(g.id));
+            if (!g.sync_calendar && !withContacts) continue;
             try {
-              const r = await gcalSync(g.id);
-              if (r.pulled + r.deleted_in > 0) calChanged = true;
+              const r = await googleSync(g.id, withContacts);
+              if (withContacts) contactsSynced.current.add(g.id);
+              if (r.calendar && r.calendar.pulled + r.calendar.deleted_in > 0) calChanged = true;
+              const m = r.matched;
+              if (
+                (r.contacts && r.contacts.pulled + r.contacts.deleted_in > 0) ||
+                (m && m.created + m.linked > 0)
+              ) {
+                contactsChanged = true;
+              }
             } catch {
               // アカウント単位の失敗は無視して次へ。
             }
           }
           if (calChanged) window.dispatchEvent(new Event(CALENDAR_SYNCED_EVENT));
+          if (contactsChanged) window.dispatchEvent(new Event(CONTACTS_SYNCED_EVENT));
         } catch {
           // 連携アカウント一覧の取得失敗は無視（未連携なら送受信するものは無い）。
         }

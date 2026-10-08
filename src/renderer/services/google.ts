@@ -1,11 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { GoogleAccount } from '@bindings/GoogleAccount';
 import type { GoogleDisconnectResult } from '@bindings/GoogleDisconnectResult';
+import type { GoogleSyncResult } from '@bindings/GoogleSyncResult';
 import type { GoogleCredentialsStatus } from '@bindings/GoogleCredentialsStatus';
 
 // Google アカウント連携（OAuth）。カレンダーと連絡先で同じアカウント・同じ認証情報を共有する。
 // 資格情報は Rust 側で keyring/app_settings に保存し、フロントは値を保持しない。
-// サービス固有の同期 API は services/gcal.ts（カレンダー）側に置く。
 
 /** OAuth クライアント資格情報（Client ID / Secret）を保存する。 */
 export const googleSetCredentials = (clientId: string, clientSecret: string) =>
@@ -31,3 +31,8 @@ export const googleConnect = (contacts: boolean) =>
  *  （Google 側の許可の取り消し・つながりと写しの削除）。どちらも Google 側の連絡先・予定は消えない。 */
 export const googleDisconnect = (accountId: number, purge: boolean) =>
   invoke<GoogleDisconnectResult>('google_disconnect', { accountId, purge });
+
+/** アカウント 1 件を同期する。カレンダーと、contacts=true なら連絡先（push → pull）も同期し、
+ *  取り込んだ連絡先を住所録へ反映する（「今すぐ同期」は常に true。自動同期は間隔を空けて true）。 */
+export const googleSync = (accountId: number, contacts: boolean) =>
+  invoke<GoogleSyncResult>('google_sync', { accountId, contacts });

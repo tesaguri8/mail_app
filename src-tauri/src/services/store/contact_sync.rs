@@ -179,18 +179,6 @@ impl Store {
         Ok((remote, plan))
     }
 
-    /// 照合の下見（件数だけ。DB は変えない）。
-    ///
-    /// # Errors
-    /// DB の読み出しに失敗したとき。
-    pub fn preview_contact_matches(
-        &self,
-        account_id: i64,
-    ) -> rusqlite::Result<GcontactsMatchResult> {
-        let (_, plan) = self.build_contact_match_plan(account_id)?;
-        Ok(summarize(&plan))
-    }
-
     /// 照合を適用する。高確信は既存へ紐付け、それ以外は新規として住所録に起こして紐付ける。
     ///
     /// 既存へ紐付けるときは中身を和集合にまとめ、まとめた結果を Google へ送り直す印を立てる。

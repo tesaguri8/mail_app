@@ -2,7 +2,7 @@ use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentMeta, AttachmentSummary, AutoconfigResult,
     AttendeeInput, CalendarInput, CalendarSummary, ContactInput, ContactMatch,
     ContactSummary, DataLocation, DbInfo, DraftContent, DraftInput, DuplicateGroup, EventAttendee,
-    EventInput, EventSummary, GcalSyncResult, GcontactsMatchResult, GcontactsSyncResult, GoogleAccount, GoogleDisconnectResult,
+    EventInput, EventSummary, GoogleAccount, GoogleDisconnectResult, GoogleSyncResult,
     GoogleCredentialsStatus,
     GreenDomainEntry,
     HomeUnreadCounts, IcsImportReport, ImportReport, MailDetail,
@@ -2287,7 +2287,7 @@ async fn gcal_handle_move(
 fn google_read_credentials(app: &AppHandle, store: &Store) -> Result<(String, String), String> {
     let (client_id, client_secret) = google_resolve_credentials(app, store);
     let client_id = client_id.ok_or(
-        "Google の Client ID が未設定です。設定 > Google カレンダー で入力（または .env の GOOGLE_CLIENT_ID）してください",
+        "Google の Client ID が未設定です。設定 > 同期 の Google 欄で入力（または .env の GOOGLE_CLIENT_ID）してください",
     )?;
     let client_secret = client_secret
         .ok_or("Google の Client Secret が未設定です（.env の GOOGLE_CLIENT_SECRET でも可）")?;
@@ -2447,51 +2447,33 @@ pub async fn google_disconnect(
     Ok(GoogleDisconnectResult { revoke_error })
 }
 
-/// 指定アカウントのカレンダーを同期する（push → pull の双方向）。
-#[tauri::command]
-pub async fn gcal_sync(
-    app: AppHandle,
-    store: State<'_, Store>,
-    account_id: i64,
-) -> Result<GcalSyncResult, String> {
-    google_ensure_connected(store.inner(), account_id)?;
-    let access = google_account_access(&app, store.inner(), account_id)
-        .await
-        .ok_or("保存された認証情報がありません。もう一度連携してください")?;
-    google::calendar::sync::sync_account(store.inner(), &access, account_id).await
-}
-
-/// 指定アカウントの Google 連絡先を同期する（未送信の変更を送ってから取り込む）。
+/// Google アカウント 1 件を同期する（「今すぐ同期」・自動同期）。
 ///
-/// まだ住所録の誰とも結び付いていない分は台帳（`contact_identities`）に留まる。結果の
-/// `unlinked` が照合（「住所録へ反映」）の対象数になる。
+/// カレンダー（有効なら）と、`contacts` を立てたときは連絡先（push → pull）も同期し、
+/// 続けて未照合の連絡先を住所録へ反映する（`services::google::account`）。自動同期は連絡先を
+/// 毎回は同期しない（重いため）ので、その判断は呼び出し側が `contacts` で渡す。
 #[tauri::command]
-pub async fn gcontacts_sync(
+pub async fn google_sync(
     app: AppHandle,
     store: State<'_, Store>,
     account_id: i64,
-) -> Result<GcontactsSyncResult, String> {
+    contacts: bool,
+) -> Result<GoogleSyncResult, String> {
     google_ensure_connected(store.inner(), account_id)?;
-    let scopes = store
-        .google_account_scopes(account_id)
-        .map_err(|e| e.to_string())?;
-    // 連絡先スコープが無いまま呼ぶと People API が 403 を返すので、先に分かる文言で止める。
-    if !scopes
-        .as_deref()
-        .is_some_and(|g| g.split(' ').any(|s| s == google::SCOPE_CONTACTS))
-    {
-        return Err(
-            "このアカウントには連絡先の権限がありません。設定 > Google カレンダー で\
-             「連絡先も同期する」を有効にして連携し直してください"
-                .into(),
-        );
-    }
+    let account = store
+        .google_account(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("連携アカウントが見つかりません")?;
     let access = google_account_access(&app, store.inner(), account_id)
         .await
         .ok_or("保存された認証情報がありません。もう一度連携してください")?;
-    google::contacts::sync::sync_account(store.inner(), &access, account_id)
-        .await
-        .map_err(|e| e.to_string())
+    Ok(google::account::sync_account(
+        store.inner(),
+        &access,
+        &account,
+        google::account::SyncScope { contacts },
+    )
+    .await)
 }
 
 /// 「Rondine で新しく作った連絡先も Google 側に作る」設定を切り替える。
@@ -2506,31 +2488,6 @@ pub fn gcontacts_set_push_new(
 ) -> Result<(), String> {
     store
         .set_push_new_contacts(account_id, enabled)
-        .map_err(|e| e.to_string())
-}
-
-/// 照合の下見: 台帳の未照合分を住所録と突き合わせ、紐付く／起こす件数だけを返す（DB は変えない）。
-#[tauri::command]
-pub fn gcontacts_match_preview(
-    store: State<Store>,
-    account_id: i64,
-) -> Result<GcontactsMatchResult, String> {
-    store
-        .preview_contact_matches(account_id)
-        .map_err(|e| e.to_string())
-}
-
-/// 照合の適用: 高確信は既存の連絡先へ紐付け、それ以外は新規として住所録に起こす。
-///
-/// 決めきれなかった分は起こしたうえで「重複整理」に候補として出る（判定は重複検出と同じ物差し）。
-/// ここで人に代わって統合はしない。
-#[tauri::command]
-pub fn gcontacts_match_apply(
-    store: State<Store>,
-    account_id: i64,
-) -> Result<GcontactsMatchResult, String> {
-    store
-        .apply_contact_matches(account_id)
         .map_err(|e| e.to_string())
 }
 

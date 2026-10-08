@@ -8,6 +8,7 @@ mod contacts;
 mod emails;
 mod events;
 mod google_accounts;
+mod google_copies;
 mod greendomain;
 mod migrations;
 mod recipients;

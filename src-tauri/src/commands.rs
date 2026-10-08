@@ -2430,6 +2430,26 @@ pub fn gcontacts_match_apply(
         .map_err(|e| e.to_string())
 }
 
+/// ファイルで取り込んだ Google 連絡先のうち、同期とつながっていない写しの件数。
+///
+/// People API の同期に置き換えたあとに残る写しを片付けるための下見（docs/CONTACTS_SYNC.md §2）。
+#[tauri::command]
+pub fn gcontacts_copies_count(store: State<Store>) -> Result<i64, String> {
+    store
+        .count_unsynced_google_copies()
+        .map_err(|e| e.to_string())
+}
+
+/// 同期とつながっていない Google の写しをゴミ箱へ移す（戻せる）。移した件数を返す。
+///
+/// 台帳に紐付いた連絡先は対象外なので、Google 側の連絡先は消えない。
+#[tauri::command]
+pub fn gcontacts_copies_trash(store: State<Store>) -> Result<i64, String> {
+    store
+        .trash_unsynced_google_copies()
+        .map_err(|e| e.to_string())
+}
+
 /// グリーン／警告ドメインの一覧（管理タブ用。住所録由来の自動グリーンも含む）。
 #[tauri::command]
 pub fn green_domain_list(store: State<Store>) -> Result<Vec<GreenDomainEntry>, String> {

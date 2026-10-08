@@ -181,6 +181,8 @@ pub fn run() {
             commands::gcontacts_set_push_new,
             commands::gcontacts_match_preview,
             commands::gcontacts_match_apply,
+            commands::gcontacts_copies_count,
+            commands::gcontacts_copies_trash,
             commands::data_location,
             commands::data_relocate,
             commands::data_reset_location,

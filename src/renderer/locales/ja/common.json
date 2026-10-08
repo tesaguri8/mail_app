@@ -536,7 +536,13 @@
     "gcontactsMatchConfirm": "{{linked}} 件を既存の連絡先に紐付け、{{created}} 件を新しく登録します（うち {{ambiguous}} 件は似た相手が居るため、あとで「重複整理」に候補として出ます）。",
     "gcontactsMatchRun": "実行する",
     "gcontactsMatchCancel": "やめる",
-    "gcontactsMatchDone": "住所録へ反映しました: 紐付け {{linked}} 件 / 新規 {{created}} 件（うち {{ambiguous}} 件は「重複整理」でご確認ください）"
+    "gcontactsMatchDone": "住所録へ反映しました: 紐付け {{linked}} 件 / 新規 {{created}} 件（うち {{ambiguous}} 件は「重複整理」でご確認ください）",
+    "gcontactsCopies": "ファイルで取り込んだ Google の連絡先が {{count}} 件あります（同期とはつながっていない写しです）。",
+    "gcontactsCopiesHint": "Google の連絡先は同期で取り込めるので、写しは不要です。先に「住所録へ反映」を済ませると、写しのうち同じ人と分かったものは同期の側へ移り、お気に入り・タグ・メモが残ります。そのあとで残った写しだけを片付けてください。消しても Google には何も送られず、住所録のゴミ箱から戻せます。",
+    "gcontactsCopiesTrash": "写しをゴミ箱へ移す",
+    "gcontactsCopiesConfirm": "同期とつながっていない Google の写し {{count}} 件をゴミ箱へ移します。よろしいですか？",
+    "gcontactsCopiesRun": "ゴミ箱へ移す",
+    "gcontactsCopiesDone": "Google の写し {{count}} 件をゴミ箱へ移しました（住所録のゴミ箱から戻せます）。"
   },
   "dataloc": {
     "title": "データの保存先",

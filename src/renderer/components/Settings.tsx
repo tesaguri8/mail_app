@@ -65,6 +65,7 @@ import type { GcontactsMatchResult } from '@bindings/GcontactsMatchResult';
 import type { GoogleAccount } from '@bindings/GoogleAccount';
 import type { GoogleCredentialsStatus } from '@bindings/GoogleCredentialsStatus';
 import { AccountSetup } from './AccountSetup';
+import { GoogleContactCopies } from './GoogleContactCopies';
 import { SignatureManager } from './SignatureManager';
 import { TagManager } from './TagManager';
 
@@ -738,6 +739,8 @@ function GoogleCalendarSettings() {
     accountId: number;
     plan: GcontactsMatchResult;
   } | null>(null);
+  // 住所録の中身が変わる操作（取り込み・住所録への反映）のたびに増やし、写しの件数を数え直させる。
+  const [contactsVersion, setContactsVersion] = useState(0);
   // 連携時に連絡先スコープも要求するか（既定は off。カレンダーだけの利用者に権限を求めない）。
   const [withContacts, setWithContacts] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -830,6 +833,7 @@ function GoogleCalendarSettings() {
           (r.conflicts > 0 ? t('settings.gcontactsSyncConflicts', { count: r.conflicts }) : ''),
       );
       googleAccounts().then(setAccounts).catch(() => undefined);
+      setContactsVersion((v) => v + 1);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -875,6 +879,7 @@ function GoogleCalendarSettings() {
           ambiguous: r.ambiguous,
         }),
       );
+      setContactsVersion((v) => v + 1);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -1079,6 +1084,9 @@ function GoogleCalendarSettings() {
           </ul>
         )}
       </div>
+
+      {/* ファイルで取り込んだ Google の写しの片付け（同期を入れたアカウントがあるときだけ）。 */}
+      {accounts.some((a) => a.sync_contacts) && <GoogleContactCopies version={contactsVersion} />}
 
       {pendingMatch && (
         <div className="space-y-2 rounded-lg border border-white/20 bg-white/5 p-3">

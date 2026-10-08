@@ -208,6 +208,9 @@ async fn pull_calendar(
         None
     };
     let mut page_token: Option<String> = None;
+    // 取得した件数と、そのうち取り込んだ・削除を取り込んだ件数（同期のたびの量を追えるように）。
+    let (before_pulled, before_deleted) = (result.pulled, result.deleted_in);
+    let mut fetched = 0usize;
 
     loop {
         let page = match api::list_events(
@@ -222,7 +225,12 @@ async fn pull_calendar(
         {
             Ok(p) => p,
             Err(ApiError::SyncTokenExpired) => {
-                // トークン失効 → フル同期へフォールバック。
+                // トークン失効 → フル同期へフォールバック。Google の祝日カレンダーなど、発行した
+                // トークンを毎回 410 で返すカレンダーがある（`[実測]` 2026-10-09）。そこでは毎回
+                // フル取得になるが、同じ版の予定は store 側で落とす（取り込みに数えない）。
+                log::debug!(
+                    "pull_calendar: cal {local_id} の同期トークンが失効（410）→ フル同期へ"
+                );
                 store
                     .set_calendar_sync_token(local_id, None)
                     .map_err(|e| e.to_string())?;
@@ -234,6 +242,7 @@ async fn pull_calendar(
             Err(e) => return Err(e.to_string()),
         };
 
+        fetched += page.items.len();
         for gev in &page.items {
             if let Some(re) = convert::remote_from_gevent(gev) {
                 match store
@@ -255,6 +264,20 @@ async fn pull_calendar(
         store
             .set_calendar_sync_token(local_id, page.next_sync_token.as_deref())
             .map_err(|e| e.to_string())?;
+        // 同期のたびに出るので、取得が 0 件のときは debug に落とす。
+        let level = if fetched > 0 {
+            log::Level::Info
+        } else {
+            log::Level::Debug
+        };
+        log::log!(
+            level,
+            "pull_calendar: cal {local_id} ({}) 取得 {fetched} 件 → 取り込み {} / 削除 {} / 次のトークン {}",
+            if use_sync.is_some() { "増分" } else { "フル" },
+            result.pulled - before_pulled,
+            result.deleted_in - before_deleted,
+            if page.next_sync_token.is_some() { "あり" } else { "なし" },
+        );
         break;
     }
     Ok(())

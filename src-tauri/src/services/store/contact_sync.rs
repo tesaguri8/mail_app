@@ -9,11 +9,11 @@
 
 use super::contact_groups::managed_group_names;
 use super::contact_rows::load_contact;
-use super::contact_tags::{add_tags, reconcile_managed_tags, set_tags};
+use super::contact_tags::{add_tags, reconcile_managed_tags};
 use super::contact_write::{write_contact, OrgLinking, WriteOptions};
 use super::{ApplyOutcome, Store};
 use crate::models::{ContactFields, GcontactsMatchResult};
-use crate::services::contact_fields::{overlay_google, union_merge};
+use crate::services::contact_fields::overlay_google;
 use crate::services::contact_match::{self, MatchDecision, MatchOutcome};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
@@ -62,6 +62,16 @@ const PULL: WriteOptions = WriteOptions {
     mark_dirty: false,
     org_linking: OrgLinking::ExistingOnly,
 };
+
+/// 連絡先に未送信の変更があるか（取り込みで上書きしない条件。通常の取り込みと同じ）。
+fn contact_dirty(conn: &Connection, contact_id: i64) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT dirty FROM contacts WHERE id = ?1",
+        params![contact_id],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|d| d != 0)
+}
 
 /// 連絡先の「未送信」の印を、つながりの印から決め直す（未送信のつながりが残っていれば 1）。
 fn refresh_contact_dirty(conn: &Connection, contact_id: i64) -> rusqlite::Result<()> {
@@ -181,8 +191,10 @@ impl Store {
 
     /// 照合を適用する。高確信は既存へ紐付け、それ以外は新規として住所録に起こして紐付ける。
     ///
-    /// 既存へ紐付けるときは中身を和集合にまとめ、まとめた結果を Google へ送り直す印を立てる。
-    /// 新規に起こした分は Google から来たままなので送らない。似た相手が居たものは、既存の
+    /// 既存へ紐付けるときは、通常の取り込みと同じく Google が扱う項目を Google の値にし、
+    /// Rondine にしか無い項目は残す（手元に未送信の変更があれば触らない）。新規に起こした分も
+    /// 含め、どちらも送信待ちにしない — 同期のたびに自動で照合するので、確認なしに Google を
+    /// 書き換える経路を作らない（利用者の判断 2026-10-09）。似た相手が居たものは、既存の
     /// 重複整理が同じ物差しで拾う（ここで人に代わって統合はしない）。
     ///
     /// # Errors
@@ -196,18 +208,15 @@ impl Store {
             match outcome.decision {
                 MatchDecision::Link(id) => {
                     link_identity(&tx, account_id, external_id, id)?;
-                    let existing = load_contact(&tx, id)?.fields;
-                    let merged = union_merge(&[&existing, contact]);
-                    write_contact(
-                        &tx,
-                        Some(id),
-                        &merged,
-                        WriteOptions {
-                            mark_dirty: true,
-                            org_linking: OrgLinking::ExistingOnly,
-                        },
-                    )?;
-                    set_tags(&tx, id, &merged.tags)?;
+                    // 通常の取り込みと同じ規則で Google の内容を取り込むだけにし、送信待ちにしない
+                    // （同期のたびに自動で照合するので、確認なしに Google を書き換えない）。
+                    // Rondine にしか無い項目は、その人を利用者が編集したときに初めて送られる。
+                    if !contact_dirty(&tx, id)? {
+                        let existing = load_contact(&tx, id)?.fields;
+                        write_contact(&tx, Some(id), &overlay_google(&existing, contact), PULL)?;
+                        let managed = managed_group_names(&tx, account_id)?;
+                        reconcile_managed_tags(&tx, id, &contact.tags, &managed)?;
+                    }
                 }
                 MatchDecision::Create => {
                     let id = write_contact(&tx, None, contact, PULL)?;

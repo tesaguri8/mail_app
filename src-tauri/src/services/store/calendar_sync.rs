@@ -114,8 +114,16 @@ pub enum ApplyOutcome {
     Upserted,
     /// Google 側の削除を取り込んだ（ローカルを論理削除）。
     Deleted,
-    /// 変化なし（既に削除済み等）。
+    /// 変化なし（既に削除済み、または手元と同じ版＝etag が同じ）。何も書き換えていない。
     Skipped,
+}
+
+/// 取り込み済みの Google の予定（同じ版かどうかを見るための最小限）。
+struct StoredRemote {
+    id: i64,
+    deleted_at: Option<String>,
+    etag: Option<String>,
+    calendar_id: Option<i64>,
 }
 
 impl Store {
@@ -238,13 +246,37 @@ impl Store {
         ev: &RemoteEvent,
     ) -> rusqlite::Result<ApplyOutcome> {
         let conn = self.conn.lock().unwrap();
-        let existing: Option<(i64, Option<String>)> = conn
+        let stored: Option<StoredRemote> = conn
             .query_row(
-                "SELECT id, deleted_at FROM events WHERE source = 'google' AND external_id = ?1",
+                "SELECT id, deleted_at, etag, calendar_id FROM events \
+                 WHERE source = 'google' AND external_id = ?1",
                 params![ev.external_id],
-                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?)),
+                |r| {
+                    Ok(StoredRemote {
+                        id: r.get(0)?,
+                        deleted_at: r.get(1)?,
+                        etag: r.get(2)?,
+                        calendar_id: r.get(3)?,
+                    })
+                },
             )
             .optional()?;
+        // 手元と同じ版（etag が同じ・同じカレンダー・削除されていない）なら何もしない。
+        // 同期トークンを受け付けないカレンダー（Google の祝日カレンダーは毎回 410 を返す）は毎回
+        // フル取得になるので、ここで落とさないと変化の無い予定まで「取り込み」に数え、書き直して
+        // しまう（`[実測]` 2026-10-09: 日本の祝日 169 件が同期のたびに取り込みとして出ていた）。
+        // 手元の未送信の変更（dirty）も、変わっていない Google の版で上書きしない。
+        if !ev.cancelled
+            && stored.as_ref().is_some_and(|st| {
+                st.deleted_at.is_none()
+                    && st.etag.is_some()
+                    && st.etag == ev.etag
+                    && st.calendar_id == Some(calendar_local_id)
+            })
+        {
+            return Ok(ApplyOutcome::Skipped);
+        }
+        let existing = stored.map(|st| (st.id, st.deleted_at));
 
         if ev.cancelled {
             // 1 回だけの削除は、本体の展開からその回を除くために記録する（予定行が無くても）。
@@ -497,6 +529,82 @@ mod tests {
             visibility: "default".into(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn the_same_version_is_not_applied_again() {
+        let s = mem_store();
+        let acct = s.upsert_google_account("a@gmail.com", None, None).unwrap();
+        let cal = s
+            .upsert_google_calendar(acct, "holiday", "日本の祝日", None, "reader", false)
+            .unwrap();
+        let v1 = RemoteEvent {
+            etag: Some("\"1\"".into()),
+            ..remote("h1", "元日", "2026-01-01")
+        };
+        assert!(matches!(
+            s.apply_remote_event(cal, &v1).unwrap(),
+            ApplyOutcome::Upserted
+        ));
+        // フル取得で同じ版がもう一度来ても、取り込みに数えない。
+        assert!(matches!(
+            s.apply_remote_event(cal, &v1).unwrap(),
+            ApplyOutcome::Skipped
+        ));
+        // 版が変われば取り込む。
+        let v2 = RemoteEvent {
+            etag: Some("\"2\"".into()),
+            ..remote("h1", "元日（祝）", "2026-01-01")
+        };
+        assert!(matches!(
+            s.apply_remote_event(cal, &v2).unwrap(),
+            ApplyOutcome::Upserted
+        ));
+        let titles: Vec<String> = s
+            .list_events("2026-01-01", "2026-01-02", false)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.title)
+            .collect();
+        assert_eq!(titles, vec!["元日（祝）".to_string()]);
+    }
+
+    #[test]
+    fn an_unchanged_remote_version_does_not_overwrite_an_unsent_local_edit() {
+        let s = mem_store();
+        let acct = s.upsert_google_account("a@gmail.com", None, None).unwrap();
+        let cal = s
+            .upsert_google_calendar(acct, "cal", "予定表", None, "owner", true)
+            .unwrap();
+        let v1 = RemoteEvent {
+            etag: Some("\"1\"".into()),
+            ..remote("e1", "会議", "2026-07-06T10:00")
+        };
+        s.apply_remote_event(cal, &v1).unwrap();
+        let ev = &s.list_events("2026-07-01", "2026-08-01", false).unwrap()[0];
+        // 手元で編集（まだ送っていない）。
+        s.upsert_event(&crate::models::EventInput {
+            id: Some(ev.id),
+            title: "会議（変更）".into(),
+            start_at: "2026-07-06T10:00".into(),
+            calendar_id: Some(cal as i32),
+            ..Default::default()
+        })
+        .unwrap();
+        // Google 側は変わっていない版が来る。
+        assert!(matches!(
+            s.apply_remote_event(cal, &v1).unwrap(),
+            ApplyOutcome::Skipped
+        ));
+        assert_eq!(
+            s.list_local_changes(cal).unwrap().len(),
+            1,
+            "未送信の変更は残る"
+        );
+        assert_eq!(
+            s.list_events("2026-07-01", "2026-08-01", false).unwrap()[0].title,
+            "会議（変更）"
+        );
     }
 
     /// 例外インスタンス（本体 `master` の、元の開始 `original` の回）。

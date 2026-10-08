@@ -171,6 +171,11 @@ services/google/calendar/{api,convert,sync}.rs
    - それ以外 → `external_id` で突き合わせて upsert。
    - 最終ページの `nextSyncToken` を保存。`410 Gone`（トークン失効）は sync_token を捨てて
      フル同期にフォールバック。
+   - **手元と同じ版（etag が同じ・同じカレンダー・削除されていない）は何もしない**（取り込みに
+     数えず、書き直さず、手元の未送信の変更も上書きしない）。`[実測]` 2026-10-09: Google の
+     祝日カレンダー（`ja.japanese#holiday@group.v.calendar.google.com`）は自分で発行した
+     `nextSyncToken` を次の呼び出しで毎回 410 にするので、同期のたびにフル取得になる。以前は
+     その 169 件が毎回「取り込み」に数えられ、書き直されていた。410 の記録は debug ログに出す
 
 競合解決は v1 では概ね **後勝ち**（push→pull の順なので、最後に同期した側の状態へ収束）。
 

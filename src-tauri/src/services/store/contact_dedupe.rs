@@ -5,6 +5,7 @@
 
 use super::contact_rows::{load_all_full, load_contact};
 use super::contact_tags::set_tags;
+use super::contact_targets::drop_redundant_create_requests;
 use super::contact_write::{write_contact, OrgLinking, WriteOptions};
 use super::Store;
 use crate::models::{ContactMatch, ContactSummary, DuplicateGroup};

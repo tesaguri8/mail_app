@@ -24,6 +24,22 @@ fn replace_event_reminders(
     Ok(())
 }
 
+/// 繰り返しの本体 `master_id` を消したとき、その 1 回だけ変更された回も論理削除する。
+///
+/// Google は本体の削除で例外インスタンスも消すので、ここで送信対象（dirty）にはしない。
+/// 本体でない予定（例外を持たない）なら何もしない。
+pub(super) fn cascade_delete_instances(conn: &Connection, master_id: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE events SET deleted_at = (SELECT deleted_at FROM events WHERE id = ?1), dirty = 0 \
+         WHERE deleted_at IS NULL AND recurring_external_id IS NOT NULL \
+           AND (calendar_id, recurring_external_id) = \
+               (SELECT calendar_id, external_id FROM events \
+                WHERE id = ?1 AND recurrence IS NOT NULL AND external_id IS NOT NULL)",
+        params![master_id],
+    )?;
+    Ok(())
+}
+
 /// 同期エンジン（services/gcal）が Store へ渡す「Google 側の予定」1件。
 /// 日時などは既にローカル表現（'YYYY-MM-DD' / 'YYYY-MM-DDTHH:MM'）へ変換済み。
 /// Store 層を gcal に依存させないため、境界の受け渡し型はここ（store 側）に置く。
@@ -47,6 +63,17 @@ pub struct RemoteEvent {
     pub availability: String,
     pub visibility: String,
     pub color: Option<String>,
+    /// 繰り返しの例外インスタンス（1 回だけ変更・削除された回）なら、本体との対応。
+    pub instance: Option<RecurringInstance>,
+}
+
+/// 例外インスタンスが「どの本体の・どの回か」。
+#[derive(Debug, Clone, Default)]
+pub struct RecurringInstance {
+    /// 本体（繰り返し元）の Google 予定 ID。
+    pub recurring_external_id: String,
+    /// 本体の展開上の元の開始（ローカル表現。終日='YYYY-MM-DD' / 時間指定='YYYY-MM-DDTHH:MM'）。
+    pub original_start_at: String,
 }
 
 /// push 対象のローカル変更（dirty=1 の予定）。Google へ送る素材。
@@ -293,17 +320,58 @@ impl Store {
             .optional()?;
 
         if ev.cancelled {
+            // 1 回だけの削除は、本体の展開からその回を除くために記録する（予定行が無くても）。
+            let recorded = match &ev.instance {
+                Some(inst) => {
+                    conn.execute(
+                        "INSERT INTO event_cancelled_instances \
+                            (calendar_id, external_id, recurring_external_id, original_start_at) \
+                         VALUES (?1, ?2, ?3, ?4) \
+                         ON CONFLICT(calendar_id, external_id) DO UPDATE SET \
+                            recurring_external_id = ?3, original_start_at = ?4",
+                        params![
+                            calendar_local_id,
+                            ev.external_id,
+                            inst.recurring_external_id,
+                            inst.original_start_at,
+                        ],
+                    )?;
+                    true
+                }
+                None => false,
+            };
             return match existing {
                 Some((id, None)) => {
                     conn.execute(
                         "UPDATE events SET deleted_at = CURRENT_TIMESTAMP, dirty = 0 WHERE id = ?1",
                         params![id],
                     )?;
+                    // 本体の削除なら、1 回だけ変更された回も一緒に消す（孤立させない）。
+                    cascade_delete_instances(&conn, id)?;
                     Ok(ApplyOutcome::Deleted)
                 }
+                _ if recorded => Ok(ApplyOutcome::Deleted),
                 _ => Ok(ApplyOutcome::Skipped),
             };
         }
+
+        // 削除されていた回が復活した（例外として戻った）なら、削除の記録を外す。
+        if ev.instance.is_some() {
+            conn.execute(
+                "DELETE FROM event_cancelled_instances WHERE calendar_id = ?1 AND external_id = ?2",
+                params![calendar_local_id, ev.external_id],
+            )?;
+        }
+        let (recurring_external_id, original_start_at) = ev
+            .instance
+            .as_ref()
+            .map(|i| {
+                (
+                    Some(i.recurring_external_id.as_str()),
+                    Some(i.original_start_at.as_str()),
+                )
+            })
+            .unwrap_or((None, None));
 
         let event_id = match existing {
             Some((id, _)) => {
@@ -313,7 +381,8 @@ impl Store {
                         all_day = ?6, recurrence = ?7, reminder_minutes = ?8, color = ?9, \
                         availability = ?10, visibility = ?11, calendar_id = ?12, \
                         remote_calendar = (SELECT external_id FROM calendars WHERE id = ?12), \
-                        etag = ?13, dirty = 0, deleted_at = NULL, updated_at = CURRENT_TIMESTAMP \
+                        etag = ?13, recurring_external_id = ?15, original_start_at = ?16, \
+                        dirty = 0, deleted_at = NULL, updated_at = CURRENT_TIMESTAMP \
                      WHERE id = ?14",
                     params![
                         ev.title,
@@ -330,6 +399,8 @@ impl Store {
                         calendar_local_id,
                         ev.etag,
                         id,
+                        recurring_external_id,
+                        original_start_at,
                     ],
                 )?;
                 id
@@ -339,10 +410,11 @@ impl Store {
                     "INSERT INTO events \
                         (title, description, location, start_at, end_at, all_day, recurrence, \
                          reminder_minutes, color, availability, visibility, calendar_id, \
-                         remote_calendar, source, external_id, etag, dirty) \
+                         remote_calendar, source, external_id, etag, recurring_external_id, \
+                         original_start_at, dirty) \
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, \
                              (SELECT external_id FROM calendars WHERE id = ?12), \
-                             'google', ?13, ?14, 0)",
+                             'google', ?13, ?14, ?15, ?16, 0)",
                     params![
                         ev.title,
                         ev.description,
@@ -358,6 +430,8 @@ impl Store {
                         calendar_local_id,
                         ev.external_id,
                         ev.etag,
+                        recurring_external_id,
+                        original_start_at,
                     ],
                 )?;
                 conn.last_insert_rowid()
@@ -480,6 +554,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::EventSummary;
 
     fn mem_store() -> Store {
         Store::open_in_memory_for_test()
@@ -495,6 +570,133 @@ mod tests {
             visibility: "default".into(),
             ..Default::default()
         }
+    }
+
+    /// 例外インスタンス（本体 `master` の、元の開始 `original` の回）。
+    fn instance(id: &str, master: &str, original: &str, start: &str) -> RemoteEvent {
+        RemoteEvent {
+            instance: Some(RecurringInstance {
+                recurring_external_id: master.into(),
+                original_start_at: original.into(),
+            }),
+            ..remote(id, "定例MTG", start)
+        }
+    }
+
+    /// Google カレンダー 1 つと、週次の本体（金曜 10:30）を用意する。
+    fn weekly_master(s: &Store) -> i64 {
+        let acct = s.upsert_calendar_account("a@gmail.com", None).unwrap();
+        let cal = s
+            .upsert_google_calendar(acct, "cal_ext_1", "予定表", None, "owner", true)
+            .unwrap();
+        let master = RemoteEvent {
+            recurrence: Some("FREQ=WEEKLY;WKST=MO".into()),
+            ..remote("m1", "定例MTG", "2026-09-04T10:30")
+        };
+        s.apply_remote_event(cal, &master).unwrap();
+        cal
+    }
+
+    fn find<'a>(list: &'a [EventSummary], start: &str) -> Option<&'a EventSummary> {
+        list.iter().find(|e| e.start_at == start)
+    }
+
+    #[test]
+    fn modified_instance_is_listed_and_excluded_from_master() {
+        let s = mem_store();
+        let cal = weekly_master(&s);
+        // 10/9（金）10:30 の回を 10/8（木）15:00 へ動かした。
+        let out = s
+            .apply_remote_event(
+                cal,
+                &instance("m1_1009", "m1", "2026-10-09T10:30", "2026-10-08T15:00"),
+            )
+            .unwrap();
+        assert_eq!(out, ApplyOutcome::Upserted);
+
+        let list = s.list_events("2026-10-05", "2026-10-12", false).unwrap();
+        let moved = find(&list, "2026-10-08T15:00").expect("動かした回が出る");
+        assert!(moved.recurrence.is_none());
+        assert_eq!(moved.original_start_at.as_deref(), Some("2026-10-09T10:30"));
+        let master = find(&list, "2026-09-04T10:30").expect("本体は展開元として出る");
+        assert_eq!(master.exdates, vec!["2026-10-09T10:30".to_string()]);
+    }
+
+    #[test]
+    fn cancelled_instance_is_recorded_without_event_row() {
+        let s = mem_store();
+        let cal = weekly_master(&s);
+        let mut cancel = instance("m1_1016", "m1", "2026-10-16T10:30", "");
+        cancel.cancelled = true;
+        assert_eq!(
+            s.apply_remote_event(cal, &cancel).unwrap(),
+            ApplyOutcome::Deleted
+        );
+
+        let list = s.list_events("2026-10-12", "2026-10-19", false).unwrap();
+        assert_eq!(list.len(), 1, "削除された回は予定行として出ない");
+        assert_eq!(list[0].exdates, vec!["2026-10-16T10:30".to_string()]);
+        assert!(
+            s.list_trashed_events().unwrap().is_empty(),
+            "ゴミ箱にも入らない"
+        );
+
+        // 同じ回が例外として戻ったら、削除の記録は外れる（変更後の回として除かれる）。
+        s.apply_remote_event(
+            cal,
+            &instance("m1_1016", "m1", "2026-10-16T10:30", "2026-10-16T13:00"),
+        )
+        .unwrap();
+        let list = s.list_events("2026-10-12", "2026-10-19", false).unwrap();
+        assert_eq!(list.len(), 2);
+        let master = find(&list, "2026-09-04T10:30").unwrap();
+        assert_eq!(master.exdates, vec!["2026-10-16T10:30".to_string()]);
+    }
+
+    #[test]
+    fn deleting_master_takes_instances_along() {
+        let s = mem_store();
+        let cal = weekly_master(&s);
+        s.apply_remote_event(
+            cal,
+            &instance("m1_1009", "m1", "2026-10-09T10:30", "2026-10-08T15:00"),
+        )
+        .unwrap();
+        let master_id = s
+            .list_events("2026-10-05", "2026-10-12", false)
+            .unwrap()
+            .iter()
+            .find(|e| e.recurrence.is_some())
+            .map(|e| e.id as i64)
+            .unwrap();
+
+        // ローカルで本体を消すと、変更された回も一緒にゴミ箱へ（送信対象は本体だけ）。
+        s.delete_event(master_id).unwrap();
+        assert!(s
+            .list_events("2026-10-05", "2026-10-12", false)
+            .unwrap()
+            .is_empty());
+        let changes = s.list_local_changes(cal).unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].id, master_id);
+
+        // 本体を戻すと、一緒に消えた回も戻る。
+        s.restore_event(master_id).unwrap();
+        assert_eq!(
+            s.list_events("2026-10-05", "2026-10-12", false)
+                .unwrap()
+                .len(),
+            2
+        );
+
+        // Google 側で本体が消えても、変更された回は孤立せず消える。
+        let mut cancel = remote("m1", "定例MTG", "");
+        cancel.cancelled = true;
+        s.apply_remote_event(cal, &cancel).unwrap();
+        assert!(s
+            .list_events("2026-10-05", "2026-10-12", false)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

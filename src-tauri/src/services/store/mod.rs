@@ -20,7 +20,7 @@ mod threads;
 mod tombstones;
 
 pub use accounts::{NewAccount, SmtpAccount};
-pub use calendar_sync::{ApplyOutcome, LocalChange, RemoteEvent};
+pub use calendar_sync::{ApplyOutcome, LocalChange, RecurringInstance, RemoteEvent};
 pub use emails::{
     insert_email, rederive_attachments, AttachmentFetchInfo, InsertOutcome, NewAttachment, NewEmail,
     NewQuote, PurgeRef,

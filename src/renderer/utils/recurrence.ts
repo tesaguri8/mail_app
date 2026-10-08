@@ -109,6 +109,9 @@ function expandOne(e: EventSummary, from: string, to: string): EventSummary[] {
 
   const toDate = at0(to);
   const untilDate = rule.until ? at0(rule.until) : null;
+  // 1 回だけ変更・削除された回（元の開始日）。変更後の回は別の行として来るので、ここでは出さない。
+  // 対応する FREQ は 1 日に高々 1 回なので、日付で突き合わせれば足りる。
+  const skipped = new Set(e.exdates.map(dayOf));
   const out: EventSummary[] = [];
   let cur = at0(baseDay);
 
@@ -131,6 +134,10 @@ function expandOne(e: EventSummary, from: string, to: string): EventSummary[] {
     guard++;
     if (untilDate && cur > untilDate) break;
     const occDay = ymd(cur);
+    if (skipped.has(occDay)) {
+      cur = stepDate(cur, rule, 1);
+      continue;
+    }
     const start_at = e.all_day ? occDay : `${occDay}T${startTime}`;
     let end_at: string | null = null;
     if (e.end_at) {

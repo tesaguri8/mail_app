@@ -59,6 +59,10 @@ pub fn generate(events: &[EventSummary]) -> String {
         }
         if let Some(r) = e.recurrence.as_deref().filter(|v| !v.is_empty()) {
             s.push_str(&format!("RRULE:{r}\r\n"));
+            // 1 回だけ変更・削除された回は本体の展開から除く（変更後の回は別の VEVENT で出る）。
+            for x in &e.exdates {
+                push_dt(&mut s, "EXDATE", x, e.all_day, false);
+            }
         }
         s.push_str("END:VEVENT\r\n");
     }
@@ -282,6 +286,8 @@ mod tests {
             calendar_id: None,
             availability: "busy".into(),
             visibility: "default".into(),
+            original_start_at: None,
+            exdates: Vec::new(),
         };
         let ics = generate(std::slice::from_ref(&e));
         let back = parse(&ics);

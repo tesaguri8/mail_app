@@ -237,6 +237,13 @@ const MIGRATIONS: &[Migration] = &[
         version: 54,
         sql: include_str!("migrations/0054_repair_empty_bodies.sql"),
     },
+    // 55〜59 は連絡先同期（feat/google-contacts-sync）が使う。この枝単体では欠番になるが、
+    // run() は version を昇順に見て未適用分を当てるだけなので、欠番があっても動く。
+    Migration {
+        // 60 は Google カレンダーの繰り返しの例外インスタンス（1 回だけの変更・削除）の取り込み。
+        version: 60,
+        sql: include_str!("migrations/0060_gcal_recurring_exceptions.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

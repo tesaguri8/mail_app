@@ -1,7 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { ContactSummary } from '@bindings/ContactSummary';
 import type { ContactInput } from '@bindings/ContactInput';
-import type { ContactGroupSummary } from '@bindings/ContactGroupSummary';
 import type { ImportReport } from '@bindings/ImportReport';
 import type { DuplicateGroup } from '@bindings/DuplicateGroup';
 import type { ContactMatch } from '@bindings/ContactMatch';
@@ -28,8 +27,6 @@ export const contactDelete = (id: number) => invoke<void>('contact_delete', { id
 
 /** 論理削除した連絡先を復元。 */
 export const contactRestore = (id: number) => invoke<void>('contact_restore', { id });
-
-export const contactGroupList = () => invoke<ContactGroupSummary[]>('contact_group_list');
 
 /** 連絡先ファイルをインポート（.vcf = vCard / .csv = Google CSV）。 */
 export const contactImport = (path: string) => invoke<ImportReport>('contact_import', { path });

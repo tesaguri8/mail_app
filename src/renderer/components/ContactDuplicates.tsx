@@ -21,8 +21,8 @@ import {
 import type { DuplicateGroup } from '@bindings/DuplicateGroup';
 import type { ContactSummary } from '@bindings/ContactSummary';
 import type { ContactInput } from '@bindings/ContactInput';
-import type { ContactValueInput } from '@bindings/ContactValueInput';
-import type { ContactAddressInput } from '@bindings/ContactAddressInput';
+import type { ContactValue } from '@bindings/ContactValue';
+import type { ContactAddress } from '@bindings/ContactAddress';
 import {
   contactGet,
   contactMerge,
@@ -34,6 +34,11 @@ import { DupModeToggle } from './OrgDuplicates';
 import { displayPhone } from '../utils/phone';
 import { getPhoneRegion, getPhoneStyle } from '../config/prefs';
 import type { CountryCode } from 'libphonenumber-js';
+import {
+  contactToInput,
+  primaryOrganization,
+  withPrimaryOrganization,
+} from '../utils/contactDraft';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -262,24 +267,34 @@ export function ContactDuplicates({
                       </span>
                       <span className="min-w-0 flex-1 truncate text-sm font-medium">
                         {c.display_name}
-                        {c.organization && (
-                          <span className="font-normal text-white/40"> · {c.organization}</span>
+                        {c.primary_organization && (
+                          <span className="font-normal text-white/40">
+                            {' '}
+                            · {c.primary_organization}
+                          </span>
                         )}
                       </span>
                     </button>
                     <div className="mt-1.5 flex min-w-0 flex-wrap gap-x-4 gap-y-1 pl-7 text-xs text-white/55">
-                      <DetailChip icon={<User size={12} />} value={c.name_kana} />
-                      <DetailChip icon={<Mail size={12} />} value={c.email} />
+                      <DetailChip icon={<User size={12} />} value={c.sort_name} />
+                      <DetailChip icon={<Mail size={12} />} value={c.primary_email} />
                       <DetailChip
                         icon={<Phone size={12} />}
                         value={
-                          c.phone
-                            ? displayPhone(c.phone, getPhoneStyle(), getPhoneRegion() as CountryCode)
+                          c.primary_phone
+                            ? displayPhone(
+                                c.primary_phone,
+                                getPhoneStyle(),
+                                getPhoneRegion() as CountryCode,
+                              )
                             : null
                         }
                       />
-                      <DetailChip icon={<Building2 size={12} />} value={c.organization} />
-                      <DetailChip icon={<MapPin size={12} />} value={c.address} />
+                      <DetailChip icon={<Building2 size={12} />} value={c.primary_organization} />
+                      <DetailChip
+                        icon={<MapPin size={12} />}
+                        value={c.addresses[0] ? addressToFlat(c.addresses[0]) : null}
+                      />
                       <DetailChip icon={<Cake size={12} />} value={c.birthday} />
                       <DetailChip icon={<StickyNote size={12} />} value={c.note} />
                     </div>
@@ -377,8 +392,16 @@ export function ContactDuplicates({
                   <EditField icon={<Building2 size={14} />} label={t('contact.organization')}>
                     <input
                       className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                      value={draft.organization ?? ''}
-                      onChange={(e) => patch({ organization: nullify(e.target.value) })}
+                      value={primaryOrganization(draft).name ?? ''}
+                      onChange={(e) =>
+                        patch({
+                          // 名前を変えたら組織カードとのつながりは外す（保存時に同名のカードへつなぎ直す）。
+                          organizations: withPrimaryOrganization(draft, {
+                            org_id: null,
+                            name: nullify(e.target.value),
+                          }),
+                        })
+                      }
                     />
                   </EditField>
                   <AddressRows
@@ -508,9 +531,8 @@ function ConfidenceBadge({ confidence }: { confidence: string }) {
 
 /** 情報の非空項目数。 */
 function fieldCount(c: ContactSummary): number {
-  return [c.name_kana, c.email, c.phone, c.organization, c.address, c.birthday, c.note].filter(
-    (v) => v && v.trim(),
-  ).length;
+  const scalars = [c.sort_name, c.birthday, c.note].filter((v) => v && v.trim()).length;
+  return scalars + c.emails.length + c.phones.length + c.organizations.length + c.addresses.length;
 }
 
 /** 代表（統合後の主）を選ぶ: 表示名の最多一致 → 情報量 → 先頭（安定ソート）。 */
@@ -525,7 +547,21 @@ function pickRepresentative(members: ContactSummary[]): ContactSummary | null {
   )[0];
 }
 
-/** 統合後の正本の下書きを作る（代表優先・空欄は他から補完、フラグは OR）。 */
+/** 同じキーの値を除いて足し合わせる（先に来たものを残す）。 */
+function unionBy<T>(lists: T[][], key: (v: T) => string): T[] {
+  const out: T[] = [];
+  const seen = new Set<string>();
+  for (const v of lists.flat()) {
+    const k = key(v);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(v);
+  }
+  return out;
+}
+
+/** 統合後の正本の下書きを作る（代表優先・空欄は他から補完、複数値は和集合、フラグは OR）。
+ *  画面が扱わない項目（URL・記念日など）も和集合にして保存で落とさない。 */
 function buildDraft(members: ContactSummary[], representative: ContactSummary): ContactInput {
   const ordered = [representative, ...members.filter((m) => m.id !== representative.id)];
   const pick = (get: (c: ContactSummary) => string | null): string | null => {
@@ -535,57 +571,34 @@ function buildDraft(members: ContactSummary[], representative: ContactSummary): 
     }
     return null;
   };
-  // 全メンバーのメール/電話/住所を値で重複排除して統合（代表を先頭に）。
-  const emails: ContactValueInput[] = [];
-  const phones: ContactValueInput[] = [];
-  const addresses: ContactAddressInput[] = [];
-  for (const m of ordered) {
-    for (const e of m.emails) {
-      if (e.value && !emails.some((x) => x.value.toLowerCase() === e.value.toLowerCase())) {
-        emails.push({ label: e.label, value: e.value, is_shared: e.is_shared });
-      }
-    }
-    for (const p of m.phones) {
-      if (p.value && !phones.some((x) => x.value === p.value)) {
-        phones.push({ label: p.label, value: p.value, is_shared: p.is_shared });
-      }
-    }
-    for (const a of m.addresses) {
-      const key = [a.postal, a.region, a.city, a.street].join('|');
-      if (!addresses.some((x) => [x.postal, x.region, x.city, x.street].join('|') === key)) {
-        addresses.push({
-          label: a.label,
-          postal: a.postal,
-          region: a.region,
-          city: a.city,
-          street: a.street,
-          extended: a.extended,
-          country: a.country,
-        });
-      }
-    }
-  }
+  const all = <T,>(get: (c: ContactSummary) => T[]): T[][] => ordered.map(get);
+  const addressKey = (a: ContactAddress) => [a.postal, a.region, a.city, a.street].join('|');
   return {
+    ...contactToInput(representative),
     id: null,
-    display_name: representative.display_name,
+    name_prefix: pick((c) => c.name_prefix),
     family_name: pick((c) => c.family_name),
+    middle_name: pick((c) => c.middle_name),
     given_name: pick((c) => c.given_name),
+    name_suffix: pick((c) => c.name_suffix),
     phonetic_family: pick((c) => c.phonetic_family),
+    phonetic_middle: pick((c) => c.phonetic_middle),
     phonetic_given: pick((c) => c.phonetic_given),
-    emails,
-    phones,
-    addresses,
-    tags: [...new Set(ordered.flatMap((m) => m.tags))],
-    name_kana: pick((c) => c.name_kana),
-    email: emails[0]?.value ?? pick((c) => c.email),
-    phone: phones[0]?.value ?? pick((c) => c.phone),
-    organization: pick((c) => c.organization),
-    org_id: ordered.find((m) => m.org_id != null)?.org_id ?? null,
-    org_title: pick((c) => c.org_title),
-    org_department: pick((c) => c.org_department),
-    address: addresses[0] ? addressToFlat(addresses[0]) || null : pick((c) => c.address),
+    nickname: pick((c) => c.nickname),
+    maiden_name: pick((c) => c.maiden_name),
     birthday: pick((c) => c.birthday),
     note: pick((c) => c.note),
+    organizations: unionBy(all((c) => c.organizations), (o) => (o.name ?? '').trim()),
+    emails: unionBy(all((c) => c.emails), (e: ContactValue) => e.value.toLowerCase()),
+    phones: unionBy(all((c) => c.phones), (p: ContactValue) => p.value),
+    addresses: unionBy(all((c) => c.addresses), addressKey),
+    urls: unionBy(all((c) => c.urls), (u) => u.value),
+    dates: unionBy(all((c) => c.dates), (d) => `${d.label ?? ''}|${d.date}`),
+    relations: unionBy(all((c) => c.relations), (r) => r.name),
+    handles: unionBy(all((c) => c.handles), (h) => `${h.kind}|${h.value}`),
+    custom_fields: unionBy(all((c) => c.custom_fields), (f) => f.key),
+    tags: [...new Set(ordered.flatMap((m) => m.tags))],
+    show_as_company: members.some((m) => m.show_as_company),
     is_favorite: members.some((m) => m.is_favorite),
     is_business: members.some((m) => m.is_business),
     allow_remote_images: members.some((m) => m.allow_remote_images),

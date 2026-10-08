@@ -536,13 +536,7 @@
     "gcontactsMatchConfirm": "This links {{linked}} to existing contacts and adds {{created}} as new ({{ambiguous}} of them look close to someone you already have and will show up under \"Merge duplicates\").",
     "gcontactsMatchRun": "Go ahead",
     "gcontactsMatchCancel": "Cancel",
-    "gcontactsMatchDone": "Added to the address book: {{linked}} linked / {{created}} new ({{ambiguous}} to review under \"Merge duplicates\")",
-    "gcontactsCopies": "{{count}} Google contacts were imported from a file (copies not connected to sync).",
-    "gcontactsCopiesHint": "Google contacts now come in through sync, so the copies are no longer needed. Run “Add to address book” first: copies recognized as the same person move over to sync and keep their favorites, tags and notes. Then clean up only the copies that remain. Nothing is sent to Google, and you can restore them from the address book trash.",
-    "gcontactsCopiesTrash": "Move copies to trash",
-    "gcontactsCopiesConfirm": "Move {{count}} Google copies that are not connected to sync to the trash?",
-    "gcontactsCopiesRun": "Move to trash",
-    "gcontactsCopiesDone": "Moved {{count}} Google copies to the trash (restore them from the address book trash)."
+    "gcontactsMatchDone": "Added to the address book: {{linked}} linked / {{created}} new ({{ambiguous}} to review under \"Merge duplicates\")"
   },
   "dataloc": {
     "title": "Data location",

@@ -24,15 +24,6 @@ export const gcontactsMatchPreview = (accountId: number) =>
 export const gcontactsMatchApply = (accountId: number) =>
   invoke<GcontactsMatchResult>('gcontacts_match_apply', { accountId });
 
-// 片付け: 同期に置き換える前にファイル（CSV／vCard）で取り込んだ Google 連絡先の写しのうち、
-// 同期とつながっていないもの。消しても Google 側には何も送られない（台帳に紐付いていないため）。
-
-/** 同期とつながっていない Google の写しの件数。 */
-export const gcontactsCopiesCount = () => invoke<number>('gcontacts_copies_count');
-
-/** 同期とつながっていない Google の写しをゴミ箱へ移す（戻せる）。移した件数を返す。 */
-export const gcontactsCopiesTrash = () => invoke<number>('gcontacts_copies_trash');
-
 /** 「Rondine で新しく作った連絡先も Google 側に作る」設定を切り替える。 */
 export const gcontactsSetPushNew = (accountId: number, enabled: boolean) =>
   invoke<void>('gcontacts_set_push_new', { accountId, enabled });

@@ -425,9 +425,9 @@ export function ContactsView({
                         )}
                         {c.display_name || t('contact.untitled')}
                       </span>
-                      {(c.organization || c.email) && (
+                      {(c.primary_organization || c.primary_email) && (
                         <span className="truncate text-xs text-white/45">
-                          {c.organization || c.email}
+                          {c.primary_organization || c.primary_email}
                         </span>
                       )}
                     </span>

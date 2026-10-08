@@ -17,9 +17,6 @@ import {
 } from 'lucide-react';
 import type { ContactSummary } from '@bindings/ContactSummary';
 import type { ContactInput } from '@bindings/ContactInput';
-import type { ContactValue } from '@bindings/ContactValue';
-import type { ContactValueInput } from '@bindings/ContactValueInput';
-import type { ContactAddressInput } from '@bindings/ContactAddressInput';
 import type { ContactMatch } from '@bindings/ContactMatch';
 import type { CountryCode } from 'libphonenumber-js';
 import type { OrganizationSummary } from '@bindings/OrganizationSummary';
@@ -37,7 +34,6 @@ import {
   PhoneRows,
   TagInput,
   ValueRows,
-  addressToFlat,
 } from './ContactValueEditor';
 import { OrgCardDialog, OrgCardInfo, OrgOverlapNotice } from './OrgCard';
 import { OrgCombobox } from './OrgCombobox';
@@ -46,6 +42,12 @@ import { findOrgOverlap, hasOrgOverlap, mergeOrgOverlap } from '../utils/orgOver
 import { formatPostal } from '../utils/postal';
 import { getPhoneRegion, getPostalAutoformat } from '../config/prefs';
 import { joinPersonName, splitPersonName } from '../utils/name';
+import {
+  contactToInput,
+  emptyContactInput,
+  primaryOrganization,
+  withPrimaryOrganization,
+} from '../utils/contactDraft';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -58,22 +60,8 @@ export type EditorRequest =
   | { kind: 'prefill'; prefill: ContactPrefill }
   | { kind: 'existing'; id: number; seed?: ContactSummary };
 
-/** ContactSummary の複数値を入力型（配列）に変換（共有フラグも引き継ぐ）。 */
-const toValueInputs = (vs: ContactValue[]): ContactValueInput[] =>
-  vs.map((v) => ({ label: v.label, value: v.value, is_shared: v.is_shared }));
-const toAddressInputs = (as: ContactAddressInput[]): ContactAddressInput[] =>
-  as.map((a) => ({
-    label: a.label,
-    postal: a.postal,
-    region: a.region,
-    city: a.city,
-    street: a.street,
-    extended: a.extended,
-    country: a.country,
-  }));
-
-/** 保存前に電話を E.164 正準形へ、郵便番号を整形し、flat 主値を配列先頭から導出する。 */
-const withPrimaries = (d: ContactInput): ContactInput => {
+/** 保存前に電話を E.164 正準形へ、郵便番号を整形する。 */
+const normalizeForSave = (d: ContactInput): ContactInput => {
   const region = getPhoneRegion() as CountryCode;
   const autoPostal = getPostalAutoformat();
   const phones = d.phones.map((p) =>
@@ -82,68 +70,11 @@ const withPrimaries = (d: ContactInput): ContactInput => {
   const addresses = autoPostal
     ? d.addresses.map((a) => (a.postal ? { ...a, postal: formatPostal(a.postal, region) } : a))
     : d.addresses;
-  return {
-    ...d,
-    phones,
-    addresses,
-    email: d.emails[0]?.value ?? null,
-    phone: phones[0]?.value ?? null,
-    address: addresses[0] ? addressToFlat(addresses[0]) || null : null,
-  };
+  return { ...d, phones, addresses };
 };
 
-/** 空の下書き（新規作成用）。 */
-const emptyDraft = (): ContactInput => ({
-  id: null,
-  display_name: '',
-  family_name: null,
-  given_name: null,
-  phonetic_family: null,
-  phonetic_given: null,
-  emails: [],
-  phones: [],
-  addresses: [],
-  tags: [],
-  name_kana: null,
-  email: null,
-  phone: null,
-  organization: null,
-  org_id: null,
-  org_title: null,
-  org_department: null,
-  address: null,
-  birthday: null,
-  note: null,
-  is_favorite: false,
-  is_business: false,
-  allow_remote_images: false,
-});
-
-const toDraft = (c: ContactSummary): ContactInput => ({
-  id: c.id,
-  display_name: c.display_name,
-  family_name: c.family_name,
-  given_name: c.given_name,
-  phonetic_family: c.phonetic_family,
-  phonetic_given: c.phonetic_given,
-  emails: toValueInputs(c.emails),
-  phones: toValueInputs(c.phones),
-  addresses: toAddressInputs(c.addresses),
-  tags: c.tags,
-  name_kana: c.name_kana,
-  email: c.email,
-  phone: c.phone,
-  organization: c.organization,
-  org_id: c.org_id,
-  org_title: c.org_title,
-  org_department: c.org_department,
-  address: c.address,
-  birthday: c.birthday,
-  note: c.note,
-  is_favorite: c.is_favorite,
-  is_business: c.is_business,
-  allow_remote_images: c.allow_remote_images,
-});
+const emptyDraft = emptyContactInput;
+const toDraft = contactToInput;
 
 /** ＋追加のプレフィル（差出人名・メール）から下書きを作る。
  *  表示名は姓・名にも推定分割して、予測できる範囲を自動入力する。 */
@@ -216,7 +147,7 @@ export function ContactEditor({
   useEffect(loadTags, [loadTags]);
 
   // 所属組織のカードを取り込む（組織を選び直したら追従。未所属・新規組織なら消す）。
-  const orgId = draft?.org_id ?? null;
+  const orgId = draft ? primaryOrganization(draft).org_id : null;
   useEffect(() => {
     if (!isTauri || orgId == null) {
       setOrg(null);
@@ -274,11 +205,11 @@ export function ContactEditor({
 
   // 個人の値のうち、所属組織のカードと同じもの（代表電話・FAX・代表メール・所在地）。
   const overlap = useMemo(() => {
-    if (!draft || !org || org.id !== draft.org_id || overlapKept === org.id) return null;
+    if (!draft || !org || org.id !== orgId || overlapKept === org.id) return null;
     const region = getPhoneRegion() as CountryCode;
     const o = findOrgOverlap(draft, org, (v) => toE164(v, region));
     return hasOrgOverlap(o) ? o : null;
-  }, [draft, org, overlapKept]);
+  }, [draft, org, orgId, overlapKept]);
 
   const dirty = useMemo(
     () => (draft ? JSON.stringify(draft) !== baseline : false),
@@ -356,7 +287,7 @@ export function ContactEditor({
     if (!draft || draft.display_name.trim() === '') return;
     setConfirmDup(false);
     try {
-      const result = await contactUpsert(withPrimaries(draft));
+      const result = await contactUpsert(normalizeForSave(draft));
       setSaved(true);
       openDraft(toDraft(result));
       loadTags();
@@ -544,13 +475,15 @@ export function ContactEditor({
             conflicts={(v) => phoneConflicts.has(v.trim())}
           />
           <OrgCombobox
-            orgId={draft.org_id}
-            name={draft.organization ?? ''}
-            onChange={(org_id, name) => patch({ org_id, organization: nullify(name) })}
+            orgId={orgId}
+            name={primaryOrganization(draft).name ?? ''}
+            onChange={(org_id, name) =>
+              patch({ organizations: withPrimaryOrganization(draft, { org_id, name: nullify(name) }) })
+            }
           />
           {/* 会社共通の情報（代表電話・FAX・代表メール・URL・所在地）はラベル表示。
               変更は所属する全員に効くので、［編集］で組織カードを開いて行う。 */}
-          {org && org.id === draft.org_id && (
+          {org && org.id === orgId && (
             <OrgCardInfo org={org} onEdit={() => setEditOrg(true)} />
           )}
           {org && overlap && (
@@ -568,15 +501,27 @@ export function ContactEditor({
             <Field icon={<Briefcase size={15} />} label={t('contact.orgTitle')}>
               <input
                 className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                value={draft.org_title ?? ''}
-                onChange={(e) => patch({ org_title: nullify(e.target.value) })}
+                value={primaryOrganization(draft).title ?? ''}
+                onChange={(e) =>
+                  patch({
+                    organizations: withPrimaryOrganization(draft, {
+                      title: nullify(e.target.value),
+                    }),
+                  })
+                }
               />
             </Field>
             <Field icon={<Building2 size={15} />} label={t('contact.orgDepartment')}>
               <input
                 className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                value={draft.org_department ?? ''}
-                onChange={(e) => patch({ org_department: nullify(e.target.value) })}
+                value={primaryOrganization(draft).department ?? ''}
+                onChange={(e) =>
+                  patch({
+                    organizations: withPrimaryOrganization(draft, {
+                      department: nullify(e.target.value),
+                    }),
+                  })
+                }
               />
             </Field>
           </div>

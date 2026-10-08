@@ -448,8 +448,10 @@ export function OrganizationsView({
                             )}
                             {m.display_name}
                           </span>
-                          {m.email && (
-                            <span className="shrink-0 truncate text-xs text-white/40">{m.email}</span>
+                          {m.primary_email && (
+                            <span className="shrink-0 truncate text-xs text-white/40">
+                              {m.primary_email}
+                            </span>
                           )}
                         </button>
                       </li>

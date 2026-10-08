@@ -82,6 +82,31 @@ import { getName, getVersion } from '@tauri-apps/api/app';
 3. **identifier を変えた場合**はデータ保存フォルダ名が変わるため、**旧→新フォルダの移行**（起動時に旧 identifier ディレクトリがあればリネーム/コピー）を 1 度行う。詳細: [DATA_STORAGE.md](DATA_STORAGE.md)。
 4. ストア登録済みの場合、`identifier`（bundle id / package）変更は別アプリ扱いになるため、**公開後は identifier を固定**する（正式リリース前に確定させる）。
 
+### 5.1 正式確定時に決めること：逆 DNS にするか（未決）
+
+**記録日: 2026-09-10。**現行の `tesaguri.rondine.dev` は暫定値で、正式名を決めるときに
+**逆 DNS 記法にするかどうかも一緒に確定させる**。
+
+- **Tauri は identifier の欄が 1 つしかない。** `tauri.conf.json` の `identifier` が
+  **データ保存フォルダ名と macOS の bundle id を兼ねる**（公式:
+  "it is used in system configurations like **the bundle ID and path to the webview data
+  directory**" — [Tauri 2 の設定](https://v2.tauri.app/reference/config/)）。
+  eframe（`with_app_id`）や electron-builder（`appId`）のように**欄を分けられない**。
+- **公式は逆 DNS 記法を前提にしている。** `tesaguri` は TLD ではないので、
+  **`tesaguri.<slug>.<env>` は既にその形から外れている**。**Windows / Linux で実害が
+  出ていないだけ**で、macOS を出すと Apple の要求とぶつかる。
+- **選択肢**: ①`tesaguri.rondine.app` のまま通す（TSG One の他アプリと綴りが揃う。
+  Primadoc / Doculator / Cocore も Tauri で同じ形）②`tech.tesaguri.rondine` 系の逆 DNS に
+  する（OS の作法に合うが、他アプリと綴りが割れる）。**どちらを採るにせよ、
+  組織全体で揃える**（TSG One アプリ共通の話。CLAUDE.md の配布ブロック「アプリの識別子は
+  `tesaguri.<slug>.<env>`」を参照）。
+- **`[要注意]` 直すなら早いほど安い。** いま alpha でデータは手元の数台にしか無い。
+  公開後に変えると**データ保存フォルダと OS キーチェーンの両方が孤児になる**ので、
+  上記 3 の移行（1 度だけ写す・**旧フォルダは消さない**）が必須になる。
+- **決める契機**: 正式名の確定、または **macOS 版に着手する時点のどちらか早い方**
+  （[CROSS_PLATFORM.md](CROSS_PLATFORM.md)）。**どこか 1 つの TSG One アプリが先に
+  macOS を出すと、そこで全体の答えが決まる。**
+
 ---
 
 ## 6. 原則（ハードコード排除の徹底）

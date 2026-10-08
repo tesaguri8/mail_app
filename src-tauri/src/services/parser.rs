@@ -151,11 +151,14 @@ pub fn part_content_type(part: &mail_parser::MessagePart) -> Option<String> {
     })
 }
 
-/// 添付パートの表示用ファイル名（名前が無ければ序数から合成）。
+/// 添付パートの表示用ファイル名（名前が無ければ序数から合成し、拡張子は Content-Type から補う）。
 pub fn part_filename(part: &mail_parser::MessagePart, index: usize) -> String {
-    part.attachment_name()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| format!("attachment-{}", index + 1))
+    let name = part
+        .attachment_name()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| crate::services::attachname::placeholder(index));
+    crate::services::attachname::ensure_extension(&name, part_content_type(part).as_deref())
 }
 
 /// メッセージの全パート（`parts` はネストも含めて平坦化されている）から「本来の添付」だけを
@@ -502,6 +505,27 @@ Date: Mon, 30 Jun 2025 10:00:00 +0900\r\n\
         // 本文3列は空 → insert_email 側で body_state='absent' になる。
         assert!(p.clean_body.as_deref().unwrap_or("").trim().is_empty());
         assert!(p.body_plain.as_deref().unwrap_or("").is_empty());
+    }
+
+    #[test]
+    fn header_only_plain_text_yields_a_content_free_html_shell() {
+        // `[要注意]` mail_parser は text/plain のメールを**ヘッダだけ**渡されると、
+        // 空本文から `<html><body></body></html>` を合成する。これを「本文あり」と
+        // 数えると、メタ先行取り込みの行が 'present' になって本文を取りに行かなくなる
+        // （services/store/emails.rs の has_html_body。実データで発生した）。
+        // ライブラリ側の挙動が変わったら気づけるよう、ここで固定しておく。
+        let raw = b"Message-ID: <a@example.com>\r\nSubject: t\r\nFrom: a@example.com\r\n\
+Content-Type: text/plain; charset=UTF-8\r\n\r\n";
+        let p = parse_message(raw).expect("ヘッダだけでも解析できる");
+        assert_eq!(p.body_plain.as_deref(), Some(""));
+        assert_eq!(p.clean_body.as_deref(), Some(""));
+        assert_eq!(p.body_html.as_deref(), Some("<html><body></body></html>"));
+
+        // multipart は本文パートが無いので、そもそも body_html が付かない。
+        let raw = b"Message-ID: <b@example.com>\r\nSubject: t\r\nFrom: a@example.com\r\n\
+Content-Type: multipart/alternative; boundary=\"bd\"\r\n\r\n";
+        let p = parse_message(raw).expect("ヘッダだけでも解析できる");
+        assert_eq!(p.body_html, None);
     }
 
     #[test]

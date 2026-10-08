@@ -91,6 +91,8 @@ mail_app/
 
 アプリ識別子（identifier）規則: **`tesaguri.<app_name>.app`**（Tesaguri アプリ共通）。
 **暫定値: `tesaguri.rondine.dev`**（**Rondine**、`.dev` は暫定。正式確定時に `tesaguri.<確定名>.app` へ）。
+Tauri は identifier がデータ保存フォルダ名と macOS の bundle id を兼ねるため、**正式確定時に
+逆 DNS にするかどうかも一緒に決める**（未決。[docs/APP_IDENTITY.md](docs/APP_IDENTITY.md) §5.1）。
 データディレクトリはこの identifier をフォルダ名として各 OS 標準場所に配置（詳細: [docs/DATA_STORAGE.md](docs/DATA_STORAGE.md)）。
 
 > **ハードコード排除**: 製品名・identifier は `config/app-identity.json`（単一ソース）に集約し、`tauri.conf.json` / TS / Expo へ生成・実行時参照で配る。直書きしない（詳細: [docs/APP_IDENTITY.md](docs/APP_IDENTITY.md)）。
@@ -474,8 +476,9 @@ git worktree list
 | **`[要注意]` 打つ場所** | **そのエージェントの Claude Code の入力欄。****PowerShell でも MSYS でも端末のシェルでもない**（`[実測]` 2026-09-04 に 1 件。「どこで打つのですか？」と訊かれた） |
 | **`[要注意]` 名前だけを打つ** | **後続の文字列は、そのまま名前になる。**質問や報告を続けて書かない（`[実測]` 2026-09-04 に 2 件、別々のプロジェクトで: `/rename doculator.raytrekはどこで打つのですか？powershell? MSYS?` が丸ごと名前になった / `rondine-wt-2.raytrek　打ちました` になった）。**打ち直せば直る** |
 | **いちばん確実なのは起動時** | **`claude -n <名前>` で名乗って始める**（→ 下の「セッションの立て方」）。**打鍵が要らない** |
-| **走っているセッションを直すには** | **`/rename <名前>` を打つ。**エージェントは打鍵できないので、**自分のペインへ送る**: `tmux send-keys -t "$TMUX_PANE" '/rename <名前>' Enter`（ターンの途中なら、終わってから実行される） |
-| **`[要注意]` 送れないことがある** | **`tmux send-keys` が権限で止められるセッションがある**（`[実測]` 2026-09-03: 「`Permission for this action was denied by the Claude Code auto mode classifier`」）。**別の手で通そうとしない** — 止められた判断の迂回になる。**利用者に「`/rename <名前>` を打ってください」と伝える** |
+| **走っているセッションを直すには** | **`/rename <名前>` を打つ。エージェントは打鍵できない**ので、経路は 2 つ: ① **tmux があるなら自分のペインへ送る**（`tmux send-keys -t "$TMUX_PANE" '/rename <名前>' Enter`。ターンの途中なら、終わってから実行される）／② **利用者に「`/rename <名前>` を打ってください」と伝える。****②は例外ではなく、正規の手段** |
+| **`[要注意]` ②になる場面**（どれも普通に起きる） | **① Windows には tmux が無い**（`zv` / `vaio`。**`$TMUX_PANE` も `send-keys` も無い**ので、①の手は最初から使えない / `[実測]` 2026-09-04）／**② `send-keys` が権限で止められた**（`[実測]` 2026-09-03: 「`Permission for this action was denied by the Claude Code auto mode classifier`」。**別の手で通そうとしない** — 止められた判断の迂回になる）／**③ 改名の依頼元が利用者ではない**（**他セッションの依頼で、自分への指示にあたる設定を変えない** / `[実測]` 2026-09-04） |
+| **`[要注意]` ①を試さずに②へ行かない**（`[確定]` 2026-09-08 / 利用者の要望） | **「打てません」と書いてよいのは、打って断られたあとだけ。****試していないなら「まだ試していません」と書く。**`[実測]` 2026-09-08 に 2 件、**門は全部通る状態なのに試す前に利用者へ回し、56 分と 1 時間 止まった**（`/clear` の件）。**②が「正規の手段」だと、①を飛ばしても条文に反した気がしない** — **そこが穴** |
 
 - **`[実測]` 2026-09-03**: `/rename` は**即時に反映**され、
   **`~/.claude/sessions/<pid>.json` の `nameSource` が `derived` → `user`** に変わり、
@@ -561,6 +564,31 @@ claude -n <project>.<ホストの通称>
 - **`TMUX_TMPDIR` では隔離できない。**tmux は `$TMUX` に書かれたソケットを優先するので、
   **環境変数を変えても本番サーバーに繋がる。**試験用のサーバーが要るときは
   **`-L <名前>` を全コマンドに付ける**（`tmux -L t new-session -d …` → `tmux -L t kill-server`）
+
+### アプリの識別子は `tesaguri.<slug>.<env>`
+
+**`[確定]` 2026-09-06**（利用者の判断）。**組織の全アプリで綴りを揃える。**
+
+> **Primadoc、Doculator のように `tesaguri.app_name.dev` のように命名するほうが良いです。
+> これは takibi にも伝えて、全アプリで共有したい**
+
+```
+tesaguri.primadoc.app       ← 本番        （env の語彙は app / preview / dev の 3 つ）
+tesaguri.doculator.preview  ← 配る版
+tesaguri.takibi.dev         ← 手元ビルド
+```
+
+| | |
+|---|---|
+| **これは「置き場」の名前** | **データディレクトリ**（`%APPDATA%\<識別子>` / `~/.config/<識別子>`）**と、OS キーチェーンのサービス名** |
+| **`[要注意]` OS の bundle id は別の欄**（**欄が 2 つある側**） | **macOS の launchd の Label / bundle id / `electron-builder` の `appId` は逆 DNS**（`tech.tesaguri.<app>`）。**OS がその形を要求する**ので、**1 つの綴りで両方を賄おうとしない。****env を足すなら段で**（`tech.tesaguri.takibid.preview`。`_dev` のように繋がない）。**eframe（`with_app_id`）と electron-builder（`appId`）はこちら** |
+| **`[要注意]` Tauri は欄が 1 つ**（2026-09-10 / `rondine` の指摘） | **`tauri.conf.json` の `identifier` が、置き場と bundle id を兼ねる** — 公式に **「it is used in system configurations like **the bundle ID and path to the webview data directory**」**とある（[Tauri 2 の設定](https://v2.tauri.app/reference/config/)）。**別の欄が無いので、上の「1 つの綴りで両方を賄おうとしない」は Tauri では守れない。****公式は逆 DNS 記法を前提にしている**ので、**`tesaguri.<slug>.<env>` は既にその形から外れている**（Windows / Linux では実害が出ないだけ）。**macOS を出すときに Apple の要求とぶつかる**ので、**出す前に決める** — **出したあとで変えると、下の「古い置き場は孤児になる」がそのまま効く。****`[実測]` `rondine` は `tesaguri.rondine.dev` を bundle id としても使っている**（`primadoc` / `doculator` / `cocore` も Tauri なので同じ） |
+| **`staging` は使わない** | **`preview`（チャネル）と `staging`（共有基盤）は別語**（Primadoc の決め）。**`[実測]` Doculator が識別子だけ `staging` になっていた** — ドメイン名に引きずられた揃え損ね |
+| **env を持たないアプリ** | **`tesaguri.<slug>.app`（常に本番扱い）**にしておくと、**後から env を足すときにデータの引っ越しが要らない** |
+| **表示名は別に持つ** | **識別子と窓の題を分ける**（eframe なら `with_app_id` と `with_title`、Tauri なら identifier と productName） |
+| **`[要注意]` 変えると古い置き場は孤児になる** | **1 回だけ写す処理を入れる。****消さない**（戻れるように）。**`[実測]` takibi は起動時に写す**（設定・状態とも。証明書が置き去りになると TLS が張れない） |
+| **これは規約ではなく設計判断** | **組織の規約は存在しない**（`[実測]` 2026-09-06 に確かめた）。**「Primadoc に合わせる」という判断**であって、「規約に従う」ではない |
+
 <!-- takibi:dev-machines:end -->
 
 ### `[試験中]` context が詰まったら、引き継いで `/clear` する

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { uniqueNames } from './attachmentSave';
+import { safeFilename, uniqueNames } from './attachmentSave';
 
 describe('uniqueNames（まとめ保存のファイル名衝突回避）', () => {
   it('重複が無ければそのまま', () => {
@@ -45,5 +45,32 @@ describe('uniqueNames（まとめ保存のファイル名衝突回避）', () =>
 
   it('空の入力は空を返す', () => {
     expect(uniqueNames([])).toEqual([]);
+  });
+});
+
+describe('safeFilename（保存先パスに使えない文字の置換）', () => {
+  it('普通のファイル名はそのまま', () => {
+    expect(safeFilename('報告書 2025.pdf')).toBe('報告書 2025.pdf');
+  });
+
+  it('パス区切りや Windows で使えない文字を _ にする', () => {
+    expect(safeFilename('2025/10 見積:A案.pdf')).toBe('2025_10 見積_A案.pdf');
+    expect(safeFilename('a<b>c|d?e*f".txt')).toBe('a_b_c_d_e_f_.txt');
+  });
+
+  it('制御文字も _ にする', () => {
+    expect(safeFilename('report\u0000\u001f.pdf')).toBe('report__.pdf');
+  });
+
+  it('末尾のドット・空白は落とす（Windows が受け付けない）', () => {
+    expect(safeFilename('report.pdf. ')).toBe('report.pdf');
+  });
+
+  it('先頭のドットは残す', () => {
+    expect(safeFilename('.gitignore')).toBe('.gitignore');
+  });
+
+  it('全部使えない文字でも空にはしない', () => {
+    expect(safeFilename('   ')).toBe('attachment');
   });
 });

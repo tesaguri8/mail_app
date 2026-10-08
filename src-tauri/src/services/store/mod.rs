@@ -1,4 +1,6 @@
 mod accounts;
+mod attachnames;
+mod bodyrepair;
 mod calendar_sync;
 mod calendars;
 mod contact_sync;
@@ -68,6 +70,20 @@ impl Store {
             Ok(n) if n > 0 => log::info!("purged {n} freemail green domains"),
             Ok(_) => {}
             Err(e) => log::warn!("freemail green domain purge skipped: {e}"),
+        }
+        // 過去に未復号のまま保存された添付ファイル名を一度だけ直す（`=?UTF-8?B?…?=` /
+        // `utf-8''%E5…` のまま保存名になっていたもの。通信不要・冪等）。
+        match attachnames::repair_stored(&conn) {
+            Ok(n) if n > 0 => log::info!("repaired {n} attachment filenames"),
+            Ok(_) => {}
+            Err(e) => log::warn!("attachment filename repair skipped: {e}"),
+        }
+        // 記録は「取得済み」でも実体に全文が無い行を、一度だけ未取得へ戻す（背景の本文
+        // バックフィルと、開いたときの自動取得が拾う。docs/SYNC.md §3.6）。
+        match bodyrepair::repair_missing_bodies(&conn) {
+            Ok(n) if n > 0 => log::info!("reset {n} rows with a missing body to 'absent'"),
+            Ok(_) => {}
+            Err(e) => log::warn!("body state repair skipped: {e}"),
         }
         // 「自分から送ったことがある相手」の索引を初回だけ構築する（docs/FILTERING.md §2）。
         // 失敗しても起動は続ける（フィルタが効かないだけで、次回起動で作り直しを試みる）。

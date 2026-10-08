@@ -20,6 +20,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             // データルート配下に mail.db を開き、マイグレーションを適用（docs/DATA_STORAGE.md）。
             let base = app.path().app_data_dir().expect("app_data_dir");

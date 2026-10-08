@@ -10,7 +10,7 @@ use crate::models::{
     RebuildAction,
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSenderConflict, SpamSettings, SpamVerdict,
-    StorageInfo, SyncProgress,
+    StorageInfo, SyncListed, SyncProgress,
     SyncResult, TagSummary, ThreadListItem, ThreadView,
 };
 use crate::services::autoconfig;
@@ -339,6 +339,17 @@ pub async fn mail_sync(
                 },
             );
         };
+        // ヘッダだけ DB に入って一覧に出せるようになったら "sync:listed" で知らせる
+        // （本文のダウンロードを待たずに一覧を更新するため。docs/SYNC.md §3.6）。
+        let listed = |folder: &str, count: i32| {
+            let _ = app_ev.emit(
+                "sync:listed",
+                SyncListed {
+                    folder: folder.to_string(),
+                    count,
+                },
+            );
+        };
         let res = imap_sync::sync_account(
             &db_path,
             account_id,
@@ -347,6 +358,7 @@ pub async fn mail_sync(
             &login_user,
             &password,
             &progress,
+            &listed,
             &cancel_task,
             &session_slot,
         );
@@ -2036,10 +2048,10 @@ pub fn ics_export(store: State<Store>, path: String) -> Result<(), String> {
 
 /// keyring 内の Client Secret のキー（OAuth アプリは 1 つなので固定）。
 const GOOGLE_CLIENT_SECRET_KEY: &str = "google:client_secret";
-/// 0054 以前のキー。読み出し時に見つかったら新キーへ移す（再連携させないため）。
+/// 0055 以前のキー。読み出し時に見つかったら新キーへ移す（再連携させないため）。
 const LEGACY_CLIENT_SECRET_KEY: &str = "gcal:client_secret";
 
-/// app_settings 内の Client ID のキー（と、0054 以前のキー）。
+/// app_settings 内の Client ID のキー（と、0055 以前のキー）。
 const GOOGLE_CLIENT_ID_SETTING: &str = "google_client_id";
 const LEGACY_CLIENT_ID_SETTING: &str = "gcal_client_id";
 
@@ -2048,7 +2060,7 @@ fn google_refresh_key(email: &str) -> String {
     format!("google:refresh:{email}")
 }
 
-/// 0054 以前の refresh_token キー。
+/// 0055 以前の refresh_token キー。
 fn legacy_refresh_key(email: &str) -> String {
     format!("gcal:refresh:{email}")
 }
@@ -2614,6 +2626,8 @@ pub async fn mail_refetch(
     store: State<'_, Store>,
     id: i64,
 ) -> Result<MailDetail, String> {
+    // 所要時間のログ（DB の鍵待ちと IMAP のどちらで待つかを見分ける。段階の内訳は fetch_message）。
+    let started = std::time::Instant::now();
     let (account_id, uid, folder) = store
         .email_refetch_info(id)
         .map_err(|e| e.to_string())?
@@ -2631,11 +2645,13 @@ pub async fn mail_refetch(
         .and_then(|e| e.get_password())
         .map_err(|e| format!("資格情報を取得できません: {e}"))?;
 
+    let looked_up = started.elapsed();
     let parsed = tauri::async_runtime::spawn_blocking(move || {
         imap_sync::fetch_message(&host, port, &login_user, &password, &folder, uid as u32)
     })
     .await
     .map_err(|e| e.to_string())??;
+    let fetched = started.elapsed();
 
     store
         .update_email_body(
@@ -2661,6 +2677,12 @@ pub async fn mail_refetch(
         })
         .collect();
     store.ensure_attachments(id, &atts).map_err(|e| e.to_string())?;
+    log::info!(
+        "mail_refetch id={id}: 準備 {}ms / IMAP {}ms / 保存 {}ms",
+        looked_up.as_millis(),
+        (fetched - looked_up).as_millis(),
+        (started.elapsed() - fetched).as_millis()
+    );
 
     store
         .get_email(id)
@@ -3002,6 +3024,17 @@ pub async fn mail_resync(
                 },
             );
         };
+        // ヘッダだけ DB に入って一覧に出せるようになったら "sync:listed" で知らせる
+        // （本文のダウンロードを待たずに一覧を更新するため。docs/SYNC.md §3.6）。
+        let listed = |folder: &str, count: i32| {
+            let _ = app_ev.emit(
+                "sync:listed",
+                SyncListed {
+                    folder: folder.to_string(),
+                    count,
+                },
+            );
+        };
         imap_sync::sync_account(
             &db_path,
             account_id,
@@ -3010,6 +3043,7 @@ pub async fn mail_resync(
             &login_user,
             &password,
             &progress,
+            &listed,
             &cancel_task,
             &session_slot,
         )

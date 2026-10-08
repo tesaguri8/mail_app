@@ -4,6 +4,20 @@ import { attachmentExport } from '../services/mail';
 import { withActivity } from '../stores/activity';
 
 /**
+ * 保存先のパスに使えない文字を `_` に置き換える（Rust 側の添付キャッシュと同じ方針）。
+ * メールのファイル名には `/` や `:` が入ることがあり、そのままフォルダへ連結すると
+ * 別の場所を指したり保存に失敗する。末尾のドット・空白は Windows が受け付けないので落とす
+ * （先頭のドットは `.gitignore` のような正当な名前なので残す）。空になる名前は `attachment`。
+ */
+export function safeFilename(name: string): string {
+  const cleaned = Array.from(name)
+    .map((ch) => (/[/\\:*?"<>|]/.test(ch) || ch.codePointAt(0)! < 0x20 ? '_' : ch))
+    .join('');
+  const trimmed = cleaned.trim().replace(/[.\s]+$/, '');
+  return trimmed === '' ? 'attachment' : trimmed;
+}
+
+/**
  * 添付 1 件を「名前を付けて保存」ダイアログでユーザー指定の場所へ保存する（ダウンロード）。
  * 既定はダウンロードフォルダ。保存中はフッターに進捗（不確定スピナー）を出す。
  * 会話バブルと全文表示（MailBody）で共通利用する。
@@ -13,11 +27,12 @@ import { withActivity } from '../stores/activity';
 export async function saveAttachment(
   id: number,
   filename: string,
-  activityLabel: string,
+  activityLabel: string
 ): Promise<boolean> {
-  let defaultPath = filename;
+  const safe = safeFilename(filename);
+  let defaultPath = safe;
   try {
-    defaultPath = await join(await downloadDir(), filename);
+    defaultPath = await join(await downloadDir(), safe);
   } catch {
     /* ダウンロードフォルダを解決できなければファイル名だけを既定にする */
   }
@@ -58,7 +73,7 @@ export function uniqueNames(filenames: string[]): string[] {
  */
 export async function saveAllAttachments(
   items: { id: number; filename: string }[],
-  activityLabel: string,
+  activityLabel: string
 ): Promise<number | null> {
   let defaultPath: string | undefined;
   try {
@@ -70,7 +85,7 @@ export async function saveAllAttachments(
   const dir = typeof picked === 'string' ? picked : null;
   if (!dir) return null;
 
-  const names = uniqueNames(items.map((a) => a.filename));
+  const names = uniqueNames(items.map((a) => safeFilename(a.filename)));
   let ok = 0;
   await withActivity(activityLabel, async () => {
     for (const [i, a] of items.entries()) {

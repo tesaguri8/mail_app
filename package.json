@@ -1,7 +1,7 @@
 {
   "name": "rondine",
   "private": true,
-  "version": "0.1.0-alpha.11",
+  "version": "0.1.0-alpha.16",
   "description": "Rondine — 軽くて美しく、AIに勝手に中身を渡さない、所有したくなるメール",
   "workspaces": [
     "packages/*"
@@ -47,6 +47,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/plugin-clipboard-manager": "^2.3.3",
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-fs": "^2",
     "@tauri-apps/plugin-log": "^2",

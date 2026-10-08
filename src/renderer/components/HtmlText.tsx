@@ -49,6 +49,21 @@ const BLOCK = new Set([
 // 中身を捨てる要素（スクリプト・スタイル等）。img は cid: 解決時のみ描画する。
 const DROP = new Set(['script', 'style', 'head', 'title', 'noscript', 'iframe', 'svg']);
 
+/**
+ * 引用の段ごとの縦線の色。深さで色を変え、4 段目以降は循環させる（同色を重ねると
+ * 深さが読めず、折りたたまれた引用を途中から読んだときに迷子になるため）。
+ * 背景写真の上に載るので彩度は抑え、アプリの既存アクセント（sky / emerald / amber）に揃える。
+ */
+const QUOTE_BAR_COLORS = ['border-sky-400/50', 'border-emerald-400/50', 'border-amber-400/50'];
+
+/** 引用ブロック（縦線＋字下げ）。HTML の blockquote とプレーンの「>」で同じ見た目を使う。 */
+function QuoteBlock({ depth, children }: { depth: number; children: ReactNode }) {
+  const color = QUOTE_BAR_COLORS[depth % QUOTE_BAR_COLORS.length];
+  return (
+    <blockquote className={`my-1 border-l-2 pl-2.5 text-white/70 ${color}`}>{children}</blockquote>
+  );
+}
+
 /** 本文埋め込み画像（content_id → data URL）。リモート画像は対象外（ブロック）。 */
 type InlineImages = Record<string, string>;
 /** 許可して取得したリモート画像（正規化 URL → サニタイズ済み data URL）。 */
@@ -101,7 +116,13 @@ function RemoteImg({
   );
 }
 
-function renderNode(node: Node, key: number, ctx: RenderCtx, insideLink = false): ReactNode {
+function renderNode(
+  node: Node,
+  key: number,
+  ctx: RenderCtx,
+  insideLink = false,
+  quoteDepth = 0,
+): ReactNode {
   if (node.nodeType === Node.TEXT_NODE) {
     const text = node.textContent ?? '';
     if (!text) return text;
@@ -175,8 +196,12 @@ function renderNode(node: Node, key: number, ctx: RenderCtx, insideLink = false)
 
   // <a> の内側では子テキストを再リンク化しない（insideLink を子へ伝播）。
   const insideChildLink = insideLink || tag === 'a';
+  // blockquote の内側は 1 段深い引用として描く（子の縦線の色が変わる）。
+  const childQuoteDepth = tag === 'blockquote' ? quoteDepth + 1 : quoteDepth;
   const children: ReactNode[] = [];
-  el.childNodes.forEach((c, i) => children.push(renderNode(c, i, ctx, insideChildLink)));
+  el.childNodes.forEach((c, i) =>
+    children.push(renderNode(c, i, ctx, insideChildLink, childQuoteDepth)),
+  );
 
   if (tag === 'br') return <br key={key} />;
 
@@ -198,6 +223,15 @@ function renderNode(node: Node, key: number, ctx: RenderCtx, insideLink = false)
       >
         {children}
       </a>
+    );
+  }
+
+  // 引用は縦線＋字下げで段を見せる（送信側 Compose も左罫線付きの blockquote で送っている）。
+  if (tag === 'blockquote') {
+    return (
+      <QuoteBlock key={key} depth={quoteDepth}>
+        {children}
+      </QuoteBlock>
     );
   }
 
@@ -372,6 +406,68 @@ function linkifyToNodes(
  * - URL: 水色リンク。クリックで外部ブラウザ（親要素へは伝播させない＝バブルを開かない）。
  * - メール: renderEmail があればそれで描画（＋登録／新規作成の導線）、無ければ素のテキスト。
  */
+/** 行頭の「>」の連なりから引用の深さを数え、記号を取り除いた本文を返す。 */
+function stripQuoteMarks(line: string): { depth: number; text: string } {
+  let depth = 0;
+  let rest = line;
+  for (;;) {
+    // 「>」の前の軽い字下げ（引用符の前に空白を入れるクライアントがある）まで許す。
+    const m = /^[ \t]{0,3}>[ \t]?/.exec(rest);
+    if (!m) break;
+    depth += 1;
+    rest = rest.slice(m[0].length);
+  }
+  return { depth, text: rest };
+}
+
+/** 深さが同じ連続行を 1 かたまりにまとめたもの（depth 0 は引用ではない地の文）。 */
+type QuoteSegment = { depth: number; text: string };
+
+/** 本文を「深さ付きのかたまり」に切り分ける。引用が無ければ 1 かたまりだけ返る。 */
+function splitByQuoteDepth(text: string): QuoteSegment[] {
+  const segs: QuoteSegment[] = [];
+  for (const line of text.split('\n')) {
+    const { depth, text: body } = stripQuoteMarks(line);
+    const last = segs[segs.length - 1];
+    if (last && last.depth === depth) last.text += `\n${body}`;
+    else segs.push({ depth, text: body });
+  }
+  return segs;
+}
+
+/**
+ * 深さ付きのかたまりを入れ子の React 要素に組み直す（同じ深さは並べ、深いものは
+ * QuoteBlock で包む）。戻り値は「次に処理すべき位置」で、再帰の打ち切りに使う。
+ */
+function buildQuoteNodes(
+  segs: QuoteSegment[],
+  start: number,
+  depth: number,
+  out: ReactNode[],
+  renderText: (text: string, key: string) => ReactNode,
+): number {
+  let i = start;
+  while (i < segs.length) {
+    const seg = segs[i];
+    if (seg.depth < depth) break;
+    if (seg.depth === depth) {
+      out.push(renderText(seg.text, `q${depth}-${i}`));
+      i += 1;
+      continue;
+    }
+    // 1 段以上深いかたまりは、まとめて 1 つの引用ブロックに入れる。
+    const inner: ReactNode[] = [];
+    const next = buildQuoteNodes(segs, i, depth + 1, inner, renderText);
+    out.push(
+      <QuoteBlock key={`q${depth}-${i}`} depth={depth}>
+        {inner}
+      </QuoteBlock>,
+    );
+    i = next;
+  }
+  return i;
+}
+
 export function AutoLinkText({
   text,
   renderEmail,
@@ -388,11 +484,20 @@ export function AutoLinkText({
   className?: string;
 }) {
   const re = buildHighlightRe(highlight);
-  return (
-    <pre className={`whitespace-pre-wrap break-words font-sans ${className}`}>
-      {linkifyToNodes(text, renderEmail, re, renderDate)}
+  const renderText = (t: string, key: string) => (
+    <pre key={key} className={`whitespace-pre-wrap break-words font-sans ${className}`}>
+      {linkifyToNodes(t, renderEmail, re, renderDate)}
     </pre>
   );
+
+  // 行頭の「>」は文字のまま並べず、深さごとに色の違う縦線で段を見せる
+  // （引用が無い本文は従来どおり <pre> 1 枚。余計な入れ子を作らない）。
+  const segs = splitByQuoteDepth(text);
+  if (segs.every((s) => s.depth === 0)) return renderText(text, 'q0');
+
+  const nodes: ReactNode[] = [];
+  buildQuoteNodes(segs, 0, 0, nodes, renderText);
+  return <>{nodes}</>;
 }
 
 /**

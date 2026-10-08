@@ -31,7 +31,13 @@ body_html: string | null, has_attachments: boolean,
 /**
  * 引用が畳まれている（clean より全文が長い）＝「引用を表示」を出すか。
  */
-has_quotes: boolean, is_read: boolean, 
+has_quotes: boolean, 
+/**
+ * 引用を含む返信か（引用ブロックがある、または In-Reply-To がある）。
+ * バブルを HTML で描くかの判断に使う。has_quotes は「clean より全文が長い」だけなので、
+ * 署名を剥がしただけのニュースレターでも立ってしまい、返信かどうかの判定には使えない。
+ */
+is_reply: boolean, is_read: boolean, 
 /**
  * スター付きか（折りたたみバブルの★バッジ用）。
  */
@@ -55,4 +61,9 @@ folder: string | null,
 /**
  * スレッド割当が手動か（'auto' | 'manual'）。
  */
-thread_assignment: string, };
+thread_assignment: string, 
+/**
+ * 本文の取得状態（'present' | 'absent' | 'empty' | 'evicted'）。
+ * バブルが本文を取りに行くかの判断に使う（'empty' は取りに行かない。docs/SYNC.md §3.6）。
+ */
+body_state: string, };

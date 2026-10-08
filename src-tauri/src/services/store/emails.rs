@@ -189,6 +189,69 @@ pub enum InsertOutcome {
 /// 新規なら挿入して Inserted を返す。重複（account_id, canonical_key）の場合は
 /// 新規挿入はしないが、機能追加前に取り込んだ古いメールでも添付が使えるよう、
 /// uid と添付メタが未設定なら埋め戻して（バックフィル）Backfilled を返す。
+/// 本文 3 列に「読める中身」があるか。挿入と埋め戻しで同じ物差しを使う。
+fn has_readable_body(
+    plain: Option<&str>,
+    html: Option<&str>,
+    clean: Option<&str>,
+) -> bool {
+    let has_text = |s: &str| !s.trim().is_empty();
+    clean.is_some_and(has_text) || plain.is_some_and(has_text) || html.is_some_and(has_html_body)
+}
+
+/// HTML 本文に中身があるか。
+///
+/// mail_parser は text/plain のメールを**ヘッダだけ**渡されると、空本文から
+/// `<html><body></body></html>` を合成する。これを本文と数えると `body_state='present'` に
+/// なり、開いても本文を取りに行かないので永久に空のままになる（実データで発生）。
+///
+/// 文字が残るかどうかでは判定しない。画像だけの HTML メールもタグを剥がすと空になるが、
+/// そちらは**取得済みの本文**なので 'present' のままにする必要がある。判定するのは
+/// 「中身の入る場所が空の骨組みか」だけ。
+/// 保存済みの行に「全文」（body_plain か中身のある HTML）が入っていないか。
+///
+/// `body_state` の記録ではなく**実体**を見る。記録が 'present' でも、合成された空の骨組み
+/// （`<html><body></body></html>`）しか入っておらず、本文が永久に埋まらない行が実在した
+/// （2026-09-11。docs/SYNC.md §3.6）。要約落ち（'evicted'）は容量のために意図して本文を
+/// 落とした行なので対象外にする（勝手に戻さない）。
+fn stored_lacks_full_body(conn: &Connection, id: i64) -> rusqlite::Result<bool> {
+    let (state, plain, html, html_z): (String, Option<String>, Option<String>, Option<Vec<u8>>) =
+        conn.query_row(
+            "SELECT COALESCE(body_state,'present'), body_plain, body_html, body_html_z
+             FROM emails WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?;
+    if state == "evicted" {
+        return Ok(false);
+    }
+    if plain.as_deref().is_some_and(|s| !s.trim().is_empty()) {
+        return Ok(false);
+    }
+    let stored_html = match html_z {
+        Some(z) => crate::services::compress::decompress_text(&z).ok(),
+        None => html,
+    };
+    Ok(!stored_html.as_deref().is_some_and(has_html_body))
+}
+
+pub(super) fn has_html_body(html: &str) -> bool {
+    let t = html.trim();
+    if t.is_empty() {
+        return false;
+    }
+    // 骨組みからタグと空白を取り除いて何も残らなければ、合成された空本文とみなす。
+    let stripped: String = t
+        .to_ascii_lowercase()
+        .replace("<html>", "")
+        .replace("</html>", "")
+        .replace("<head>", "")
+        .replace("</head>", "")
+        .replace("<body>", "")
+        .replace("</body>", "");
+    !stripped.trim().is_empty()
+}
+
 pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertOutcome> {
     // フォルダごとに別レコードにするため canonical_key はフォルダ接頭辞付きで保存する。
     let key = folder_key(&e.folder, &e.canonical_key);
@@ -209,12 +272,18 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
         .as_deref()
         .filter(|s| !s.trim().is_empty())
         .map(crate::services::quotes::fingerprint);
-    // 本文の取得状態を本文列の有無から導出する（docs/SYNC.md §3.6）。本文3列がすべて空＝
+    // 本文の取得状態を本文列の中身から導出する（docs/SYNC.md §3.6）。読める中身が無い＝
     // ヘッダのみ取り込んだ「メタのみ行」＝'absent'（開いた時にサーバから本文取得）。本文が
     // あれば 'present'。※要約落ち('evicted')は挿入ではなく storage.rs の更新側で付ける。
-    let has_body = e.clean_body.as_deref().is_some_and(|s| !s.trim().is_empty())
-        || e.body_plain.as_deref().is_some_and(|s| !s.is_empty())
-        || e.body_html.as_deref().is_some_and(|s| !s.is_empty());
+    //
+    // 「空でない文字列か」で見てはいけない。mail_parser は text/plain のメールをヘッダだけ
+    // 渡されると、空本文から `<html><body></body></html>` を合成する。これを本文と数えると
+    // 'present' になり、開いても本文を取りに行かないので永久に空のままになる（実データで発生）。
+    let has_body = has_readable_body(
+        e.body_plain.as_deref(),
+        e.body_html.as_deref(),
+        e.clean_body.as_deref(),
+    );
     let body_state = if has_body { "present" } else { "absent" };
     let changed = conn.execute(
         "INSERT OR IGNORE INTO emails
@@ -576,9 +645,11 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
     }
     // 本文が未取得（absent）の既存行に全文取得できたときは、全文(body_plain)・HTML・状態を
     // 復元する（本文バックフィル）。clean_body/FTS は上のブロック、添付は下のブロックで揃う。
-    let new_has_body = e.body_plain.as_deref().is_some_and(|s| !s.is_empty())
-        || e.body_html.as_deref().is_some_and(|s| !s.is_empty())
-        || e.clean_body.as_deref().is_some_and(|s| !s.trim().is_empty());
+    let new_has_body = has_readable_body(
+        e.body_plain.as_deref(),
+        e.body_html.as_deref(),
+        e.clean_body.as_deref(),
+    );
     let stored_absent = conn
         .query_row(
             "SELECT COALESCE(body_state,'present')='absent' FROM emails WHERE id = ?1",
@@ -586,7 +657,9 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
             |r| r.get::<_, i64>(0).map(|v| v != 0),
         )
         .unwrap_or(false);
-    if stored_absent && new_has_body {
+    // 記録が 'present' でも、実体は空（合成された骨組みだけ）という行が実在した。記録ではなく
+    // 中身を見て、全文が入っていなければ埋める（docs/SYNC.md §3.6）。
+    if stored_lacks_full_body(conn, id)? && new_has_body {
         let body_html_z = e
             .body_html
             .as_deref()
@@ -600,16 +673,31 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
             params![e.body_plain, body_html_z, e.has_attachments as i64, id],
         )?;
         touched = true;
+    } else if stored_absent {
+        // 取りに行ったのに読める本文が無かった＝**本当に空のメール**（件名だけ・添付だけ）。
+        // 'absent'（未取得）のままにすると、開くたびにサーバーへ取りに行ってしまうので、
+        // 「取ったが空だった」を記録して打ち止めにする（docs/SYNC.md §3.6）。
+        conn.execute(
+            "UPDATE emails SET body_state = 'empty', has_attachments = ?1 WHERE id = ?2",
+            params![e.has_attachments as i64, id],
+        )?;
+        touched = true;
     }
 
-    // 添付行が無ければ挿入する（重複防止）。
+    // 添付行が無ければ挿入する（重複防止）。既にあるときは、後から分かった正しいファイル名へ
+    // 寄せる（メタ先行で入った仮名・未復号の生値を本文取得時の名前で差し替える。行は消さない
+    // ので取得済み本体への参照は切れない。services/store/attachnames.rs）。
     let existing: i64 = conn.query_row(
         "SELECT count(*) FROM attachments WHERE email_id = ?1",
         params![id],
         |r| r.get(0),
     )?;
-    if existing == 0 && !e.attachments.is_empty() {
-        insert_attachments(conn, id, &e.attachments)?;
+    if existing == 0 {
+        if !e.attachments.is_empty() {
+            insert_attachments(conn, id, &e.attachments)?;
+            touched = true;
+        }
+    } else if super::attachnames::refresh_names(conn, id, &e.attachments)? {
         touched = true;
     }
     Ok(touched)
@@ -1674,6 +1762,216 @@ mod tests {
             )
             .unwrap();
         store
+    }
+
+    /// ヘッダだけを取り込んだ「メタのみ行」を作る（Pass1.5 が渡してくる形）。
+    /// mail_parser は text/plain の空本文から `<html><body></body></html>` を合成するので、
+    /// 本文が無くても body_html だけは空にならない。
+    fn insert_header_only(store: &Store, key: &str, body_html: Option<&str>) -> String {
+        let conn = store.conn.lock().unwrap();
+        let e = NewEmail {
+            account_id: 1,
+            message_id: None,
+            canonical_key: key.to_string(),
+            subject: Some("ヘッダのみ".to_string()),
+            from_address: Some("a@b".to_string()),
+            from_name: None,
+            to_addresses: None,
+            to_name: None,
+            reply_to: None,
+            cc_addresses: None,
+            date: Some("2026-01-01 00:00:00".to_string()),
+            date_ts: Some(1_767_225_600),
+            body_plain: Some(String::new()),
+            clean_body: Some(String::new()),
+            body_html: body_html.map(str::to_string),
+            auth_result: None,
+            list_id: None,
+            in_reply_to: None,
+            references_ids: None,
+            thread_index: None,
+            raw_headers: None,
+            has_attachments: false,
+            uid: Some(1),
+            folder: "inbox".to_string(),
+            is_read: false,
+            attachments: Vec::new(),
+            quotes: Vec::new(),
+            verified_self: false,
+        };
+        insert_email(&conn, &e).unwrap();
+        conn.query_row(
+            "SELECT body_state FROM emails WHERE canonical_key = ?1",
+            params![folder_key("inbox", key)],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_header_only_plain_text_mail_is_marked_absent() {
+        // text/plain のメールをヘッダだけ取り込むと、mail_parser が空の HTML 骨組みを作る。
+        // これを「本文あり」と数えると body_state='present' になり、開いても本文が
+        // 取りに行かれず永久に空のままになる（実データで発生。docs/SYNC.md §3.6）。
+        let store = test_store();
+        assert_eq!(
+            insert_header_only(&store, "shell@x", Some("<html><body></body></html>")),
+            "absent",
+            "中身の無い HTML 骨組みを本文と数えてはならない"
+        );
+        // multipart は body_html 自体が付かない（こちらは元から absent）。
+        assert_eq!(insert_header_only(&store, "none@x", None), "absent");
+        // 改行だけの本文も「取得済み」にしない。
+        assert_eq!(insert_header_only(&store, "ws@x", Some("<html><body>\n \n</body></html>")), "absent");
+    }
+
+    #[test]
+    fn a_body_that_comes_back_empty_is_marked_so_we_stop_asking() {
+        // 取りに行ったのに本文が無いメール（件名だけ・添付だけ）は、'absent' のままにすると
+        // 開くたびにサーバーへ行く。「取ったが空だった」を記録して打ち止めにする。
+        let store = test_store();
+        let key = "empty@x";
+        assert_eq!(insert_header_only(&store, key, None), "absent");
+
+        let conn = store.conn.lock().unwrap();
+        let id: i64 = conn
+            .query_row(
+                "SELECT id FROM emails WHERE canonical_key = ?1",
+                params![folder_key("inbox", key)],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // 全文取得の結果が空だった、という更新をかける。
+        let e = NewEmail {
+            account_id: 1,
+            message_id: None,
+            canonical_key: key.to_string(),
+            subject: Some("件名だけ".to_string()),
+            from_address: Some("a@b".to_string()),
+            from_name: None,
+            to_addresses: None,
+            to_name: None,
+            reply_to: None,
+            cc_addresses: None,
+            date: Some("2026-01-01 00:00:00".to_string()),
+            date_ts: Some(1_767_225_600),
+            body_plain: Some(String::new()),
+            clean_body: Some(String::new()),
+            body_html: None,
+            auth_result: None,
+            list_id: None,
+            in_reply_to: None,
+            references_ids: None,
+            thread_index: None,
+            raw_headers: None,
+            has_attachments: false,
+            uid: Some(1),
+            folder: "inbox".to_string(),
+            is_read: false,
+            attachments: Vec::new(),
+            quotes: Vec::new(),
+            verified_self: false,
+        };
+        backfill_existing(&conn, &e).unwrap();
+        let state: String = conn
+            .query_row("SELECT body_state FROM emails WHERE id = ?1", params![id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(state, "empty");
+    }
+
+    #[test]
+    fn a_row_poisoned_as_present_still_gets_its_body() {
+        // alpha.13 が作ってしまった行の形: 記録は 'present' なのに、実体は空の骨組みだけ。
+        // clean_body だけは後から入るので一覧のプレビューには本文が出るが、全文
+        // （body_plain / HTML）が空のままなので、バブルも詳細も空に見えていた。
+        // 記録ではなく実体を見て埋め直す（2026-09-25 の実データ）。
+        let store = test_store();
+        let key = "poisoned@x";
+        insert_header_only(&store, key, Some("<html><body></body></html>"));
+        let conn = store.conn.lock().unwrap();
+        let id: i64 = conn
+            .query_row(
+                "SELECT id FROM emails WHERE canonical_key = ?1",
+                params![folder_key("inbox", key)],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "UPDATE emails SET body_state = 'present', body_html = '<html><body></body></html>',
+                               clean_body = '末松さま お世話になっております。'
+             WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+
+        // 本文取得（Pass2）が同じ行へ届く。
+        let mut e = new_email_for_test(key);
+        e.body_plain = Some("末松さま お世話になっております。\n> 引用".to_string());
+        e.clean_body = Some("末松さま お世話になっております。".to_string());
+        backfill_existing(&conn, &e).unwrap();
+
+        let (plain, state): (Option<String>, String) = conn
+            .query_row(
+                "SELECT body_plain, body_state FROM emails WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            plain.as_deref(),
+            Some("末松さま お世話になっております。\n> 引用"),
+            "記録が 'present' でも、実体が空なら全文を埋める"
+        );
+        assert_eq!(state, "present");
+    }
+
+    /// 取り込み 1 通ぶんの雛形（本文は呼び出し側で差し替える）。
+    fn new_email_for_test(key: &str) -> NewEmail {
+        NewEmail {
+            account_id: 1,
+            message_id: None,
+            canonical_key: key.to_string(),
+            subject: Some("ヘッダのみ".to_string()),
+            from_address: Some("a@b".to_string()),
+            from_name: None,
+            to_addresses: None,
+            to_name: None,
+            reply_to: None,
+            cc_addresses: None,
+            date: Some("2026-01-01 00:00:00".to_string()),
+            date_ts: Some(1_767_225_600),
+            body_plain: None,
+            clean_body: None,
+            body_html: None,
+            auth_result: None,
+            list_id: None,
+            in_reply_to: None,
+            references_ids: None,
+            thread_index: None,
+            raw_headers: None,
+            has_attachments: false,
+            uid: Some(1),
+            folder: "inbox".to_string(),
+            is_read: false,
+            attachments: Vec::new(),
+            quotes: Vec::new(),
+            verified_self: false,
+        }
+    }
+
+    #[test]
+    fn an_image_only_html_mail_stays_present() {
+        // 画像だけの HTML メールはタグを剥がすと文字が残らないが、**取得済みの本文**なので
+        // 'present' のままにする。ここを取り違えると、開くたびに本文を取り直しに行く。
+        let store = test_store();
+        assert_eq!(
+            insert_header_only(
+                &store,
+                "img@x",
+                Some("<html><body><img src=\"cid:a\"></body></html>")
+            ),
+            "present"
+        );
     }
 
     fn seed(store: &Store, subject: &str, from: &str, body: &str, folder: &str, key: &str) {

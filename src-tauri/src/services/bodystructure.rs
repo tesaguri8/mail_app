@@ -15,7 +15,7 @@ pub struct StructPart {
     pub section: String,
     /// "type/subtype"（小文字。例: "application/pdf"）。
     pub content_type: String,
-    /// 表示名（Content-Disposition filename か Content-Type name。無ければ None）。
+    /// 表示名（Content-Disposition filename か Content-Type name を復号済み。無ければ None）。
     pub filename: Option<String>,
     /// Content-ID（山括弧除去。cid: 参照解決・inline 判定用）。
     pub content_id: Option<String>,
@@ -27,20 +27,13 @@ pub struct StructPart {
     pub is_body_text: bool,
 }
 
-/// BodyParams（`Option<Vec<(key, value)>>`）から key（大小無視）の値を取り出す。
-/// 完全一致に加え、RFC2231 の継続/拡張形（`filename*0` `filename*` `filename*0*` 等）も拾う。
-/// 長い/非ASCII のファイル名は素の `filename`/`name` ではなくこれらの形で入るため、
-/// これを見ないと添付を取りこぼす（正しい復号名は取得側 [resolve_attachments] が別途行う）。
-fn param<'a>(params: &BodyParams<'a>, key: &str) -> Option<&'a str> {
-    let list = params.as_ref()?;
-    for &(k, v) in list.iter() {
-        let is_continuation =
-            k.len() > key.len() && k.as_bytes()[key.len()] == b'*' && k[..key.len()].eq_ignore_ascii_case(key);
-        if k.eq_ignore_ascii_case(key) || is_continuation {
-            return Some(v);
-        }
-    }
-    None
+/// BodyParams（`Option<Vec<(key, value)>>`）から key（大小無視）のファイル名を復号して取り出す。
+/// RFC2231 の継続/拡張形（`filename*0*` 等）は全区画をつなぎ、RFC2047 のエンコードワードも
+/// 復号する（[`crate::services::attachname`]）。長い/非ASCII のファイル名はこれらの形で入るため、
+/// 生値のままだと `utf-8''%E5%A0%B1…` のような名前や、先頭片だけの尻切れ（拡張子が落ちる）になる。
+fn filename_param(params: &BodyParams<'_>, key: &str) -> Option<String> {
+    let list = params.as_deref().unwrap_or(&[]);
+    crate::services::attachname::decode_params(list, key)
 }
 
 /// BODYSTRUCTURE 全体を辿って、葉パートを文書順（section 昇順）に返す。
@@ -90,10 +83,8 @@ fn walk(bs: &BodyStructure, prefix: &str, out: &mut Vec<StructPart>) {
             let filename = common
                 .disposition
                 .as_ref()
-                .and_then(|d| param(&d.params, "filename"))
-                .or_else(|| param(&ct.params, "name"))
-                .map(|s| s.to_string())
-                .filter(|s| !s.trim().is_empty());
+                .and_then(|d| filename_param(&d.params, "filename"))
+                .or_else(|| filename_param(&ct.params, "name"));
             let content_id = other
                 .id
                 .map(|s| s.trim_matches(|c| c == '<' || c == '>').trim().to_string())
@@ -127,10 +118,8 @@ fn walk(bs: &BodyStructure, prefix: &str, out: &mut Vec<StructPart>) {
             let filename = common
                 .disposition
                 .as_ref()
-                .and_then(|d| param(&d.params, "filename"))
-                .or_else(|| param(&common.ty.params, "name"))
-                .map(|s| s.to_string())
-                .filter(|s| !s.trim().is_empty());
+                .and_then(|d| filename_param(&d.params, "filename"))
+                .or_else(|| filename_param(&common.ty.params, "name"));
             let content_id = other
                 .id
                 .map(|s| s.trim_matches(|c| c == '<' || c == '>').trim().to_string())

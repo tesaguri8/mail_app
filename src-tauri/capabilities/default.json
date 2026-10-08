@@ -18,6 +18,7 @@
     "shell:default",
     "opener:default",
     "log:default",
-    "notification:default"
+    "notification:default",
+    "clipboard-manager:allow-read-text"
   ]
 }

@@ -764,8 +764,10 @@ pub struct MailDetail {
     pub has_attachments: bool,
     /// 容量節約のため本文を要約保存に落としてある（clean_body のみ）。全文はサーバー再取得可。
     pub body_compacted: bool,
-    /// 本文の取得状態: 'present'（全文あり）/ 'evicted'（要約のみ）/ 'absent'（メタのみ・未取得）。
-    /// 'absent' は開いた時にサーバから本文を取得する（docs/SYNC.md §3.6）。
+    /// 本文の取得状態: 'present'（全文あり）/ 'evicted'（要約のみ）/ 'absent'（メタのみ・未取得）/
+    /// 'empty'（取りに行ったが本文が無かった＝件名だけ・添付だけのメール）。
+    /// 'absent' は開いた時にサーバから本文を取得する。'empty' は取りに行かない（打ち止め）。
+    /// 表示側は状態を鵜呑みにせず**本文が実際に空か**も見る（docs/SYNC.md §3.6）。
     pub body_state: String,
     /// 差出人がグリーン（本人 or 認定ドメイン）か。バッジ・認定ボタン用。docs/GREEN_DOMAINS.md。
     pub is_green: bool,
@@ -819,6 +821,10 @@ pub struct ThreadMessage {
     pub has_attachments: bool,
     /// 引用が畳まれている（clean より全文が長い）＝「引用を表示」を出すか。
     pub has_quotes: bool,
+    /// 引用を含む返信か（引用ブロックがある、または In-Reply-To がある）。
+    /// バブルを HTML で描くかの判断に使う。has_quotes は「clean より全文が長い」だけなので、
+    /// 署名を剥がしただけのニュースレターでも立ってしまい、返信かどうかの判定には使えない。
+    pub is_reply: bool,
     pub is_read: bool,
     /// スター付きか（折りたたみバブルの★バッジ用）。
     pub is_starred: bool,
@@ -832,6 +838,9 @@ pub struct ThreadMessage {
     pub folder: Option<String>,
     /// スレッド割当が手動か（'auto' | 'manual'）。
     pub thread_assignment: String,
+    /// 本文の取得状態（'present' | 'absent' | 'empty' | 'evicted'）。
+    /// バブルが本文を取りに行くかの判断に使う（'empty' は取りに行かない。docs/SYNC.md §3.6）。
+    pub body_state: String,
 }
 
 /// 会話ビュー（スレッド情報＋時系列のメッセージ）。
@@ -1091,6 +1100,17 @@ pub struct SyncProgress {
     pub current: i32,
     /// このフォルダで取得予定の件数（目安）。
     pub total: i32,
+}
+
+/// 新着が一覧に出せる状態になったこと（Tauri イベント "sync:listed" のペイロード）。
+/// 本文のダウンロードを待たずにヘッダだけ DB へ入れた時点で発火する（docs/SYNC.md §3.6）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct SyncListed {
+    /// 'inbox' | 'sent' | 'drafts' | 'trash' | 'spam'。
+    pub folder: String,
+    /// 今回一覧に出せるようになった件数（新規に作られた行）。
+    pub count: i32,
 }
 
 /// データ保存先（mail.db と添付キャッシュのフォルダ）と使用量。

@@ -50,6 +50,7 @@ import {
 } from '../services/mail';
 import { recipientSuggest } from '../services/recipients';
 import { MAIL_SYNCED_EVENT } from '../hooks/useAutoSync';
+import type { SyncListed } from '@bindings/SyncListed';
 import { RecipientSuggestList } from './RecipientSuggestList';
 import { mailAddTag, mailRemoveTag, tagCreate, tagList } from '../services/tags';
 import { pickTagColor, DEFAULT_TAG_COLOR } from '../utils/tagColors';
@@ -65,11 +66,16 @@ import { FolderIcons } from './FolderIcons';
 import { MAIL_FILTERS, matchesFilters, matchesNoneOfFilters } from './mailFilters';
 import { Tooltip } from './Tooltip';
 import { ContextMenu, type MenuItem } from './ContextMenu';
+import { Dropdown } from './Dropdown';
 import { PrintMail } from './PrintMail';
 import { DateFilter, matchesDate, type DateRange } from './DateFilter';
 import { SpamConflictAlert } from './SpamConflictAlert';
 import { TagFilter, matchesTags } from './TagFilter';
 import { TagPicker } from './TagPicker';
+
+/** 取り込み途中の "sync:listed" をまとめる待ち時間（ms）。チャンクごとの連続発火で
+ *  一覧を何度も読み直さないよう、最後の 1 回だけ実行する。 */
+const LISTED_RELOAD_DELAY_MS = 400;
 
 const iconBtn =
   'flex h-8 w-8 items-center justify-center rounded-md text-white/55 hover:text-white/80 disabled:opacity-40';
@@ -316,10 +322,21 @@ export function MailboxView({
   // 作成セッション（compose）は App 側で保持する（上の props）。メール画面はビュー切替で
   // アンマウントされるが、compose は App にあるため未編集の返信/新規もそのまま残り、戻ると再表示される。
   // 作成画面に入ったら編集/カレンダーパネルは閉じる（全幅で作成に集中）。
+  // 作成に入る前の一覧サイドバーの開閉を覚えておき、作成を終えたら（送信・下書き保存・破棄の
+  // いずれでも）元に戻す。作成中はサイドバーを描かないので、その間に状態が変わっても画面では
+  // 分からず、戻ったときだけ閉じて見える。
+  const sidebarBeforeComposeRef = useRef<boolean | null>(null);
   useEffect(() => {
     if (compose) {
+      // パネルを開いている最中に作成へ入ったら、戻すべきなのは「パネルを開く前」の状態。
+      if (sidebarBeforeComposeRef.current == null) {
+        sidebarBeforeComposeRef.current = sidebarBeforePanelRef.current ?? sidebarOpen;
+      }
       closeContactPanel();
       closeCalendarPanel();
+    } else if (sidebarBeforeComposeRef.current != null) {
+      setSidebarOpen(sidebarBeforeComposeRef.current);
+      sidebarBeforeComposeRef.current = null;
     }
     // close* は毎回同じ挙動。compose の変化だけをトリガにする。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -432,8 +449,12 @@ export function MailboxView({
   }, [selectedIds.size, menu, tagPicker, compose]);
 
   // Ctrl+S（Mac は Cmd+S）でサイドバー（一覧ペイン）の表示を切替。ブラウザの保存は抑止。
+  // 作成中は受け付けない。Compose で「保存」のつもりで Ctrl+S を押すと、画面に出ていない
+  // サイドバーの開閉だけが変わり、送信・下書き保存のあと一覧が閉じたままになるため
+  // （利用者報告 2026-09-25。下書きは自動保存なので Compose 側に Ctrl+S の処理は無い）。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (compose) return;
       if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 's' || e.key === 'S')) {
         e.preventDefault();
         setSidebarOpen((v) => !v);
@@ -441,7 +462,7 @@ export function MailboxView({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [compose]);
 
   // Del / Ctrl+D（Mac は Cmd+D）で、選択中（未選択なら閲覧中）のメールを削除する。
   // 重なり UI（メニュー/タグピッカー/作成モーダル/候補）や入力欄フォーカス中は対象外。
@@ -710,6 +731,28 @@ export function MailboxView({
     return () => window.removeEventListener(MAIL_SYNCED_EVENT, onSynced);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncing, selected, folder]);
+
+  // 取り込みの途中でも、ヘッダが DB に入った時点で一覧へ出す（本文は後から届く。
+  // docs/SYNC.md §3.6）。チャンクごとに来るので、まとめて 1 回だけ読み直す。
+  useEffect(() => {
+    if (selected == null) return;
+    let timer: number | null = null;
+    let stopped = false;
+    const unlisten = listen<SyncListed>('sync:listed', (e) => {
+      if (e.payload.count <= 0 || stopped) return;
+      if (timer != null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = null;
+        void loadMails({ keepScroll: true });
+      }, LISTED_RELOAD_DELAY_MS);
+    });
+    return () => {
+      stopped = true;
+      if (timer != null) window.clearTimeout(timer);
+      void unlisten.then((off) => off());
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, folder]);
 
   // 全文検索: 入力を 250ms デバウンスして呼ぶ。アカウント/フォルダ切替でも再実行。
   useEffect(() => {
@@ -1351,23 +1394,19 @@ export function MailboxView({
       )}
       {/* アカウント選択＋フォルダ選択（アイコンボタン）を同じ行に置く */}
       <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-2 py-1.5">
-        <select
-          className="min-w-0 flex-1 rounded-md bg-white/10 px-2 py-1 text-xs outline-none"
-          value={selected ?? ''}
-          onChange={(e) => setSelected(e.target.value === 'all' ? 'all' : Number(e.target.value))}
-        >
-          {/* 全アカウント横断表示。既定は「全て」。複数アカウントがある時のみ選べる。 */}
-          {accounts.length > 1 && (
-            <option value="all">
-              {t('mailbox.allAccounts')}
-            </option>
-          )}
-          {accounts.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.email}
-            </option>
-          ))}
-        </select>
+        {/* アカウント選択。ネイティブ <select> は候補リストを OS が描くため、環境によって
+            背景と文字が同系色になって読めなくなる（Windows で実測）。自前描画の Dropdown に
+            置き換えて OS 依存を無くす。全アカウント横断表示は複数アカウントがある時だけ。 */}
+        <Dropdown
+          value={String(selected ?? '')}
+          options={[
+            ...(accounts.length > 1 ? [{ value: 'all', label: t('mailbox.allAccounts') }] : []),
+            ...accounts.map((a) => ({ value: String(a.id), label: a.email })),
+          ]}
+          onChange={(v) => setSelected(v === 'all' ? 'all' : Number(v))}
+          className="min-w-0 flex-1 text-xs"
+          ariaLabel={t('mailbox.account')}
+        />
         <FolderIcons value={folder} onChange={setFolder} />
         {/* 迷惑登録の矛盾（住所録/グリーンなのに迷惑）を知らせる情報アイコン。矛盾が無ければ非表示。 */}
         <SpamConflictAlert onResolved={() => loadMails({ keepScroll: true })} />
@@ -1805,6 +1844,11 @@ export function MailboxView({
       }
       target={compose}
       onDraftId={onComposeDraftChange}
+      // 送信したら、作成前に閉じていても一覧サイドバーを開いて戻す（送ったメールを一覧で
+      // 確かめられるように。利用者の要望 2026-10-03）。下書き保存・破棄は作成前の状態へ戻す。
+      onSent={() => {
+        sidebarBeforeComposeRef.current = true;
+      }}
       onClose={() => {
         setCompose(null);
         // 作成画面を閉じたら復元対象もクリア（次にメールへ戻っても勝手に開かない）。

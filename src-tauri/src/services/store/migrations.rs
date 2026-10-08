@@ -233,25 +233,31 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0053_sent_addresses.sql"),
     },
     Migration {
-        // 54 は Google 連携アカウントの共通化（calendar_accounts → google_accounts）。
-        // カレンダーと連絡先で 1 アカウント・1 refresh_token を共有する（docs/CALENDAR_SYNC.md）。
+        // 54 は本文が空なのに 'present' になっていた行の修復（メタ先行取り込みの取りこぼし）。
         version: 54,
-        sql: include_str!("migrations/0054_google_accounts.sql"),
+        sql: include_str!("migrations/0054_repair_empty_bodies.sql"),
     },
     Migration {
-        // 55 は Google 連絡先（People API）の取り込み台帳 contact_identities。
+        // 55 は Google 連携アカウントの共通化（calendar_accounts → google_accounts）。
+        // カレンダーと連絡先で 1 アカウント・1 refresh_token を共有する（docs/CALENDAR_SYNC.md）。
+        // 枝の上では 54〜57 だったが、dev の 54（本文の修復）と重なったので 55〜58 にずらした。
         version: 55,
-        sql: include_str!("migrations/0055_contact_identities.sql"),
+        sql: include_str!("migrations/0055_google_accounts.sql"),
     },
     Migration {
-        // 56 は Google 連絡先の送信（push）。contacts.dirty と、新規をどう扱うかの既定。
+        // 56 は Google 連絡先（People API）の取り込み台帳 contact_identities。
         version: 56,
-        sql: include_str!("migrations/0056_contact_push.sql"),
+        sql: include_str!("migrations/0056_contact_identities.sql"),
     },
     Migration {
-        // 57 は Google の連絡先グループ（ラベル）と Rondine のタグの対応表。
+        // 57 は Google 連絡先の送信（push）。contacts.dirty と、新規をどう扱うかの既定。
         version: 57,
-        sql: include_str!("migrations/0057_contact_group_identities.sql"),
+        sql: include_str!("migrations/0057_contact_push.sql"),
+    },
+    Migration {
+        // 58 は Google の連絡先グループ（ラベル）と Rondine のタグの対応表。
+        version: 58,
+        sql: include_str!("migrations/0058_contact_group_identities.sql"),
     },
 ];
 
@@ -338,6 +344,37 @@ mod tests {
         run(&conn).unwrap();
     }
 
+    /// 0054: 本文が空なのに 'present' になっていた行を取り直し対象へ戻す。
+    /// alpha.13 で壊れた実データが、更新するだけで読めるようになることを確かめる。
+    #[test]
+    fn migration_0054_repairs_bodies_that_were_never_fetched() {
+        let conn = Connection::open_in_memory().unwrap();
+        run(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1,'a@b','i','s');
+             INSERT INTO emails (account_id, canonical_key, body_plain, clean_body, body_state)
+                 VALUES (1, 'broken', '', '', 'present'),      -- 本文が無いのに取得済み
+                        (1, 'ok',     '本文あり', '本文あり', 'present'),
+                        (1, 'absent', NULL, NULL, 'absent');",
+        )
+        .unwrap();
+        // 0054 だけをもう一度当てる（マイグレーションは冪等な UPDATE）。
+        conn.execute_batch(include_str!("migrations/0054_repair_empty_bodies.sql"))
+            .unwrap();
+
+        let state = |key: &str| -> String {
+            conn.query_row(
+                "SELECT body_state FROM emails WHERE canonical_key = ?1",
+                [key],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(state("broken"), "absent", "空の行は取り直しに回す");
+        assert_eq!(state("ok"), "present", "本文がある行は触らない");
+        assert_eq!(state("absent"), "absent");
+    }
+
     /// 別枝で先に列を追加済みの DB（user_version=35 で reply_to だけ既存＝旧 fix 枝の DB を模す）でも、
     /// run() が「既存の列は許容し、無い列だけ追加」して最新版へ到達する（ゴミ箱/Reply-To 衝突対策）。
     #[test]
@@ -346,7 +383,9 @@ mod tests {
         // 実在の v35 DB を忠実に模す: from_address(0001)・body_compacted(0011) と
         // folder_sync(0015) は 35 より前に存在する。reply_to だけ「別枝で既存」の状態を作る。
         conn.execute_batch(
-            "CREATE TABLE emails (id INTEGER PRIMARY KEY, folder TEXT, from_address TEXT, body_compacted INTEGER DEFAULT 0, has_attachments INTEGER DEFAULT 0);
+            "CREATE TABLE emails (id INTEGER PRIMARY KEY, folder TEXT, from_address TEXT, body_compacted INTEGER DEFAULT 0, has_attachments INTEGER DEFAULT 0,
+               -- 本文列（0001 から存在）。0054(空本文の修復)が動くよう用意する。
+               body_plain TEXT, clean_body TEXT);
              ALTER TABLE emails ADD COLUMN reply_to TEXT;
              CREATE TABLE folder_sync (
                account_id INTEGER NOT NULL, folder TEXT NOT NULL,
@@ -362,7 +401,7 @@ mod tests {
                name_kana TEXT, note TEXT,
                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, deleted_at TEXT);
-             -- 住所録（0016 で作成）。0056(contacts.dirty 追加)が動くよう用意する。
+             -- 住所録（0016 で作成）。0057(contacts.dirty 追加)が動くよう用意する。
              CREATE TABLE contacts (id INTEGER PRIMARY KEY, display_name TEXT NOT NULL);
              PRAGMA user_version = 35;",
         )
@@ -512,11 +551,11 @@ mod tests {
         assert_eq!(n, 0);
     }
 
-    /// 0054（calendar_accounts → google_accounts）の更新パス。既に Google カレンダーを
+    /// 0055（calendar_accounts → google_accounts）の更新パス。既に Google カレンダーを
     /// 連携済みの DB で、アカウントと同期実績が失われない（＝再連携・全予定の再取得を
     /// 強いない）ことを確かめる。
     #[test]
-    fn migration_0054_preserves_linked_google_accounts() {
+    fn migration_0055_preserves_linked_google_accounts() {
         let conn = Connection::open_in_memory().unwrap();
         // 0041 が作る当時の calendar_accounts をそのまま再現し、連携済み 1 件を入れる。
         conn.execute_batch(
@@ -530,8 +569,11 @@ mod tests {
                  UNIQUE(provider, email));
              INSERT INTO calendar_accounts (email, external_id, last_sync_at)
                  VALUES ('a@gmail.com', 'sub123', '2026-08-20 01:23:45');
-             -- 0055(contact_identities の外部キー)・0056(contacts.dirty 追加)が動くよう用意する。
+             -- 0056(contact_identities の外部キー)・0057(contacts.dirty 追加)が動くよう用意する。
              CREATE TABLE contacts (id INTEGER PRIMARY KEY, display_name TEXT NOT NULL);
+             -- 0054(空本文の修復)が動くよう、触る列だけを持つ emails を用意する。
+             CREATE TABLE emails (id INTEGER PRIMARY KEY, body_state TEXT,
+               body_plain TEXT, clean_body TEXT);
              PRAGMA user_version = 52;",
         )
         .unwrap();

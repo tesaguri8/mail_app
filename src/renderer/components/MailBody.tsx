@@ -45,6 +45,7 @@ import { parseDateTime, type ParsedDate } from '../utils/dateparse';
 import { formatDateTime } from '../utils/datetime';
 import { saveAllAttachments, saveAttachment } from '../utils/attachmentSave';
 import { withActivity } from '../stores/activity';
+import { hasReadableBody, htmlHasContent } from '../utils/mailBody';
 
 /** 「表示名 <メール>」に整形。表示名が無ければアドレスのみ。 */
 function formatAddress(name: string | null, address: string | null): string {
@@ -694,11 +695,23 @@ export function MailBody({
     }
   };
 
-  // 未取得(absent)本文はメールを開いた時に自動でサーバから取得する（docs/SYNC.md §3.6：
-  // 全件メタ索引で見出しだけ先に並べ、開いた本文はオンデマンド）。要約(evicted)は clean_body が
-  // あるので自動取得せず、必要時に「全文を再取得」ボタンで取る。
+  // 本文が無いメールを開いたら、自動でサーバから取りに行く（docs/SYNC.md §3.6：全件メタ索引で
+  // 見出しだけ先に並べ、開いた本文はオンデマンド）。
+  //
+  // 条件は body_state ではなく**本文が実際に空か**で見る。状態は嘘をつくことがあり、実際に
+  // 「本文が空なのに 'present'」で永久に取りに行かない不具合が起きた（2026-09-11）。実体を
+  // 見れば、記録が壊れていても開いた時点で自力で回復する。
+  //
+  // 例外が 2 つ。'empty' は「取りに行ったが本文が無かった」＝件名だけ・添付だけのメールなので
+  // これ以上試さない（開くたびにサーバーへ行くのを防ぐ）。要約(evicted)は clean_body があるので
+  // ここには来ない（必要時に「全文を再取得」ボタンで取る）。
   useEffect(() => {
-    if (detail.body_state === 'absent' && !refreshed && !refetching) {
+    // 「実体が空」に加えて、記録が 'absent'（未取得）のときも取りに行く。修復で 'absent' へ
+    // 戻した行は clean_body だけ入っていることがあり、実体だけ見ると取りに行かないため
+    // （全文・HTML が欠けたままになる。docs/SYNC.md §3.6）。
+    const missing =
+      (!hasReadableBody(detail) || detail.body_state === 'absent') && detail.body_state !== 'empty';
+    if (missing && !refreshed && !refetching) {
       void handleRefetch();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -733,7 +746,10 @@ export function MailBody({
   const clean = d.clean_body ?? '';
   const full = d.body_plain ?? '';
   const html = d.body_html?.trim() ?? '';
-  const hasHtml = html.length > 0;
+  // 中身の無い骨組み（`<html><body></body></html>`）を「HTML 本文あり」と数えない。
+  // 数えると HtmlText が何も描かず、本文（clean_body/body_plain）があるのに空に見える
+  // （2026-09-11 の不具合の残り。取り直し済みの行でも骨組みが残っていることがある）。
+  const hasHtml = htmlHasContent(html);
   const hasQuotedExtra = !hasHtml && full.trim().length > clean.trim().length;
   const body = showQuotes ? full : clean || full;
 
@@ -1010,10 +1026,12 @@ export function MailBody({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
-        {d.body_state === 'absent' && !refreshed && (
+        {!hasReadableBody(d) && !refreshed && (
           <div className="mb-3 flex items-center gap-2 rounded-md border border-sky-300/25 bg-sky-300/10 px-3 py-2 text-[11px] leading-snug text-sky-100/80">
             <RefreshCw size={12} className={refetching ? 'animate-spin' : ''} />
-            <span className="flex-1">{t('mailbox.bodyAbsent')}</span>
+            <span className="flex-1">
+              {d.body_state === 'empty' ? t('mailbox.bodyEmpty') : t('mailbox.bodyAbsent')}
+            </span>
             {!refetching && (
               <button
                 onClick={handleRefetch}

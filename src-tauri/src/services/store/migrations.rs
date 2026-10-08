@@ -275,6 +275,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 61,
         sql: include_str!("migrations/0061_google_account_disconnect.sql"),
     },
+    Migration {
+        // 62 は連絡先ごとの同期先（作成待ちの表と、向こうも消す外し方の印）。
+        version: 62,
+        sql: include_str!("migrations/0062_contact_sync_targets.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

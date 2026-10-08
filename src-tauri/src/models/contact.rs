@@ -173,6 +173,21 @@ pub struct ContactLink {
     pub account_email: Option<String>,
     /// 連携アカウントが解除中（つながりは残るが同期されない。再接続すると戻る）。
     pub disconnected: bool,
+    /// つながりの状態（作成待ち・削除待ちは次の同期で送る）。
+    pub state: ContactLinkState,
+}
+
+/// つながりの状態。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+#[serde(rename_all = "snake_case")]
+pub enum ContactLinkState {
+    /// 同期中（向こうにある）。
+    Synced,
+    /// 「このサービスにも保存」を選び、次の同期で作る。
+    PendingCreate,
+    /// 同期をやめて向こうも消す。次の同期で削除を送る。
+    PendingDelete,
 }
 
 /// 連絡先の中身（編集できる項目のすべて）。一覧/詳細・入力・取り込みの中間表現で共有する。

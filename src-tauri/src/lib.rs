@@ -183,6 +183,8 @@ pub fn run() {
             commands::google_disconnect,
             commands::google_sync,
             commands::gcontacts_set_push_new,
+            commands::contact_sync_target_add,
+            commands::contact_sync_stop,
             commands::data_location,
             commands::data_relocate,
             commands::data_reset_location,

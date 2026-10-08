@@ -64,8 +64,8 @@ impl Pusher<'_> {
                     .push_delete(gid)
                     .await
                     .map(|()| result.deleted_out += 1),
-                // 削除済みで未連携のものは送信対象に出てこないが、出ても送るものは無い。
-                (true, None) => Ok(self.store.clear_contact_dirty(ch.contact_id)?),
+                // 削除で向こうの ID が無いものは送信対象に出てこない（作成待ちは削除済みを除く）。
+                (true, None) => Ok(()),
                 (false, Some(gid)) => self
                     .push_update(&ch, gid)
                     .await
@@ -107,15 +107,17 @@ impl Pusher<'_> {
         self.finish(ch, &rn, &g, &current).await
     }
 
-    /// ローカル生まれ → 新規作成（`push_new_contacts` が有効なときだけここへ来る）。
+    /// 作成待ち → 新規作成（利用者がこの人の同期先にこのアカウントを選んだときだけここへ来る）。
     async fn push_create(&self, ch: &ContactPush) -> Result<(), SyncError> {
         let body = outgoing::person_body(&ch.contact, None);
         let g = api::create_contact(self.client, self.token, &body).await?;
         match g.resource_name.clone() {
             Some(rn) => self.finish(ch, &rn, &g, &ContactFields::default()).await,
             // resourceName が返らないことは無いはずだが、返らなければ紐付けようが無いので
-            // 未送信の印だけ落として二重作成を防ぐ。
-            None => Ok(self.store.clear_contact_dirty(ch.contact_id)?),
+            // 作成待ちを取り下げて二重作成を防ぐ。
+            None => Ok(self
+                .store
+                .drop_contact_create_request(self.account_id, ch.contact_id)?),
         }
     }
 

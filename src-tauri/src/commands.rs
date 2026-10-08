@@ -2476,10 +2476,46 @@ pub async fn google_sync(
     .await)
 }
 
-/// 「Rondine で新しく作った連絡先も Google 側に作る」設定を切り替える。
+/// 連絡先の同期先に Google アカウントを加える（作成待ちを置き、次の同期で作る）。
 ///
-/// 既定は無効。住所録を Google へ上げるかどうかは利用者が決めることなので、明示的に
-/// 有効にしたときだけローカル生まれの連絡先を送る。
+/// 連携中（解除中でない）で連絡先の同期をしているアカウントだけを受け付ける。
+#[tauri::command]
+pub fn contact_sync_target_add(
+    store: State<Store>,
+    contact_id: i64,
+    account_id: i64,
+) -> Result<(), String> {
+    let account = store
+        .google_account(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("連携アカウントが見つかりません")?;
+    if account.disconnected_at.is_some() {
+        return Err("このアカウントは解除中です。再接続してから選んでください".into());
+    }
+    if !account.sync_contacts {
+        return Err("このアカウントは連絡先を同期していません".into());
+    }
+    store
+        .request_contact_create(contact_id, account_id)
+        .map_err(|e| e.to_string())
+}
+
+/// 連絡先とそのアカウントの同期をやめる。`delete_remote` なら次の同期で向こうの連絡先も
+/// 削除し、偽ならつながりだけ外す（向こうは残る）。Rondine の連絡先はどちらでも残る。
+#[tauri::command]
+pub fn contact_sync_stop(
+    store: State<Store>,
+    contact_id: i64,
+    account_id: i64,
+    delete_remote: bool,
+) -> Result<(), String> {
+    store
+        .stop_contact_sync(contact_id, account_id, delete_remote)
+        .map_err(|e| e.to_string())
+}
+
+/// 「新しく作る連絡先は、既定で Google にも保存する」を切り替える（新規作成の画面で最初から
+/// チェックを入れるかの既定。どこにもつながっていない連絡先を勝手に作ることはしない）。
 #[tauri::command]
 pub fn gcontacts_set_push_new(
     store: State<Store>,

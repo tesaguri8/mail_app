@@ -30,13 +30,14 @@ pub struct RemoteContact {
     pub contact: Option<ContactFields>,
 }
 
-/// 送るべきローカル変更 1 件（このアカウントへのつながりが未送信、または未連携の新規）。
+/// 送るべきローカル変更 1 件（このアカウントへのつながりが未送信・向こうも消す外し方、または
+/// 作成待ち）。
 #[derive(Debug, Clone)]
 pub struct ContactPush {
     pub contact_id: i64,
     /// 連携済みなら People API の resourceName。None＝Google 側にまだ無い（作成する）。
     pub external_id: Option<String>,
-    /// ローカルで論理削除された（Google 側も削除する）。
+    /// Google 側を削除する（ローカルで論理削除した、または同期をやめて向こうも消す）。
     pub deleted: bool,
     /// 送る中身（削除のときは使わない）。
     pub contact: ContactFields,
@@ -74,7 +75,7 @@ fn contact_dirty(conn: &Connection, contact_id: i64) -> rusqlite::Result<bool> {
 }
 
 /// 連絡先の「未送信」の印を、つながりの印から決め直す（未送信のつながりが残っていれば 1）。
-fn refresh_contact_dirty(conn: &Connection, contact_id: i64) -> rusqlite::Result<()> {
+pub(super) fn refresh_contact_dirty(conn: &Connection, contact_id: i64) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE contacts SET dirty = EXISTS (SELECT 1 FROM contact_identities \
          WHERE contact_id = ?1 AND dirty = 1) WHERE id = ?1",
@@ -229,18 +230,6 @@ impl Store {
         Ok(report)
     }
 
-    /// 「Rondine で新しく作った連絡先も Google 側に作る」設定（既定 false）。
-    fn push_new_contacts(&self, account_id: i64) -> rusqlite::Result<bool> {
-        let conn = self.conn.lock().unwrap();
-        conn.query_row(
-            "SELECT push_new_contacts FROM google_accounts WHERE id = ?1",
-            params![account_id],
-            |r| r.get::<_, i64>(0),
-        )
-        .optional()
-        .map(|v| v.unwrap_or(0) != 0)
-    }
-
     /// 上の設定を変える。
     ///
     /// # Errors
@@ -257,19 +246,21 @@ impl Store {
     /// このアカウントへ送るべきローカル変更を送信順に返す。
     ///
     /// - このアカウントへのつながりが未送信の連絡先（更新・削除）
-    /// - どのサービスにもつながっていない未送信の連絡先（新規作成）。`push_new_contacts` が
-    ///   有効なときだけ
+    /// - 同期をやめて向こうも消すつながり（削除）
+    /// - このアカウントへの作成待ち（新規作成）。どこにもつながっていない連絡先を勝手に作る
+    ///   ことはしない（同期先は 1 人ずつ選ぶ。docs/CONTACT_MODEL.md §3）
     ///
     /// # Errors
     /// DB の読み出しに失敗したとき。
     pub fn list_contacts_to_push(&self, account_id: i64) -> rusqlite::Result<Vec<ContactPush>> {
-        let push_new = self.push_new_contacts(account_id)?;
         let conn = self.conn.lock().unwrap();
         let mut targets: Vec<(i64, Option<String>, bool)> = {
             let mut stmt = conn.prepare(
-                "SELECT c.id, ci.external_id, c.deleted_at IS NOT NULL \
+                "SELECT c.id, ci.external_id, \
+                        c.deleted_at IS NOT NULL OR ci.unlink_requested = 1 \
                  FROM contact_identities ci JOIN contacts c ON c.id = ci.contact_id \
-                 WHERE ci.provider = 'google' AND ci.account_id = ?1 AND ci.dirty = 1 \
+                 WHERE ci.provider = 'google' AND ci.account_id = ?1 \
+                   AND (ci.dirty = 1 OR ci.unlink_requested = 1) \
                  ORDER BY c.id",
             )?;
             let rows = stmt.query_map(params![account_id], |r| {
@@ -277,14 +268,15 @@ impl Store {
             })?;
             rows.collect::<rusqlite::Result<_>>()?
         };
-        if push_new {
-            // ローカル生まれ＝どのつながりも無い連絡先。削除済みは送らない（向こうに無いので）。
+        {
+            // 作成待ち。削除済み（ゴミ箱）の人は作らない（向こうに無いので消すものも無い）。
             let mut stmt = conn.prepare(
-                "SELECT c.id FROM contacts c WHERE c.dirty = 1 AND c.deleted_at IS NULL \
-                 AND NOT EXISTS (SELECT 1 FROM contact_identities ci WHERE ci.contact_id = c.id) \
-                 ORDER BY c.id",
+                "SELECT r.contact_id FROM contact_create_requests r \
+                 JOIN contacts c ON c.id = r.contact_id \
+                 WHERE r.provider = 'google' AND r.account_id = ?1 AND c.deleted_at IS NULL \
+                 ORDER BY r.contact_id",
             )?;
-            let rows = stmt.query_map([], |r| r.get::<_, i64>(0))?;
+            let rows = stmt.query_map(params![account_id], |r| r.get::<_, i64>(0))?;
             for id in rows {
                 targets.push((id?, None, false));
             }
@@ -325,18 +317,30 @@ impl Store {
                  contact_id = ?3, etag = ?4, snapshot = coalesce(?5, snapshot), dirty = 0",
             params![account_id, external_id, contact_id, etag, snapshot],
         )?;
+        // 作成待ちだったなら、作れたので消す。
+        conn.execute(
+            "DELETE FROM contact_create_requests \
+             WHERE contact_id = ?1 AND provider = 'google' AND account_id = ?2",
+            params![contact_id, account_id],
+        )?;
         refresh_contact_dirty(&conn, contact_id)
     }
 
-    /// 送るものが無かった（作成で resourceName が返らなかった等）連絡先の未送信の印を落とす。
+    /// 作成待ちを、作れないまま取り下げる（作成で resourceName が返らなかったとき。残すと
+    /// 同期のたびに作成を繰り返して二重になる）。
     ///
     /// # Errors
     /// DB の書き込みに失敗したとき。
-    pub fn clear_contact_dirty(&self, contact_id: i64) -> rusqlite::Result<()> {
+    pub fn drop_contact_create_request(
+        &self,
+        account_id: i64,
+        contact_id: i64,
+    ) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE contacts SET dirty = 0 WHERE id = ?1",
-            params![contact_id],
+            "DELETE FROM contact_create_requests \
+             WHERE contact_id = ?1 AND provider = 'google' AND account_id = ?2",
+            params![contact_id, account_id],
         )?;
         Ok(())
     }
@@ -412,7 +416,7 @@ fn apply_remote_update(
         .query_row(
             "SELECT ci.contact_id FROM contact_identities ci JOIN contacts c ON c.id = ci.contact_id \
              WHERE ci.provider = 'google' AND ci.account_id = ?1 AND ci.external_id = ?2 \
-               AND c.dirty = 0",
+               AND c.dirty = 0 AND ci.unlink_requested = 0",
             params![account_id, remote.external_id],
             |r| r.get(0),
         )

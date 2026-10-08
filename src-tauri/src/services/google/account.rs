@@ -83,6 +83,8 @@ mod tests {
             last_calendar_sync_at: None,
             last_contacts_sync_at: None,
             disconnected_at: None,
+            calendar_granted: true,
+            contacts_granted: sync_contacts,
         }
     }
 

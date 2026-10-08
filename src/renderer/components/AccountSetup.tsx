@@ -387,6 +387,7 @@ export function AccountSetup({
           imap_port: imapPort,
           smtp_host: smtpHost,
           smtp_port: smtpPort,
+          provider: null,
         },
         password
       );

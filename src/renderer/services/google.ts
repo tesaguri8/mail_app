@@ -3,6 +3,7 @@ import type { GoogleAccount } from '@bindings/GoogleAccount';
 import type { GoogleDisconnectResult } from '@bindings/GoogleDisconnectResult';
 import type { GoogleSyncResult } from '@bindings/GoogleSyncResult';
 import type { GoogleCredentialsStatus } from '@bindings/GoogleCredentialsStatus';
+import type { GoogleService } from '@bindings/GoogleService';
 
 // Google アカウント連携（OAuth）。カレンダーと連絡先で同じアカウント・同じ認証情報を共有する。
 // 資格情報は Rust 側で keyring/app_settings に保存し、フロントは値を保持しない。
@@ -20,11 +21,17 @@ export const googleAccounts = () => invoke<GoogleAccount[]>('google_accounts');
 
 /**
  * Google アカウントを連携する（ブラウザで同意 → 完了で解決）。
- * `contacts` を立てると連絡先（People API）の権限も要求する。連携済みのアカウントに
- * 後から足す場合も、同じ呼び出しで差分同意できる。
+ * オンにしたいサービス（カレンダー・連絡先）の権限だけを要求する。連携済みのアカウントに
+ * 後から足す場合も、同じ呼び出しで差分同意できる。`loginHint` はカードのアドレス
+ * （アカウント選択で先に選んでおく。利用者が別のアカウントを選べば、そのアドレスのカードに入る）。
  */
-export const googleConnect = (contacts: boolean) =>
-  invoke<GoogleAccount>('google_connect', { contacts });
+export const googleConnect = (calendar: boolean, contacts: boolean, loginHint?: string) =>
+  invoke<GoogleAccount>('google_connect', { calendar, contacts, loginHint: loginHint ?? null });
+
+/** サービス（カードの「カレンダー」「連絡先」のスイッチ）を切り替える。権限が無いのにオンに
+ *  しようとするとエラー（先に googleConnect でログインし直す）。 */
+export const googleSetService = (accountId: number, service: GoogleService, enabled: boolean) =>
+  invoke<GoogleAccount>('google_set_service', { accountId, service, enabled });
 
 /** 連携を解除する（取り込んだカレンダー/予定も削除）。 */
 /** 連携の解除。purge=false は「解除中」（記録を残して同期を止める）、true は「完全に解除」

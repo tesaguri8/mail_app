@@ -1,6 +1,7 @@
+use super::account_profiles::{ensure_profile, prune_profile};
 use super::contact_lookup::contact_exists_sql;
 use super::Store;
-use crate::models::AccountSummary;
+use crate::models::{AccountProvider, AccountSummary};
 use rusqlite::{params, OptionalExtension};
 
 /// アカウント挿入用（内部）。資格情報は含めない（keyring で別管理）。
@@ -13,6 +14,9 @@ pub struct NewAccount {
     pub smtp_host: String,
     pub smtp_port: u16,
     pub server_account_id: Option<i64>,
+    /// このアドレスのカード（`account_profiles`）の提供元。カードが既にあれば、その他から
+    /// 具体的な提供元へ上げるときだけ使う。
+    pub provider: AccountProvider,
 }
 
 /// 送信に必要なアカウント情報。email は keyring のキー、from_* は差出人ヘッダ用。
@@ -30,12 +34,19 @@ pub struct SmtpAccount {
 }
 
 impl Store {
+    /// メールアカウントを登録し、行 id を返す。このアドレスのカード（`account_profiles`）が
+    /// 無ければ作ってつなぐ。
+    ///
+    /// # Errors
+    /// DB の書き込みに失敗したとき（カードの作成ごと巻き戻す）。
     pub fn insert_account(&self, a: &NewAccount) -> rusqlite::Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let profile_id = ensure_profile(&tx, &a.email, a.provider)?;
         // 新規アカウントの初回同期は現行パイプラインで行われるので、データ形式は現行として記録。
-        conn.execute(
-            "INSERT INTO accounts (email, display_name, username, imap_host, imap_port, smtp_host, smtp_port, server_account_id, ingest_version, parse_version)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        tx.execute(
+            "INSERT INTO accounts (email, display_name, username, imap_host, imap_port, smtp_host, smtp_port, server_account_id, ingest_version, parse_version, profile_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 a.email,
                 a.display_name,
@@ -46,10 +57,13 @@ impl Store {
                 a.smtp_port,
                 a.server_account_id,
                 crate::services::dataver::INGEST_VERSION,
-                crate::services::dataver::PARSE_VERSION
+                crate::services::dataver::PARSE_VERSION,
+                profile_id
             ],
         )?;
-        Ok(conn.last_insert_rowid())
+        let id = tx.last_insert_rowid();
+        tx.commit()?;
+        Ok(id)
     }
 
     /// データ形式バージョン（ingest, parse）の記録を取得。アカウントが無ければ None。
@@ -308,6 +322,14 @@ impl Store {
     pub fn delete_account(&self, id: i64) -> rusqlite::Result<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
+        let profile_id: Option<i64> = tx
+            .query_row(
+                "SELECT profile_id FROM accounts WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
         let of_account = "SELECT id FROM emails WHERE account_id=?1";
         // メール本体にぶら下がるもの（FTS は外部コンテンツ表なので rowid で消す）。
         for sql in [
@@ -331,6 +353,8 @@ impl Store {
         // 送信履歴の索引はアドレス単位でアカウントに紐づかないので、消したアカウントの分
         // だけを抜けない。残ったメールから作り直す（アカウント削除は稀な操作）。
         super::sent_addresses::rebuild(&tx)?;
+        // ほかに中身（Google 連携・同じアドレスの重複登録）が無ければ、カードも片付ける。
+        profile_id.map_or(Ok(()), |p| prune_profile(&tx, p))?;
         tx.commit()
     }
 
@@ -401,6 +425,7 @@ mod tests {
                 smtp_host: "s".into(),
                 smtp_port: 587,
                 server_account_id: None,
+                provider: AccountProvider::Imap,
             })
             .unwrap();
         assert_eq!(
@@ -425,6 +450,7 @@ mod tests {
                 smtp_host: "smtp.example.com".into(),
                 smtp_port: 587,
                 server_account_id: None,
+                provider: AccountProvider::Imap,
             })
             .unwrap();
 

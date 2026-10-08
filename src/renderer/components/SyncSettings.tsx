@@ -156,7 +156,7 @@ function GoogleSyncSection() {
     setError(null);
     setMessage(null);
     try {
-      await googleConnect(contacts);
+      await googleConnect(true, contacts);
       refresh();
     } catch (e) {
       setError(String(e));

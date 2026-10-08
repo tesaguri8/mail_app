@@ -14,9 +14,8 @@
 //! - 候補が複数あるとき・確信が弱いときは**紐付けず新規として起こし**、人の判断（重複整理）に回す
 //! - 1 人のローカル連絡先を 2 つの外部 ID が掴まない（送信フェーズで宛先が定まらなくなるため）
 
-use crate::models::ContactSummary;
+use crate::models::{ContactFields, ContactSummary};
 use crate::services::dedupe::{compare, Confidence, Rec};
-use crate::services::vcard::ImportedContact;
 use std::collections::{HashMap, HashSet};
 
 /// 台帳 1 件をどう扱うか。
@@ -47,11 +46,11 @@ pub struct MatchOutcome {
 /// - `locals`: 住所録の連絡先（共有値を除いた比較材料つき）
 /// - `already_linked`: すでに別の外部 ID が掴んでいるローカル ID（紐付け先から外す）
 pub fn plan(
-    remote: &[(String, ImportedContact)],
+    remote: &[(String, ContactFields)],
     locals: &[ContactSummary],
     already_linked: &HashSet<i64>,
 ) -> Vec<MatchOutcome> {
-    let local_recs: Vec<Rec> = locals.iter().map(Rec::from_contact).collect();
+    let local_recs: Vec<Rec> = locals.iter().map(|c| Rec::from_fields(&c.fields)).collect();
 
     // ブロッキング: 同じキー（メール・携帯・氏名）を持つ相手だけを比較候補にする。
     let mut buckets: HashMap<&str, Vec<usize>> = HashMap::new();
@@ -67,7 +66,7 @@ pub fn plan(
     remote
         .iter()
         .map(|(external_id, contact)| {
-            let rec = Rec::from_imported(contact);
+            let rec = Rec::from_fields(contact);
 
             // 候補の添字を集める（同じ相手が複数キーで挙がるので重複排除）。
             let mut seen: HashSet<usize> = HashSet::new();
@@ -113,32 +112,28 @@ pub fn plan(
 mod tests {
     use super::*;
 
+    fn value(v: &str) -> crate::models::ContactValue {
+        crate::models::ContactValue {
+            label: None,
+            value: v.into(),
+            is_shared: false,
+        }
+    }
+
+    fn fields(name: &str, email: Option<&str>, phone: Option<&str>) -> ContactFields {
+        ContactFields {
+            display_name: name.into(),
+            emails: email.map(value).into_iter().collect(),
+            phones: phone.map(value).into_iter().collect(),
+            ..Default::default()
+        }
+    }
+
     fn local(id: i32, name: &str, email: Option<&str>, phone: Option<&str>) -> ContactSummary {
         ContactSummary {
             id,
-            display_name: name.into(),
-            family_name: None,
-            given_name: None,
-            phonetic_family: None,
-            phonetic_given: None,
-            name_kana: None,
-            email: email.map(str::to_string),
-            phone: phone.map(str::to_string),
-            organization: None,
-            org_id: None,
-            org_title: None,
-            org_department: None,
-            address: None,
-            birthday: None,
-            note: None,
-            is_favorite: false,
-            is_business: false,
-            allow_remote_images: false,
-            deleted_at: None,
-            emails: Vec::new(),
-            phones: Vec::new(),
-            addresses: Vec::new(),
-            tags: Vec::new(),
+            fields: fields(name, email, phone),
+            ..Default::default()
         }
     }
 
@@ -147,18 +142,8 @@ mod tests {
         name: &str,
         email: Option<&str>,
         phone: Option<&str>,
-    ) -> (String, ImportedContact) {
-        (
-            id.into(),
-            ImportedContact {
-                display_name: name.into(),
-                email: email.map(str::to_string),
-                phone: phone.map(str::to_string),
-                source: "google".into(),
-                external_id: Some(id.into()),
-                ..Default::default()
-            },
-        )
+    ) -> (String, ContactFields) {
+        (id.into(), fields(name, email, phone))
     }
 
     #[test]

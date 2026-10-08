@@ -4,24 +4,17 @@
 use serde::Deserialize;
 
 /// API 呼び出しのエラー。増分同期トークンの失効は上位でフル同期に切り替える。
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ApiError {
     /// syncToken が失効した（410 Gone / EXPIRED_SYNC_TOKEN）。フル同期し直す必要がある。
+    #[error("同期トークンが失効しました")]
     SyncTokenExpired,
     /// 送った etag が古い（Google 側が先に更新されている）。読み直してから送り直す。
+    #[error("Google 側が先に更新されています（etag 不一致）")]
     EtagConflict,
     /// その他のエラー（メッセージ）。
+    #[error("{0}")]
     Message(String),
-}
-
-impl std::fmt::Display for ApiError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ApiError::SyncTokenExpired => write!(f, "同期トークンが失効しました"),
-            ApiError::EtagConflict => write!(f, "Google 側が先に更新されています（etag 不一致）"),
-            ApiError::Message(m) => write!(f, "{m}"),
-        }
-    }
 }
 
 impl From<reqwest::Error> for ApiError {
@@ -58,11 +51,26 @@ pub struct GName {
     pub phonetic_family_name: Option<String>,
     #[serde(rename = "phoneticGivenName", default)]
     pub phonetic_given_name: Option<String>,
+    #[serde(rename = "middleName", default)]
+    pub middle_name: Option<String>,
+    #[serde(rename = "phoneticMiddleName", default)]
+    pub phonetic_middle_name: Option<String>,
+    #[serde(rename = "honorificPrefix", default)]
+    pub honorific_prefix: Option<String>,
+    #[serde(rename = "honorificSuffix", default)]
+    pub honorific_suffix: Option<String>,
     #[serde(default)]
     pub metadata: GFieldMetadata,
 }
 
-/// メール・電話に共通の「値＋種別」。
+/// ニックネーム。
+#[derive(Debug, Deserialize, Default)]
+pub struct GNickname {
+    #[serde(default)]
+    pub value: Option<String>,
+}
+
+/// メール・電話・URL に共通の「値＋種別」。
 #[derive(Debug, Deserialize, Default)]
 pub struct GTypedValue {
     #[serde(default)]
@@ -95,6 +103,10 @@ pub struct GAddress {
     pub extended_address: Option<String>,
     #[serde(default)]
     pub country: Option<String>,
+    #[serde(rename = "countryCode", default)]
+    pub country_code: Option<String>,
+    #[serde(rename = "poBox", default)]
+    pub po_box: Option<String>,
     #[serde(default)]
     pub metadata: GFieldMetadata,
 }
@@ -103,6 +115,8 @@ pub struct GAddress {
 pub struct GOrganization {
     #[serde(default)]
     pub name: Option<String>,
+    #[serde(rename = "phoneticName", default)]
+    pub phonetic_name: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
@@ -129,6 +143,53 @@ pub struct GBirthday {
     /// 自由入力（date が無いときの原文）。
     #[serde(default)]
     pub text: Option<String>,
+}
+
+/// 記念日などの日付（events）。
+#[derive(Debug, Deserialize, Default)]
+pub struct GEvent {
+    #[serde(default)]
+    pub date: Option<GDate>,
+    #[serde(rename = "type", default)]
+    pub value_type: Option<String>,
+    #[serde(rename = "formattedType", default)]
+    pub formatted_type: Option<String>,
+}
+
+/// 関係（relations）。
+#[derive(Debug, Deserialize, Default)]
+pub struct GRelation {
+    #[serde(default)]
+    pub person: Option<String>,
+    #[serde(rename = "type", default)]
+    pub value_type: Option<String>,
+    #[serde(rename = "formattedType", default)]
+    pub formatted_type: Option<String>,
+}
+
+/// チャット（imClients）。
+#[derive(Debug, Deserialize, Default)]
+pub struct GImClient {
+    #[serde(default)]
+    pub username: Option<String>,
+    /// 'skype' | 'googleTalk' などの機械可読な名前、またはカスタム名。
+    #[serde(default)]
+    pub protocol: Option<String>,
+    #[serde(rename = "formattedProtocol", default)]
+    pub formatted_protocol: Option<String>,
+    #[serde(rename = "type", default)]
+    pub value_type: Option<String>,
+    #[serde(rename = "formattedType", default)]
+    pub formatted_type: Option<String>,
+}
+
+/// カスタム項目（userDefined）。
+#[derive(Debug, Deserialize, Default)]
+pub struct GUserDefined {
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub value: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -161,6 +222,8 @@ pub struct GPerson {
     pub metadata: GPersonMetadata,
     #[serde(default)]
     pub names: Vec<GName>,
+    #[serde(default)]
+    pub nicknames: Vec<GNickname>,
     #[serde(rename = "emailAddresses", default)]
     pub email_addresses: Vec<GTypedValue>,
     #[serde(rename = "phoneNumbers", default)]
@@ -173,6 +236,16 @@ pub struct GPerson {
     pub biographies: Vec<GBiography>,
     #[serde(default)]
     pub birthdays: Vec<GBirthday>,
+    #[serde(default)]
+    pub urls: Vec<GTypedValue>,
+    #[serde(default)]
+    pub events: Vec<GEvent>,
+    #[serde(default)]
+    pub relations: Vec<GRelation>,
+    #[serde(rename = "imClients", default)]
+    pub im_clients: Vec<GImClient>,
+    #[serde(rename = "userDefined", default)]
+    pub user_defined: Vec<GUserDefined>,
     #[serde(default)]
     pub memberships: Vec<GMembership>,
 }
@@ -289,6 +362,22 @@ pub async fn list_contact_groups(
     Ok(out)
 }
 
+/// 連絡先を 1 件読む（`people.get`）。送信の直前に読み直し、その内容を土台に Rondine が扱う
+/// 部分だけを上書きするため、型に落とさず JSON のまま返す（知らない項目も保つため）。
+pub async fn get_person(
+    client: &reqwest::Client,
+    token: &str,
+    resource_name: &str,
+) -> Result<serde_json::Value, ApiError> {
+    let resp = client
+        .get(format!("{}/{resource_name}", super::API_BASE))
+        .bearer_auth(token)
+        .query(&[("personFields", super::PERSON_FIELDS)])
+        .send()
+        .await?;
+    Ok(check(resp).await?.json().await?)
+}
+
 /// 連絡先を 1 件作成する（`people:createContact`）。作成された Person（resourceName / etag つき）を返す。
 pub async fn create_contact(
     client: &reqwest::Client,
@@ -309,7 +398,7 @@ pub async fn create_contact(
 ///
 /// `body` には**読んだ版の etag を必ず含める**こと（含めないと People API に弾かれる）。
 /// `updatePersonFields` に挙げた項目だけが置き換わり、挙げなかった項目は Google 側で保持される
-/// （＝Rondine が扱わない写真・カスタム項目は触らない）。
+/// （＝Rondine が扱わない写真などは触らない）。
 pub async fn update_contact(
     client: &reqwest::Client,
     token: &str,

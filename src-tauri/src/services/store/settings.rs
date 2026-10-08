@@ -119,8 +119,9 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let allowed: bool = conn
             .query_row(
-                "SELECT 1 FROM contacts \
-                 WHERE lower(email) = ?1 AND allow_remote_images = 1 LIMIT 1",
+                "SELECT 1 FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id \
+                 WHERE lower(ce.value) = ?1 AND c.allow_remote_images = 1 \
+                   AND c.deleted_at IS NULL LIMIT 1",
                 params![addr],
                 |_| Ok(true),
             )

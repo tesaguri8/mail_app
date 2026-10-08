@@ -11,6 +11,7 @@
 //! 1 人を信頼するとドメイン全体が信頼されてしまう）。手動認定も拒否し、本人一致だけを
 //! グリーンとする。
 
+use super::contact_lookup::{address_matches_contact, all_contact_emails};
 use super::Store;
 use crate::models::GreenDomainEntry;
 use rusqlite::{params, Connection};
@@ -123,18 +124,10 @@ pub(crate) fn green_domain_set(conn: &Connection) -> rusqlite::Result<HashSet<St
         }
     }
     // 住所録由来（削除済み連絡先は除く。フリーメールは除外）。
-    for sql in [
-        "SELECT DISTINCT ce.value FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id \
-         WHERE ce.value IS NOT NULL AND c.deleted_at IS NULL",
-        "SELECT DISTINCT c.email FROM contacts c WHERE c.email IS NOT NULL AND c.deleted_at IS NULL",
-    ] {
-        let mut stmt = conn.prepare(sql)?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        for v in rows {
-            if let Some(dom) = domain_of(&v?) {
-                if !is_freemail(&dom) {
-                    set.insert(dom);
-                }
+    for v in all_contact_emails(conn)? {
+        if let Some(dom) = domain_of(&v) {
+            if !is_freemail(&dom) {
+                set.insert(dom);
             }
         }
     }
@@ -151,35 +144,12 @@ pub(crate) fn green_domain_set(conn: &Connection) -> rusqlite::Result<HashSet<St
 
 /// アドレスが住所録の本人（完全一致・非削除）か。
 pub(crate) fn address_is_known(conn: &Connection, address: &str) -> rusqlite::Result<bool> {
-    let addr = address.trim();
-    if addr.is_empty() {
-        return Ok(false);
-    }
-    let n: i64 = conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM contacts c WHERE c.deleted_at IS NULL AND lower(c.email) = lower(?1)) \
-              OR EXISTS (SELECT 1 FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id \
-                         WHERE c.deleted_at IS NULL AND lower(ce.value) = lower(?1))",
-        params![addr],
-        |r| r.get(0),
-    )?;
-    Ok(n != 0)
+    address_matches_contact(conn, address, false)
 }
 
 /// アドレスが住所録のお気に入り（VIP）連絡先か（完全一致・非削除）。
 pub(crate) fn address_is_vip(conn: &Connection, address: &str) -> rusqlite::Result<bool> {
-    let addr = address.trim();
-    if addr.is_empty() {
-        return Ok(false);
-    }
-    let n: i64 = conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM contacts c \
-                        WHERE c.deleted_at IS NULL AND c.is_favorite = 1 AND lower(c.email) = lower(?1)) \
-              OR EXISTS (SELECT 1 FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id \
-                         WHERE c.deleted_at IS NULL AND c.is_favorite = 1 AND lower(ce.value) = lower(?1))",
-        params![addr],
-        |r| r.get(0),
-    )?;
-    Ok(n != 0)
+    address_matches_contact(conn, address, true)
 }
 
 /// アドレスがグリーンか（本人一致 or ドメインがグリーン集合）。
@@ -206,18 +176,10 @@ impl Store {
 
         // ドメインごとの連絡先件数（非削除・フリーメール除く。参考表示＆自動判定用）。
         let mut contact_domains: HashMap<String, i32> = HashMap::new();
-        for sql in [
-            "SELECT ce.value FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id \
-             WHERE ce.value IS NOT NULL AND c.deleted_at IS NULL",
-            "SELECT c.email FROM contacts c WHERE c.email IS NOT NULL AND c.deleted_at IS NULL",
-        ] {
-            let mut stmt = conn.prepare(sql)?;
-            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-            for v in rows {
-                if let Some(dom) = domain_of(&v?) {
-                    if !is_freemail(&dom) {
-                        *contact_domains.entry(dom).or_insert(0) += 1;
-                    }
+        for v in all_contact_emails(&conn)? {
+            if let Some(dom) = domain_of(&v) {
+                if !is_freemail(&dom) {
+                    *contact_domains.entry(dom).or_insert(0) += 1;
                 }
             }
         }
@@ -349,7 +311,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::ContactInput;
+    use crate::services::store::test_support::person;
 
     fn store() -> Store {
         Store::open_in_memory_for_test()
@@ -367,19 +329,11 @@ mod tests {
     fn auto_green_excludes_freemail_and_warning_overrides() {
         let s = store();
         // 会社ドメインの連絡先 → ドメイン自動グリーン。
-        s.upsert_contact(&ContactInput {
-            display_name: "会社の人".into(),
-            email: Some("taro@acme.co.jp".into()),
-            ..Default::default()
-        })
-        .unwrap();
+        s.upsert_contact(&person("会社の人", &["taro@acme.co.jp"]))
+            .unwrap();
         // フリーメールの連絡先 → ドメインは自動グリーンにしない（本人だけ）。
-        s.upsert_contact(&ContactInput {
-            display_name: "個人".into(),
-            email: Some("hanako@gmail.com".into()),
-            ..Default::default()
-        })
-        .unwrap();
+        s.upsert_contact(&person("個人", &["hanako@gmail.com"]))
+            .unwrap();
 
         assert!(s.address_green("info@acme.co.jp").unwrap(), "会社ドメインは自動グリーン");
         assert!(s.address_green("taro@acme.co.jp").unwrap());

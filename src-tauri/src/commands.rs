@@ -1,17 +1,17 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentMeta, AttachmentSummary, AutoconfigResult,
-    AttendeeInput, CalendarInput, CalendarSummary, ContactGroupSummary, ContactInput, ContactMatch,
+    AttendeeInput, CalendarInput, CalendarSummary, ContactInput, ContactMatch,
     ContactSummary, DataLocation, DbInfo, DraftContent, DraftInput, DuplicateGroup, EventAttendee,
     EventInput, EventSummary, GcalSyncResult, GcontactsMatchResult, GcontactsSyncResult, GoogleAccount,
     GoogleCredentialsStatus,
     GreenDomainEntry,
     HomeUnreadCounts, IcsImportReport, ImportReport, MailDetail,
-    MailSummary, OrgDuplicateGroup, OrganizationDetail, OrganizationInput, OrganizationSummary,
+    MailSummary, OrgDuplicateGroup, OrgLinkSuggestion, OrganizationDetail, OrganizationInput, OrganizationSummary,
     RebuildAction,
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSenderConflict, SpamSettings, SpamVerdict,
     StorageInfo, SyncListed, SyncProgress,
-    SyncResult, TagSummary, ThreadListItem, ThreadView,
+    SyncResult, TagSummary, ThreadListItem, ThreadView, UnlinkedOrgName,
 };
 use crate::services::autoconfig;
 use crate::services::datadir;
@@ -1629,7 +1629,7 @@ pub fn recipient_suggest(
 /// 連絡先を作成または更新（確定後の行を返す）。`input.id` が無ければ新規。
 #[tauri::command]
 pub fn contact_upsert(store: State<Store>, input: ContactInput) -> Result<ContactSummary, String> {
-    if input.display_name.trim().is_empty() {
+    if input.fields.display_name.trim().is_empty() {
         return Err("名前を入力してください".to_string());
     }
     store.upsert_contact(&input).map_err(|e| e.to_string())
@@ -1645,12 +1645,6 @@ pub fn contact_delete(store: State<Store>, id: i64) -> Result<(), String> {
 #[tauri::command]
 pub fn contact_restore(store: State<Store>, id: i64) -> Result<(), String> {
     store.restore_contact(id).map_err(|e| e.to_string())
-}
-
-/// 連絡先グループ一覧（所属件数つき）。
-#[tauri::command]
-pub fn contact_group_list(store: State<Store>) -> Result<Vec<ContactGroupSummary>, String> {
-    store.list_contact_groups().map_err(|e| e.to_string())
 }
 
 /// 組織一覧（所属件数つき）。`query` があれば名前で部分一致。組織コンボボックス用。
@@ -1773,6 +1767,44 @@ pub fn organization_merge(
     }
     store
         .merge_organizations(keep_id, &drop_ids, &name)
+        .map_err(|e| e.to_string())
+}
+
+/// 組織カードになっていない会社名（正規化名でまとめ、人数の多い順）。組織タブの「整理」用。
+#[tauri::command]
+pub fn organization_unlinked_names(store: State<Store>) -> Result<Vec<UnlinkedOrgName>, String> {
+    store.list_unlinked_org_names().map_err(|e| e.to_string())
+}
+
+/// 会社名から組織カードを作り、同じ会社名（正規化後）の人を全員つなぐ。
+#[tauri::command]
+pub fn organization_create_from_name(
+    store: State<Store>,
+    name: String,
+) -> Result<OrganizationSummary, String> {
+    if name.trim().is_empty() {
+        return Err("組織名を入力してください".to_string());
+    }
+    store.create_org_from_name(&name).map_err(|e| e.to_string())
+}
+
+/// 組織カードごとの「つながっていないが同じ組織らしい人」（理由つき）。組織タブの「整理」用。
+#[tauri::command]
+pub fn organization_link_suggestions(
+    store: State<Store>,
+) -> Result<Vec<OrgLinkSuggestion>, String> {
+    store.org_link_suggestions().map_err(|e| e.to_string())
+}
+
+/// 選んだ人を組織カードにつなぎ、つないだ後のカードを返す。
+#[tauri::command]
+pub fn organization_link_contacts(
+    store: State<Store>,
+    org_id: i64,
+    contact_ids: Vec<i64>,
+) -> Result<OrganizationSummary, String> {
+    store
+        .link_contacts_to_org(org_id, &contact_ids)
         .map_err(|e| e.to_string())
 }
 
@@ -2360,10 +2392,10 @@ pub async fn gcal_sync(
     google::calendar::sync::sync_account(store.inner(), &access, account_id).await
 }
 
-/// 指定アカウントの Google 連絡先を取り込む（現状は取り込みのみ）。
+/// 指定アカウントの Google 連絡先を同期する（未送信の変更を送ってから取り込む）。
 ///
-/// 取り込み先は台帳（`contact_identities`）までで、住所録には反映しない。既存の住所録と
-/// 全件重複させないためで、結果の `unlinked` が照合フェーズの対象数になる。
+/// まだ住所録の誰とも結び付いていない分は台帳（`contact_identities`）に留まる。結果の
+/// `unlinked` が照合（「住所録へ反映」）の対象数になる。
 #[tauri::command]
 pub async fn gcontacts_sync(
     app: AppHandle,
@@ -2387,7 +2419,9 @@ pub async fn gcontacts_sync(
     let access = google_account_access(&app, store.inner(), account_id)
         .await
         .ok_or("保存された認証情報がありません。もう一度連携してください")?;
-    google::contacts::sync::sync_account(store.inner(), &access, account_id).await
+    google::contacts::sync::sync_account(store.inner(), &access, account_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// 「Rondine で新しく作った連絡先も Google 側に作る」設定を切り替える。
@@ -2427,26 +2461,6 @@ pub fn gcontacts_match_apply(
 ) -> Result<GcontactsMatchResult, String> {
     store
         .apply_contact_matches(account_id)
-        .map_err(|e| e.to_string())
-}
-
-/// ファイルで取り込んだ Google 連絡先のうち、同期とつながっていない写しの件数。
-///
-/// People API の同期に置き換えたあとに残る写しを片付けるための下見（docs/CONTACTS_SYNC.md §2）。
-#[tauri::command]
-pub fn gcontacts_copies_count(store: State<Store>) -> Result<i64, String> {
-    store
-        .count_unsynced_google_copies()
-        .map_err(|e| e.to_string())
-}
-
-/// 同期とつながっていない Google の写しをゴミ箱へ移す（戻せる）。移した件数を返す。
-///
-/// 台帳に紐付いた連絡先は対象外なので、Google 側の連絡先は消えない。
-#[tauri::command]
-pub fn gcontacts_copies_trash(store: State<Store>) -> Result<i64, String> {
-    store
-        .trash_unsynced_google_copies()
         .map_err(|e| e.to_string())
 }
 

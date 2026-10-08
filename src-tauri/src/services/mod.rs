@@ -4,6 +4,8 @@ pub mod autoconfig;
 pub mod bodyfetch;
 pub mod bodystructure;
 pub mod compress;
+pub mod contact_fields;
+pub mod contact_labels;
 pub mod contact_match;
 pub mod datadir;
 pub mod dataver;

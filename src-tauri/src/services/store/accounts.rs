@@ -1,3 +1,4 @@
+use super::contact_lookup::contact_exists_sql;
 use super::Store;
 use crate::models::AccountSummary;
 use rusqlite::{params, OptionalExtension};
@@ -209,13 +210,9 @@ impl Store {
         let green: Vec<String> = super::greendomain::green_domain_set(&conn)?
             .into_iter()
             .collect();
-        // 住所録一致（known）／お気に入り一致（vip）の EXISTS 断片（emails.rs の known_vip_cols と同義）。
-        let known = "(EXISTS(SELECT 1 FROM contacts c WHERE c.deleted_at IS NULL AND lower(c.email)=lower(e.from_address)) \
-                      OR EXISTS(SELECT 1 FROM contact_emails ce JOIN contacts c3 ON c3.id=ce.contact_id \
-                                WHERE c3.deleted_at IS NULL AND lower(ce.value)=lower(e.from_address)))";
-        let vip = "(EXISTS(SELECT 1 FROM contacts c WHERE c.deleted_at IS NULL AND c.is_favorite=1 AND lower(c.email)=lower(e.from_address)) \
-                    OR EXISTS(SELECT 1 FROM contact_emails ce JOIN contacts c2 ON c2.id=ce.contact_id \
-                              WHERE c2.deleted_at IS NULL AND c2.is_favorite=1 AND lower(ce.value)=lower(e.from_address)))";
+        // 住所録一致（known）／お気に入り一致（vip）の EXISTS 断片（contact_lookup と共通）。
+        let known = contact_exists_sql("e.from_address", false);
+        let vip = contact_exists_sql("e.from_address", true);
         // グリーンドメイン一致: 差出人ドメインが集合に含まれるか（空集合なら住所録本人のみ green）。
         let green_domain = if green.is_empty() {
             "1=0".to_string()

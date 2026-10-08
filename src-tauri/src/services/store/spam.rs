@@ -359,14 +359,7 @@ impl Store {
         let green_set = super::greendomain::green_domain_set(&conn)?;
         let mut out = Vec::new();
         for addr in addrs {
-            let name: Option<String> = conn
-                .query_row(
-                    "SELECT c.display_name FROM contact_emails ce JOIN contacts c ON c.id = ce.contact_id \
-                     WHERE lower(ce.value) = ?1 AND c.deleted_at IS NULL LIMIT 1",
-                    params![addr],
-                    |r| r.get(0),
-                )
-                .optional()?;
+            let name = super::contact_lookup::contact_name_for(&conn, Some(&addr))?;
             let is_contact = name.is_some() || super::greendomain::address_is_known(&conn, &addr)?;
             let is_green = super::greendomain::domain_of(&addr)
                 .is_some_and(|domain| green_set.contains(&domain));

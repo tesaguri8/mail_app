@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+mod contact;
+pub use contact::*;
+
 /// 境界型の例。ts-rs により `src/bindings/AppInfo.ts` を生成する。
 /// 生成: `npm run gen:bindings`（= cargo test --lib export_bindings）
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -190,166 +193,6 @@ pub struct TagSummary {
     pub parent_id: Option<i32>,
     /// 付与されているメール件数。
     pub count: i32,
-}
-
-/// ラベル付きの値（メール・電話）。Apple/Google のラベル付き複数値に対応。
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/bindings/")]
-pub struct ContactValue {
-    pub id: i32,
-    /// 見出し（自宅/職場/携帯/カスタム＝会社名など）。
-    pub label: Option<String>,
-    pub value: String,
-    pub is_primary: bool,
-    /// 複数名で共有する会社の代表値（info@… / 代表電話 / 代表FAX 等）。
-    /// 人単位の重複判定の手掛かりから除外する（docs/FILTERING.md 誤検知抑制）。
-    #[serde(default)]
-    pub is_shared: bool,
-}
-
-/// ラベル付きの構造化住所。
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/bindings/")]
-pub struct ContactAddress {
-    pub id: i32,
-    pub label: Option<String>,
-    pub postal: Option<String>,
-    pub region: Option<String>,
-    pub city: Option<String>,
-    pub street: Option<String>,
-    pub extended: Option<String>,
-    pub country: Option<String>,
-    pub is_primary: bool,
-}
-
-/// 連絡先（住所録）。一覧・詳細・編集で共通に使う（連絡先はメールほど大量でないため軽量/詳細を分けない）。
-/// メール/電話/住所は子テーブル由来のラベル付き複数値（arrays）。flat な email/phone/address は
-/// 主(primary)値の写しで、一覧表示や後方互換のために保持する。
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/bindings/")]
-pub struct ContactSummary {
-    pub id: i32,
-    pub display_name: String,
-    /// 姓（構造化名。表示名とは別）。
-    pub family_name: Option<String>,
-    /// 名。
-    pub given_name: Option<String>,
-    /// よみ（姓）。
-    pub phonetic_family: Option<String>,
-    /// よみ（名）。
-    pub phonetic_given: Option<String>,
-    /// 読み（並び替え用。よみ姓＋よみ名の結合など）。
-    pub name_kana: Option<String>,
-    /// 主メールアドレス（primary の写し）。
-    pub email: Option<String>,
-    pub phone: Option<String>,
-    /// 組織名（org_id があればその組織名と同期した写し。表示・検索・重複判定に使う）。
-    pub organization: Option<String>,
-    /// 紐づく組織レコードの ID（照合はこの ID。無ければ未所属）。
-    pub org_id: Option<i32>,
-    /// 役職。
-    pub org_title: Option<String>,
-    /// 部署。
-    pub org_department: Option<String>,
-    /// 主住所の整形文字列（primary の写し。一覧用）。
-    pub address: Option<String>,
-    /// 誕生日（YYYY-MM-DD 等の文字列。ホーム/ウィジェット通知用）。
-    pub birthday: Option<String>,
-    pub note: Option<String>,
-    /// お気に入り（先頭に固定表示）。
-    pub is_favorite: bool,
-    /// 取引先の手動フラグ（docs/FILTERING.md）。
-    pub is_business: bool,
-    /// この相手からのメールで外部画像を許可（docs/MAIL_SECURITY.md）。
-    pub allow_remote_images: bool,
-    /// 論理削除（ゴミ箱）の日時（UTC 文字列）。非 null＝削除済み（保持期間後に完全削除）。
-    pub deleted_at: Option<String>,
-    /// ラベル付き複数メール（詳細取得時のみ充填。一覧では空）。
-    pub emails: Vec<ContactValue>,
-    /// ラベル付き複数電話（同上）。
-    pub phones: Vec<ContactValue>,
-    /// ラベル付き複数住所（同上）。
-    pub addresses: Vec<ContactAddress>,
-    /// タグ（グループ/ラベル）名（同上）。
-    pub tags: Vec<String>,
-}
-
-/// ラベル付き値の入力（メール・電話）。
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/bindings/")]
-pub struct ContactValueInput {
-    pub label: Option<String>,
-    pub value: String,
-    /// 複数名で共有する会社の代表値かどうか（重複判定から除外）。
-    #[serde(default)]
-    pub is_shared: bool,
-}
-
-/// 構造化住所の入力。
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/bindings/")]
-pub struct ContactAddressInput {
-    pub label: Option<String>,
-    pub postal: Option<String>,
-    pub region: Option<String>,
-    pub city: Option<String>,
-    pub street: Option<String>,
-    pub extended: Option<String>,
-    pub country: Option<String>,
-}
-
-/// 連絡先の作成・更新入力（フロントから受け取る）。`id` が None なら新規作成。
-/// 姓/名・よみ姓/よみ名・複数値配列は任意（省略時はフロント旧実装との後方互換）。
-/// emails/phones/addresses が非空ならそれらで子テーブルを作り直し、空なら flat の主値のみ反映。
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/bindings/")]
-pub struct ContactInput {
-    pub id: Option<i32>,
-    pub display_name: String,
-    /// ラベル付き複数メール（非空ならこれで確定）。
-    #[serde(default)]
-    pub emails: Vec<ContactValueInput>,
-    /// ラベル付き複数電話。
-    #[serde(default)]
-    pub phones: Vec<ContactValueInput>,
-    /// ラベル付き複数住所（構造化）。
-    #[serde(default)]
-    pub addresses: Vec<ContactAddressInput>,
-    /// タグ（グループ/ラベル）名。指定時はメンバーシップをこの集合に一致させる。
-    #[serde(default)]
-    pub tags: Vec<String>,
-    /// 姓（構造化名）。
-    #[serde(default)]
-    pub family_name: Option<String>,
-    /// 名。
-    #[serde(default)]
-    pub given_name: Option<String>,
-    /// よみ（姓）。
-    #[serde(default)]
-    pub phonetic_family: Option<String>,
-    /// よみ（名）。
-    #[serde(default)]
-    pub phonetic_given: Option<String>,
-    pub name_kana: Option<String>,
-    pub email: Option<String>,
-    pub phone: Option<String>,
-    pub organization: Option<String>,
-    /// 紐づく組織 ID。指定時はその組織へ、未指定で organization 文字列があれば
-    /// 同名の組織を find-or-create して紐づける（コンボボックスの「選択 or 新規登録」）。
-    #[serde(default)]
-    pub org_id: Option<i32>,
-    /// 役職。
-    #[serde(default)]
-    pub org_title: Option<String>,
-    /// 部署。
-    #[serde(default)]
-    pub org_department: Option<String>,
-    pub address: Option<String>,
-    pub birthday: Option<String>,
-    pub note: Option<String>,
-    pub is_favorite: bool,
-    pub is_business: bool,
-    pub allow_remote_images: bool,
 }
 
 /// 連絡先インポートの結果（vCard 取り込み。docs/IMPORT_EXPORT.md）。
@@ -723,17 +566,6 @@ pub struct OrgDuplicateGroup {
     pub canonical: String,
     /// 同一とみなした組織レコード（2 件以上）。
     pub organizations: Vec<OrganizationSummary>,
-}
-
-/// 連絡先グループ（所属件数つき。編集 UI は後続）。
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/bindings/")]
-pub struct ContactGroupSummary {
-    pub id: i32,
-    pub name: String,
-    pub color: Option<String>,
-    /// 所属している連絡先の件数。
-    pub count: i32,
 }
 
 /// メール詳細（本文表示用）。

@@ -5,13 +5,16 @@
 //! 強い証拠（携帯・メール）から確信度を付け、確信度順でグループを返す。実際の統合は UI 側で
 //! ユーザーが「残す1件」を選んで行う（自動融合はしない）。外部依存なしの自前実装。
 
-use crate::models::{ContactSummary, DuplicateGroup};
-use crate::services::vcard::ImportedContact;
+use crate::models::{ContactFields, ContactSummary, DuplicateGroup};
+use crate::services::contact_fields::{address_line, phonetic_name};
 use std::collections::HashMap;
 
 /// 連絡先群を重複候補グループに束ねる（2件以上のみ、確信度順）。
 pub fn group(contacts: &[ContactSummary]) -> Vec<DuplicateGroup> {
-    let recs: Vec<Rec> = contacts.iter().map(Rec::from_contact).collect();
+    let recs: Vec<Rec> = contacts
+        .iter()
+        .map(|c| Rec::from_fields(&c.fields))
+        .collect();
     let n = recs.len();
 
     // ブロッキング: 同じキー（全メール・全携帯・氏名）を持つ index 同士だけを比較候補に。
@@ -91,7 +94,7 @@ pub fn group(contacts: &[ContactSummary]) -> Vec<DuplicateGroup> {
                 }
             };
             DuplicateGroup {
-                label: contacts[members[0]].display_name.clone(),
+                label: contacts[members[0]].fields.display_name.clone(),
                 confidence: conf.as_str().to_string(),
                 contacts: members.iter().map(|&i| contacts[i].clone()).collect(),
             }
@@ -202,48 +205,26 @@ pub(crate) struct Rec {
 }
 
 impl Rec {
-    /// 住所録の連絡先から作る（重複検出用）。
-    pub(crate) fn from_contact(c: &ContactSummary) -> Self {
-        // 全メール（無ければ flat email）／全電話（無ければ flat phone）を材料にする。
-        let emails: Vec<&str> = if c.emails.is_empty() {
-            c.email.as_deref().into_iter().collect()
-        } else {
-            c.emails.iter().map(|v| v.value.as_str()).collect()
+    /// 連絡先の中身から作る（重複検出・照合で共通）。住所録の連絡先も、取り込んだ外部の
+    /// 連絡先も同じ土俵に載せる。共有指定の値（会社の代表メール/電話）は手掛かりにしない。
+    pub(crate) fn from_fields(f: &ContactFields) -> Self {
+        let personal = |vs: &[crate::models::ContactValue]| -> Vec<String> {
+            vs.iter()
+                .filter(|v| !v.is_shared)
+                .map(|v| v.value.clone())
+                .collect()
         };
-        let phones: Vec<&str> = if c.phones.is_empty() {
-            c.phone.as_deref().into_iter().collect()
-        } else {
-            c.phones.iter().map(|v| v.value.as_str()).collect()
-        };
+        let emails = personal(&f.emails);
+        let phones = personal(&f.phones);
+        let emails: Vec<&str> = emails.iter().map(String::as_str).collect();
+        let phones: Vec<&str> = phones.iter().map(String::as_str).collect();
         Rec::build(
-            &c.display_name,
-            c.name_kana.as_deref(),
+            &f.display_name,
+            phonetic_name(f).as_deref(),
             &emails,
             &phones,
-            c.organization.as_deref(),
-            c.address.as_deref(),
-        )
-    }
-
-    /// 取り込み中間表現から作る（Google 連絡先などの照合用）。住所録側と同じ土俵に載せる。
-    pub(crate) fn from_imported(c: &ImportedContact) -> Self {
-        let emails: Vec<&str> = if c.all_emails.is_empty() {
-            c.email.as_deref().into_iter().collect()
-        } else {
-            c.all_emails.iter().map(|v| v.value.as_str()).collect()
-        };
-        let phones: Vec<&str> = if c.all_phones.is_empty() {
-            c.phone.as_deref().into_iter().collect()
-        } else {
-            c.all_phones.iter().map(|v| v.value.as_str()).collect()
-        };
-        Rec::build(
-            &c.display_name,
-            c.name_kana.as_deref(),
-            &emails,
-            &phones,
-            c.organization.as_deref(),
-            c.address.as_deref(),
+            f.organizations.first().and_then(|o| o.name.as_deref()),
+            f.addresses.first().map(address_line).as_deref(),
         )
     }
 
@@ -507,29 +488,20 @@ mod tests {
     ) -> ContactSummary {
         ContactSummary {
             id,
-            display_name: name.into(),
-            family_name: None,
-            given_name: None,
-            phonetic_family: None,
-            phonetic_given: None,
-            name_kana: None,
-            email: email.map(str::to_string),
-            phone: phone.map(str::to_string),
-            organization: org.map(str::to_string),
-            org_id: None,
-            org_title: None,
-            org_department: None,
-            address: None,
-            birthday: None,
-            note: None,
-            is_favorite: false,
-            is_business: false,
-            allow_remote_images: false,
-            deleted_at: None,
-            emails: Vec::new(),
-            phones: Vec::new(),
-            addresses: Vec::new(),
-            tags: Vec::new(),
+            fields: ContactFields {
+                display_name: name.into(),
+                emails: email.map(val).into_iter().collect(),
+                phones: phone.map(val).into_iter().collect(),
+                organizations: org
+                    .map(|o| crate::models::ContactOrganization {
+                        name: Some(o.into()),
+                        ..Default::default()
+                    })
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            },
+            ..Default::default()
         }
     }
 
@@ -617,10 +589,8 @@ mod tests {
 
     fn val(v: &str) -> ContactValue {
         ContactValue {
-            id: 0,
             label: None,
             value: v.into(),
-            is_primary: false,
             is_shared: false,
         }
     }
@@ -629,9 +599,9 @@ mod tests {
     fn secondary_email_matches_are_linked() {
         // 主メールは違うが、副メールが一致し氏名も一致 → High（全メールを見る）。
         let mut a = c(1, "末松 信吾", None, None, None);
-        a.emails = vec![val("primary@x.jp"), val("shared@y.jp")];
+        a.fields.emails = vec![val("primary@x.jp"), val("shared@y.jp")];
         let mut b = c(2, "末松信吾", None, None, None);
-        b.emails = vec![val("other@z.jp"), val("shared@y.jp")];
+        b.fields.emails = vec![val("other@z.jp"), val("shared@y.jp")];
         let g = group(&[a, b]);
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].confidence, "high");
@@ -641,9 +611,9 @@ mod tests {
     fn shared_landline_only_is_not_linked_without_name() {
         // 固定電話のみ共有で氏名が違えば連結しない（共有されがちなので弱い証拠）。
         let mut a = c(1, "田中一郎", None, None, None);
-        a.phones = vec![val("03-5287-3625")];
+        a.fields.phones = vec![val("03-5287-3625")];
         let mut b = c(2, "鈴木花子", None, None, None);
-        b.phones = vec![val("(03) 5287-3625")];
+        b.fields.phones = vec![val("(03) 5287-3625")];
         assert!(group(&[a, b]).is_empty());
     }
 
@@ -651,9 +621,9 @@ mod tests {
     fn shared_landline_plus_name_is_medium() {
         // 固定電話共有＋氏名一致は候補（Medium）。
         let mut a = c(1, "田中一郎", None, None, None);
-        a.phones = vec![val("03-5287-3625")];
+        a.fields.phones = vec![val("03-5287-3625")];
         let mut b = c(2, "田中 一郎", None, None, None);
-        b.phones = vec![val("(03) 5287-3625")];
+        b.fields.phones = vec![val("(03) 5287-3625")];
         let g = group(&[a, b]);
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].confidence, "medium");

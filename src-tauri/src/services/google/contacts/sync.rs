@@ -1,161 +1,217 @@
 //! 同期エンジン: ローカルの変更を送り（push）、Google の正本を取り込む（pull）。
 //!
 //! 順序はカレンダーと同じ **push → pull**。ローカルの変更を先に送ってから取り込むことで、
-//! 双方の状態が収束する（競合は概ね後勝ち）。
+//! 双方の状態が収束する（競合は後勝ち）。
 //!
 //! **まだ住所録の誰とも結び付いていない連絡先は `contact_identities`（台帳）に留まる。**
-//! 初回は Google 側と住所録に同じ人が別 ID で並ぶので、そのまま住所録へ入れると丸ごと二重に
-//! なるため。「ローカルの誰と同じ人か」を決めるのは照合（`services::contact_match`。利用者が
+//! 「ローカルの誰と同じ人か」を決めるのは照合（`services::contact_match`。利用者が
 //! 「住所録へ反映」を押したとき）の役目で、取り込みでは決めない。
 
-use super::api::{self, ApiError};
-use super::convert;
-use crate::models::GcontactsSyncResult;
-use crate::services::store::{ApplyOutcome, GoogleService, RemoteContact, Store};
+use super::api::{self, ApiError, GPerson};
+use super::{incoming, outgoing, STARRED_GROUP};
+use crate::models::{ContactFields, GcontactsSyncResult};
+use crate::services::store::{ApplyOutcome, ContactPush, GoogleService, RemoteContact, Store};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
 
+/// 同期のエラー。
+#[derive(Debug, thiserror::Error)]
+pub enum SyncError {
+    #[error("{0}")]
+    Client(String),
+    #[error(transparent)]
+    Api(#[from] ApiError),
+    #[error("データベースの操作に失敗しました: {0}")]
+    Db(#[from] rusqlite::Error),
+}
+
 /// Google への送信（作成／更新／削除）をプロセス全体で直列化するロック。
 ///
-/// 同じアカウントの同期が重なると、同一の未送信連絡先（dirty=1）を二重に作成してしまう
-/// （カレンダーの `push_lock` と同じ理由）。ここで直列化すると、先の送信が
-/// `mark_contact_pushed` で dirty を落としてから後続が `list_contacts_to_push` を読む。
+/// 同じアカウントの同期が重なると、同一の未送信連絡先を二重に作成してしまう（カレンダーの
+/// `push_lock` と同じ理由）。先の送信が未送信の印を落としてから後続が送信対象を読む。
 fn push_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-/// 未送信のローカル変更（`contacts.dirty = 1`）を Google へ送る。
-///
-/// 1 件の失敗で全体を止めない（ログして次へ）。壊れた 1 件が他の送信や後続の取り込みを
-/// 阻害しないようにするため。etag 不一致は**送らずに未送信のまま残す**: 次の取り込みで
-/// 新しい etag を受け取り、その次の送信で通る（結果として後勝ち）。
-async fn push_contacts(
-    store: &Store,
-    client: &reqwest::Client,
-    token: &str,
+/// 送信の文脈（1 アカウントぶん）。
+struct Pusher<'a> {
+    store: &'a Store,
+    client: &'a reqwest::Client,
+    token: &'a str,
     account_id: i64,
-    result: &mut GcontactsSyncResult,
-) -> Result<(), String> {
-    let _guard = push_lock().lock().await;
-    let changes = store
-        .list_contacts_to_push(account_id)
-        .map_err(|e| e.to_string())?;
-    log::info!("push_contacts: account {account_id} 未送信 {} 件", changes.len());
-
-    for ch in changes {
-        // 前回の取り込み時点で Google に付いていたラベル（差分の基準）。
-        let current_labels: Vec<String> = ch
-            .external_id
-            .as_deref()
-            .and_then(|gid| store.contact_identity(account_id, gid).ok().flatten())
-            .and_then(|i| i.snapshot)
-            .map(|s| s.labels)
-            .unwrap_or_default();
-
-        // 送信できた連絡先の resourceName（ラベルの付け替えに使う）。削除・失敗時は None。
-        let pushed_to: Option<String> = match (ch.deleted, ch.external_id.as_deref()) {
-            // ローカルで削除 → Google 側も削除。未連携なら送るものは無い。
-            (true, gid) => {
-                if let Some(gid) = gid {
-                    if let Err(e) = api::delete_contact(client, token, gid).await {
-                        log::warn!(
-                            "push_contacts: DELETE 失敗 id={} gid={gid}（スキップ）: {e}",
-                            ch.contact_id
-                        );
-                        continue;
-                    }
-                    let _ = store.mark_identity_pushed_delete(account_id, gid);
-                    result.deleted_out += 1;
-                }
-                let _ = store.clear_contact_dirty(ch.contact_id);
-                None
-            }
-            // 連携済み → 更新（etag 必須）。
-            (false, Some(gid)) => {
-                let body = convert::person_write_from_contact(&ch.contact, ch.etag.as_deref());
-                match api::update_contact(client, token, gid, &body).await {
-                    Ok(g) => {
-                        let rn = g.resource_name.as_deref().unwrap_or(gid).to_string();
-                        let _ = store.mark_contact_pushed(
-                            account_id,
-                            ch.contact_id,
-                            &rn,
-                            g.etag.as_deref(),
-                        );
-                        result.pushed += 1;
-                        Some(rn)
-                    }
-                    Err(ApiError::EtagConflict) => {
-                        // Google 側が先に更新されている。未送信のまま残して次回に持ち越す。
-                        log::warn!(
-                            "push_contacts: etag 不一致 id={} gid={gid}（次回に持ち越し）",
-                            ch.contact_id
-                        );
-                        result.conflicts += 1;
-                        None
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "push_contacts: UPDATE 失敗 id={} gid={gid}（スキップ）: {e}",
-                            ch.contact_id
-                        );
-                        None
-                    }
-                }
-            }
-            // ローカル生まれ → 新規作成（push_new_contacts が有効なときだけここへ来る）。
-            (false, None) => {
-                let body = convert::person_write_from_contact(&ch.contact, None);
-                match api::create_contact(client, token, &body).await {
-                    Ok(g) => {
-                        result.pushed += 1;
-                        match g.resource_name {
-                            Some(rn) => {
-                                let _ = store.mark_contact_pushed(
-                                    account_id,
-                                    ch.contact_id,
-                                    &rn,
-                                    g.etag.as_deref(),
-                                );
-                                Some(rn)
-                            }
-                            // resourceName が返らないことは無いはずだが、返らなければ
-                            // 紐付けようが無いので未送信の印だけ落として二重作成を防ぐ。
-                            None => {
-                                let _ = store.clear_contact_dirty(ch.contact_id);
-                                None
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "push_contacts: CREATE 失敗 id={}（スキップ）: {e}",
-                            ch.contact_id
-                        );
-                        None
-                    }
-                }
-            }
-        };
-
-        // ラベルの付け替え。本体の送信が通ったときだけ行う（失敗しても本体は送れている
-        // ので、ここでは止めずにログするに留める）。
-        if let Some(rn) = pushed_to {
-            if let Err(e) =
-                push_labels(store, client, token, account_id, &rn, &ch.contact.tags, &current_labels)
-                    .await
-            {
-                log::warn!("push_contacts: ラベルの反映に失敗 id={}: {e}", ch.contact_id);
-            }
-        }
-    }
-    Ok(())
+    /// 連絡先グループ ID → 名前（Person のラベル所属をタグ名に戻すため）。
+    groups: &'a HashMap<String, String>,
 }
 
-/// 連絡先グループ ID → 名前の対応を作る。システムグループ（myContacts 等）はタグにしても
-/// 意味が無いので除く。
+impl Pusher<'_> {
+    /// 未送信のローカル変更を Google へ送る。
+    ///
+    /// 1 件の失敗で全体を止めない（ログして次へ）。etag 不一致は送らずに未送信のまま残す
+    /// （次の同期で読み直して送る）。
+    async fn push_all(&self, result: &mut GcontactsSyncResult) -> Result<(), SyncError> {
+        let _guard = push_lock().lock().await;
+        let changes = self.store.list_contacts_to_push(self.account_id)?;
+        log::info!(
+            "push_contacts: account {} 未送信 {} 件",
+            self.account_id,
+            changes.len()
+        );
+        for ch in changes {
+            let outcome = match (ch.deleted, ch.external_id.as_deref()) {
+                (true, Some(gid)) => self
+                    .push_delete(gid)
+                    .await
+                    .map(|()| result.deleted_out += 1),
+                // 削除済みで未連携のものは送信対象に出てこないが、出ても送るものは無い。
+                (true, None) => Ok(self.store.clear_contact_dirty(ch.contact_id)?),
+                (false, Some(gid)) => self
+                    .push_update(&ch, gid)
+                    .await
+                    .map(|()| result.pushed += 1),
+                (false, None) => self.push_create(&ch).await.map(|()| result.pushed += 1),
+            };
+            match outcome {
+                Ok(()) => {}
+                Err(SyncError::Api(ApiError::EtagConflict)) => {
+                    log::warn!(
+                        "push_contacts: etag 不一致 id={}（次回に持ち越し）",
+                        ch.contact_id
+                    );
+                    result.conflicts += 1;
+                }
+                Err(e) => log::warn!(
+                    "push_contacts: 送信失敗 id={}（スキップ）: {e}",
+                    ch.contact_id
+                ),
+            }
+        }
+        Ok(())
+    }
+
+    /// ローカルで削除 → Google 側も削除し、つながりを外す。
+    async fn push_delete(&self, gid: &str) -> Result<(), SyncError> {
+        api::delete_contact(self.client, self.token, gid).await?;
+        self.store.forget_contact_identity(self.account_id, gid)?;
+        Ok(())
+    }
+
+    /// 連携済み → 送る直前に読み直し、それを土台に Rondine が扱う部分だけを上書きして送る。
+    async fn push_update(&self, ch: &ContactPush, gid: &str) -> Result<(), SyncError> {
+        let base = api::get_person(self.client, self.token, gid).await?;
+        let current = person_fields(&base, self.groups);
+        let body = outgoing::person_body(&ch.contact, Some(&base));
+        let g = api::update_contact(self.client, self.token, gid, &body).await?;
+        let rn = g.resource_name.clone().unwrap_or_else(|| gid.to_string());
+        self.finish(ch, &rn, &g, &current).await
+    }
+
+    /// ローカル生まれ → 新規作成（`push_new_contacts` が有効なときだけここへ来る）。
+    async fn push_create(&self, ch: &ContactPush) -> Result<(), SyncError> {
+        let body = outgoing::person_body(&ch.contact, None);
+        let g = api::create_contact(self.client, self.token, &body).await?;
+        match g.resource_name.clone() {
+            Some(rn) => self.finish(ch, &rn, &g, &ContactFields::default()).await,
+            // resourceName が返らないことは無いはずだが、返らなければ紐付けようが無いので
+            // 未送信の印だけ落として二重作成を防ぐ。
+            None => Ok(self.store.clear_contact_dirty(ch.contact_id)?),
+        }
+    }
+
+    /// 送信できたつながりを記録し、ラベルとスターを合わせる。ラベルの失敗は本体の送信を
+    /// 取り消さない（ログするに留める）。
+    async fn finish(
+        &self,
+        ch: &ContactPush,
+        rn: &str,
+        sent: &GPerson,
+        current: &ContactFields,
+    ) -> Result<(), SyncError> {
+        let snapshot = incoming::fields_from_person(sent, self.groups);
+        self.store.mark_contact_pushed(
+            self.account_id,
+            ch.contact_id,
+            rn,
+            sent.etag.as_deref(),
+            snapshot.as_ref(),
+        )?;
+        if let Err(e) = self.push_memberships(rn, &ch.contact, current).await {
+            log::warn!(
+                "push_contacts: ラベルの反映に失敗 id={}: {e}",
+                ch.contact_id
+            );
+        }
+        Ok(())
+    }
+
+    /// ラベル（タグ）とスター（お気に入り）の所属を Google 側へ合わせる。
+    ///
+    /// 所属は `people:updateContact` では変えられないので、グループごとに
+    /// `contactGroups/*/members:modify` を呼ぶ。Rondine 側にしか無いラベルは Google に作る。
+    /// `current` は送る直前に読み直した Google 側の状態。
+    async fn push_memberships(
+        &self,
+        rn: &str,
+        wanted: &ContactFields,
+        current: &ContactFields,
+    ) -> Result<(), SyncError> {
+        let me = [rn.to_string()];
+        if wanted.is_favorite != current.is_favorite {
+            let (add, remove): (&[String], &[String]) = if wanted.is_favorite {
+                (&me, &[])
+            } else {
+                (&[], &me)
+            };
+            api::modify_contact_group_members(self.client, self.token, STARRED_GROUP, add, remove)
+                .await?;
+        }
+        for name in wanted.tags.iter().filter(|w| !current.tags.contains(w)) {
+            let Some(id) = self.group_id_or_create(name).await? else {
+                continue;
+            };
+            api::modify_contact_group_members(self.client, self.token, &id, &me, &[]).await?;
+        }
+        for name in current.tags.iter().filter(|c| !wanted.tags.contains(c)) {
+            // 外す側は Google に既にあるはずなので、無ければ何もしない。
+            if let Some(id) = self.store.contact_group_id(self.account_id, name)? {
+                api::modify_contact_group_members(self.client, self.token, &id, &[], &me).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// ラベル名 → Google のグループ ID。未知のラベルは Google に作って台帳へ覚える。
+    async fn group_id_or_create(&self, name: &str) -> Result<Option<String>, SyncError> {
+        if let Some(id) = self.store.contact_group_id(self.account_id, name)? {
+            return Ok(Some(id));
+        }
+        let g = api::create_contact_group(self.client, self.token, name).await?;
+        let id = g
+            .resource_name
+            .as_deref()
+            .and_then(|r| r.strip_prefix("contactGroups/"))
+            .map(str::to_string);
+        match &id {
+            Some(id) => self
+                .store
+                .remember_contact_group(self.account_id, id, name)?,
+            None => log::warn!("push_labels: 作成したラベル '{name}' の ID が返りませんでした"),
+        }
+        Ok(id)
+    }
+}
+
+/// 読み直した Person（JSON）の中身。読めなければ空（ラベル・スターを付けていない扱い）。
+fn person_fields(base: &serde_json::Value, groups: &HashMap<String, String>) -> ContactFields {
+    serde_json::from_value::<GPerson>(base.clone())
+        .ok()
+        .and_then(|p| incoming::fields_from_person(&p, groups))
+        .unwrap_or_default()
+}
+
+/// 連絡先グループ ID → 名前の対応を作る。システムグループ（myContacts・starred 等）は
+/// タグにしても意味が無いので除く（スターはお気に入りとして別に扱う）。
 async fn group_names(
     client: &reqwest::Client,
     token: &str,
@@ -172,95 +228,41 @@ async fn group_names(
         .collect())
 }
 
-/// 連絡先 1 件のラベル所属を Google 側へ合わせる。
-///
-/// 所属は `people:updateContact` では変えられないので、グループごとに
-/// `contactGroups/*/members:modify` を呼ぶ。Rondine 側にしか無いラベルは Google に作る。
-/// `current` は前回の取り込み時点の所属（台帳の snapshot）。
-async fn push_labels(
+/// Person 1 件を台帳へ渡す形にする。連絡先として成立しないものは None。
+fn remote_from_person(person: &GPerson, groups: &HashMap<String, String>) -> Option<RemoteContact> {
+    let external_id = person.resource_name.clone()?;
+    if person.metadata.deleted {
+        return Some(RemoteContact {
+            external_id,
+            etag: None,
+            deleted: true,
+            contact: None,
+        });
+    }
+    let contact = incoming::fields_from_person(person, groups)?;
+    Some(RemoteContact {
+        external_id,
+        etag: person.etag.clone(),
+        deleted: false,
+        contact: Some(contact),
+    })
+}
+
+/// 連絡先を取り込む（増分同期トークンがあれば増分。失効したらフル同期へ切り替える）。
+async fn pull(
     store: &Store,
     client: &reqwest::Client,
     token: &str,
     account_id: i64,
-    resource_name: &str,
-    wanted: &[String],
-    current: &[String],
-) -> Result<(), String> {
-    let one = |s: &str| vec![s.to_string()];
-    for name in wanted.iter().filter(|w| !current.contains(w)) {
-        // 未知のラベルは Google 側に作ってから所属させる。
-        let id = match store.contact_group_id(account_id, name).map_err(|e| e.to_string())? {
-            Some(id) => id,
-            None => {
-                let g = api::create_contact_group(client, token, name)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                let Some(id) = g
-                    .resource_name
-                    .as_deref()
-                    .and_then(|r| r.strip_prefix("contactGroups/"))
-                    .map(str::to_string)
-                else {
-                    log::warn!("push_labels: 作成したラベル '{name}' の ID が返りませんでした");
-                    continue;
-                };
-                let _ = store.remember_contact_group(account_id, &id, name);
-                id
-            }
-        };
-        api::modify_contact_group_members(client, token, &id, &one(resource_name), &[])
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    for name in current.iter().filter(|c| !wanted.contains(c)) {
-        // 外す側は Google に既にあるはずなので、無ければ何もしない。
-        if let Some(id) = store.contact_group_id(account_id, name).map_err(|e| e.to_string())? {
-            api::modify_contact_group_members(client, token, &id, &[], &one(resource_name))
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-    }
-    Ok(())
-}
-
-/// 1 アカウントぶんの Google 連絡先を取り込む。access_token は呼び出し側で更新済みのものを渡す。
-pub async fn sync_account(
-    store: &Store,
-    access_token: &str,
-    account_id: i64,
-) -> Result<GcontactsSyncResult, String> {
-    let client = crate::services::google::http_client()?;
-    let mut result = GcontactsSyncResult::default();
-
-    // ラベル解決に失敗しても連絡先の取り込みは続ける（タグが付かないだけ）。
-    // 取得できたときは台帳を洗い替える（送信でラベル ID を引くため／取り込みで「Google の
-    // 持ち物であるタグ」を見分けるため）。
-    let groups: HashMap<String, String> = match group_names(&client, access_token).await {
-        Ok(list) => {
-            store
-                .replace_contact_groups(account_id, &list)
-                .map_err(|e| e.to_string())?;
-            list.into_iter().collect()
-        }
-        Err(e) => {
-            log::warn!("gcontacts: ラベル一覧を取得できません（タグ無しで続行）: {e}");
-            HashMap::new()
-        }
-    };
-
-    // 取り込みの前にローカルの変更を送る（送信に成功した分は dirty が落ち、直後の取り込みで
-    // Google の正本に上書きされる＝双方が収束する）。送信の失敗で取り込みまで止めない。
-    if let Err(e) = push_contacts(store, &client, access_token, account_id, &mut result).await {
-        log::warn!("gcontacts: 送信に失敗しました（取り込みは続行）: {e}");
-    }
-
-    let mut sync_token = store.contacts_sync_token(account_id).map_err(|e| e.to_string())?;
+    groups: &HashMap<String, String>,
+    result: &mut GcontactsSyncResult,
+) -> Result<(), SyncError> {
+    let mut sync_token = store.contacts_sync_token(account_id)?;
     let mut page_token: Option<String> = None;
-
     loop {
         let page = match api::list_connections(
-            &client,
-            access_token,
+            client,
+            token,
             sync_token.as_deref(),
             page_token.as_deref(),
         )
@@ -270,69 +272,85 @@ pub async fn sync_account(
             Err(ApiError::SyncTokenExpired) => {
                 // トークン失効 → フル同期へフォールバック（upsert なので再適用は安全）。
                 log::info!("gcontacts: 同期トークンが失効。フル同期に切り替えます");
-                store
-                    .set_contacts_sync_token(account_id, None)
-                    .map_err(|e| e.to_string())?;
+                store.set_contacts_sync_token(account_id, None)?;
                 sync_token = None;
                 page_token = None;
                 continue;
             }
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(e.into()),
         };
-
         for person in &page.connections {
-            let Some(external_id) = person.resource_name.clone() else {
+            // 名前もメールも電話も無い＝連絡先として成立しない。
+            let Some(remote) = remote_from_person(person, groups) else {
                 result.skipped += 1;
                 continue;
             };
-            let remote = if person.metadata.deleted {
-                RemoteContact {
-                    external_id,
-                    etag: None,
-                    deleted: true,
-                    contact: None,
-                }
-            } else {
-                match convert::imported_from_person(person, &groups) {
-                    Some(contact) => RemoteContact {
-                        external_id,
-                        etag: person.etag.clone(),
-                        deleted: false,
-                        contact: Some(contact),
-                    },
-                    // 名前もメールも電話も無い＝連絡先として成立しない。
-                    None => {
-                        result.skipped += 1;
-                        continue;
-                    }
-                }
-            };
-            match store
-                .apply_remote_contact(account_id, &remote)
-                .map_err(|e| e.to_string())?
-            {
+            match store.apply_remote_contact(account_id, &remote)? {
                 ApplyOutcome::Upserted => result.pulled += 1,
                 ApplyOutcome::Deleted => result.deleted_in += 1,
                 ApplyOutcome::Skipped => result.skipped += 1,
             }
         }
-
-        if let Some(next) = page.next_page_token {
-            page_token = Some(next);
-            continue;
+        match page.next_page_token {
+            Some(next) => page_token = Some(next),
+            None => {
+                // 最終ページ: 次回の増分同期トークンを保存して終了。
+                store.set_contacts_sync_token(account_id, page.next_sync_token.as_deref())?;
+                return Ok(());
+            }
         }
-        // 最終ページ: 次回の増分同期トークンを保存して終了。
-        store
-            .set_contacts_sync_token(account_id, page.next_sync_token.as_deref())
-            .map_err(|e| e.to_string())?;
-        break;
     }
+}
 
-    store
-        .touch_google_account_synced(account_id, GoogleService::Contacts)
-        .map_err(|e| e.to_string())?;
-    result.unlinked = store
-        .count_unlinked_identities(account_id)
-        .map_err(|e| e.to_string())? as i32;
+/// 1 アカウントぶんの Google 連絡先を同期する（送信 → 取り込み）。access_token は呼び出し側で
+/// 更新済みのものを渡す。
+///
+/// # Errors
+/// HTTP クライアントの初期化・取り込み・DB の操作に失敗したとき。送信の失敗は取り込みを
+/// 止めない（ログして続ける）。
+pub async fn sync_account(
+    store: &Store,
+    access_token: &str,
+    account_id: i64,
+) -> Result<GcontactsSyncResult, SyncError> {
+    let client = crate::services::google::http_client().map_err(SyncError::Client)?;
+    let mut result = GcontactsSyncResult::default();
+
+    // ラベル解決に失敗しても連絡先の同期は続ける（タグが付かないだけ）。取得できたときは
+    // 台帳を洗い替える（送信でラベル ID を引くため／取り込みで「Google の持ち物であるタグ」を
+    // 見分けるため）。
+    let groups: HashMap<String, String> = match group_names(&client, access_token).await {
+        Ok(list) => {
+            store.replace_contact_groups(account_id, &list)?;
+            list.into_iter().collect()
+        }
+        Err(e) => {
+            log::warn!("gcontacts: ラベル一覧を取得できません（タグ無しで続行）: {e}");
+            HashMap::new()
+        }
+    };
+
+    let pusher = Pusher {
+        store,
+        client: &client,
+        token: access_token,
+        account_id,
+        groups: &groups,
+    };
+    if let Err(e) = pusher.push_all(&mut result).await {
+        log::warn!("gcontacts: 送信に失敗しました（取り込みは続行）: {e}");
+    }
+    pull(
+        store,
+        &client,
+        access_token,
+        account_id,
+        &groups,
+        &mut result,
+    )
+    .await?;
+
+    store.touch_google_account_synced(account_id, GoogleService::Contacts)?;
+    result.unlinked = store.count_unlinked_identities(account_id)? as i32;
     Ok(result)
 }

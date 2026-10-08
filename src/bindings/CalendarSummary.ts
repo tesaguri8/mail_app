@@ -29,6 +29,10 @@ source: string,
  */
 account_email: string | null, 
 /**
+ * 連携アカウントが解除中（写しは残るが同期されない）。ローカルは false。
+ */
+account_disconnected: boolean, 
+/**
  * Google の権限。'owner' | 'writer' | 'reader' | 'freeBusyReader'。書き込み可否の表示に使う。
  * ローカルカレンダーは None（暗黙的に編集可）。
  */

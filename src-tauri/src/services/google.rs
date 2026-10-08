@@ -32,6 +32,8 @@ pub const BUILTIN_CLIENT_SECRET: &str = "";
 pub const AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 pub const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 pub const USERINFO_ENDPOINT: &str = "https://openidconnect.googleapis.com/v1/userinfo";
+/// 許可の取り消し（「完全に解除」で refresh token を無効にする）。
+pub const REVOKE_ENDPOINT: &str = "https://oauth2.googleapis.com/revoke";
 
 /// 要求スコープを組み立てる（`SCOPE_IDENTITY` は常に含める）。
 ///

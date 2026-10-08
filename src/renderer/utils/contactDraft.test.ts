@@ -15,8 +15,18 @@ describe('isBlankOrganization', () => {
 });
 
 describe('matchesSource', () => {
-  const google: ContactLink = { provider: 'google', account_id: 1, account_email: 'a@x.jp' };
-  const icloud: ContactLink = { provider: 'icloud', account_id: 2, account_email: null };
+  const google: ContactLink = {
+    provider: 'google',
+    account_id: 1,
+    account_email: 'a@x.jp',
+    disconnected: false,
+  };
+  const icloud: ContactLink = {
+    provider: 'icloud',
+    account_id: 2,
+    account_email: null,
+    disconnected: false,
+  };
   it('すべては常に当たる', () => {
     expect(matchesSource([], 'all')).toBe(true);
     expect(matchesSource([google], 'all')).toBe(true);

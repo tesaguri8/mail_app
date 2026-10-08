@@ -682,15 +682,32 @@ mod tests {
     }
 
     #[test]
-    fn disconnect_removes_google_calendars_and_events() {
+    fn disconnect_keeps_calendars_and_unsent_changes_until_purged() {
         let s = mem_store();
         let acct = s.upsert_google_account("a@gmail.com", None, None).unwrap();
         let cal = s
             .upsert_google_calendar(acct, "cal_ext_1", "予定表", None, "owner", true)
             .unwrap();
         s.apply_remote_event(cal, &remote("ev1", "会議", "2026-07-06T10:00")).unwrap();
+        // 未送信のローカル変更。
+        s.upsert_event(&crate::models::EventInput {
+            title: "未送信".into(),
+            start_at: "2026-07-07T10:00".into(),
+            calendar_id: Some(cal as i32),
+            ..Default::default()
+        })
+        .unwrap();
 
-        s.delete_google_account(acct).unwrap();
+        // 解除中: カレンダー・予定・未送信の変更は残り、解除中と分かる。
+        s.disconnect_google_account(acct).unwrap();
+        assert!(s.google_account_disconnected(acct).unwrap());
+        assert_eq!(s.list_events("2026-07-01", "2026-08-01", false).unwrap().len(), 2);
+        assert_eq!(s.list_local_changes(cal).unwrap().len(), 1);
+        let cals = s.list_calendars().unwrap();
+        assert!(cals.iter().any(|c| c.account_disconnected));
+
+        // 完全に解除: Google のカレンダーと予定の写しが消える。
+        s.purge_google_account(acct).unwrap();
         assert!(s.list_google_accounts().unwrap().is_empty());
         // 既定（ローカル）カレンダーは残る
         assert_eq!(s.list_calendars().unwrap().len(), 1);

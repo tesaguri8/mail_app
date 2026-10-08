@@ -171,6 +171,8 @@ pub struct ContactLink {
     pub account_id: i32,
     /// 連携アカウントのメールアドレス（同じサービスに複数アカウントがありうるため添える）。
     pub account_email: Option<String>,
+    /// 連携アカウントが解除中（つながりは残るが同期されない。再接続すると戻る）。
+    pub disconnected: bool,
 }
 
 /// 連絡先の中身（編集できる項目のすべて）。一覧/詳細・入力・取り込みの中間表現で共有する。

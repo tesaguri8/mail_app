@@ -29,4 +29,8 @@ last_calendar_sync_at: string | null,
 /**
  * 連絡先の最終同期時刻（UTC 文字列）。未同期なら None。
  */
-last_contacts_sync_at: string | null, };
+last_contacts_sync_at: string | null, 
+/**
+ * 解除中になった時刻（UTC 文字列）。None＝連携中。解除中は同期せず、記録は残す。
+ */
+disconnected_at: string | null, };

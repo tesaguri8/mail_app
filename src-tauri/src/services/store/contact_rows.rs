@@ -313,7 +313,8 @@ fn load_links(conn: &Connection, scope: Scope) -> rusqlite::Result<HashMap<i64, 
         where_sql
     };
     let sql = format!(
-        "SELECT DISTINCT ci.contact_id, ci.provider, ci.account_id, ga.email \
+        "SELECT DISTINCT ci.contact_id, ci.provider, ci.account_id, ga.email, \
+                ga.disconnected_at IS NOT NULL \
          FROM contact_identities ci \
          LEFT JOIN google_accounts ga ON ci.provider = 'google' AND ga.id = ci.account_id \
          {cond} ORDER BY ci.contact_id, ci.provider, ci.account_id"
@@ -327,15 +328,17 @@ fn load_links(conn: &Connection, scope: Scope) -> rusqlite::Result<HashMap<i64, 
             r.get::<_, String>(1)?,
             r.get::<_, i64>(2)?,
             r.get::<_, Option<String>>(3)?,
+            r.get::<_, Option<bool>>(4)?.unwrap_or(false),
         ))
     })?;
     for row in rows {
-        let (cid, provider, account_id, account_email) = row?;
+        let (cid, provider, account_id, account_email, disconnected) = row?;
         if let Some(provider) = ContactProvider::from_db(&provider) {
             out.entry(cid).or_default().push(ContactLink {
                 provider,
                 account_id: account_id as i32,
                 account_email,
+                disconnected,
             });
         }
     }

@@ -53,12 +53,18 @@ export function ContactLinkMarks({ links }: { links: ContactLink[] }) {
   return (
     <span className="flex shrink-0 items-center gap-1">
       {providers.map((p) => {
-        const title = links
-          .filter((l) => l.provider === p)
-          .map((l) => `${t(`contact.link.${p}`)}${l.account_email ? ` · ${l.account_email}` : ''}`)
+        const mine = links.filter((l) => l.provider === p);
+        const title = mine
+          .map(
+            (l) =>
+              `${t(`contact.link.${p}`)}${l.account_email ? ` · ${l.account_email}` : ''}` +
+              (l.disconnected ? ` (${t('contact.link.disconnected')})` : ''),
+          )
           .join('\n');
+        // そのサービスのつながりがすべて解除中なら薄く出す（記録は残っているが同期しない）。
+        const dim = mine.every((l) => l.disconnected);
         return (
-          <span key={p} title={title} aria-label={title}>
+          <span key={p} title={title} aria-label={title} className={dim ? 'opacity-35' : undefined}>
             <ProviderMark provider={p} size={13} />
           </span>
         );
@@ -85,10 +91,19 @@ export function ContactLinkChips({ links }: { links: ContactLink[] }) {
   return (
     <div className="flex flex-wrap gap-1.5">
       {links.map((l) => (
-        <span key={`${l.provider}-${l.account_id}`} className={chip}>
+        <span
+          key={`${l.provider}-${l.account_id}`}
+          className={`${chip} ${l.disconnected ? 'opacity-60' : ''}`}
+          title={l.disconnected ? t('contact.link.disconnectedHint') : undefined}
+        >
           <ProviderMark provider={l.provider} size={12} />
           {t(`contact.link.${l.provider}`)}
           {l.account_email && <span className="text-white/45">{l.account_email}</span>}
+          {l.disconnected && (
+            <span className="rounded bg-amber-400/20 px-1 text-[10px] text-amber-200">
+              {t('contact.link.disconnected')}
+            </span>
+          )}
         </span>
       ))}
     </div>

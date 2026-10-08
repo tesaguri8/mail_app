@@ -109,7 +109,9 @@
     "searchPlaceholder": "Search events…",
     "searchClear": "Clear search",
     "searchResults": "Results for “{{query}}”: {{count}}",
-    "searchEmpty": "No matching events"
+    "searchEmpty": "No matching events",
+    "accountDisconnected": "Disconnected",
+    "accountDisconnectedHint": "This account is disconnected. Events are kept but not synced with Google (use “Reconnect” in Settings)."
   },
   "comingSoon": "Coming soon",
   "filter": {
@@ -403,7 +405,9 @@
     "link": {
       "google": "Google",
       "icloud": "iCloud",
-      "rondineOnly": "Rondine only (not synced with any service)"
+      "rondineOnly": "Rondine only (not synced with any service)",
+      "disconnected": "Disconnected",
+      "disconnectedHint": "This account is disconnected. The link is kept but not synced (it comes back when you reconnect)."
     },
     "sourceHint": {
       "all": "All contacts",
@@ -614,7 +618,6 @@
     "gcalSyncNow": "Sync now",
     "gcalSyncing": "Syncing…",
     "gcalDisconnect": "Disconnect",
-    "gcalDisconnectConfirm": "Disconnect this account? The imported Google calendars and events will be removed from Rondine (events on Google are not deleted).",
     "gcalLastSync": "Last sync: {{when}}",
     "gcalNeverSynced": "Never synced",
     "gcalSyncDone": "Sync done: {{pulled}} pulled / {{pushed}} pushed / {{deletedIn}} deleted-in / {{deletedOut}} deleted-out",
@@ -637,7 +640,23 @@
     "gcontactsMatchRun": "Go ahead",
     "gcontactsMatchCancel": "Cancel",
     "gcontactsMatchDone": "Added to the address book: {{linked}} linked / {{created}} new ({{ambiguous}} to review under \"Merge duplicates\")",
-    "trashPurgeRun": "Delete permanently"
+    "trashPurgeRun": "Delete permanently",
+    "gcalReconnect": "Reconnect",
+    "gcalDisconnectedBadge": "Disconnected",
+    "gcalDisconnectedHint": "Disconnected. Imported calendars and events, contact links and unsent changes are kept. Reconnect the same account to resume syncing.",
+    "gcalDisconnectTitle": "Disconnect {{email}}",
+    "gcalDisconnectBody": "Either way, your contacts and events on Google itself are not deleted.",
+    "gcalDisconnectOption": "Disconnect for now (keep records)",
+    "gcalDisconnectOptionHint": "Stops syncing. Imported calendars and events, contact links to Google and unsent changes are kept; reconnecting the same account picks up where it left off.",
+    "gcalPurgeOption": "Disconnect completely",
+    "gcalPurgeOptionHint": "Revokes Rondine’s access on Google, unlinks your contacts from Google (they stay in Rondine) and removes the imported copies of calendars and events.",
+    "gcalDisconnectKeepNote": "Events and contacts you changed in Rondine but haven’t sent yet will be sent on the next sync after reconnecting.",
+    "gcalPurgeNote": "Event changes not yet sent to Google will be lost. Revoking access on Google may also disconnect Rondine on your other devices that use the same account.",
+    "gcalDisconnectRun": "Disconnect for now",
+    "gcalPurgeRun": "Disconnect completely",
+    "gcalDisconnected": "Disconnected {{email}} for now. Use “Reconnect” to resume.",
+    "gcalPurged": "Disconnected {{email}} completely.",
+    "gcalRevokeFailed": "Couldn’t revoke access on Google (the disconnect itself is done): {{message}}"
   },
   "dataloc": {
     "title": "Data location",

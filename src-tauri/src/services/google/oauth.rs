@@ -161,6 +161,40 @@ pub async fn refresh_access_token(
     Ok(body.access_token.unwrap())
 }
 
+/// Google 側の許可を取り消す（refresh token を送ると、その連携の許可が無効になる）。
+///
+/// 「完全に解除」で使う。取り消すと、同じ Google アカウント・同じ OAuth クライアントで
+/// 発行したほかのトークン（別の端末の連携など）も無効になりうる。
+///
+/// # Errors
+/// 送れなかった、または Google が拒んだとき（理由の文言つき）。
+pub async fn revoke_token(token: &str) -> Result<(), String> {
+    revoke_token_at(&super::http_client()?, super::REVOKE_ENDPOINT, token).await
+}
+
+/// [`revoke_token`] の本体（送り先を差し替えて試験するため分けてある）。
+async fn revoke_token_at(
+    client: &reqwest::Client,
+    endpoint: &str,
+    token: &str,
+) -> Result<(), String> {
+    let resp = client
+        .post(endpoint)
+        .form(&[("token", token)])
+        .send()
+        .await
+        .map_err(|e| format!("許可の取り消しを送れませんでした: {e}"))?;
+    let status = resp.status();
+    if status.is_success() {
+        return Ok(());
+    }
+    // 失効済みのトークンは 400 invalid_token が返る。理由はそのまま見せる。
+    let body = resp.text().await.unwrap_or_default();
+    Err(format!(
+        "Google が許可の取り消しを受け付けませんでした（{status}）: {body}"
+    ))
+}
+
 async fn exchange_code(
     client: &reqwest::Client,
     client_id: &str,
@@ -310,5 +344,64 @@ fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String, 
             }
             Err(e) => return Err(format!("待受でエラー: {e}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    /// 1 回だけ応える試験用の HTTP サーバー。受け取った要求の全文を返す。
+    fn one_shot_server(
+        status_line: &'static str,
+        body: &'static str,
+    ) -> (String, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/revoke", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = vec![0u8; 4096];
+            let mut req = String::new();
+            // 頭と本文（form）が揃うまで読む。
+            while !req.contains("token=") {
+                let n = sock.read(&mut buf).unwrap();
+                if n == 0 {
+                    break;
+                }
+                req.push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+            let resp = format!(
+                "{status_line}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            sock.write_all(resp.as_bytes()).unwrap();
+            req
+        });
+        (url, handle)
+    }
+
+    #[test]
+    fn revoke_posts_the_token_as_a_form() {
+        let (url, server) = one_shot_server("HTTP/1.1 200 OK", "");
+        let client = reqwest::Client::new();
+        let r = tauri::async_runtime::block_on(revoke_token_at(&client, &url, "1//refresh-abc"));
+        assert!(r.is_ok(), "{r:?}");
+        let req = server.join().unwrap();
+        assert!(req.starts_with("POST /revoke"));
+        assert!(req.contains("application/x-www-form-urlencoded"));
+        assert!(req.contains("token=1%2F%2Frefresh-abc"));
+    }
+
+    #[test]
+    fn revoke_reports_a_refusal() {
+        let (url, server) =
+            one_shot_server("HTTP/1.1 400 Bad Request", r#"{"error":"invalid_token"}"#);
+        let client = reqwest::Client::new();
+        let r = tauri::async_runtime::block_on(revoke_token_at(&client, &url, "expired"));
+        server.join().unwrap();
+        let e = r.unwrap_err();
+        assert!(e.contains("400") && e.contains("invalid_token"), "{e}");
     }
 }

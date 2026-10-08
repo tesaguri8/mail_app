@@ -95,6 +95,45 @@ pub(crate) fn is_freemail(domain: &str) -> bool {
     FREEMAIL_DOMAINS.contains(&d.as_str())
 }
 
+/// 契約者なら誰でも持てるプロバイダ・携帯のドメイン（`*.ne.jp`。JPRS の属性型でネットワーク
+/// サービス向け）。フリーメールと同じく、同じドメインでも同じ組織とは限らない。
+const ISP_SUFFIXES: &[&str] = &[".ne.jp"];
+
+/// 官公庁のドメイン（`*.lg.jp` 地方公共団体 / `*.go.jp` 政府機関）。組織が大きく、ドメインでは
+/// 部署（＝組織カードの単位）を見分けられない。
+const PUBLIC_BODY_SUFFIXES: &[&str] = &[".lg.jp", ".go.jp"];
+
+/// 地域型 jp ドメインの自治体（`city.nago.okinawa.jp` / `pref.okinawa.jp` など）の先頭ラベル。
+/// `*.lg.jp` より前からある形で、今も使われている（`[実測]` 2026-10-08 に名護市役所の各課）。
+const LOCAL_GOV_LABELS: &[&str] = &["pref", "city", "town", "vill"];
+
+/// `domain` が `base` そのものか、そのサブドメイン（`biz.ezweb.ne.jp` ⊂ `ezweb.ne.jp`）か。
+fn is_within(domain: &str, base: &str) -> bool {
+    domain == base
+        || domain
+            .strip_suffix(base)
+            .is_some_and(|head| head.ends_with('.'))
+}
+
+/// 同じドメインでも同じ組織とは言えないドメインか（組織カードへの「つなぐ」の手掛かりにしない）。
+///
+/// フリーメール（サブドメインを含む）・プロバイダ（`*.ne.jp`）・官公庁（`*.lg.jp` / `*.go.jp` /
+/// 地域型の `city.*.jp` など）。一覧はこのモジュールに集め、組織の整理（`org_tidy`）はこの関数
+/// だけを見る。
+pub(crate) fn is_unaffiliated_domain(domain: &str) -> bool {
+    let d = domain.trim().trim_end_matches('.').to_lowercase();
+    let local_gov = d.ends_with(".jp")
+        && d.split('.')
+            .next()
+            .is_some_and(|head| LOCAL_GOV_LABELS.contains(&head));
+    local_gov
+        || FREEMAIL_DOMAINS.iter().any(|f| is_within(&d, f))
+        || ISP_SUFFIXES
+            .iter()
+            .chain(PUBLIC_BODY_SUFFIXES)
+            .any(|suffix| d.ends_with(suffix))
+}
+
 /// 旧バージョンで手動グリーンに登録されたフリーメールドメイン（gmail.com 等）を取り除く。
 /// ドメイン単位の信頼はフリーメールでは成立しない（誰でも取得できる）ため、起動時に掃除する。
 /// 冪等（該当が無ければ 0 件）。戻り値は削除した行数。
@@ -387,5 +426,24 @@ mod tests {
             assert_eq!(left, 1, "フリーメールだけ消え、通常ドメインは残る");
         }
         assert!(s.address_green("info@acme.co.jp").unwrap());
+    }
+
+    #[test]
+    fn unaffiliated_domains_are_freemail_isp_and_public_bodies() {
+        // フリーメールは本体もサブドメインも。
+        assert!(is_unaffiliated_domain("gmail.com"));
+        assert!(is_unaffiliated_domain("ryugin.biz.ezweb.ne.jp"));
+        // プロバイダ（*.ne.jp）と官公庁（*.lg.jp / *.go.jp）。
+        assert!(is_unaffiliated_domain("nirai.ne.jp"));
+        assert!(is_unaffiliated_domain("Pref.Okinawa.LG.jp"));
+        assert!(is_unaffiliated_domain("mlit.go.jp"));
+        // 地域型の自治体ドメイン。
+        assert!(is_unaffiliated_domain("city.nago.okinawa.jp"));
+        assert!(is_unaffiliated_domain("pref.okinawa.jp"));
+        assert!(!is_unaffiliated_domain("city.example.com"), "jp 以外は対象外");
+        // 会社のドメインは手掛かりになる。似た綴りでも区切りが違えば別物。
+        assert!(!is_unaffiliated_domain("ryugin.co.jp"));
+        assert!(!is_unaffiliated_domain("notgmail.com"));
+        assert!(!is_unaffiliated_domain("lg.jp.example.com"));
     }
 }

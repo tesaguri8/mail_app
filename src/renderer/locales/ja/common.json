@@ -338,7 +338,7 @@
     "save": "保存",
     "saved": "保存しました",
     "delete": "削除",
-    "deleteConfirm": "この連絡先を削除しますか？",
+    "deleteConfirm": "「{{name}}」を削除しますか？ゴミ箱に移り、保持期間を過ぎると完全に削除されます。",
     "sharedToggle": "共有アドレス（会社の代表など。複数名で共有し、重複判定から除外）",
     "dupInline": "既存の連絡先と一致しています",
     "dupBanner": "似た連絡先が {{count}} 件あります",
@@ -409,7 +409,9 @@
       "google": "Google と同期している連絡先",
       "icloud": "iCloud と同期している連絡先",
       "rondine": "どのサービスとも同期していない（Rondine のみの）連絡先"
-    }
+    },
+    "deleteTitle": "連絡先を削除",
+    "deleteAlsoRemote": "{{service}} の連絡先からも削除されます（次の同期で削除を送ります）。"
   },
   "org": {
     "tab": "組織",
@@ -447,7 +449,8 @@
     "mergeBody": "「{{from}}」を既存の「{{to}}」に統合します。所属 {{count}} 名がこの組織へ移り、「{{from}}」は削除されます。",
     "mergeConfirm": "統合する",
     "cancel": "キャンセル",
-    "trashDaysRestore": "削除済み・残り {{count}} 日（選ぶと復元）"
+    "trashDaysRestore": "削除済み・残り {{count}} 日（選ぶと復元）",
+    "deleteTitle": "組織カードを削除"
   },
   "orgTidy": {
     "title": "整理（組織カードにする・つなぐ・重複）",
@@ -480,7 +483,12 @@
     "reasonName": "会社名「{{name}}」",
     "reasonDomain": "ドメイン {{domain}}",
     "linkRun": "選んだ {{count}} 人をつなぐ",
-    "linked": "{{count}} 人を「{{name}}」につなぎました。"
+    "linked": "{{count}} 人を「{{name}}」につなぎました。",
+    "impactCounting": "影響を数えています…",
+    "impactResent": "{{count}} 人の会社が変わる（会社名がカードの名前にそろう・会社が足される）ため、次の同期で Google にも反映されます。",
+    "noNameMatch": "会社名が一致する人はいません。",
+    "domainOnly": "メールのドメインだけ一致（{{count}} 人。会社名は違います）",
+    "linkConfirm": "選んだ {{count}} 人を「{{name}}」につなぎます。よろしいですか？"
   },
   "dupes": {
     "title": "重複の整理",
@@ -627,7 +635,8 @@
     "gcontactsMatchConfirm": "{{linked}} 件を既存の連絡先に紐付け、{{created}} 件を新しく登録します（うち {{ambiguous}} 件は似た相手が居るため、あとで「重複整理」に候補として出ます）。",
     "gcontactsMatchRun": "実行する",
     "gcontactsMatchCancel": "やめる",
-    "gcontactsMatchDone": "住所録へ反映しました: 紐付け {{linked}} 件 / 新規 {{created}} 件（うち {{ambiguous}} 件は「重複整理」でご確認ください）"
+    "gcontactsMatchDone": "住所録へ反映しました: 紐付け {{linked}} 件 / 新規 {{created}} 件（うち {{ambiguous}} 件は「重複整理」でご確認ください）",
+    "trashPurgeRun": "完全に削除する"
   },
   "dataloc": {
     "title": "データの保存先",

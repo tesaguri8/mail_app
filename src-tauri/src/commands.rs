@@ -6,7 +6,7 @@ use crate::models::{
     GoogleCredentialsStatus,
     GreenDomainEntry,
     HomeUnreadCounts, IcsImportReport, ImportReport, MailDetail,
-    MailSummary, OrgDuplicateGroup, OrgLinkSuggestion, OrganizationDetail, OrganizationInput, OrganizationSummary,
+    MailSummary, OrgChangeImpact, OrgDuplicateGroup, OrgLinkSuggestion, OrganizationDetail, OrganizationInput, OrganizationSummary,
     RebuildAction,
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSenderConflict, SpamSettings, SpamVerdict,
@@ -1786,6 +1786,29 @@ pub fn organization_create_from_name(
         return Err("組織名を入力してください".to_string());
     }
     store.create_org_from_name(&name).map_err(|e| e.to_string())
+}
+
+/// 「会社名から組織カードを作る」の下見（次の同期で送り直しになる人数）。何も書き換えない。
+#[tauri::command]
+pub fn organization_create_from_name_impact(
+    store: State<Store>,
+    name: String,
+) -> Result<OrgChangeImpact, String> {
+    store
+        .create_org_from_name_impact(&name)
+        .map_err(|e| e.to_string())
+}
+
+/// 「選んだ人を組織カードにつなぐ」の下見（次の同期で送り直しになる人数）。何も書き換えない。
+#[tauri::command]
+pub fn organization_link_contacts_impact(
+    store: State<Store>,
+    org_id: i64,
+    contact_ids: Vec<i64>,
+) -> Result<OrgChangeImpact, String> {
+    store
+        .link_contacts_to_org_impact(org_id, &contact_ids)
+        .map_err(|e| e.to_string())
 }
 
 /// 組織カードごとの「つながっていないが同じ組織らしい人」（理由つき）。組織タブの「整理」用。

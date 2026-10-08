@@ -338,7 +338,7 @@
     "save": "Save",
     "saved": "Saved",
     "delete": "Delete",
-    "deleteConfirm": "Delete this contact?",
+    "deleteConfirm": "Delete “{{name}}”? It moves to the trash and is removed for good after the retention period.",
     "sharedToggle": "Shared address (e.g. a company's main address, used by several people — excluded from duplicate checks)",
     "dupInline": "Matches an existing contact",
     "dupBanner": "{{count}} similar contact(s) found",
@@ -409,7 +409,9 @@
       "google": "Contacts synced with Google",
       "icloud": "Contacts synced with iCloud",
       "rondine": "Contacts not synced with any service (Rondine only)"
-    }
+    },
+    "deleteTitle": "Delete contact",
+    "deleteAlsoRemote": "It will also be deleted from your {{service}} contacts (the deletion is sent on the next sync)."
   },
   "org": {
     "tab": "Organizations",
@@ -447,7 +449,8 @@
     "mergeBody": "\"{{from}}\" will be merged into the existing \"{{to}}\". Its {{count}} members move to this organization and \"{{from}}\" is deleted.",
     "mergeConfirm": "Merge",
     "cancel": "Cancel",
-    "trashDaysRestore": "Deleted · {{count}}d left (select to restore)"
+    "trashDaysRestore": "Deleted · {{count}}d left (select to restore)",
+    "deleteTitle": "Delete organization card"
   },
   "orgTidy": {
     "title": "Tidy up (make cards, link people, duplicates)",
@@ -480,7 +483,12 @@
     "reasonName": "Company “{{name}}”",
     "reasonDomain": "Domain {{domain}}",
     "linkRun": "Link {{count}} selected",
-    "linked": "Linked {{count}} people to “{{name}}”."
+    "linked": "Linked {{count}} people to “{{name}}”.",
+    "impactCounting": "Checking what changes…",
+    "impactResent": "The company of {{count}} people changes (renamed to the card’s name or added), so Google will be updated on the next sync.",
+    "noNameMatch": "No one with a matching company name.",
+    "domainOnly": "Matched by email domain only ({{count}}; different company name)",
+    "linkConfirm": "Link the {{count}} selected people to “{{name}}”?"
   },
   "dupes": {
     "title": "Clean up duplicates",
@@ -627,7 +635,8 @@
     "gcontactsMatchConfirm": "This links {{linked}} to existing contacts and adds {{created}} as new ({{ambiguous}} of them look close to someone you already have and will show up under \"Merge duplicates\").",
     "gcontactsMatchRun": "Go ahead",
     "gcontactsMatchCancel": "Cancel",
-    "gcontactsMatchDone": "Added to the address book: {{linked}} linked / {{created}} new ({{ambiguous}} to review under \"Merge duplicates\")"
+    "gcontactsMatchDone": "Added to the address book: {{linked}} linked / {{created}} new ({{ambiguous}} to review under \"Merge duplicates\")",
+    "trashPurgeRun": "Delete permanently"
   },
   "dataloc": {
     "title": "Data location",

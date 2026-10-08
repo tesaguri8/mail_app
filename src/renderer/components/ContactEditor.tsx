@@ -47,6 +47,7 @@ import {
 } from './ContactValueEditor';
 import { HandleRows, PairRows } from './ContactExtraRows';
 import { ContactLinkChips } from './ContactLinks';
+import { ConfirmDialog } from './ConfirmDialog';
 import { OrgRows } from './ContactOrgRows';
 import { OrgCardDialog, OrgCardInfo, OrgOverlapNotice } from './OrgCard';
 import { LABEL_LIST_IDS } from '../utils/contactLabels';
@@ -212,6 +213,9 @@ export function ContactEditor({
   const [matches, setMatches] = useState<ContactMatch[]>([]);
   // 新規保存前の重複確認ダイアログの表示。
   const [confirmDup, setConfirmDup] = useState(false);
+  // 削除の確認ダイアログの表示と、削除中か。
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   // タグ入力の候補（既存タグ名）。保存でタグが増えることがあるので取り直す。
   const [tagNames, setTagNames] = useState<string[]>([]);
   // 所属組織のカード（会社共通の代表連絡先。ここではラベル表示のみ）。
@@ -269,6 +273,7 @@ export function ContactEditor({
     setSaved(false);
     setMatches([]);
     setConfirmDup(false);
+    setConfirmDelete(false);
     setEditOrg(false);
     setOverlapKept(null);
     setShown(new Set());
@@ -411,15 +416,23 @@ export function ContactEditor({
     void doSave();
   };
 
+  // 削除は画面内で確認してから（window.confirm は Linux で素通りする）。つながっている
+  // サービスがあれば、そちらの連絡先も消えることを添える（次の同期で削除が送られる）。
   const remove = async (id: number) => {
-    if (!window.confirm(t('contact.deleteConfirm'))) return;
+    setDeleting(true);
     try {
       await contactDelete(id);
+      setConfirmDelete(false);
       onDeleted?.(id);
     } catch {
       /* noop */
+    } finally {
+      setDeleting(false);
     }
   };
+  const deleteNotes = [...new Set(links.map((l) => l.provider))].map((p) =>
+    t('contact.deleteAlsoRemote', { service: t(`contact.link.${p}`) }),
+  );
 
   // 重複バナー: 親が「整理」誘導を持てばそこへ、無ければその連絡先を開く。
   const handleReview = (m: ContactMatch) => {
@@ -487,7 +500,7 @@ export function ContactEditor({
           </button>
           {draft.id !== null && (
             <button
-              onClick={() => remove(draft.id as number)}
+              onClick={() => setConfirmDelete(true)}
               title={t('contact.delete')}
               aria-label={t('contact.delete')}
               className="flex h-9 w-9 items-center justify-center rounded-full border border-white/20 text-white/60 hover:border-red-400/60 hover:bg-red-500/30 hover:text-white"
@@ -930,6 +943,19 @@ export function ContactEditor({
             </div>
           </div>
         </div>
+      )}
+
+      {confirmDelete && draft.id !== null && (
+        <ConfirmDialog
+          title={t('contact.deleteTitle')}
+          body={t('contact.deleteConfirm', { name: draft.display_name || t('contact.untitled') })}
+          notes={deleteNotes}
+          confirmLabel={t('contact.delete')}
+          danger
+          busy={deleting}
+          onConfirm={() => void remove(draft.id as number)}
+          onCancel={() => setConfirmDelete(false)}
+        />
       )}
 
       {/* 組織カードの編集（会社共通の情報なので、所属している全員に反映される）。 */}

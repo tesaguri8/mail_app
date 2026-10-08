@@ -158,3 +158,80 @@ fn linking_people_reuses_a_matching_company_or_adds_one() {
     assert_eq!(n.fields.organizations[0].org_id, Some(card.id));
     assert_eq!(n.primary_organization.as_deref(), Some("株式会社テスト"));
 }
+
+/// 連絡先を Google につながっていることにする（送り直しの数え方の試験用）。
+fn link_to_google(s: &Store, contact_id: i64) {
+    let conn = s.conn.lock().unwrap();
+    conn.execute(
+        "INSERT INTO contact_identities (provider, account_id, external_id, contact_id) \
+         VALUES ('google', 1, ?1, ?2)",
+        rusqlite::params![format!("people/c{contact_id}"), contact_id],
+    )
+    .unwrap();
+}
+
+#[test]
+fn provider_and_public_body_domains_are_not_a_hint() {
+    let s = store();
+    import(
+        &s,
+        &[("メンバー", "北部土木事務所", "a@pref.okinawa.lg.jp")],
+    );
+    import(&s, &[("会員", "株式会社ニライ", "b@nirai.ne.jp")]);
+    s.create_org_from_name("北部土木事務所").unwrap();
+    s.create_org_from_name("株式会社ニライ").unwrap();
+    import(
+        &s,
+        &[
+            ("県の別部署", "環境部", "c@pref.okinawa.lg.jp"),
+            ("同じプロバイダ", "別の会社", "d@nirai.ne.jp"),
+        ],
+    );
+    let sugg = s.org_link_suggestions().unwrap();
+    assert!(
+        sugg.is_empty(),
+        "官公庁・プロバイダのドメインだけでは候補にしない: {:?}",
+        sugg.iter().map(|g| &g.org.name).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn impact_counts_only_synced_people_whose_company_changes() {
+    let s = store();
+    import(
+        &s,
+        &[
+            ("そのまま", "株式会社テスト", "a@x.jp"),
+            ("表記ゆれ", "(株)テスト", "b@y.jp"),
+            ("つながりなし", "(株)テスト", "c@z.jp"),
+        ],
+    );
+    link_to_google(&s, id_of(&s, "そのまま"));
+    link_to_google(&s, id_of(&s, "表記ゆれ"));
+
+    // カード名は「株式会社テスト」: 名前が変わるのは表記ゆれの 2 人、うち同期しているのは 1 人。
+    let impact = s.create_org_from_name_impact("株式会社テスト").unwrap();
+    assert_eq!(impact.resent, 1);
+    // 下見は何も書き換えない。
+    assert!(s.list_organizations(None, false).unwrap().is_empty());
+
+    let card = s.create_org_from_name("株式会社テスト").unwrap();
+    // つなぐ: 会社が足される人（同期あり）は送り直し、同期の無い人は数えない。
+    import(&s, &[("足される人", "別の会社", "d@test.co.jp")]);
+    let added = id_of(&s, "足される人");
+    link_to_google(&s, added);
+    let loose = s
+        .upsert_contact(&person("会社なし", &["e@test.co.jp"]))
+        .unwrap()
+        .id as i64;
+    let impact = s
+        .link_contacts_to_org_impact(card.id as i64, &[added, loose])
+        .unwrap();
+    assert_eq!(impact.resent, 1);
+    // 既につながっている人は数えない。
+    let already = id_of(&s, "そのまま");
+    let impact = s
+        .link_contacts_to_org_impact(card.id as i64, &[already])
+        .unwrap();
+    assert_eq!(impact.resent, 0);
+}

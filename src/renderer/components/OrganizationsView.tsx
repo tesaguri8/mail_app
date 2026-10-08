@@ -32,6 +32,7 @@ import { trashDaysLeft } from '../utils/trash';
 import { OrgCardFields, orgDraft } from './OrgCard';
 import { OrgAutocomplete } from './OrgCombobox';
 import { OrgTidy } from './OrgTidy';
+import { ConfirmDialog } from './ConfirmDialog';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -65,6 +66,8 @@ export function OrganizationsView({
   // 削除済み（ゴミ箱）を表示するか、と保持日数。
   const [showDeleted, setShowDeleted] = useState(false);
   const [retention, setRetention] = useState(7);
+  // 組織カードの削除の確認ダイアログ（window.confirm は Linux で素通りする）。
+  const [confirmDelete, setConfirmDelete] = useState(false);
   // 「整理」（カードになっていない会社名・つながっていない人・重複）の画面を開いているか。
   const [tidy, setTidy] = useState(false);
   // 右ペイン（組織カード）のスクロール枠と、いま開いている組織の ID。
@@ -190,7 +193,7 @@ export function OrganizationsView({
   const canDelete = detail !== null && detail.members.length === 0;
   const remove = async () => {
     if (!detail || !canDelete || !isTauri) return;
-    if (!window.confirm(t('org.deleteConfirm', { name: detail.org.name }))) return;
+    setConfirmDelete(false);
     try {
       await organizationDelete(detail.org.id);
       setSelectedId(null);
@@ -397,7 +400,7 @@ export function OrganizationsView({
                 <AlertTriangle size={16} className="shrink-0 text-amber-300" />
                 <span className="flex-1 text-xs text-amber-100">{t('org.emptyWarn')}</span>
                 <button
-                  onClick={remove}
+                  onClick={() => setConfirmDelete(true)}
                   className="flex shrink-0 items-center gap-1 rounded-md border border-red-400/50 bg-red-500/20 px-2.5 py-1 text-xs text-red-100 hover:bg-red-500/40"
                 >
                   <Trash2 size={13} />
@@ -490,6 +493,17 @@ export function OrganizationsView({
           </div>
         )}
       </section>
+
+      {confirmDelete && detail && (
+        <ConfirmDialog
+          title={t('org.deleteTitle')}
+          body={t('org.deleteConfirm', { name: detail.org.name })}
+          confirmLabel={t('org.delete')}
+          danger
+          onConfirm={() => void remove()}
+          onCancel={() => setConfirmDelete(false)}
+        />
+      )}
 
       {/* 統合の確認（別の既存組織名に一致した会社名で保存したとき） */}
       {confirmMerge && detail && mergeTarget && (

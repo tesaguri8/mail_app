@@ -138,6 +138,12 @@ const TERMS: &[Term] = &[
 /// ラベルにしない種別（情報が増えない既定値・vCard の補助的な TYPE）。
 const NO_LABEL: &[&str] = &["", "other", "internet", "pref", "voice", "x400", "x-other"];
 
+/// ラベルにしない種別の、各言語での表記。Google の連絡先には種別そのものが「その他」という
+/// 文字列（カスタム種別）で入っていることがある（CSV やほかの端末から入った連絡先。`[実測]`
+/// 2026-10-08 に試験用アカウントのメール 2,010 件・電話 4,541 件）。既定値と同じ意味なので
+/// 無ラベルにする（docs/CONTACT_MODEL.md §1-2）。
+const NO_LABEL_LOCALIZED: &[&str] = &["その他"];
+
 /// iCloud の `_$!<Anniversary>!$_` 形式を中身だけにする。それ以外はそのまま。
 fn unwrap_apple(raw: &str) -> &str {
     raw.strip_prefix("_$!<")
@@ -151,7 +157,7 @@ fn unwrap_apple(raw: &str) -> &str {
 pub fn label_from_term(raw: &str) -> Option<String> {
     let t = unwrap_apple(raw.trim()).trim();
     let lower = t.to_ascii_lowercase();
-    if NO_LABEL.contains(&lower.as_str()) {
+    if NO_LABEL.contains(&lower.as_str()) || NO_LABEL_LOCALIZED.contains(&t) {
         return None;
     }
     TERMS
@@ -168,11 +174,8 @@ pub fn label_from_google(value_type: Option<&str>, formatted: Option<&str>) -> O
     match value_type.map(str::trim).filter(|t| !t.is_empty()) {
         Some(t) if t.eq_ignore_ascii_case("other") => None,
         Some(t) => label_from_term(t),
-        // 種別が無いときは表示用の種別（カスタム名）を使う。「その他」は既定値なので付けない。
-        None => formatted
-            .map(str::trim)
-            .filter(|f| !f.is_empty() && *f != "その他")
-            .and_then(label_from_term),
+        // 種別が無いときは表示用の種別（カスタム名）を使う。「その他」は label_from_term が落とす。
+        None => formatted.and_then(label_from_term),
     }
 }
 
@@ -215,6 +218,11 @@ mod tests {
             Some("携帯")
         );
         assert_eq!(label_from_google(Some("other"), Some("その他")), None);
+        // 種別そのものが「その他」（カスタム種別）でも無ラベル。
+        assert_eq!(label_from_google(Some("その他"), Some("その他")), None);
+        assert_eq!(label_from_google(Some(" その他 "), None), None);
+        assert_eq!(label_from_google(None, Some("その他")), None);
+        assert_eq!(label_from_term("_$!<その他>!$_"), None);
         assert_eq!(
             label_from_google(None, Some("実家")).as_deref(),
             Some("実家")

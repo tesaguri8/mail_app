@@ -74,6 +74,7 @@ import type { GcontactsMatchResult } from '@bindings/GcontactsMatchResult';
 import type { GoogleAccount } from '@bindings/GoogleAccount';
 import type { GoogleCredentialsStatus } from '@bindings/GoogleCredentialsStatus';
 import { AccountSetup } from './AccountSetup';
+import { ConfirmDialog } from './ConfirmDialog';
 import { SignatureManager } from './SignatureManager';
 import { TagManager } from './TagManager';
 
@@ -667,6 +668,8 @@ function TrashSettings() {
   const { t } = useTranslation();
   const [days, setDays] = useState('7');
   const [saved, setSaved] = useState(false);
+  // 完全削除の確認ダイアログ（window.confirm は Linux で素通りする）。
+  const [confirmPurge, setConfirmPurge] = useState(false);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -689,8 +692,8 @@ function TrashSettings() {
   };
 
   const purgeNow = async () => {
+    setConfirmPurge(false);
     if (!isTauri) return;
-    if (!window.confirm(t('settings.trashPurgeConfirm'))) return;
     try {
       await trashPurge();
     } catch {
@@ -720,11 +723,21 @@ function TrashSettings() {
         {saved && <span className="pb-1.5 text-xs text-emerald-300">{t('contact.saved')}</span>}
       </div>
       <button
-        onClick={purgeNow}
+        onClick={() => setConfirmPurge(true)}
         className="mt-3 rounded-md border border-white/20 px-3 py-1.5 text-sm text-white/70 hover:bg-white/10"
       >
         {t('settings.trashPurgeNow')}
       </button>
+      {confirmPurge && (
+        <ConfirmDialog
+          title={t('settings.trashPurgeNow')}
+          body={t('settings.trashPurgeConfirm')}
+          confirmLabel={t('settings.trashPurgeRun')}
+          danger
+          onConfirm={() => void purgeNow()}
+          onCancel={() => setConfirmPurge(false)}
+        />
+      )}
     </div>
   );
 }

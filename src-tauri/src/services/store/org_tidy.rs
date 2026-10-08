@@ -7,10 +7,12 @@
 
 use super::contact_rows::{query_summaries, SUMMARY_ORDER};
 use super::contact_write::{find_org_by_key, mark_dirty};
-use super::greendomain::{domain_of, is_freemail};
+use super::greendomain::{domain_of, is_unaffiliated_domain};
 use super::organizations::{load_org, sync_member_names};
 use super::Store;
-use crate::models::{OrgLinkCandidate, OrgLinkSuggestion, OrganizationSummary, UnlinkedOrgName};
+use crate::models::{
+    OrgChangeImpact, OrgLinkCandidate, OrgLinkSuggestion, OrganizationSummary, UnlinkedOrgName,
+};
 use crate::services::dedupe::normalize_org;
 use rusqlite::{params, Connection};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -58,7 +60,7 @@ fn cards(conn: &Connection) -> rusqlite::Result<Vec<(i64, String, Option<String>
     rows.collect()
 }
 
-/// 連絡先ごとのメールのドメイン（フリーメールを除く）。
+/// 連絡先ごとのメールのドメイン（同じ組織の手掛かりにならないドメインを除く）。
 fn contact_domains(conn: &Connection) -> rusqlite::Result<HashMap<i64, Vec<String>>> {
     let mut stmt = conn.prepare(
         "SELECT ce.contact_id, ce.value FROM contact_emails ce \
@@ -68,7 +70,7 @@ fn contact_domains(conn: &Connection) -> rusqlite::Result<HashMap<i64, Vec<Strin
     let mut out: HashMap<i64, Vec<String>> = HashMap::new();
     for row in rows {
         let (cid, value) = row?;
-        if let Some(d) = domain_of(&value).filter(|d| !is_freemail(d)) {
+        if let Some(d) = domain_of(&value).filter(|d| !is_unaffiliated_domain(d)) {
             let list = out.entry(cid).or_default();
             if !list.contains(&d) {
                 list.push(d);
@@ -76,6 +78,109 @@ fn contact_domains(conn: &Connection) -> rusqlite::Result<HashMap<i64, Vec<Strin
         }
     }
     Ok(out)
+}
+
+/// 外部サービスとつながっている連絡先（変更すると次の同期で送り直しになる人）。
+fn synced_contacts(conn: &Connection) -> rusqlite::Result<HashSet<i64>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT contact_id FROM contact_identities WHERE contact_id IS NOT NULL",
+    )?;
+    let rows = stmt.query_map([], |r| r.get(0))?;
+    rows.collect()
+}
+
+/// 変わる人のうち、送り直しになる人の数。
+fn impact_of(
+    conn: &Connection,
+    changed: impl IntoIterator<Item = i64>,
+) -> rusqlite::Result<OrgChangeImpact> {
+    let synced = synced_contacts(conn)?;
+    let resent: HashSet<i64> = changed.into_iter().filter(|c| synced.contains(c)).collect();
+    Ok(OrgChangeImpact {
+        resent: i32::try_from(resent.len()).unwrap_or(i32::MAX),
+    })
+}
+
+/// 会社名から組織カードを作る（同じ正規化名のカードがあればそこへつなぐ）段取り。
+struct CreatePlan {
+    /// 同じ正規化名の既存カード。
+    existing: Option<i64>,
+    /// つないだ人の会社名をそろえる先（既存カードの名前、無ければ入力した名前）。
+    card_name: String,
+    /// つなぐ会社の行: (行 id, 連絡先 id)。
+    rows: Vec<(i64, i64)>,
+    /// 会社名がカードの名前に変わる人。
+    renamed: Vec<i64>,
+}
+
+fn create_plan(conn: &Connection, name: &str) -> rusqlite::Result<CreatePlan> {
+    let name = name.trim();
+    let key = normalize_org(name);
+    let existing = find_org_by_key(conn, &key)?;
+    let card_name = existing
+        .as_ref()
+        .map_or_else(|| name.to_string(), |(_, n)| n.clone());
+    let targets: Vec<OrgRow> = org_rows(conn)?
+        .into_iter()
+        .filter(|r| {
+            r.org_id.is_none() && key_of(r.name.as_deref()).as_deref() == Some(key.as_str())
+        })
+        .collect();
+    let renamed = targets
+        .iter()
+        .filter(|r| r.name.as_deref() != Some(card_name.as_str()))
+        .map(|r| r.contact_id)
+        .collect();
+    Ok(CreatePlan {
+        existing: existing.map(|(id, _)| id),
+        card_name,
+        rows: targets.iter().map(|r| (r.row_id, r.contact_id)).collect(),
+        renamed,
+    })
+}
+
+/// 1 人をカードへつなぐ手。
+enum LinkStep {
+    /// 既にある会社の行をつなぐ（`renamed`: 会社名がカードの名前に変わる）。
+    Attach { row_id: i64, renamed: bool },
+    /// 会社を 1 つ足してつなぐ。
+    Add,
+}
+
+/// 選んだ人を組織カードへつなぐ段取り（既につながっている人は含まない）。
+fn link_plan(
+    conn: &Connection,
+    card: &OrganizationSummary,
+    contact_ids: &[i64],
+) -> rusqlite::Result<Vec<(i64, LinkStep)>> {
+    let org_id = i64::from(card.id);
+    let key = key_of(Some(&card.name));
+    let rows = org_rows(conn)?;
+    let steps = contact_ids
+        .iter()
+        .filter_map(|cid| {
+            let mine: Vec<&OrgRow> = rows.iter().filter(|r| r.contact_id == *cid).collect();
+            if mine.iter().any(|r| r.org_id == Some(org_id)) {
+                return None;
+            }
+            let target = mine
+                .iter()
+                .find(|r| r.org_id.is_none() && key.is_some() && key_of(r.name.as_deref()) == key)
+                .or_else(|| {
+                    mine.iter()
+                        .find(|r| r.org_id.is_none() && key_of(r.name.as_deref()).is_none())
+                });
+            let step = match target {
+                Some(r) => LinkStep::Attach {
+                    row_id: r.row_id,
+                    renamed: r.name.as_deref() != Some(card.name.as_str()),
+                },
+                None => LinkStep::Add,
+            };
+            Some((*cid, step))
+        })
+        .collect();
+    Ok(steps)
 }
 
 impl Store {
@@ -145,32 +250,39 @@ impl Store {
     /// # Errors
     /// DB の書き込みに失敗したとき（全体を巻き戻す）。
     pub fn create_org_from_name(&self, name: &str) -> rusqlite::Result<OrganizationSummary> {
-        let name = name.trim();
-        let key = normalize_org(name);
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        let org_id = match find_org_by_key(&tx, &key)? {
-            Some((id, _)) => id,
+        let plan = create_plan(&tx, name)?;
+        let org_id = match plan.existing {
+            Some(id) => id,
             None => {
                 tx.execute(
                     "INSERT INTO organizations (name) VALUES (?1)",
-                    params![name],
+                    params![plan.card_name],
                 )?;
                 tx.last_insert_rowid()
             }
         };
-        for row in org_rows(&tx)? {
-            if row.org_id.is_none() && key_of(row.name.as_deref()).as_deref() == Some(key.as_str())
-            {
-                tx.execute(
-                    "UPDATE contact_organizations SET org_id = ?1 WHERE id = ?2",
-                    params![org_id, row.row_id],
-                )?;
-            }
+        for (row_id, _) in &plan.rows {
+            tx.execute(
+                "UPDATE contact_organizations SET org_id = ?1 WHERE id = ?2",
+                params![org_id, row_id],
+            )?;
         }
         sync_member_names(&tx, org_id)?;
         tx.commit()?;
         load_org(&conn, org_id)
+    }
+
+    /// [`Store::create_org_from_name`] の下見: 会社名がカードの名前にそろい、次の同期で
+    /// 送り直しになる人の数（確認欄で知らせるため）。何も書き換えない。
+    ///
+    /// # Errors
+    /// DB の読み出しに失敗したとき。
+    pub fn create_org_from_name_impact(&self, name: &str) -> rusqlite::Result<OrgChangeImpact> {
+        let conn = self.conn.lock().unwrap();
+        let plan = create_plan(&conn, name)?;
+        impact_of(&conn, plan.renamed)
     }
 
     /// 組織カードごとに「つながっていないが同じ組織らしい人」を理由つきで返す（候補のある
@@ -178,7 +290,7 @@ impl Store {
     ///
     /// 理由は 2 つ: 会社名が一致（正規化後。カードにつながっていない会社名だけを見る）、
     /// メールのドメインが一致（カードの代表メール、または既につながっている人のメールと同じ
-    /// ドメイン。フリーメールは除く）。
+    /// ドメイン。フリーメール・プロバイダ・官公庁は除く＝`is_unaffiliated_domain`）。
     ///
     /// # Errors
     /// DB の読み出しに失敗したとき。
@@ -202,7 +314,7 @@ impl Store {
             let card_domains: HashSet<String> = card_email
                 .as_deref()
                 .and_then(domain_of)
-                .filter(|d| !is_freemail(d))
+                .filter(|d| !is_unaffiliated_domain(d))
                 .into_iter()
                 .chain(
                     members
@@ -269,41 +381,49 @@ impl Store {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         let card = load_org(&tx, org_id)?;
-        let key = key_of(Some(&card.name));
-        let rows = org_rows(&tx)?;
-        for cid in contact_ids {
-            let mine: Vec<&OrgRow> = rows.iter().filter(|r| r.contact_id == *cid).collect();
-            if mine.iter().any(|r| r.org_id == Some(org_id)) {
-                continue;
-            }
-            let target = mine
-                .iter()
-                .find(|r| r.org_id.is_none() && key.is_some() && key_of(r.name.as_deref()) == key)
-                .or_else(|| {
-                    mine.iter()
-                        .find(|r| r.org_id.is_none() && key_of(r.name.as_deref()).is_none())
-                });
-            match target {
-                Some(r) => {
+        for (cid, step) in link_plan(&tx, &card, contact_ids)? {
+            match step {
+                LinkStep::Attach { row_id, .. } => {
                     tx.execute(
                         "UPDATE contact_organizations SET org_id = ?1 WHERE id = ?2",
-                        params![org_id, r.row_id],
+                        params![org_id, row_id],
                     )?;
                 }
-                None => {
+                LinkStep::Add => {
                     tx.execute(
                         "INSERT INTO contact_organizations (contact_id, position, org_id, name) \
                          VALUES (?1, (SELECT coalesce(max(position) + 1, 0) \
                                       FROM contact_organizations WHERE contact_id = ?1), ?2, ?3)",
                         params![cid, org_id, card.name],
                     )?;
-                    mark_dirty(&tx, *cid)?;
+                    mark_dirty(&tx, cid)?;
                 }
             }
         }
         sync_member_names(&tx, org_id)?;
         tx.commit()?;
         load_org(&conn, org_id)
+    }
+
+    /// [`Store::link_contacts_to_org`] の下見: 会社名が変わる・会社が足される人のうち、次の
+    /// 同期で送り直しになる人の数。何も書き換えない。
+    ///
+    /// # Errors
+    /// DB の読み出しに失敗したとき（カードが無いときを含む）。
+    pub fn link_contacts_to_org_impact(
+        &self,
+        org_id: i64,
+        contact_ids: &[i64],
+    ) -> rusqlite::Result<OrgChangeImpact> {
+        let conn = self.conn.lock().unwrap();
+        let card = load_org(&conn, org_id)?;
+        let changed = link_plan(&conn, &card, contact_ids)?
+            .into_iter()
+            .filter(|(_, step)| {
+                matches!(step, LinkStep::Attach { renamed: true, .. } | LinkStep::Add)
+            })
+            .map(|(cid, _)| cid);
+        impact_of(&conn, changed)
     }
 }
 

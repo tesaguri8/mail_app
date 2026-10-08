@@ -3,6 +3,7 @@ import type { OrganizationSummary } from '@bindings/OrganizationSummary';
 import type { OrganizationInput } from '@bindings/OrganizationInput';
 import type { OrganizationDetail } from '@bindings/OrganizationDetail';
 import type { OrgDuplicateGroup } from '@bindings/OrgDuplicateGroup';
+import type { OrgChangeImpact } from '@bindings/OrgChangeImpact';
 import type { OrgLinkSuggestion } from '@bindings/OrgLinkSuggestion';
 import type { UnlinkedOrgName } from '@bindings/UnlinkedOrgName';
 
@@ -56,3 +57,11 @@ export const organizationLinkSuggestions = () =>
 /** 選んだ人を組織カードにつなぐ。 */
 export const organizationLinkContacts = (orgId: number, contactIds: number[]) =>
   invoke<OrganizationSummary>('organization_link_contacts', { orgId, contactIds });
+
+/** 「組織カードにする」の下見（次の同期で送り直しになる人数）。何も書き換えない。 */
+export const organizationCreateFromNameImpact = (name: string) =>
+  invoke<OrgChangeImpact>('organization_create_from_name_impact', { name });
+
+/** 「つなぐ」の下見（次の同期で送り直しになる人数）。何も書き換えない。 */
+export const organizationLinkContactsImpact = (orgId: number, contactIds: number[]) =>
+  invoke<OrgChangeImpact>('organization_link_contacts_impact', { orgId, contactIds });

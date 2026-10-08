@@ -306,3 +306,11 @@ pub struct OrgLinkSuggestion {
     pub org: super::OrganizationSummary,
     pub candidates: Vec<OrgLinkCandidate>,
 }
+
+/// 組織の整理（カードにする・つなぐ）の下見。確認欄で知らせるために数える。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct OrgChangeImpact {
+    /// 会社名が変わる・会社が足されるため、次の同期でつながっているサービスへ送り直しになる人数。
+    pub resent: i32,
+}

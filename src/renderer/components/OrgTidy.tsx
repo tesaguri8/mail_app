@@ -5,6 +5,8 @@ import {
   AtSign,
   Building2,
   Check,
+  ChevronDown,
+  ChevronRight,
   Link2,
   Plus,
   RefreshCw,
@@ -15,9 +17,12 @@ import {
 } from 'lucide-react';
 import type { UnlinkedOrgName } from '@bindings/UnlinkedOrgName';
 import type { OrgLinkSuggestion } from '@bindings/OrgLinkSuggestion';
+import type { OrgLinkCandidate } from '@bindings/OrgLinkCandidate';
 import {
   organizationCreateFromName,
+  organizationCreateFromNameImpact,
   organizationLinkContacts,
+  organizationLinkContactsImpact,
   organizationLinkSuggestions,
   organizationUnlinkedNames,
 } from '../services/organizations';
@@ -126,6 +131,59 @@ function TidyHeader({
   );
 }
 
+/**
+ * 画面内の確認欄（カードにする・つなぐ）。会社名がそろう・会社が足されるために次の同期で
+ * 送り直しになる人がいれば、その人数を添える（下見で数える。数え終わるまで実行できない）。
+ */
+function ConfirmBox({
+  text,
+  resent,
+  runLabel,
+  busy,
+  onRun,
+  onCancel,
+}: {
+  text: string;
+  /** 送り直しになる人数（null＝数えている途中）。 */
+  resent: number | null;
+  runLabel: string;
+  busy: boolean;
+  onRun: () => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="mt-4 space-y-2 rounded-lg border border-white/20 bg-white/5 p-3">
+      <p className="text-sm text-white/80">{text}</p>
+      {resent === null ? (
+        <p className="text-xs text-white/45">{t('orgTidy.impactCounting')}</p>
+      ) : (
+        resent > 0 && (
+          <p className="rounded-md bg-amber-300/10 px-2.5 py-1.5 text-xs text-amber-100">
+            {t('orgTidy.impactResent', { count: resent })}
+          </p>
+        )
+      )}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={onRun}
+          disabled={busy || resent === null}
+          className="rounded-md bg-emerald-500/80 px-3 py-1.5 text-xs font-medium hover:bg-emerald-500 disabled:opacity-40"
+        >
+          {runLabel}
+        </button>
+        <button
+          onClick={onCancel}
+          disabled={busy}
+          className="rounded-md border border-white/20 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10 disabled:opacity-40"
+        >
+          {t('org.cancel')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function EmptyPane({ text }: { text: string }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-1 text-center">
@@ -206,9 +264,22 @@ function UnlinkedNames({ mode, onModeChange, onChanged, onExit, onOpenOrg }: Pan
   // カードにするときの名前（既定は最も多い表記）と、画面内の確認の表示。
   const [name, setName] = useState('');
   const [confirming, setConfirming] = useState(false);
+  // 確認欄の下見（送り直しになる人数。null＝数えている途中）。
+  const [resent, setResent] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<{ id: number; name: string; count: number } | null>(null);
+
+  const askCreate = () => {
+    setConfirming(true);
+    setResent(null);
+    organizationCreateFromNameImpact(name.trim())
+      .then((r) => setResent(r.resent))
+      .catch((e) => {
+        setConfirming(false);
+        setError(String(e));
+      });
+  };
 
   const load = () => {
     if (!isTauri) return;
@@ -348,30 +419,17 @@ function UnlinkedNames({ mode, onModeChange, onChanged, onExit, onOpenOrg }: Pan
             </label>
 
             {confirming ? (
-              <div className="mt-4 space-y-2 rounded-lg border border-white/20 bg-white/5 p-3">
-                <p className="text-sm text-white/80">
-                  {t('orgTidy.createConfirm', { name: name.trim(), count: item.contact_count })}
-                </p>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={create}
-                    disabled={busy}
-                    className="rounded-md bg-emerald-500/80 px-3 py-1.5 text-xs font-medium hover:bg-emerald-500 disabled:opacity-40"
-                  >
-                    {t('orgTidy.createRun')}
-                  </button>
-                  <button
-                    onClick={() => setConfirming(false)}
-                    disabled={busy}
-                    className="rounded-md border border-white/20 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10 disabled:opacity-40"
-                  >
-                    {t('org.cancel')}
-                  </button>
-                </div>
-              </div>
+              <ConfirmBox
+                text={t('orgTidy.createConfirm', { name: name.trim(), count: item.contact_count })}
+                resent={resent}
+                runLabel={t('orgTidy.createRun')}
+                busy={busy}
+                onRun={create}
+                onCancel={() => setConfirming(false)}
+              />
             ) : (
               <button
-                onClick={() => setConfirming(true)}
+                onClick={askCreate}
                 disabled={name.trim() === ''}
                 className="mt-4 flex items-center gap-1.5 rounded-md bg-emerald-500/80 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
               >
@@ -396,6 +454,11 @@ function LinkSuggestions({ mode, onModeChange, onChanged, onExit, onOpenOrg }: P
   const [selected, setSelected] = useState<number | null>(null);
   // つなぐ人（既定は誰も選ばない。人が選ぶ）。
   const [picked, setPicked] = useState<Set<number>>(new Set());
+  // ドメインだけで一致した候補（会社名は違う）は雑音が多いので、最初は畳んでおく。
+  const [showDomainOnly, setShowDomainOnly] = useState(false);
+  // 確認欄（null＝出していない）と、その下見（送り直しになる人数。null＝数えている途中）。
+  const [confirming, setConfirming] = useState(false);
+  const [resent, setResent] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
@@ -420,19 +483,40 @@ function LinkSuggestions({ mode, onModeChange, onChanged, onExit, onOpenOrg }: P
   const item = items.find((s) => s.org.id === selected) ?? null;
   const total = items.reduce((n, s) => n + s.candidates.length, 0);
 
+  const byName = item ? item.candidates.filter((c) => c.matched_name !== null) : [];
+  const domainOnly = item ? item.candidates.filter((c) => c.matched_name === null) : [];
+  // 「すべて選ぶ」は見えている候補だけ（畳んだドメインだけの一致は含めない）。
+  const visible = showDomainOnly ? [...byName, ...domainOnly] : byName;
+
   const pick = (id: number) => {
     setSelected(id);
     setPicked(new Set());
+    setShowDomainOnly(false);
+    setConfirming(false);
     setError(null);
     setDone(null);
   };
-  const toggle = (id: number) =>
+  const toggle = (id: number) => {
+    setConfirming(false);
     setPicked((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+  };
+
+  const askLink = () => {
+    if (!item || picked.size === 0) return;
+    setConfirming(true);
+    setResent(null);
+    organizationLinkContactsImpact(item.org.id, [...picked])
+      .then((r) => setResent(r.resent))
+      .catch((e) => {
+        setConfirming(false);
+        setError(String(e));
+      });
+  };
 
   const link = async () => {
     if (!item || picked.size === 0 || busy) return;
@@ -452,6 +536,7 @@ function LinkSuggestions({ mode, onModeChange, onChanged, onExit, onOpenOrg }: P
       );
       setDone(t('orgTidy.linked', { name: org.name, count: picked.size }));
       setPicked(new Set());
+      setConfirming(false);
       onChanged();
     } catch (e) {
       setError(String(e));
@@ -524,76 +609,80 @@ function LinkSuggestions({ mode, onModeChange, onChanged, onExit, onOpenOrg }: P
 
             <div className="mb-2 flex items-center gap-3 text-xs">
               <button
-                onClick={() => setPicked(new Set(item.candidates.map((c) => c.contact.id)))}
+                onClick={() => {
+                  setConfirming(false);
+                  setPicked(new Set(visible.map((c) => c.contact.id)));
+                }}
                 className="text-sky-300 hover:text-sky-200"
               >
                 {t('orgTidy.selectAll')}
               </button>
               <button
-                onClick={() => setPicked(new Set())}
+                onClick={() => {
+                  setConfirming(false);
+                  setPicked(new Set());
+                }}
                 className="text-sky-300 hover:text-sky-200"
               >
                 {t('orgTidy.selectNone')}
               </button>
             </div>
-            <ul className="space-y-1.5">
-              {item.candidates.map((c) => {
-                const on = picked.has(c.contact.id);
-                return (
-                  <li key={c.contact.id}>
-                    <button
-                      onClick={() => toggle(c.contact.id)}
-                      aria-pressed={on}
-                      className={`flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left ${
-                        on
-                          ? 'border-sky-400/40 bg-sky-500/10'
-                          : 'border-white/10 bg-white/5 hover:bg-white/10'
-                      }`}
-                    >
-                      <span
-                        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded ${
-                          on ? 'bg-sky-500 text-white' : 'border border-white/30'
-                        }`}
-                      >
-                        {on && <Check size={13} />}
-                      </span>
-                      <User size={14} className="shrink-0 text-white/40" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium">
-                          {c.contact.display_name || t('contact.untitled')}
-                        </span>
-                        {(c.contact.primary_organization || c.contact.primary_email) && (
-                          <span className="block truncate text-xs text-white/45">
-                            {[c.contact.primary_organization, c.contact.primary_email]
-                              .filter(Boolean)
-                              .join(' · ')}
-                          </span>
-                        )}
-                      </span>
-                      <span className="flex shrink-0 flex-col items-end gap-0.5">
-                        {c.matched_name && (
-                          <span className="flex items-center gap-1 rounded bg-emerald-400/15 px-1.5 py-0.5 text-[10px] text-emerald-200">
-                            <Building2 size={10} />
-                            {t('orgTidy.reasonName', { name: c.matched_name })}
-                          </span>
-                        )}
-                        {c.matched_domain && (
-                          <span className="flex items-center gap-1 rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] text-amber-200">
-                            <AtSign size={10} />
-                            {t('orgTidy.reasonDomain', { domain: c.matched_domain })}
-                          </span>
-                        )}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+            {byName.length > 0 ? (
+              <ul className="space-y-1.5">
+                {byName.map((c) => (
+                  <CandidateRow
+                    key={c.contact.id}
+                    c={c}
+                    on={picked.has(c.contact.id)}
+                    onToggle={() => toggle(c.contact.id)}
+                  />
+                ))}
+              </ul>
+            ) : (
+              <p className="rounded-md bg-white/5 px-3 py-2 text-xs text-white/45">
+                {t('orgTidy.noNameMatch')}
+              </p>
+            )}
 
+            {domainOnly.length > 0 && (
+              <div className="mt-3">
+                <button
+                  onClick={() => setShowDomainOnly((v) => !v)}
+                  aria-expanded={showDomainOnly}
+                  className="flex items-center gap-1 text-xs text-white/60 hover:text-white"
+                >
+                  {showDomainOnly ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  {t('orgTidy.domainOnly', { count: domainOnly.length })}
+                </button>
+                {showDomainOnly && (
+                  <ul className="mt-1.5 space-y-1.5">
+                    {domainOnly.map((c) => (
+                      <CandidateRow
+                        key={c.contact.id}
+                        c={c}
+                        on={picked.has(c.contact.id)}
+                        onToggle={() => toggle(c.contact.id)}
+                      />
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            {confirming && (
+              <ConfirmBox
+                text={t('orgTidy.linkConfirm', { name: item.org.name, count: picked.size })}
+                resent={resent}
+                runLabel={t('orgTidy.linkRun', { count: picked.size })}
+                busy={busy}
+                onRun={link}
+                onCancel={() => setConfirming(false)}
+              />
+            )}
             <div className="mt-4 flex flex-wrap items-center gap-3">
               <button
-                onClick={link}
-                disabled={busy || picked.size === 0}
+                onClick={askLink}
+                disabled={busy || picked.size === 0 || confirming}
                 className="flex items-center gap-1.5 rounded-md bg-emerald-500/80 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Link2 size={15} />
@@ -606,5 +695,64 @@ function LinkSuggestions({ mode, onModeChange, onChanged, onExit, onOpenOrg }: P
         )}
       </section>
     </div>
+  );
+}
+
+/** 「つなぐ」の候補 1 人（選択・名前・会社/メール・一致の理由）。 */
+function CandidateRow({
+  c,
+  on,
+  onToggle,
+}: {
+  c: OrgLinkCandidate;
+  on: boolean;
+  onToggle: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <li>
+      <button
+        onClick={onToggle}
+        aria-pressed={on}
+        className={`flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left ${
+          on ? 'border-sky-400/40 bg-sky-500/10' : 'border-white/10 bg-white/5 hover:bg-white/10'
+        }`}
+      >
+        <span
+          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded ${
+            on ? 'bg-sky-500 text-white' : 'border border-white/30'
+          }`}
+        >
+          {on && <Check size={13} />}
+        </span>
+        <User size={14} className="shrink-0 text-white/40" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium">
+            {c.contact.display_name || t('contact.untitled')}
+          </span>
+          {(c.contact.primary_organization || c.contact.primary_email) && (
+            <span className="block truncate text-xs text-white/45">
+              {[c.contact.primary_organization, c.contact.primary_email]
+                .filter(Boolean)
+                .join(' · ')}
+            </span>
+          )}
+        </span>
+        <span className="flex shrink-0 flex-col items-end gap-0.5">
+          {c.matched_name && (
+            <span className="flex items-center gap-1 rounded bg-emerald-400/15 px-1.5 py-0.5 text-[10px] text-emerald-200">
+              <Building2 size={10} />
+              {t('orgTidy.reasonName', { name: c.matched_name })}
+            </span>
+          )}
+          {c.matched_domain && (
+            <span className="flex items-center gap-1 rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] text-amber-200">
+              <AtSign size={10} />
+              {t('orgTidy.reasonDomain', { domain: c.matched_domain })}
+            </span>
+          )}
+        </span>
+      </button>
+    </li>
   );
 }

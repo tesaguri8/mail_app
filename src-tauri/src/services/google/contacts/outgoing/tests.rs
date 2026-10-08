@@ -221,3 +221,35 @@ fn unknown_parts_of_the_base_person_survive() {
     assert_eq!(im[0]["protocol"], "skype");
     assert!(im[0].get("formattedProtocol").is_none());
 }
+
+/// 1 つの値の項目で残す 2 つ目以降の要素からも、読み取り専用のキーを落として送る。
+#[test]
+fn the_rest_of_a_single_value_field_is_sent_without_read_only_keys() {
+    let base = serde_json::json!({
+        "nicknames": [
+            {"value": "たろ", "metadata": {"primary": true}},
+            {"value": "やまちゃん", "type": "ALTERNATE_NAME",
+             "metadata": {"source": {"type": "CONTACT", "id": "1"}}}
+        ],
+        "biographies": [
+            {"value": "メモ", "contentType": "TEXT_PLAIN"},
+            {"value": "古いメモ", "metadata": {"source": {"type": "CONTACT"}}}
+        ]
+    });
+    let mut c = contact("山田 太郎");
+    c.nickname = Some("たろう".into());
+    let b = person_body(&c, Some(&base));
+    let nick = b["nicknames"].as_array().unwrap();
+    assert_eq!(nick.len(), 2);
+    assert_eq!(nick[1]["value"], "やまちゃん");
+    assert_eq!(
+        nick[1]["type"], "ALTERNATE_NAME",
+        "Rondine が知らないキーは残す"
+    );
+    assert!(nick[1].get("metadata").is_none());
+    // メモを消しても、2 つ目以降は残しつつ metadata は落とす。
+    let bio = b["biographies"].as_array().unwrap();
+    assert_eq!(bio.len(), 1);
+    assert_eq!(bio[0]["value"], "古いメモ");
+    assert!(bio[0].get("metadata").is_none());
+}

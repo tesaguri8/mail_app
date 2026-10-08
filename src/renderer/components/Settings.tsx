@@ -1,7 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
-import { FolderInput, HardDrive, RotateCcw, RefreshCw, Link2, Unlink, Users } from 'lucide-react';
+import {
+  FolderInput,
+  HardDrive,
+  Loader2,
+  RotateCcw,
+  RefreshCw,
+  Link2,
+  Unlink,
+  Users,
+} from 'lucide-react';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { SpamSettings as SpamSettingsType } from '@bindings/SpamSettings';
 import type { DataLocation } from '@bindings/DataLocation';
@@ -738,11 +747,19 @@ function GoogleCalendarSettings() {
     accountId: number;
     plan: GcontactsMatchResult;
   } | null>(null);
-  // 住所録の中身が変わる操作（取り込み・住所録への反映）のたびに増やし、写しの件数を数え直させる。
   // 連携時に連絡先スコープも要求するか（既定は off。カレンダーだけの利用者に権限を求めない）。
   const [withContacts, setWithContacts] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 下見の確認欄・結果・エラーの置き場。ボタンから離れた下に出るので、出たら画面内へ寄せる
+  // （寄せないと、押しても何も起きないように見える）。
+  const statusRef = useRef<HTMLDivElement>(null);
+  const matching = busy === 'matchingContacts';
+  useEffect(() => {
+    if (pendingMatch || message || error || matching) {
+      statusRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [pendingMatch, message, error, matching]);
 
   const refresh = () => {
     if (!isTauri) return;
@@ -1047,8 +1064,12 @@ function GoogleCalendarSettings() {
                         disabled={busy !== 'idle'}
                         className="flex items-center gap-1 rounded-md bg-white/15 px-2.5 py-1.5 text-xs font-medium hover:bg-white/25 disabled:opacity-40"
                       >
-                        <Users size={13} />
-                        {busy === 'matchingContacts'
+                        {matching ? (
+                          <Loader2 size={13} className="animate-spin" />
+                        ) : (
+                          <Users size={13} />
+                        )}
+                        {matching
                           ? t('settings.gcontactsMatching')
                           : t('settings.gcontactsMatchNow')}
                       </button>
@@ -1081,35 +1102,43 @@ function GoogleCalendarSettings() {
         )}
       </div>
 
-      {pendingMatch && (
-        <div className="space-y-2 rounded-lg border border-white/20 bg-white/5 p-3">
-          <p className="text-sm text-white/80">
-            {t('settings.gcontactsMatchConfirm', {
-              linked: pendingMatch.plan.linked,
-              created: pendingMatch.plan.created,
-              ambiguous: pendingMatch.plan.ambiguous,
-            })}
+      <div ref={statusRef} className="space-y-2">
+        {matching && !pendingMatch && (
+          <p className="flex items-center gap-1.5 text-sm text-white/70">
+            <Loader2 size={14} className="animate-spin" />
+            {t('settings.gcontactsMatching')}
           </p>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={applyMatch}
-              disabled={busy !== 'idle'}
-              className="rounded-md bg-emerald-500/80 px-3 py-1.5 text-xs font-medium hover:bg-emerald-500 disabled:opacity-40"
-            >
-              {t('settings.gcontactsMatchRun')}
-            </button>
-            <button
-              onClick={() => setPendingMatch(null)}
-              disabled={busy !== 'idle'}
-              className="rounded-md border border-white/20 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10 disabled:opacity-40"
-            >
-              {t('settings.gcontactsMatchCancel')}
-            </button>
+        )}
+        {pendingMatch && (
+          <div className="space-y-2 rounded-lg border border-white/20 bg-white/5 p-3">
+            <p className="text-sm text-white/80">
+              {t('settings.gcontactsMatchConfirm', {
+                linked: pendingMatch.plan.linked,
+                created: pendingMatch.plan.created,
+                ambiguous: pendingMatch.plan.ambiguous,
+              })}
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={applyMatch}
+                disabled={busy !== 'idle'}
+                className="rounded-md bg-emerald-500/80 px-3 py-1.5 text-xs font-medium hover:bg-emerald-500 disabled:opacity-40"
+              >
+                {t('settings.gcontactsMatchRun')}
+              </button>
+              <button
+                onClick={() => setPendingMatch(null)}
+                disabled={busy !== 'idle'}
+                className="rounded-md border border-white/20 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10 disabled:opacity-40"
+              >
+                {t('settings.gcontactsMatchCancel')}
+              </button>
+            </div>
           </div>
-        </div>
-      )}
-      {message && <p className="text-sm text-emerald-300">{message}</p>}
-      {error && <p className="text-sm text-red-300">{t('settings.gcalError', { message: error })}</p>}
+        )}
+        {message && <p className="text-sm text-emerald-300">{message}</p>}
+        {error && <p className="text-sm text-red-300">{t('settings.gcalError', { message: error })}</p>}
+      </div>
       {!isTauri && <p className="text-xs text-white/40">{t('settings.spamPreviewNote')}</p>}
     </div>
   );

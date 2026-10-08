@@ -13,6 +13,7 @@ import {
   Trash2,
   User,
   Users,
+  Wand2,
   X,
 } from 'lucide-react';
 import type { OrganizationSummary } from '@bindings/OrganizationSummary';
@@ -30,6 +31,7 @@ import { trashRetentionGet } from '../services/trash';
 import { trashDaysLeft } from '../utils/trash';
 import { OrgCardFields, orgDraft } from './OrgCard';
 import { OrgAutocomplete } from './OrgCombobox';
+import { OrgTidy } from './OrgTidy';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -63,6 +65,8 @@ export function OrganizationsView({
   // 削除済み（ゴミ箱）を表示するか、と保持日数。
   const [showDeleted, setShowDeleted] = useState(false);
   const [retention, setRetention] = useState(7);
+  // 「整理」（カードになっていない会社名・つながっていない人・重複）の画面を開いているか。
+  const [tidy, setTidy] = useState(false);
   // 右ペイン（組織カード）のスクロール枠と、いま開いている組織の ID。
   // 別の組織に切り替えたときだけ先頭へ戻す（保存後の開き直しでは読んでいた位置を保つ）。
   const paneRef = useRef<HTMLElement>(null);
@@ -210,6 +214,20 @@ export function OrganizationsView({
     }
   };
 
+  // 整理は専用の 2 ペイン画面を全幅で出す（住所録の重複整理と同じ）。
+  if (tidy) {
+    return (
+      <OrgTidy
+        onChanged={() => load(query)}
+        onExit={() => setTidy(false)}
+        onOpenOrg={(id) => {
+          setTidy(false);
+          open(id);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0">
       {/* 左：検索 + 組織一覧 */}
@@ -243,6 +261,14 @@ export function OrganizationsView({
             }`}
           >
             <Trash2 size={16} />
+          </button>
+          <button
+            onClick={() => setTidy(true)}
+            title={t('orgTidy.title')}
+            aria-label={t('orgTidy.title')}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white"
+          >
+            <Wand2 size={16} />
           </button>
           <button
             onClick={startNew}

@@ -29,7 +29,13 @@ import {
   contactUpsert,
   contactFindDuplicates,
 } from '../services/contacts';
-import { AddressRows, PhoneRows, ValueRows, addressToFlat } from './ContactValueEditor';
+import {
+  AddressRows,
+  LabelDatalists,
+  PhoneRows,
+  ValueRows,
+  addressToFlat,
+} from './ContactValueEditor';
 import { DupModeToggle } from './OrgDuplicates';
 import { displayPhone } from '../utils/phone';
 import { getPhoneRegion, getPhoneStyle } from '../config/prefs';
@@ -170,6 +176,7 @@ export function ContactDuplicates({
 
   return (
     <div className="flex h-full min-h-0">
+      <LabelDatalists />
       {/* 左：グループ一覧 */}
       <aside className="flex w-72 shrink-0 flex-col border-r border-white/10">
         <div className="flex flex-col gap-2 p-3">

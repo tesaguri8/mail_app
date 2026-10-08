@@ -120,13 +120,17 @@ fn merge_list(
 }
 
 /// 1 つの値の項目（名前・ニックネーム・メモ・誕生日）。土台の先頭だけを置き換え、2 つ目以降は
-/// 残す。`extra` は先頭の要素から落とすキー（読み取り専用のキーに加えて）。
+/// 残す。`extra` は落とすキー（読み取り専用のキーに加えて）。2 つ目以降の要素からも同じキーを
+/// 落とす（`metadata` などを付けたまま送り返さない）。
 fn merge_single(
     base: &[Value],
     first: Option<Vec<(&'static str, Option<Value>)>>,
     extra: &[&str],
 ) -> Value {
-    let rest = base.iter().skip(1).cloned();
+    let rest = base
+        .iter()
+        .skip(1)
+        .map(|b| Value::Object(cleaned(b, extra)));
     let head = first.map(|values| {
         let mut m = base.first().map(|b| cleaned(b, extra)).unwrap_or_default();
         for (k, v) in values {

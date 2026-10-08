@@ -7,8 +7,23 @@ import type { ContactAddress } from '@bindings/ContactAddress';
 import { countryOptions, parseStored, toE164 } from '../utils/phone';
 import { formatPostal } from '../utils/postal';
 import { getPhoneRegion, getPostalAutoformat } from '../config/prefs';
+import { LABEL_LIST_IDS, LABEL_LISTS, type LabelListKind } from '../utils/contactLabels';
 
-const LABELS = ['自宅', '職場', '携帯', 'FAX', '代表'];
+/** ラベル・サービス名の候補（datalist）。各行の input が list で参照するので、
+ *  これらの行エディタを置く画面に 1 度だけ置く。 */
+export function LabelDatalists() {
+  return (
+    <>
+      {(Object.keys(LABEL_LIST_IDS) as LabelListKind[]).map((k) => (
+        <datalist key={k} id={LABEL_LIST_IDS[k]}>
+          {LABEL_LISTS[k].map((l) => (
+            <option key={l} value={l} />
+          ))}
+        </datalist>
+      ))}
+    </>
+  );
+}
 
 /** 構造化住所を 1 行の文字列へ（flat 保存・一覧用。バックエンドと同じ並び）。 */
 export function addressToFlat(a: ContactAddress): string {
@@ -27,7 +42,7 @@ function reorder<T>(list: T[], from: number, to: number): T[] {
 }
 
 /** ネイティブ DnD の並べ替え。ハンドルからドラッグし、行を drop 先にする。 */
-function useDnd<T>(list: T[], onChange: (l: T[]) => void) {
+export function useDnd<T>(list: T[], onChange: (l: T[]) => void) {
   const [drag, setDrag] = useState<number | null>(null);
   return {
     dragging: drag,
@@ -74,7 +89,7 @@ export function Field({
 }
 
 /** ドラッグハンドル。 */
-function DragHandle(props: React.HTMLAttributes<HTMLSpanElement> & { draggable?: boolean }) {
+export function DragHandle(props: React.HTMLAttributes<HTMLSpanElement> & { draggable?: boolean }) {
   const { t } = useTranslation();
   return (
     <span
@@ -144,7 +159,7 @@ export function ValueRows({
               <input
                 className="w-16 shrink-0 rounded bg-white/10 px-2 py-1.5 text-xs outline-none focus:bg-white/15"
                 placeholder={t('contact.labelPlaceholder')}
-                list="contact-label-options"
+                list={LABEL_LIST_IDS.value}
                 value={v.label ?? ''}
                 onChange={(e) =>
                   set(i, { label: e.target.value.trim() === '' ? null : e.target.value })
@@ -197,11 +212,6 @@ export function ValueRows({
         <Plus size={13} />
         {t('contact.addRow')}
       </button>
-      <datalist id="contact-label-options">
-        {LABELS.map((l) => (
-          <option key={l} value={l} />
-        ))}
-      </datalist>
     </div>
   );
 }
@@ -248,7 +258,7 @@ export function PhoneRows({
               <input
                 className="w-16 shrink-0 rounded bg-white/10 px-2 py-1.5 text-xs outline-none focus:bg-white/15"
                 placeholder={t('contact.labelPlaceholder')}
-                list="contact-label-options"
+                list={LABEL_LIST_IDS.value}
                 value={v.label ?? ''}
                 onChange={(e) =>
                   set(i, { label: e.target.value.trim() === '' ? null : e.target.value })
@@ -316,11 +326,6 @@ export function PhoneRows({
         <Plus size={13} />
         {t('contact.addRow')}
       </button>
-      <datalist id="contact-label-options">
-        {LABELS.map((l) => (
-          <option key={l} value={l} />
-        ))}
-      </datalist>
     </div>
   );
 }
@@ -439,7 +444,7 @@ export function AddressRows({
               <input
                 className="w-20 rounded bg-white/10 px-2 py-1 text-xs outline-none focus:bg-white/15"
                 placeholder={t('contact.labelPlaceholder')}
-                list="contact-label-options"
+                list={LABEL_LIST_IDS.value}
                 value={a.label ?? ''}
                 onChange={(e) =>
                   set(i, { label: e.target.value.trim() === '' ? null : e.target.value })

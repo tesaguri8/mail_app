@@ -37,15 +37,15 @@ export function DupModeToggle({
 /**
  * 組織名の統一（2ペイン）。左＝重複グループ一覧、右＝統一名を決めて［統一する］。
  * 「株式会社◯◯」と「(株)◯◯」などを 1 つの組織にまとめ、所属連絡先を付け替える。
+ * 住所録の重複整理と組織タブの整理の両方から開くので、見出しの切替は呼び出し側が渡す。
  */
 export function OrgDuplicates({
-  mode,
-  onModeChange,
+  modeToggle,
   onMerged,
   onExit,
 }: {
-  mode: 'contacts' | 'orgs';
-  onModeChange: (m: 'contacts' | 'orgs') => void;
+  /** 左上の切替（連絡先／組織、または整理の種類）。 */
+  modeToggle: React.ReactNode;
   onMerged: () => void;
   onExit: () => void;
 }) {
@@ -139,7 +139,7 @@ export function OrgDuplicates({
           >
             <ArrowLeft size={17} />
           </button>
-          <DupModeToggle mode={mode} onChange={onModeChange} />
+          {modeToggle}
           <span className="flex-1" />
           <button
             onClick={load}

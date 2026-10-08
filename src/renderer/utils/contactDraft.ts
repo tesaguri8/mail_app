@@ -1,8 +1,8 @@
 // 連絡先の編集用の下書き（ContactInput）を組み立てる小道具。
 //
 // 連絡先の中身は Rust 側の ContactFields と同じ形で、一覧/詳細（ContactSummary）と
-// 入力（ContactInput）が共有している。編集画面が扱わない項目（ミドルネーム・URL・
-// 記念日など）も、読み込んだ値をそのまま下書きに写して送れば保存で消えない。
+// 入力（ContactInput）が共有している。すべての項目を下書きに写して送るので、画面に
+// 出していない項目（畳んでいる項目・送らない属性）も保存で消えない。
 
 import type { ContactInput } from '@bindings/ContactInput';
 import type { ContactOrganization } from '@bindings/ContactOrganization';
@@ -73,7 +73,7 @@ export const contactToInput = (c: ContactSummary): ContactInput => ({
 });
 
 /** 空の会社。 */
-const emptyOrganization = (): ContactOrganization => ({
+export const emptyOrganization = (): ContactOrganization => ({
   org_id: null,
   name: null,
   phonetic_name: null,
@@ -81,7 +81,7 @@ const emptyOrganization = (): ContactOrganization => ({
   department: null,
 });
 
-/** 主の会社（先頭）。無ければ空。いまの編集画面は主の 1 社だけを扱う。 */
+/** 主の会社（先頭）。無ければ空。 */
 export const primaryOrganization = (d: Pick<ContactInput, 'organizations'>): ContactOrganization =>
   d.organizations[0] ?? emptyOrganization();
 
@@ -90,3 +90,8 @@ export const withPrimaryOrganization = (
   d: Pick<ContactInput, 'organizations'>,
   patch: Partial<ContactOrganization>
 ): ContactOrganization[] => [{ ...primaryOrganization(d), ...patch }, ...d.organizations.slice(1)];
+
+/** 会社の欄がすべて空か（「会社を追加」したまま何も入れていない行）。 */
+export const isBlankOrganization = (o: ContactOrganization): boolean =>
+  o.org_id === null &&
+  [o.name, o.phonetic_name, o.title, o.department].every((v) => (v ?? '').trim() === '');

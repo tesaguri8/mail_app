@@ -5,19 +5,28 @@ import {
   Briefcase,
   Building2,
   Cake,
+  CalendarHeart,
   Gem,
+  Globe,
+  HeartHandshake,
   ImageOff,
+  ListPlus,
   Mail,
   MapPin,
+  MessageCircle,
   Phone,
+  Plus,
   Save,
+  Smile,
   StickyNote,
   Trash2,
   User,
+  UserRound,
 } from 'lucide-react';
 import type { ContactSummary } from '@bindings/ContactSummary';
 import type { ContactInput } from '@bindings/ContactInput';
 import type { ContactMatch } from '@bindings/ContactMatch';
+import type { ContactLink } from '@bindings/ContactLink';
 import type { CountryCode } from 'libphonenumber-js';
 import type { OrganizationSummary } from '@bindings/OrganizationSummary';
 import {
@@ -31,12 +40,16 @@ import { tagList } from '../services/tags';
 import {
   AddressRows,
   Field,
+  LabelDatalists,
   PhoneRows,
   TagInput,
   ValueRows,
 } from './ContactValueEditor';
+import { HandleRows, PairRows } from './ContactExtraRows';
+import { ContactLinkChips } from './ContactLinks';
+import { OrgRows } from './ContactOrgRows';
 import { OrgCardDialog, OrgCardInfo, OrgOverlapNotice } from './OrgCard';
-import { OrgCombobox } from './OrgCombobox';
+import { LABEL_LIST_IDS } from '../utils/contactLabels';
 import { toE164 } from '../utils/phone';
 import { findOrgOverlap, hasOrgOverlap, mergeOrgOverlap } from '../utils/orgOverlap';
 import { formatPostal } from '../utils/postal';
@@ -45,8 +58,8 @@ import { joinPersonName, splitPersonName } from '../utils/name';
 import {
   contactToInput,
   emptyContactInput,
+  isBlankOrganization,
   primaryOrganization,
-  withPrimaryOrganization,
 } from '../utils/contactDraft';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -60,7 +73,7 @@ export type EditorRequest =
   | { kind: 'prefill'; prefill: ContactPrefill }
   | { kind: 'existing'; id: number; seed?: ContactSummary };
 
-/** 保存前に電話を E.164 正準形へ、郵便番号を整形する。 */
+/** 保存前に電話を E.164 正準形へ、郵便番号を整形し、空のまま追加した行を落とす。 */
 const normalizeForSave = (d: ContactInput): ContactInput => {
   const region = getPhoneRegion() as CountryCode;
   const autoPostal = getPostalAutoformat();
@@ -70,10 +83,80 @@ const normalizeForSave = (d: ContactInput): ContactInput => {
   const addresses = autoPostal
     ? d.addresses.map((a) => (a.postal ? { ...a, postal: formatPostal(a.postal, region) } : a))
     : d.addresses;
-  return { ...d, phones, addresses };
+  const filled = (v: string) => v.trim() !== '';
+  return {
+    ...d,
+    phones,
+    addresses,
+    organizations: d.organizations.filter((o) => !isBlankOrganization(o)),
+    urls: d.urls.filter((u) => filled(u.value)),
+    dates: d.dates.filter((x) => filled(x.date)),
+    relations: d.relations.filter((r) => filled(r.name)),
+    handles: d.handles.filter((h) => filled(h.value)),
+    custom_fields: d.custom_fields.filter((c) => filled(c.key) || filled(c.value)),
+  };
+};
+
+/** 日付の表記（`YYYY-MM-DD` か年なしの `--MM-DD`）として読めるか。 */
+const isContactDate = (v: string) => /^(\d{4}|-)-\d{2}-\d{2}$/.test(v.trim());
+
+/** 普段は畳んでおき、「項目を追加」から出す項目。値があれば最初から出す。 */
+const OPTIONAL_SECTIONS = [
+  'nameDetails',
+  'nickname',
+  'maidenName',
+  'urls',
+  'dates',
+  'relations',
+  'handles',
+  'customFields',
+] as const;
+type OptionalSection = (typeof OPTIONAL_SECTIONS)[number];
+
+/** その項目に値が入っているか（入っていれば畳まずに出す）。 */
+const sectionHasData = (d: ContactInput, s: OptionalSection): boolean => {
+  switch (s) {
+    case 'nameDetails':
+      return !!(d.name_prefix || d.middle_name || d.name_suffix || d.phonetic_middle);
+    case 'nickname':
+      return !!d.nickname;
+    case 'maidenName':
+      return !!d.maiden_name;
+    case 'urls':
+      return d.urls.length > 0;
+    case 'dates':
+      return d.dates.length > 0;
+    case 'relations':
+      return d.relations.length > 0;
+    case 'handles':
+      return d.handles.length > 0;
+    case 'customFields':
+      return d.custom_fields.length > 0;
+  }
+};
+
+/** 「項目を追加」で出したとき、行の項目なら空の行を 1 つ足す（すぐ入力できるように）。 */
+const withFirstRow = (d: ContactInput, s: OptionalSection): Partial<ContactInput> => {
+  switch (s) {
+    case 'urls':
+      return { urls: [...d.urls, { label: null, value: '' }] };
+    case 'dates':
+      return { dates: [...d.dates, { label: null, date: '' }] };
+    case 'relations':
+      return { relations: [...d.relations, { label: null, name: '' }] };
+    case 'handles':
+      return { handles: [...d.handles, { kind: 'im', service: null, value: '', label: null }] };
+    case 'customFields':
+      return { custom_fields: [...d.custom_fields, { key: '', value: '' }] };
+    default:
+      return {};
+  }
 };
 
 const emptyDraft = emptyContactInput;
+
+const INPUT = 'rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15';
+const INPUT_FULL = `w-full ${INPUT}`;
 const toDraft = contactToInput;
 
 /** ＋追加のプレフィル（差出人名・メール）から下書きを作る。
@@ -137,6 +220,13 @@ export function ContactEditor({
   const [editOrg, setEditOrg] = useState(false);
   // 「組織に登録されています。統合しますか？」を「このままにする」で閉じた組織（編集中だけ覚える）。
   const [overlapKept, setOverlapKept] = useState<number | null>(null);
+  // 「項目を追加」で出した項目（値が無くても出しておく）と、その選択肢の表示。
+  const [shown, setShown] = useState<Set<OptionalSection>>(new Set());
+  const [addMenu, setAddMenu] = useState(false);
+  // この連絡先に保存済みの会社名（小文字）。保存済みの名前は保存しても組織カードにならない。
+  const [savedOrgNames, setSavedOrgNames] = useState<Set<string>>(new Set());
+  // 開いている連絡先がつながっているサービス（見出しの印。新規は空＝Rondine のみ）。
+  const [links, setLinks] = useState<ContactLink[]>([]);
 
   const loadTags = useCallback(() => {
     if (!isTauri) return;
@@ -165,6 +255,13 @@ export function ContactEditor({
   const openDraft = (d: ContactInput) => {
     setDraft(d);
     setBaseline(JSON.stringify(d));
+    setSavedOrgNames(
+      new Set(
+        d.id === null
+          ? []
+          : d.organizations.map((o) => (o.name ?? '').trim().toLowerCase()).filter(Boolean),
+      ),
+    );
   };
 
   // request（何を開くか）に沿って下書きを作り直す。
@@ -174,6 +271,9 @@ export function ContactEditor({
     setConfirmDup(false);
     setEditOrg(false);
     setOverlapKept(null);
+    setShown(new Set());
+    setAddMenu(false);
+    setLinks(request?.kind === 'existing' ? (request.seed?.links ?? []) : []);
     if (!request) {
       setDraft(null);
       setBaseline('');
@@ -193,7 +293,9 @@ export function ContactEditor({
     let alive = true;
     contactGet(request.id)
       .then((full) => {
-        if (alive) openDraft(toDraft(full));
+        if (!alive) return;
+        openDraft(toDraft(full));
+        setLinks(full.links);
       })
       .catch(() => undefined);
     return () => {
@@ -290,6 +392,7 @@ export function ContactEditor({
       const result = await contactUpsert(normalizeForSave(draft));
       setSaved(true);
       openDraft(toDraft(result));
+      setLinks(result.links);
       loadTags();
       onSaved?.(result);
     } catch {
@@ -325,6 +428,16 @@ export function ContactEditor({
     else onOpenContact?.(m.id);
   };
 
+  // 畳んでいる項目の出し入れ。
+  const visible = (sec: OptionalSection) =>
+    !!draft && (shown.has(sec) || sectionHasData(draft, sec));
+  const hidden = OPTIONAL_SECTIONS.filter((sec) => !visible(sec));
+  const reveal = (sec: OptionalSection) => {
+    setShown((prev) => new Set(prev).add(sec));
+    if (draft) patch(withFirstRow(draft, sec));
+    setAddMenu(false);
+  };
+
   if (!draft) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-1 text-center">
@@ -336,6 +449,7 @@ export function ContactEditor({
 
   return (
     <div className="h-full min-h-0 overflow-y-auto">
+      <LabelDatalists />
       <div className="mx-auto max-w-xl p-6">
         <div className="mb-5 flex items-center gap-2">
           <button
@@ -383,6 +497,11 @@ export function ContactEditor({
           )}
         </div>
 
+        {/* どのサービスと同期しているか（アカウント名つき）。 */}
+        <div className="-mt-3 mb-4 pl-11">
+          <ContactLinkChips links={links} />
+        </div>
+
         {/* 重複候補（既存連絡先と一致）。クリックでその連絡先を開ける。 */}
         {matches.length > 0 && (
           <div className="mb-4 rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-2.5">
@@ -420,38 +539,123 @@ export function ContactEditor({
         )}
 
         <div className="space-y-3">
-          <Field icon={<User size={15} />} label={t('contact.nameLabel')}>
+          {visible('nameDetails') ? (
+            <>
+              <Field icon={<User size={15} />} label={t('contact.nameLabelFull')}>
+                <div className="flex gap-2">
+                  <input
+                    className={`${INPUT} w-16 shrink-0`}
+                    placeholder={t('contact.namePrefix')}
+                    value={draft.name_prefix ?? ''}
+                    onChange={(e) => patch({ name_prefix: nullify(e.target.value) })}
+                  />
+                  <input
+                    className={`${INPUT} min-w-0 flex-1`}
+                    placeholder={t('contact.familyName')}
+                    value={draft.family_name ?? ''}
+                    onChange={(e) => patchName({ family_name: nullify(e.target.value) })}
+                  />
+                  <input
+                    className={`${INPUT} min-w-0 flex-1`}
+                    placeholder={t('contact.middleName')}
+                    value={draft.middle_name ?? ''}
+                    onChange={(e) => patch({ middle_name: nullify(e.target.value) })}
+                  />
+                  <input
+                    className={`${INPUT} min-w-0 flex-1`}
+                    placeholder={t('contact.givenName')}
+                    value={draft.given_name ?? ''}
+                    onChange={(e) => patchName({ given_name: nullify(e.target.value) })}
+                  />
+                  <input
+                    className={`${INPUT} w-16 shrink-0`}
+                    placeholder={t('contact.nameSuffix')}
+                    value={draft.name_suffix ?? ''}
+                    onChange={(e) => patch({ name_suffix: nullify(e.target.value) })}
+                  />
+                </div>
+              </Field>
+              <Field icon={<User size={15} />} label={t('contact.phoneticLabelFull')}>
+                <div className="flex gap-2">
+                  <input
+                    className={`${INPUT} min-w-0 flex-1`}
+                    placeholder={t('contact.familyName')}
+                    value={draft.phonetic_family ?? ''}
+                    onChange={(e) => patch({ phonetic_family: nullify(e.target.value) })}
+                  />
+                  <input
+                    className={`${INPUT} min-w-0 flex-1`}
+                    placeholder={t('contact.middleName')}
+                    value={draft.phonetic_middle ?? ''}
+                    onChange={(e) => patch({ phonetic_middle: nullify(e.target.value) })}
+                  />
+                  <input
+                    className={`${INPUT} min-w-0 flex-1`}
+                    placeholder={t('contact.givenName')}
+                    value={draft.phonetic_given ?? ''}
+                    onChange={(e) => patch({ phonetic_given: nullify(e.target.value) })}
+                  />
+                </div>
+              </Field>
+            </>
+          ) : (
+            <>
+              <Field icon={<User size={15} />} label={t('contact.nameLabel')}>
+                <div className="flex gap-2">
+                  <input
+                    className={INPUT_FULL}
+                    placeholder={t('contact.familyName')}
+                    value={draft.family_name ?? ''}
+                    onChange={(e) => patchName({ family_name: nullify(e.target.value) })}
+                  />
+                  <input
+                    className={INPUT_FULL}
+                    placeholder={t('contact.givenName')}
+                    value={draft.given_name ?? ''}
+                    onChange={(e) => patchName({ given_name: nullify(e.target.value) })}
+                  />
+                </div>
+              </Field>
+              <Field icon={<User size={15} />} label={t('contact.phoneticLabel')}>
+                <div className="flex gap-2">
+                  <input
+                    className={INPUT_FULL}
+                    placeholder={t('contact.familyName')}
+                    value={draft.phonetic_family ?? ''}
+                    onChange={(e) => patch({ phonetic_family: nullify(e.target.value) })}
+                  />
+                  <input
+                    className={INPUT_FULL}
+                    placeholder={t('contact.givenName')}
+                    value={draft.phonetic_given ?? ''}
+                    onChange={(e) => patch({ phonetic_given: nullify(e.target.value) })}
+                  />
+                </div>
+              </Field>
+            </>
+          )}
+          {(visible('nickname') || visible('maidenName')) && (
             <div className="flex gap-2">
-              <input
-                className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                placeholder={t('contact.familyName')}
-                value={draft.family_name ?? ''}
-                onChange={(e) => patchName({ family_name: nullify(e.target.value) })}
-              />
-              <input
-                className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                placeholder={t('contact.givenName')}
-                value={draft.given_name ?? ''}
-                onChange={(e) => patchName({ given_name: nullify(e.target.value) })}
-              />
+              {visible('nickname') && (
+                <Field icon={<Smile size={15} />} label={t('contact.nickname')}>
+                  <input
+                    className={INPUT_FULL}
+                    value={draft.nickname ?? ''}
+                    onChange={(e) => patch({ nickname: nullify(e.target.value) })}
+                  />
+                </Field>
+              )}
+              {visible('maidenName') && (
+                <Field icon={<UserRound size={15} />} label={t('contact.maidenName')}>
+                  <input
+                    className={INPUT_FULL}
+                    value={draft.maiden_name ?? ''}
+                    onChange={(e) => patch({ maiden_name: nullify(e.target.value) })}
+                  />
+                </Field>
+              )}
             </div>
-          </Field>
-          <Field icon={<User size={15} />} label={t('contact.phoneticLabel')}>
-            <div className="flex gap-2">
-              <input
-                className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                placeholder={t('contact.familyName')}
-                value={draft.phonetic_family ?? ''}
-                onChange={(e) => patch({ phonetic_family: nullify(e.target.value) })}
-              />
-              <input
-                className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                placeholder={t('contact.givenName')}
-                value={draft.phonetic_given ?? ''}
-                onChange={(e) => patch({ phonetic_given: nullify(e.target.value) })}
-              />
-            </div>
-          </Field>
+          )}
           <TagInput
             tags={draft.tags}
             onChange={(tags) => patch({ tags })}
@@ -474,57 +678,29 @@ export function ContactEditor({
             shareable
             conflicts={(v) => phoneConflicts.has(v.trim())}
           />
-          <OrgCombobox
-            orgId={orgId}
-            name={primaryOrganization(draft).name ?? ''}
-            onChange={(org_id, name) =>
-              patch({ organizations: withPrimaryOrganization(draft, { org_id, name: nullify(name) }) })
-            }
-          />
-          {/* 会社共通の情報（代表電話・FAX・代表メール・URL・所在地）はラベル表示。
-              変更は所属する全員に効くので、［編集］で組織カードを開いて行う。 */}
-          {org && org.id === orgId && (
-            <OrgCardInfo org={org} onEdit={() => setEditOrg(true)} />
-          )}
-          {org && overlap && (
-            <OrgOverlapNotice
-              org={org}
-              overlap={overlap}
-              onMerge={() => {
-                setDraft((d) => (d ? mergeOrgOverlap(d, overlap) : d));
-                setSaved(false);
-              }}
-              onKeep={() => setOverlapKept(org.id)}
-            />
-          )}
-          <div className="flex gap-2">
-            <Field icon={<Briefcase size={15} />} label={t('contact.orgTitle')}>
-              <input
-                className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                value={primaryOrganization(draft).title ?? ''}
-                onChange={(e) =>
-                  patch({
-                    organizations: withPrimaryOrganization(draft, {
-                      title: nullify(e.target.value),
-                    }),
-                  })
-                }
+          <OrgRows
+            organizations={draft.organizations}
+            onChange={(organizations) => patch({ organizations })}
+            savedNames={savedOrgNames}
+            showPhonetic={visible('nameDetails')}
+          >
+            {/* 会社共通の情報（代表電話・FAX・代表メール・URL・所在地）はラベル表示。
+                変更は所属する全員に効くので、［編集］で組織カードを開いて行う。 */}
+            {org && org.id === orgId && (
+              <OrgCardInfo org={org} onEdit={() => setEditOrg(true)} />
+            )}
+            {org && overlap && (
+              <OrgOverlapNotice
+                org={org}
+                overlap={overlap}
+                onMerge={() => {
+                  setDraft((d) => (d ? mergeOrgOverlap(d, overlap) : d));
+                  setSaved(false);
+                }}
+                onKeep={() => setOverlapKept(org.id)}
               />
-            </Field>
-            <Field icon={<Building2 size={15} />} label={t('contact.orgDepartment')}>
-              <input
-                className="w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15"
-                value={primaryOrganization(draft).department ?? ''}
-                onChange={(e) =>
-                  patch({
-                    organizations: withPrimaryOrganization(draft, {
-                      department: nullify(e.target.value),
-                    }),
-                  })
-                }
-              />
-            </Field>
-          </div>
+            )}
+          </OrgRows>
           <AddressRows
             icon={<MapPin size={14} />}
             label={t('contact.address')}
@@ -547,6 +723,116 @@ export function ContactEditor({
               onChange={(e) => patch({ note: nullify(e.target.value) })}
             />
           </Field>
+          {visible('urls') && (
+            <PairRows
+              icon={<Globe size={14} />}
+              label={t('contact.urls')}
+              items={draft.urls}
+              onChange={(urls) => patch({ urls })}
+              empty={() => ({ label: null, value: '' })}
+              nullable={['label']}
+              columns={[
+                {
+                  key: 'label',
+                  placeholder: t('contact.labelPlaceholder'),
+                  list: LABEL_LIST_IDS.url,
+                  width: 'w-24 shrink-0 text-xs',
+                },
+                { key: 'value', placeholder: 'https://' },
+              ]}
+            />
+          )}
+          {visible('dates') && (
+            <PairRows
+              icon={<CalendarHeart size={14} />}
+              label={t('contact.dates')}
+              items={draft.dates}
+              onChange={(dates) => patch({ dates })}
+              empty={() => ({ label: null, date: '' })}
+              nullable={['label']}
+              columns={[
+                {
+                  key: 'label',
+                  placeholder: t('contact.labelPlaceholder'),
+                  list: LABEL_LIST_IDS.date,
+                  width: 'w-24 shrink-0 text-xs',
+                },
+                {
+                  key: 'date',
+                  placeholder: t('contact.datePlaceholder'),
+                  invalid: (v) => !isContactDate(v),
+                },
+              ]}
+            />
+          )}
+          {visible('relations') && (
+            <PairRows
+              icon={<HeartHandshake size={14} />}
+              label={t('contact.relations')}
+              items={draft.relations}
+              onChange={(relations) => patch({ relations })}
+              empty={() => ({ label: null, name: '' })}
+              nullable={['label']}
+              columns={[
+                {
+                  key: 'label',
+                  placeholder: t('contact.labelPlaceholder'),
+                  list: LABEL_LIST_IDS.relation,
+                  width: 'w-24 shrink-0 text-xs',
+                },
+                { key: 'name', placeholder: t('contact.relationName') },
+              ]}
+            />
+          )}
+          {visible('handles') && (
+            <HandleRows
+              icon={<MessageCircle size={14} />}
+              label={t('contact.handles')}
+              handles={draft.handles}
+              onChange={(handles) => patch({ handles })}
+            />
+          )}
+          {visible('customFields') && (
+            <PairRows
+              icon={<ListPlus size={14} />}
+              label={t('contact.customFields')}
+              items={draft.custom_fields}
+              onChange={(custom_fields) => patch({ custom_fields })}
+              empty={() => ({ key: '', value: '' })}
+              nullable={[]}
+              columns={[
+                { key: 'key', placeholder: t('contact.customKey'), width: 'w-28 shrink-0' },
+                { key: 'value', placeholder: t('contact.customValue') },
+              ]}
+            />
+          )}
+
+          {/* 普段使わない項目は畳んでおき、ここから出す（画面を長くしすぎない）。 */}
+          {hidden.length > 0 && (
+            <div>
+              <button
+                onClick={() => setAddMenu((v) => !v)}
+                aria-expanded={addMenu}
+                className="flex items-center gap-1 text-xs text-sky-300 hover:text-sky-200"
+              >
+                <Plus size={13} />
+                {t('contact.addField')}
+              </button>
+              {addMenu && (
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {hidden.map((sec) => (
+                    <button
+                      key={sec}
+                      onClick={() => reveal(sec)}
+                      className="rounded-full border border-white/20 px-2.5 py-1 text-xs text-white/75 hover:bg-white/10 hover:text-white"
+                    >
+                      {t(`contact.section.${sec}`)}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="mt-4 space-y-2">
@@ -556,6 +842,13 @@ export function ContactEditor({
             hint={t('contact.businessHint')}
             checked={draft.is_business}
             onChange={(v) => patch({ is_business: v })}
+          />
+          <Toggle
+            icon={<Building2 size={15} />}
+            label={t('contact.showAsCompany')}
+            hint={t('contact.showAsCompanyHint')}
+            checked={draft.show_as_company}
+            onChange={(v) => patch({ show_as_company: v })}
           />
           <Toggle
             icon={<ImageOff size={15} />}

@@ -407,6 +407,20 @@ pub struct GcontactsMatchResult {
     pub ambiguous: i32,
 }
 
+/// Google アカウント 1 件の同期（「今すぐ同期」・自動同期）の結果。
+///
+/// カレンダーと連絡先は独立に進めるので、成否を別々に持つ。同期しなかった側は結果もエラーも None。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct GoogleSyncResult {
+    pub calendar: Option<GcalSyncResult>,
+    pub calendar_error: Option<String>,
+    pub contacts: Option<GcontactsSyncResult>,
+    /// 取り込みに続けて住所録へ反映した結果（つないだ／新規／重複整理の候補）。
+    pub matched: Option<GcontactsMatchResult>,
+    pub contacts_error: Option<String>,
+}
+
 /// OAuth クライアント資格情報の設定状況（Client ID の有無を UI に伝える。値は返さない）。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

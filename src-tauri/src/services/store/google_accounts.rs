@@ -115,6 +115,20 @@ impl Store {
         rows.collect()
     }
 
+    /// アカウント 1 件。無ければ None。
+    ///
+    /// # Errors
+    /// DB の読み出しに失敗したとき。
+    pub fn google_account(&self, account_id: i64) -> rusqlite::Result<Option<GoogleAccount>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            &format!("SELECT {ACCOUNT_COLUMNS} FROM google_accounts WHERE id = ?1"),
+            params![account_id],
+            row_to_account,
+        )
+        .optional()
+    }
+
     /// アカウントのメールアドレス（keyring キー）を引く。
     pub fn google_account_email(&self, account_id: i64) -> rusqlite::Result<Option<String>> {
         let conn = self.conn.lock().unwrap();

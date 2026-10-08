@@ -239,6 +239,10 @@ pub struct EventSummary {
     pub availability: String,
     /// 公開設定。'default' | 'public' | 'private'。
     pub visibility: String,
+    /// 繰り返しの 1 回だけ変更された回なら、本体の展開上の元の開始（非 null＝例外インスタンス）。
+    pub original_start_at: Option<String>,
+    /// 繰り返しの本体について、1 回だけ変更・削除された回の元の開始。展開でその回を出さない。
+    pub exdates: Vec<String>,
 }
 
 /// カレンダー（マイ/他）。docs/DATABASE_SCHEMA.md（calendars）。

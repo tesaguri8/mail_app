@@ -162,17 +162,43 @@ services/google/calendar/{api,convert,sync}.rs
   取り込み時は Google の RFC3339（オフセット付き）→ 端末ローカルへ、送信時は端末オフセットを付けて RFC3339 に。
 - 終日の終了日: Google は**排他日（翌日）**。取り込みで −1 日、送信で +1 日。
 - 繰り返し: Google `recurrence[]` の先頭 `RRULE:` を `events.recurrence` に保存（送信は `["RRULE:…"]`）。
+- 繰り返しの例外インスタンス（`recurringEventId` ＋ `originalStartTime` を持つ予定）→ §3-6。
 - 予定あり/なし: `transparency`（opaque/transparent）⇄ `availability`（busy/free）。
 - 公開設定: `visibility`（default/public/private）。
 
 ### 3-5. v1 の制限（既知）
 
-- **繰り返しの個別インスタンス上書き**（1 回だけ時間変更/削除など）は取り込まない（マスターのみ扱う）。
+- **繰り返しの「この回だけ」を Rondine で新しく作ることはできない**（本体の編集はシリーズ全体に
+  適用）。Google 側で作られた例外の取り込み・表示は §3-6。
+- **`recurrence[]` の `EXDATE` 行は取り込まない**（Google 上の 1 回だけの削除は、通常 EXDATE ではなく
+  cancelled の例外インスタンスとして来るので §3-6 で扱える。iCal 由来の予定で EXDATE が残っている
+  ものだけが、削除した回も表示される）。
 - **参加者（ゲスト）の送信は未対応**（取り込み・ローカル編集は従来どおり）。
 - **添付・会議リンク（Meet）・色 ID** はマッピング対象外。
 - 競合は後勝ち（フィールド単位のマージや競合 UI はなし）。
 - 読み取り専用カレンダーに Rondine 側で作った予定は送信されない（ローカルに残る）。
 
+### 3-6. 繰り返しの例外インスタンス（1 回だけの変更・削除）
+
+`events.list` は `singleEvents=false` で取るので、繰り返しは**本体（RRULE 付き）1 件＋例外**で届く。
+展開はフロント（`src/renderer/utils/recurrence.ts`）が本体の RRULE から行う。
+
+| Google から来るもの | ローカルでの持ち方（`migrations/0060`） |
+|---|---|
+| **1 回だけ変更された回**（`recurringEventId`＋`originalStartTime`、status≠cancelled） | 通常の予定行（`recurrence` なし）として保存し、`events.recurring_external_id`（本体の Google ID）と `events.original_start_at`（元の回の開始・ローカル表現）を持たせる |
+| **1 回だけ削除された回**（同上、status=cancelled） | 予定行は作らず `event_cancelled_instances` に（カレンダー, 例外 ID, 本体 ID, 元の開始）を記録 |
+
+- **表示**: `list_events` は本体の行に `exdates`（変更・削除された回の元の開始）を付けて返す。
+  展開はその**日付**の回を出さない（対応する FREQ は 1 日に高々 1 回なので日付で突き合わせる）。
+  変更された回は通常の予定として範囲抽出で出る。変更された回を消した（ゴミ箱）場合も、本体の分は出さない。
+- **本体の削除**（Google 側・Rondine 側とも）: その本体の変更された回も一緒に論理削除する（孤立させない）。
+  Rondine 側の削除で送るのは本体だけ（Google は本体の削除で例外も消す）。本体を戻すと、一緒に
+  ゴミ箱に入った回も戻る。
+- **変更された回の編集**: その回の Google ID へ PATCH される（その回だけに効く）。編集画面では繰り返しの
+  設定を出さない（`original_start_at` が非 null の予定）。
+- **エクスポート（.ics）**: 本体に `EXDATE` を付け、変更された回は別の VEVENT として出す。
+- **既存 DB**: 0060 で Google カレンダーの `sync_token` を捨て、次回の同期をフル同期にして過去の例外を取り直す。
+
 ---
 
-最終更新日: 2026年7月
+最終更新日: 2026年10月

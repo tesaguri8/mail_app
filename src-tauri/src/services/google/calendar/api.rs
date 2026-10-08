@@ -105,8 +105,12 @@ pub struct GEvent {
     pub transparency: Option<String>,
     #[serde(default)]
     pub visibility: Option<String>,
+    /// 例外インスタンス（1 回だけ変更・削除された回）なら、本体（繰り返し元）の予定 ID。
     #[serde(rename = "recurringEventId", default)]
     pub recurring_event_id: Option<String>,
+    /// 例外インスタンスが、本体の展開上どの回だったか（元の開始日時）。
+    #[serde(rename = "originalStartTime", default)]
+    pub original_start_time: Option<GTime>,
     #[serde(default)]
     pub reminders: Option<GReminders>,
 }

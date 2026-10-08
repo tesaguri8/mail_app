@@ -1,3 +1,4 @@
+use super::calendar_sync::cascade_delete_instances;
 use super::Store;
 use crate::models::{AttendeeInput, EventAttendee, EventInput, EventSummary, IcsImportReport};
 use crate::services::ics;
@@ -21,12 +22,33 @@ fn row_to_event(r: &Row) -> rusqlite::Result<EventSummary> {
         calendar_id: r.get::<_, Option<i64>>(12)?.map(|v| v as i32),
         availability: r.get(13)?,
         visibility: r.get(14)?,
+        original_start_at: r.get(15)?,
+        exdates: r
+            .get::<_, Option<String>>(16)?
+            .map(|s| s.split(EXDATE_SEP).map(str::to_string).collect())
+            .unwrap_or_default(),
     })
 }
 
+/// EVENT_COLS の exdates 列（group_concat）の区切り。日時文字列に現れない制御文字を使う。
+const EXDATE_SEP: char = '\u{1f}';
+
+/// events を別名なしで引く SELECT 用の列。末尾の exdates は繰り返しの本体についてだけ、
+/// 1 回だけ変更・削除された回の元の開始を集める（展開でその回を出さないため）。
+/// 変更された回は論理削除済みでも数える（その回を消した＝本体の分も出さない）。
 const EVENT_COLS: &str = "id, title, description, location, start_at, end_at, all_day, color, \
      recurrence, reminder_minutes, related_email_id, deleted_at, calendar_id, availability, \
-     visibility";
+     visibility, original_start_at, \
+     CASE WHEN recurrence IS NOT NULL AND external_id IS NOT NULL THEN \
+       (SELECT group_concat(o, char(31)) FROM ( \
+          SELECT x.original_start_at AS o FROM events x \
+           WHERE x.calendar_id = events.calendar_id \
+             AND x.recurring_external_id = events.external_id \
+          UNION \
+          SELECT c.original_start_at FROM event_cancelled_instances c \
+           WHERE c.calendar_id = events.calendar_id \
+             AND c.recurring_external_id = events.external_id)) \
+     END";
 
 /// 任意テキストを trim し、空なら None に倒す（保存時に空文字を NULL 化して表示分岐を単純化）。
 fn trimmed(s: &Option<String>) -> Option<&str> {
@@ -246,18 +268,30 @@ impl Store {
 
     /// 予定を論理削除（ゴミ箱へ。deleted_at を立てて一覧から隠す。保持期間後に完全削除）。
     /// dirty=1 も立て、Google カレンダーの予定なら次回同期で Google 側も削除する。
+    /// 繰り返しの本体なら、その 1 回だけ変更された回も一緒にゴミ箱へ入れる（送信はしない。
+    /// Google は本体の削除で例外も消す）。
     pub fn delete_event(&self, id: i64) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE events SET deleted_at = CURRENT_TIMESTAMP, dirty = 1 WHERE id = ?1",
             params![id],
         )?;
+        cascade_delete_instances(&conn, id)?;
         Ok(())
     }
 
     /// 論理削除した予定を復元する（deleted_at をクリア）。
+    /// 繰り返しの本体なら、本体と一緒にゴミ箱へ入った 1 回だけ変更された回も戻す。
     pub fn restore_event(&self, id: i64) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE events SET deleted_at = NULL \
+             WHERE recurring_external_id IS NOT NULL \
+               AND (calendar_id, recurring_external_id, deleted_at) = \
+                   (SELECT calendar_id, external_id, deleted_at FROM events \
+                    WHERE id = ?1 AND recurrence IS NOT NULL AND external_id IS NOT NULL)",
+            params![id],
+        )?;
         conn.execute("UPDATE events SET deleted_at = NULL WHERE id = ?1", params![id])?;
         Ok(())
     }

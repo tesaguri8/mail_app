@@ -1763,6 +1763,8 @@ export function EventEditor({
   // Google カレンダー由来の説明文は HTML（Zoom 招待の <br>/<a> 等）を含むことがあるので、
   // 素のテキストへ整形して表示・編集する（保存時にそのまま plain text で書き戻る）。
   const [description, setDescription] = useState(() => htmlToText(event?.description ?? ''));
+  // Google で 1 回だけ変更された回（繰り返しの例外インスタンス）。
+  const isInstance = !!event?.original_start_at;
   const initialRecur = ruleToPreset(event?.recurrence ?? null);
   const [recur, setRecur] = useState<RecurPreset>(initialRecur.preset);
   const [until, setUntil] = useState<string>(initialRecur.until ?? '');
@@ -1965,18 +1967,25 @@ export function EventEditor({
           className={field}
         />
 
-        {/* 繰り返し */}
-        <div className="flex items-center gap-2">
-          <Repeat size={14} className="shrink-0 text-white/55" />
-          <select value={recur} onChange={(e) => setRecur(e.target.value as RecurPreset)} className={`flex-1 ${small}`}>
-            {RECUR_PRESETS.map((p) => (
-              <option key={p} value={p} className="bg-neutral-800">
-                {t(`cal.r_${p}`)}
-              </option>
-            ))}
-          </select>
-        </div>
-        {recur !== 'none' && (
+        {/* 繰り返し（1 回だけ変更された回は、その回だけの予定なので繰り返しを持たせない） */}
+        {isInstance ? (
+          <p className="flex items-center gap-2 text-xs text-white/45">
+            <Repeat size={14} className="shrink-0 text-white/55" />
+            {t('cal.instanceNote')}
+          </p>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Repeat size={14} className="shrink-0 text-white/55" />
+            <select value={recur} onChange={(e) => setRecur(e.target.value as RecurPreset)} className={`flex-1 ${small}`}>
+              {RECUR_PRESETS.map((p) => (
+                <option key={p} value={p} className="bg-neutral-800">
+                  {t(`cal.r_${p}`)}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        {!isInstance && recur !== 'none' && (
           <input
             type="date"
             value={until}

@@ -265,6 +265,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 59,
         sql: include_str!("migrations/0059_contact_model.sql"),
     },
+    Migration {
+        // 60 は Google カレンダーの繰り返しの例外インスタンス（1 回だけの変更・削除）の取り込み。
+        version: 60,
+        sql: include_str!("migrations/0060_gcal_recurring_exceptions.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
@@ -670,7 +675,9 @@ mod tests {
              PRAGMA user_version = 52;",
         )
         .unwrap();
-        run(&conn).unwrap();
+        // 連絡先の作り直し（0059）までを当てる。0060 以降は予定（events）を触るので、
+        // この最小の土台では当てられない（0060 は別のテストで確かめる）。
+        run_until(&conn, 59).unwrap();
 
         let (email, ext, last, cal, con): (String, String, String, i64, i64) = conn
             .query_row(

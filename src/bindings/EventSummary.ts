@@ -44,4 +44,12 @@ availability: string,
 /**
  * 公開設定。'default' | 'public' | 'private'。
  */
-visibility: string, };
+visibility: string, 
+/**
+ * 繰り返しの 1 回だけ変更された回なら、本体の展開上の元の開始（非 null＝例外インスタンス）。
+ */
+original_start_at: string | null, 
+/**
+ * 繰り返しの本体について、1 回だけ変更・削除された回の元の開始。展開でその回を出さない。
+ */
+exdates: Array<string>, };

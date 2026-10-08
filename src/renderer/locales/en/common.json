@@ -60,6 +60,7 @@
     "trashEmpty": "Trash is empty",
     "repeatUntil": "Repeat until",
     "seriesNote": "This is a recurring event. Changes apply to the whole series.",
+    "instanceNote": "This occurrence of a recurring event was changed individually. Changes apply to this occurrence only.",
     "r_none": "Does not repeat",
     "r_daily": "Daily",
     "r_weekly": "Weekly",

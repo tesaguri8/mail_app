@@ -49,7 +49,6 @@ const google = (over: Partial<GoogleAccount> = {}): GoogleAccount => ({
   email: 'a@gmail.com',
   sync_calendar: true,
   sync_contacts: true,
-  push_new_contacts: false,
   last_calendar_sync_at: null,
   last_contacts_sync_at: null,
   disconnected_at: null,

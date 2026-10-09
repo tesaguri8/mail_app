@@ -2695,19 +2695,6 @@ pub fn contact_sync_stop(
         .map_err(|e| e.to_string())
 }
 
-/// 「新しく作る連絡先は、既定で Google にも保存する」を切り替える（新規作成の画面で最初から
-/// チェックを入れるかの既定。どこにもつながっていない連絡先を勝手に作ることはしない）。
-#[tauri::command]
-pub fn gcontacts_set_push_new(
-    store: State<Store>,
-    account_id: i64,
-    enabled: bool,
-) -> Result<(), String> {
-    store
-        .set_push_new_contacts(account_id, enabled)
-        .map_err(|e| e.to_string())
-}
-
 /// グリーン／警告ドメインの一覧（管理タブ用。住所録由来の自動グリーンも含む）。
 #[tauri::command]
 pub fn green_domain_list(store: State<Store>) -> Result<Vec<GreenDomainEntry>, String> {

@@ -5,6 +5,7 @@ import type { ContactLink } from '@bindings/ContactLink';
 import type { GoogleAccount } from '@bindings/GoogleAccount';
 import { googleAccounts } from '../services/google';
 import { contactSyncStop, contactSyncTargetAdd } from '../services/contacts';
+import { getNewContactTarget, setNewContactTarget } from '../config/prefs';
 import { ConfirmDialog } from './ConfirmDialog';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -12,9 +13,13 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 /** 同期先に選べるアカウント（連携中＝解除中でない、かつ連絡先を同期している）。 */
 export const selectableAccount = (a: GoogleAccount) => a.sync_contacts && a.disconnected_at == null;
 
-/** 新規作成の画面で最初からチェックを入れるアカウント（「既定で Google にも保存」）。 */
-export const defaultTargets = (accounts: GoogleAccount[]): Set<number> =>
-  new Set(accounts.filter((a) => selectableAccount(a) && a.push_new_contacts).map((a) => a.id));
+/** 新規作成の画面で最初からチェックを入れるアカウント（選べるもののうち、前回外していないもの。
+ *  未記録はオン）。`isOn` はアカウント別の前回の選択（既定は端末に覚えたもの）。 */
+export const defaultTargets = (
+  accounts: GoogleAccount[],
+  isOn: (accountId: number) => boolean = getNewContactTarget
+): Set<number> =>
+  new Set(accounts.filter((a) => selectableAccount(a) && isOn(a.id)).map((a) => a.id));
 
 /**
  * 連絡先の「同期先」（docs/CONTACT_MODEL.md §3「同期先は 1 人ずつ選ぶ」）。
@@ -57,7 +62,7 @@ export function ContactSyncTargets({
       .catch(() => setAccounts([]));
   }, []);
 
-  // 新規の画面を開いたら、「既定で Google にも保存」のアカウントに最初からチェックを入れる（外せる）。
+  // 新規の画面を開いたら、選べるアカウントに最初からチェックを入れる（前回外したものは外したまま）。
   useEffect(() => {
     if (contactId === null && selected === null && accounts.length > 0) {
       onSelectedChange(defaultTargets(accounts));
@@ -88,6 +93,8 @@ export function ContactSyncTargets({
       const next = new Set(selected ?? []);
       if (next.has(a.id)) next.delete(a.id);
       else next.add(a.id);
+      // 変えた選択は、次に新しく作るときの既定にする（メールからの追加でも同じ）。
+      setNewContactTarget(a.id, next.has(a.id));
       onSelectedChange(next);
       return;
     }

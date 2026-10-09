@@ -653,7 +653,6 @@
     "gcalError": "エラー: {{message}}",
     "gcontactsLastSync": "連絡先の最終取り込み: {{when}}",
     "gcontactsNeverSynced": "連絡先は未取り込み",
-    "gcontactsPushNew": "新しく作る連絡先は、既定で Google にも保存する（作成の画面で最初からチェックが入ります）",
     "trashPurgeRun": "完全に削除する",
     "gcalReconnect": "再接続",
     "gcalDisconnectedBadge": "解除中",

@@ -33,9 +33,7 @@ fn unlinked_contacts_are_never_created_on_their_own() {
     let s = store();
     let acct = account(&s, "a@gmail.com");
     contact(&s, "メールの相手");
-    // 「新しく作る連絡先は既定で Google にも保存」をオンにしても、どこにもつながっていない
-    // 連絡先を勝手に作ることはしない（既定のチェックにだけ効く）。
-    s.set_push_new_contacts(acct, true).unwrap();
+    // どこにもつながっていない連絡先を勝手に作ることはしない（作るのは作成待ちを置いた人だけ）。
     assert!(s.list_contacts_to_push(acct).unwrap().is_empty());
 }
 

@@ -11,7 +11,6 @@ import {
   googleSetService,
   googleSync,
 } from '../../services/google';
-import { gcontactsSetPushNew } from '../../services/gcontacts';
 import { summarizeGoogleSync } from '../../utils/googleSyncSummary';
 import { CALENDAR_SYNCED_EVENT, CONTACTS_SYNCED_EVENT } from '../../hooks/useAutoSync';
 import { GoogleDisconnectDialog } from './GoogleDisconnectDialog';
@@ -139,9 +138,6 @@ export function GoogleServices({
     });
   };
 
-  const togglePushNew = (enabled: boolean) =>
-    google && run('switching', () => gcontactsSetPushNew(google.id, enabled));
-
   const disconnectedBadge = disconnected && (
     <span
       className="rounded bg-amber-400/20 px-1.5 py-0.5 text-[10px] text-amber-200"
@@ -172,21 +168,7 @@ export function GoogleServices({
         busy={pending === 'contacts'}
         disabled={busy !== 'idle'}
         onToggle={() => toggle('contacts', !(connected && google.sync_contacts))}
-      >
-        {/* 住所録を Google へ上げるかは利用者が決めることなので、既定は無効。 */}
-        {connected && google.sync_contacts && (
-          <label className="mt-1.5 flex items-start gap-2 pl-[26px] text-xs text-white/55">
-            <input
-              type="checkbox"
-              className="mt-0.5"
-              checked={google.push_new_contacts}
-              onChange={(e) => void togglePushNew(e.target.checked)}
-              disabled={busy !== 'idle'}
-            />
-            {t('settings.gcontactsPushNew')}
-          </label>
-        )}
-      </ServiceRow>
+      />
       <ServiceRow
         icon={<CalendarDays size={16} />}
         label={t('account.serviceCalendar')}

@@ -83,7 +83,6 @@ mod tests {
             email: "a@gmail.com".into(),
             sync_calendar: true,
             sync_contacts,
-            push_new_contacts: false,
             last_calendar_sync_at: None,
             last_contacts_sync_at: None,
             disconnected_at: None,

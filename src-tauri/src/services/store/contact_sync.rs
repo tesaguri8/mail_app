@@ -235,19 +235,6 @@ impl Store {
         Ok(report)
     }
 
-    /// 上の設定を変える。
-    ///
-    /// # Errors
-    /// DB の書き込みに失敗したとき。
-    pub fn set_push_new_contacts(&self, account_id: i64, enabled: bool) -> rusqlite::Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "UPDATE google_accounts SET push_new_contacts = ?2 WHERE id = ?1",
-            params![account_id, enabled as i64],
-        )?;
-        Ok(())
-    }
-
     /// このアカウントへ送るべきローカル変更を送信順に返す。
     ///
     /// - このアカウントへのつながりが未送信の連絡先（更新・削除）

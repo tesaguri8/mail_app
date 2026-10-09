@@ -653,7 +653,6 @@
     "gcalError": "Error: {{message}}",
     "gcontactsLastSync": "Contacts last imported: {{when}}",
     "gcontactsNeverSynced": "Contacts never imported",
-    "gcontactsPushNew": "Save new contacts to Google by default (pre-checked when creating a contact)",
     "trashPurgeRun": "Delete permanently",
     "gcalReconnect": "Reconnect",
     "gcalDisconnectedBadge": "Disconnected",

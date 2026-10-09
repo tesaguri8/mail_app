@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Download, Gem, Layers, Plus, RotateCcw, Search, Trash2, User, X } from 'lucide-react';
 import type { ContactSummary } from '@bindings/ContactSummary';
+import type { ContactListItem } from '@bindings/ContactListItem';
 import type { ContactMatch } from '@bindings/ContactMatch';
 import type { ImportReport } from '@bindings/ImportReport';
 import { contactFindDuplicates, contactImport, contactList, contactRestore } from '../services/contacts';
@@ -61,7 +62,7 @@ export function ContactsView({
   const refreshCached = useContactsStore((s) => s.refresh);
   const removeCached = useContactsStore((s) => s.remove);
   // 検索・タグ絞り込み・ゴミ箱表示のときの結果（その都度取りに行く）。
-  const [filtered, setFiltered] = useState<ContactSummary[] | null>(null);
+  const [filtered, setFiltered] = useState<ContactListItem[] | null>(null);
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<number | null>(null);
   // 編集フォームに「何を開くか」の指示。null＝何も開いていない。
@@ -147,9 +148,9 @@ export function ContactsView({
     return () => window.removeEventListener(CONTACTS_SYNCED_EVENT, onSynced);
   }, [query, tagFilter, showDeleted, load, reloadTags]);
 
-  const openContact = (c: ContactSummary) => {
+  const openContact = (c: ContactListItem) => {
     setSelectedId(c.id);
-    // 一覧は軽量（複数値が空）なので、seed を渡しつつ編集フォーム側でフル取得させる。
+    // 一覧は一覧に出す分だけなので、seed（つながり）を渡しつつ編集フォーム側でフル取得させる。
     setRequest({ kind: 'existing', id: c.id, seed: c });
   };
 

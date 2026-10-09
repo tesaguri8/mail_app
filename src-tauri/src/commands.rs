@@ -1,6 +1,6 @@
 use crate::models::{
     AccountInput, AccountSummary, AppInfo, AttachmentMeta, AttachmentSummary, AutoconfigResult,
-    AttendeeInput, CalendarInput, CalendarSummary, ContactInput, ContactMatch,
+    AttendeeInput, CalendarInput, CalendarSummary, ContactInput, ContactListItem, ContactMatch,
     ContactSummary, DataLocation, DbInfo, DraftContent, DraftInput, DuplicateGroup, EventAttendee,
     EventInput, EventSummary, GoogleAccount, GoogleDisconnectResult, GoogleSyncResult,
     GoogleCredentialsStatus,
@@ -1581,19 +1581,24 @@ pub fn spam_settings_set(store: State<Store>, settings: SpamSettings) -> Result<
 
 /// 連絡先一覧（`query` で名前/よみ/メール/組織を絞り込み、`groups` のいずれかのタグで絞り込み）。
 #[tauri::command]
-pub fn contact_list(
-    store: State<Store>,
+pub async fn contact_list(
+    app: AppHandle,
     query: Option<String>,
     groups: Option<Vec<i64>>,
     include_deleted: Option<bool>,
-) -> Result<Vec<ContactSummary>, String> {
-    store
-        .list_contacts(
-            query.as_deref(),
-            &groups.unwrap_or_default(),
-            include_deleted.unwrap_or(false),
-        )
-        .map_err(|e| e.to_string())
+) -> Result<Vec<ContactListItem>, String> {
+    // 数千件を読むので、メインスレッド（画面）を止めないよう spawn_blocking に載せる。
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Store>()
+            .list_contact_items(
+                query.as_deref(),
+                &groups.unwrap_or_default(),
+                include_deleted.unwrap_or(false),
+            )
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 単一の連絡先を取得。

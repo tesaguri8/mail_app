@@ -280,6 +280,40 @@ pub struct ContactSummary {
     pub links: Vec<ContactLink>,
 }
 
+/// 連絡先一覧の 1 行（一覧に出す分だけ）。
+///
+/// 一覧は数千件になるので、[`ContactSummary`] の全項目（ほとんど空）を IPC に載せると、
+/// JSON の組み立てと読み込みだけで画面が止まる。開いたら [`ContactSummary`] を取り直す。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ContactListItem {
+    pub id: i32,
+    pub display_name: String,
+    /// 主メール（一覧の 2 行目。会社名が無いとき）。
+    pub primary_email: Option<String>,
+    /// 主の会社名（一覧の 2 行目）。
+    pub primary_organization: Option<String>,
+    pub is_favorite: bool,
+    /// 論理削除（ゴミ箱）の日時（UTC 文字列）。非 null＝削除済み。
+    pub deleted_at: Option<String>,
+    /// つながっているサービス（同期先の印と、同期先での絞り込みに使う）。
+    pub links: Vec<ContactLink>,
+}
+
+impl From<ContactSummary> for ContactListItem {
+    fn from(c: ContactSummary) -> Self {
+        Self {
+            id: c.id,
+            display_name: c.fields.display_name,
+            primary_email: c.primary_email,
+            primary_organization: c.primary_organization,
+            is_favorite: c.fields.is_favorite,
+            deleted_at: c.deleted_at,
+            links: c.links,
+        }
+    }
+}
+
 /// 連絡先の作成・更新入力（フロントから受け取る）。`id` が None なら新規作成。
 ///
 /// 配列・タグは**送ったもので置き換える**。画面が扱わない項目も、読み込んだ連絡先の値を

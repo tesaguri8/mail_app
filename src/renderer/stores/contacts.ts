@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ContactSummary } from '@bindings/ContactSummary';
+import type { ContactListItem } from '@bindings/ContactListItem';
 import { contactList } from '../services/contacts';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -13,7 +13,7 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
  */
 interface ContactsState {
   /** 既定の一覧。null はまだ一度も読んでいない。 */
-  items: ContactSummary[] | null;
+  items: ContactListItem[] | null;
   /** 一覧を取り直して差し替える。重なったときは最後に頼んだ分だけを反映する。 */
   refresh: () => Promise<void>;
   /** 取り直しを待たずに、手元の一覧から外す（削除の直後に消えて見えるように）。 */

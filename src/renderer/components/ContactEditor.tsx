@@ -24,6 +24,7 @@ import {
   UserRound,
 } from 'lucide-react';
 import type { ContactSummary } from '@bindings/ContactSummary';
+import type { ContactListItem } from '@bindings/ContactListItem';
 import type { ContactInput } from '@bindings/ContactInput';
 import type { ContactMatch } from '@bindings/ContactMatch';
 import type { ContactLink } from '@bindings/ContactLink';
@@ -74,7 +75,7 @@ export type ContactPrefill = { name?: string | null; email?: string | null };
 export type EditorRequest =
   | { kind: 'new' }
   | { kind: 'prefill'; prefill: ContactPrefill }
-  | { kind: 'existing'; id: number; seed?: ContactSummary };
+  | { kind: 'existing'; id: number; seed?: ContactListItem };
 
 /** 保存前に電話を E.164 正準形へ、郵便番号を整形し、空のまま追加した行を落とす。 */
 const normalizeForSave = (d: ContactInput): ContactInput => {
@@ -297,8 +298,7 @@ export function ContactEditor({
       openDraft(draftFromPrefill(request.prefill));
       return;
     }
-    // 既存: seed があれば即表示し、フル取得で上書きする。
-    if (request.seed) openDraft(toDraft(request.seed));
+    // 既存: フル取得して開く（一覧の seed はつながりだけ先に出す。項目は持っていない）。
     if (!isTauri) return;
     let alive = true;
     contactGet(request.id)

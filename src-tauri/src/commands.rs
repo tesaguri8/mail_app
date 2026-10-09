@@ -2638,6 +2638,7 @@ pub async fn google_sync(
     account_id: i64,
     contacts: bool,
 ) -> Result<GoogleSyncResult, String> {
+    log::info!("google_sync: account {account_id} contacts={contacts}");
     google_ensure_connected(store.inner(), account_id)?;
     let account = store
         .google_account(account_id)

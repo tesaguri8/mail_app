@@ -18,7 +18,7 @@ use crate::services::store::Store;
 /// 同期する範囲。
 #[derive(Debug, Clone, Copy)]
 pub struct SyncScope {
-    /// 連絡先も同期するか（自動同期は毎回ではなく間隔を空けるため、呼び出し側が決める）。
+    /// 連絡先も同期するか（同期をオンにしているアカウントでは、自動同期も毎回 true で呼ぶ）。
     pub contacts: bool,
 }
 

@@ -185,6 +185,11 @@ impl Store {
                 linked_contact_ids(&conn, account_id)?,
             )
         };
+        // 未照合が無ければ住所録を読まない（自動同期は毎回これを通るので、全員を中身まで読む
+        // 重い処理を空回りさせない）。
+        if remote.is_empty() {
+            return Ok((remote, Vec::new()));
+        }
         let locals = self.contacts_for_dedupe()?;
         let plan = contact_match::plan(&remote, &locals, &already_linked);
         Ok((remote, plan))

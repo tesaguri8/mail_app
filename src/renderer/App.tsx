@@ -94,12 +94,9 @@ export default function App() {
     if (view !== 'mail') refreshAccounts();
   }, [view, refreshAccounts]);
 
-  // 自動同期: ホーム/メール/カレンダーに入った時＋滞在中は設定間隔（既定30秒）で
-  // 全メールアカウント＋Google カレンダーを同期する。
-  const syncNow = useAutoSync(
-    view === 'home' || view === 'mail' || view === 'calendar',
-    accounts,
-  );
+  // 自動同期: 起動中はどの画面にいても設定間隔（既定30秒）で全メールアカウント＋Google
+  // （カレンダー・連絡先）を同期し、連絡先を変えたら即送る（利用者の判断 2026-10-09）。
+  const syncNow = useAutoSync(accounts);
 
   // カレンダーのリマインダー通知（アプリ起動中、期限が来たら OS 通知）。
   useReminders();

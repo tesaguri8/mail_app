@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { changed } from '../utils/localChange';
 import type { OrganizationSummary } from '@bindings/OrganizationSummary';
 import type { OrganizationInput } from '@bindings/OrganizationInput';
 import type { OrganizationDetail } from '@bindings/OrganizationDetail';
@@ -14,7 +15,7 @@ export const organizationList = (query?: string, includeDeleted = false) =>
 
 /** 論理削除した組織を復元。 */
 export const organizationRestore = (id: number) =>
-  invoke<void>('organization_restore', { id });
+  changed(invoke<void>('organization_restore', { id }));
 
 /** 単一の組織（組織カード）を取得。連絡先のラベル表示・カード編集ダイアログ用。 */
 export const organizationGet = (id: number) =>
@@ -27,10 +28,10 @@ export const organizationDetail = (id: number) =>
 /** 組織カード（名前・よみ・メモ・代表電話/FAX/代表メール/URL・所在地）を作成/編集。
  *  input.id 指定で更新、無ければ新規。 */
 export const organizationUpsert = (input: OrganizationInput) =>
-  invoke<OrganizationSummary>('organization_upsert', { input });
+  changed(invoke<OrganizationSummary>('organization_upsert', { input }));
 
 /** 組織を削除（所属している連絡先があるときはバックエンド側で拒否される）。 */
-export const organizationDelete = (id: number) => invoke<void>('organization_delete', { id });
+export const organizationDelete = (id: number) => changed(invoke<void>('organization_delete', { id }));
 
 /** 組織名の重複候補（正規化名で束ねたグループ）を取得。 */
 export const organizationFindDuplicates = () =>
@@ -38,7 +39,7 @@ export const organizationFindDuplicates = () =>
 
 /** 複数の組織を 1 件（keepId）に統一（name が統一名）。 */
 export const organizationMerge = (keepId: number, dropIds: number[], name: string) =>
-  invoke<OrganizationSummary>('organization_merge', { keepId, dropIds, name });
+  changed(invoke<OrganizationSummary>('organization_merge', { keepId, dropIds, name }));
 
 // ── 整理（docs/CONTACT_MODEL.md §4-1）。どれも候補を出すだけで、作る・つなぐは人が選ぶ。
 
@@ -48,7 +49,7 @@ export const organizationUnlinkedNames = () =>
 
 /** 会社名から組織カードを作り、同じ会社名（正規化後）の人を全員つなぐ。 */
 export const organizationCreateFromName = (name: string) =>
-  invoke<OrganizationSummary>('organization_create_from_name', { name });
+  changed(invoke<OrganizationSummary>('organization_create_from_name', { name }));
 
 /** 組織カードごとの「つながっていないが同じ組織らしい人」（理由つき）。 */
 export const organizationLinkSuggestions = () =>
@@ -56,7 +57,7 @@ export const organizationLinkSuggestions = () =>
 
 /** 選んだ人を組織カードにつなぐ。 */
 export const organizationLinkContacts = (orgId: number, contactIds: number[]) =>
-  invoke<OrganizationSummary>('organization_link_contacts', { orgId, contactIds });
+  changed(invoke<OrganizationSummary>('organization_link_contacts', { orgId, contactIds }));
 
 /** 「組織カードにする」の下見（次の同期で送り直しになる人数）。何も書き換えない。 */
 export const organizationCreateFromNameImpact = (name: string) =>

@@ -29,6 +29,10 @@ source: string,
  */
 account_email: string | null, 
 /**
+ * 連携アカウントの名前（設定のカードの呼び名。付けていなければアドレス）。見出しに使う。
+ */
+account_label: string | null, 
+/**
  * 連携アカウントが解除中（写しは残るが同期されない）。ローカルは false。
  */
 account_disconnected: boolean, 

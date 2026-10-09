@@ -247,6 +247,49 @@ mod tests {
         assert_eq!(mail_order, vec![a, b]);
     }
 
+    /// 連絡先の印とカレンダーの見出しは、カードの呼び名（無ければアドレス）で出る。
+    #[test]
+    fn links_and_calendars_carry_the_card_name() {
+        let s = Store::open_in_memory_for_test();
+        let g = s.upsert_google_account("a@gmail.com", None, None).unwrap();
+        let c = s
+            .upsert_contact(&crate::services::store::test_support::person("山田", &[]))
+            .unwrap();
+        {
+            let conn = s.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO contact_identities (provider, account_id, external_id, contact_id) \
+                 VALUES ('google', ?1, 'people/1', ?2)",
+                rusqlite::params![g, c.id],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO calendars (name, source, account_id) VALUES ('仕事', 'google', ?1)",
+                [g],
+            )
+            .unwrap();
+        }
+        let label = |s: &Store| {
+            let link = s.get_contact(i64::from(c.id)).unwrap().links[0]
+                .account_label
+                .clone();
+            let cal = s
+                .list_calendars()
+                .unwrap()
+                .into_iter()
+                .find(|x| x.source == "google")
+                .and_then(|x| x.account_label);
+            (link, cal)
+        };
+        let addr = Some("a@gmail.com".to_string());
+        assert_eq!(label(&s), (addr.clone(), addr));
+
+        let card = i64::from(s.list_account_profiles().unwrap()[0].id);
+        s.rename_account_profile(card, Some("個人")).unwrap();
+        let name = Some("個人".to_string());
+        assert_eq!(label(&s), (name.clone(), name));
+    }
+
     #[test]
     fn rename_trims_and_clears() {
         let s = Store::open_in_memory_for_test();

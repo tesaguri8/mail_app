@@ -1521,7 +1521,8 @@ function CalendarSidebar({
                   <div className="mb-0.5 flex items-center gap-1.5 px-1 text-xs font-medium text-white/55">
                     <GoogleGlyph size={12} />
                     <span className="truncate" title={email}>
-                      {email}
+                      {/* カードの呼び名（無ければアドレス）。docs/ACCOUNTS.md */}
+                      {cals[0]?.account_label ?? email}
                     </span>
                     {/* 解除中: 写しは残るが同期しない（設定の「再接続」で再開） */}
                     {cals[0]?.account_disconnected && (
@@ -2045,7 +2046,7 @@ export function EventEditor({
               ].map(([email, cals]) => (
                 <optgroup
                   key={email}
-                  label={`Google — ${email}${cals[0]?.account_disconnected ? ` (${t('cal.accountDisconnected')})` : ''}`}
+                  label={`Google — ${cals[0]?.account_label ?? email}${cals[0]?.account_disconnected ? ` (${t('cal.accountDisconnected')})` : ''}`}
                 >
                   {cals.map((c) => {
                     const ro = !isWritableCalendar(c);

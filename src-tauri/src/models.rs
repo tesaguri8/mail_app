@@ -271,6 +271,8 @@ pub struct CalendarSummary {
     pub source: String,
     /// Google 連携カレンダーの場合の連携アカウント（メール）。ローカルは None。
     pub account_email: Option<String>,
+    /// 連携アカウントの名前（設定のカードの呼び名。付けていなければアドレス）。見出しに使う。
+    pub account_label: Option<String>,
     /// 連携アカウントが解除中（写しは残るが同期されない）。ローカルは false。
     pub account_disconnected: bool,
     /// Google の権限。'owner' | 'writer' | 'reader' | 'freeBusyReader'。書き込み可否の表示に使う。

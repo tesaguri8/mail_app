@@ -15,6 +15,10 @@ account_id: number,
  */
 account_email: string | null, 
 /**
+ * 連携アカウントの名前（設定のカードの呼び名。付けていなければアドレス）。印の表示に使う。
+ */
+account_label: string | null, 
+/**
  * 連携アカウントが解除中（つながりは残るが同期されない。再接続すると戻る）。
  */
 disconnected: boolean, 

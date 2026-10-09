@@ -16,6 +16,7 @@ import { tagList } from '../services/tags';
 import type { TagSummary } from '@bindings/TagSummary';
 import { DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import { CONTACTS_SYNCED_EVENT } from '../hooks/useAutoSync';
+import { useVirtualRows } from '../hooks/useVirtualRows';
 import {
   CONTACT_SOURCE_FILTERS,
   ContactLinkMarks,
@@ -27,6 +28,9 @@ import {
 export type { ContactPrefill };
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+/** 一覧の 1 行の高さ（px）。仮想スクロールのため全行で揃える（アバター 32 ＋ 2 行の文字 ＋ 上下の余白）。 */
+const ROW_HEIGHT = 52;
 
 /**
  * 住所録（アドレス帳）。左に検索付き一覧、右に詳細・編集フォーム（ContactEditor）。
@@ -67,6 +71,8 @@ export function ContactsView({
   // 同期先での絞り込み（一覧が links を持つので画面側で絞る）。
   const [source, setSource] = useState<ContactSourceFilter>('all');
   const shownItems = items.filter((c) => matchesSource(c.links, source));
+  // 数千件を全部描くと重いので、見えている行だけ描く。
+  const rows = useVirtualRows<HTMLUListElement>(shownItems.length, ROW_HEIGHT);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -408,7 +414,7 @@ export function ContactsView({
             </button>
           ))}
         </div>
-        <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+        <ul ref={rows.ref} onScroll={rows.onScroll} className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
           {shownItems.length === 0 ? (
             <li className="px-2 py-6 text-center text-sm text-white/45">
               {showDeleted
@@ -418,63 +424,67 @@ export function ContactsView({
                   : t('contact.empty')}
             </li>
           ) : (
-            shownItems.map((c) =>
-              c.deleted_at ? (
-                // 削除済み（ゴミ箱）: 赤字＋残り日数＋復元。
-                <li key={c.id}>
-                  <div className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-500/15 text-xs font-semibold uppercase text-red-200">
-                      {c.display_name.trim().charAt(0) || <User size={15} />}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-red-200">
-                        {c.display_name || t('contact.untitled')}
+            <>
+              <li aria-hidden style={{ height: rows.padTop }} />
+              {shownItems.slice(rows.start, rows.end).map((c) =>
+                c.deleted_at ? (
+                  // 削除済み（ゴミ箱）: 赤字＋残り日数＋復元。
+                  <li key={c.id} style={{ height: ROW_HEIGHT }}>
+                    <div className="flex h-full w-full items-center gap-2.5 rounded-md px-2.5 py-2">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-500/15 text-xs font-semibold uppercase text-red-200">
+                        {c.display_name.trim().charAt(0) || <User size={15} />}
                       </span>
-                      <span className="block truncate text-xs text-red-300/70">
-                        {t('contact.trashDaysLeft', {
-                          count: trashDaysLeft(c.deleted_at, retention),
-                        })}
-                      </span>
-                    </span>
-                    <button
-                      onClick={() => restore(c.id)}
-                      title={t('contact.restore')}
-                      aria-label={t('contact.restore')}
-                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white"
-                    >
-                      <RotateCcw size={15} />
-                    </button>
-                  </div>
-                </li>
-              ) : (
-                <li key={c.id}>
-                  <button
-                    onClick={() => openContact(c)}
-                    className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left ${
-                      selectedId === c.id ? 'bg-white/20' : 'hover:bg-white/10'
-                    }`}
-                  >
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/15 text-xs font-semibold uppercase">
-                      {c.display_name.trim().charAt(0) || <User size={15} />}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-1 truncate text-sm font-medium">
-                        {c.is_favorite && (
-                          <Gem size={12} className="shrink-0 fill-sky-300/30 text-sky-300" />
-                        )}
-                        {c.display_name || t('contact.untitled')}
-                      </span>
-                      {(c.primary_organization || c.primary_email) && (
-                        <span className="block truncate text-xs text-white/45">
-                          {c.primary_organization || c.primary_email}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium text-red-200">
+                          {c.display_name || t('contact.untitled')}
                         </span>
-                      )}
-                    </span>
-                    <ContactLinkMarks links={c.links} />
-                  </button>
-                </li>
-              ),
-            )
+                        <span className="block truncate text-xs text-red-300/70">
+                          {t('contact.trashDaysLeft', {
+                            count: trashDaysLeft(c.deleted_at, retention),
+                          })}
+                        </span>
+                      </span>
+                      <button
+                        onClick={() => restore(c.id)}
+                        title={t('contact.restore')}
+                        aria-label={t('contact.restore')}
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white"
+                      >
+                        <RotateCcw size={15} />
+                      </button>
+                    </div>
+                  </li>
+                ) : (
+                  <li key={c.id} style={{ height: ROW_HEIGHT }}>
+                    <button
+                      onClick={() => openContact(c)}
+                      className={`flex h-full w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left ${
+                        selectedId === c.id ? 'bg-white/20' : 'hover:bg-white/10'
+                      }`}
+                    >
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/15 text-xs font-semibold uppercase">
+                        {c.display_name.trim().charAt(0) || <User size={15} />}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-1 truncate text-sm font-medium">
+                          {c.is_favorite && (
+                            <Gem size={12} className="shrink-0 fill-sky-300/30 text-sky-300" />
+                          )}
+                          {c.display_name || t('contact.untitled')}
+                        </span>
+                        {(c.primary_organization || c.primary_email) && (
+                          <span className="block truncate text-xs text-white/45">
+                            {c.primary_organization || c.primary_email}
+                          </span>
+                        )}
+                      </span>
+                      <ContactLinkMarks links={c.links} />
+                    </button>
+                  </li>
+                ),
+              )}
+              <li aria-hidden style={{ height: rows.padBottom }} />
+            </>
           )}
         </ul>
       </aside>

@@ -367,3 +367,18 @@ pub struct OrgChangeImpact {
     /// 会社名が変わる・会社が足されるため、次の同期でつながっているサービスへ送り直しになる人数。
     pub resent: i32,
 }
+
+/// 統合で Google 側から消すことになる連絡先の件数（アカウントごと）。統合の確認画面に出す。
+///
+/// 統合すると、同じ Google アカウントにつながった ID は 1 つだけ残し、余りは次の同期で
+/// Google 側から削除する（docs/CONTACTS_SYNC.md §3-5）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct MergeRemoteDeletion {
+    /// `google_accounts.id`。
+    pub account_id: i32,
+    /// アカウントの名前（設定のカードの呼び名。無ければアドレス）。
+    pub account_label: String,
+    /// 削除する件数（残す 1 件は含まない）。
+    pub count: i32,
+}

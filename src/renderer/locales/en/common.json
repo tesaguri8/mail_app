@@ -543,7 +543,16 @@
       "high": "Near-certain",
       "medium": "Likely",
       "low": "Review"
-    }
+    },
+    "googleDeleteLine": "Also delete {{count}} from Google Contacts and keep one ({{account}})",
+    "googleTrashNote": "Deletions are sent on the next sync. Contacts deleted in Google can be restored from the Google Contacts trash for 30 days.",
+    "googleMergeTitle": "Merge in Google Contacts too",
+    "googleMergeBody": "Some of these contacts are separate entries in the same Google account. Merging in Rondine keeps just one of them in Google and updates it with the merged details.",
+    "googleLeftover": "{{count}} duplicates remain in Google Contacts. Merge them?",
+    "googleLeftoverRun": "Merge",
+    "googleLeftoverTitle": "Merge duplicates in Google Contacts",
+    "googleLeftoverBody": "Contacts you merged earlier in Rondine are still separate entries in Google. Keep one of each and delete the rest in Google. Your Rondine contacts are not changed.",
+    "googleLeftoverDone": "{{count}} will be deleted from Google Contacts on the next sync."
   },
   "greeting": {
     "morning": "Good morning",

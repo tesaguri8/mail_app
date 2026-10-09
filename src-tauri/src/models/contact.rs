@@ -282,6 +282,25 @@ pub struct ContactSummary {
     pub links: Vec<ContactLink>,
 }
 
+/// vCard の版（連絡先の書き出し）。既定は 3.0（Google 連絡先・iPhone・Outlook が読める）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub enum VcardVersion {
+    #[default]
+    #[serde(rename = "3.0")]
+    V3,
+    #[serde(rename = "4.0")]
+    V4,
+}
+
+/// 連絡先の書き出し結果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ContactExportReport {
+    /// 書き出した人数。
+    pub exported: i32,
+}
+
 /// 郵便番号表から引いた住所 1 件（日本）。住所欄の自動入力に使う。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

@@ -2,6 +2,7 @@
 //! ドキュメント: https://developers.google.com/people/api/rest/v1/people.connections/list
 
 use serde::Deserialize;
+use std::collections::HashMap;
 
 /// API 呼び出しのエラー。増分同期トークンの失効は上位でフル同期に切り替える。
 #[derive(Debug, thiserror::Error)]
@@ -516,6 +517,125 @@ pub async fn batch_delete_contacts(
     check(resp).await?;
     Ok(())
 }
+
+/// `people:batchGet`・`people:batchUpdateContacts` で一度に扱える件数の上限（People API の仕様）。
+pub const BATCH_UPDATE_MAX: usize = 200;
+
+#[derive(Debug, Deserialize, Default)]
+struct BatchGetResponse {
+    #[serde(default)]
+    responses: Vec<BatchGetEntry>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct BatchGetEntry {
+    #[serde(rename = "requestedResourceName", default)]
+    requested_resource_name: Option<String>,
+    #[serde(default)]
+    person: Option<serde_json::Value>,
+}
+
+/// 連絡先をまとめて読む（`people:batchGet`。1 回 [`BATCH_UPDATE_MAX`] 件まで）。送る直前の読み直しを
+/// 1 件ずつではなくまとめて行う。resourceName → Person（JSON のまま。知らない項目も保つため）。
+/// 向こうに無い連絡先は結果に入らない。
+pub async fn batch_get_people(
+    client: &reqwest::Client,
+    token: &str,
+    resource_names: &[String],
+) -> Result<HashMap<String, serde_json::Value>, ApiError> {
+    if resource_names.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut query: Vec<(&str, &str)> = vec![("personFields", super::PERSON_FIELDS)];
+    query.extend(
+        resource_names
+            .iter()
+            .map(|rn| ("resourceNames", rn.as_str())),
+    );
+    let resp = client
+        .get(format!("{}/people:batchGet", super::API_BASE))
+        .bearer_auth(token)
+        .query(&query)
+        .send()
+        .await?;
+    let body: BatchGetResponse = check(resp).await?.json().await?;
+    Ok(body
+        .responses
+        .into_iter()
+        .filter_map(|e| Some((e.requested_resource_name?, e.person?)))
+        .collect())
+}
+
+/// まとめて更新した結果 1 件。
+#[derive(Debug)]
+pub enum BatchUpdateOutcome {
+    /// 更新できた（更新後の Person）。
+    Updated(Box<GPerson>),
+    /// etag が古い（Google 側が先に更新されている）。未送信のまま次回に持ち越す。
+    EtagConflict,
+    /// そのほかの失敗（理由）。
+    Failed(String),
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct BatchUpdateResponse {
+    #[serde(rename = "updateResult", default)]
+    update_result: HashMap<String, BatchUpdateEntry>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct BatchUpdateEntry {
+    #[serde(default)]
+    person: Option<GPerson>,
+    #[serde(default)]
+    status: Option<serde_json::Value>,
+}
+
+/// 連絡先をまとめて更新する（`people:batchUpdateContacts`。1 回 [`BATCH_UPDATE_MAX`] 件まで）。
+/// `bodies` は resourceName → 送る Person（読み直した版の etag を含める）。結果は 1 件ずつ返る
+/// （etag 不一致は [`BatchUpdateOutcome::EtagConflict`]）。全体が失敗したら Err（上限の 429 も）。
+pub async fn batch_update_contacts(
+    client: &reqwest::Client,
+    token: &str,
+    bodies: &HashMap<String, serde_json::Value>,
+) -> Result<HashMap<String, BatchUpdateOutcome>, ApiError> {
+    if bodies.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let resp = client
+        .post(format!("{}/people:batchUpdateContacts", super::API_BASE))
+        .bearer_auth(token)
+        .json(&serde_json::json!({
+            "contacts": bodies,
+            "updateMask": super::WRITE_PERSON_FIELDS,
+            "readMask": super::PERSON_FIELDS,
+        }))
+        .send()
+        .await?;
+    let body: BatchUpdateResponse = check(resp).await?.json().await?;
+    Ok(body
+        .update_result
+        .into_iter()
+        .map(|(rn, e)| {
+            let outcome = match (e.person, e.status) {
+                (Some(p), None) => BatchUpdateOutcome::Updated(Box::new(p)),
+                (_, Some(st)) => {
+                    let text = st.to_string();
+                    if text.contains("etag") || text.contains("FAILED_PRECONDITION") {
+                        BatchUpdateOutcome::EtagConflict
+                    } else {
+                        BatchUpdateOutcome::Failed(text.chars().take(300).collect())
+                    }
+                }
+                (None, None) => BatchUpdateOutcome::Failed("結果に Person がありません".into()),
+            };
+            (rn, outcome)
+        })
+        .collect())
+}
+
+/// `members:modify` で一度に送れる件数の上限（People API の仕様）。
+pub const MEMBERS_MODIFY_MAX: usize = 1000;
 
 /// 連絡先グループ（ラベル）を 1 つ作る（`contactGroups.create`）。
 pub async fn create_contact_group(

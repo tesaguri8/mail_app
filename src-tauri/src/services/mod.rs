@@ -17,6 +17,7 @@ pub mod imap_sync;
 pub mod media;
 pub mod name_norm;
 pub mod parser;
+pub mod postal;
 pub mod quotes;
 pub mod selfmark;
 pub mod smtp;

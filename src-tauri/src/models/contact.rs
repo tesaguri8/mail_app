@@ -282,6 +282,20 @@ pub struct ContactSummary {
     pub links: Vec<ContactLink>,
 }
 
+/// 郵便番号表から引いた住所 1 件（日本）。住所欄の自動入力に使う。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct PostalAddress {
+    /// 郵便番号（「NNN-NNNN」）。
+    pub postal: String,
+    /// 都道府県。
+    pub region: String,
+    /// 市区町村。
+    pub city: String,
+    /// 町域（市区町村の既定の番号なら空）。
+    pub town: String,
+}
+
 /// 連絡先一覧の 1 行（一覧に出す分だけ）。
 ///
 /// 一覧は数千件になるので、[`ContactSummary`] の全項目（ほとんど空）を IPC に載せると、

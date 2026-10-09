@@ -125,6 +125,8 @@ pub fn run() {
             commands::spam_settings_get,
             commands::spam_settings_set,
             commands::contact_list,
+            commands::postal_lookup_by_code,
+            commands::postal_lookup_by_address,
             commands::contact_get,
             commands::contact_lookup_email,
             commands::recipient_suggest,

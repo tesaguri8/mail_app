@@ -218,6 +218,10 @@ impl Store {
     /// 中身は和集合（[`union_merge`]）、フラグは OR。消える側のつながり（Google 等）とタグは
     /// 残す側へ寄せる — つながりを移さないと、次の同期で同じ人がもう一度新規として起こされる。
     ///
+    /// 寄せた結果、同じ Google アカウントの ID が複数になるときは 1 つだけ残し（残す側がもともと
+    /// 持っていたものを優先）、余りを削除待ちにする（次の同期で Google 側から削除する。
+    /// 解除中のアカウントは除く。`merge_remote`）。
+    ///
     /// # Errors
     /// DB の書き込みに失敗したとき（全体を巻き戻す）。
     pub fn merge_contacts(
@@ -227,6 +231,9 @@ impl Store {
     ) -> rusqlite::Result<ContactSummary> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
+        // 同じ Google アカウントの ID は 1 つだけ残し、余りは次の同期で Google 側から消す
+        // （寄せる前に、どれが残す側のものかを見て決める）。
+        merge_remote::mark_surplus(&tx, &merge_remote::load_links(&tx, keep_id, drop_ids)?)?;
         let keep = load_contact(&tx, keep_id)?;
         let drops = drop_ids
             .iter()
@@ -263,6 +270,8 @@ impl Store {
         load_contact(&conn, keep_id)
     }
 }
+
+mod merge_remote;
 
 #[cfg(test)]
 mod tests;

@@ -83,7 +83,7 @@ export function ContactExport({
         <Upload size={17} />
       </button>
       {open && (
-        <div className="absolute right-0 top-11 z-20 w-60 space-y-3 rounded-lg border border-white/15 bg-neutral-900/95 p-3 shadow-xl">
+        <div className="absolute left-0 top-11 z-20 w-60 space-y-3 rounded-lg border border-white/15 bg-neutral-900/95 p-3 shadow-xl">
           <div className="text-sm font-medium">{t('contact.export')}</div>
           <div className="space-y-1.5">
             <div className="text-[11px] text-white/50">{t('contact.exportScope')}</div>

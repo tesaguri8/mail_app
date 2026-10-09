@@ -6,7 +6,7 @@ use crate::models::{
     GoogleCredentialsStatus, GoogleService,
     GreenDomainEntry,
     HomeUnreadCounts, IcsImportReport, ImportReport, MailDetail,
-    MailSummary, OrgChangeImpact, OrgDuplicateGroup, OrgLinkSuggestion, OrganizationDetail, OrganizationInput, OrganizationSummary, PostalAddress,
+    MailSummary, MergeRemoteDeletion, OrgChangeImpact, OrgDuplicateGroup, OrgLinkSuggestion, OrganizationDetail, OrganizationInput, OrganizationSummary, PostalAddress,
     RebuildAction,
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSenderConflict, SpamSettings, SpamVerdict,
@@ -1924,7 +1924,36 @@ pub fn contact_find_matches(
         .map_err(|e| e.to_string())
 }
 
+/// 統合したら Google 側から消すことになる件数（アカウントごと）。読むだけ。統合の確認画面用。
+#[tauri::command]
+pub fn contact_merge_preview(
+    store: State<Store>,
+    keep_id: i64,
+    drop_ids: Vec<i64>,
+) -> Result<Vec<MergeRemoteDeletion>, String> {
+    store
+        .merge_remote_preview(keep_id, &drop_ids)
+        .map_err(|e| e.to_string())
+}
+
+/// 以前の統合で残った Google の重複（1 人に同じアカウントの ID が 2 つ以上）を、片付けたら
+/// 消すことになる件数（アカウントごと）。読むだけ。
+#[tauri::command]
+pub fn contact_google_duplicates(store: State<Store>) -> Result<Vec<MergeRemoteDeletion>, String> {
+    store.duplicate_remote_ids().map_err(|e| e.to_string())
+}
+
+/// 以前の統合で残った Google の重複を、統合と同じ規則で片付ける（余りを削除待ちにし、次の
+/// 同期で Google 側から削除する）。削除待ちにした件数を返す。
+#[tauri::command]
+pub fn contact_google_duplicates_tidy(store: State<Store>) -> Result<usize, String> {
+    store.tidy_duplicate_remote_ids().map_err(|e| e.to_string())
+}
+
 /// 複数の連絡先を 1 件（keep_id）に統合し、統合後の連絡先を返す。
+///
+/// 同じ Google アカウントの ID が複数になるときは 1 つ残し、余りは次の同期で Google 側から
+/// 削除する（画面は `contact_merge_preview` の件数で先に了承を取る）。
 #[tauri::command]
 pub fn contact_merge(
     store: State<Store>,

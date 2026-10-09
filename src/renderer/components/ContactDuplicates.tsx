@@ -23,12 +23,17 @@ import type { ContactSummary } from '@bindings/ContactSummary';
 import type { ContactInput } from '@bindings/ContactInput';
 import type { ContactValue } from '@bindings/ContactValue';
 import type { ContactAddress } from '@bindings/ContactAddress';
+import type { MergeRemoteDeletion } from '@bindings/MergeRemoteDeletion';
 import {
   contactGet,
   contactMerge,
+  contactMergePreview,
   contactUpsert,
   contactFindDuplicates,
 } from '../services/contacts';
+import { remoteDeletionNotes } from '../utils/mergeRemote';
+import { ConfirmDialog } from './ConfirmDialog';
+import { GoogleDuplicateNotice } from './GoogleDuplicateNotice';
 import {
   AddressRows,
   LabelDatalists,
@@ -77,6 +82,10 @@ export function ContactDuplicates({
   const [included, setIncluded] = useState<Set<number>>(new Set());
   const [draft, setDraft] = useState<ContactInput | null>(null); // 統合後の正本（編集可）
   const [busy, setBusy] = useState(false);
+  // 統合で Google 側から消すものがあるときの確認（null＝出していない）。
+  const [confirmRemote, setConfirmRemote] = useState<MergeRemoteDeletion[] | null>(null);
+  // 統合のたびに増やし、以前の重複の案内を数え直させる。
+  const [merges, setMerges] = useState(0);
 
   const load = () => {
     if (!isTauri) return;
@@ -154,16 +163,26 @@ export function ContactDuplicates({
   const nullify = (s: string) => (s.trim() === '' ? null : s);
 
   // [正本として保存]: 代表へ統合（追加メール等を保持）→ 編集内容で確定。
-  const saveMaster = async () => {
+  // 同じ Google アカウントの連絡先が複数まとまるときは、Google 側からも余りを消すので先に了承を取る。
+  const saveMaster = async (confirmed = false) => {
     if (!draft || !representative || busy || draft.display_name.trim() === '') return;
     const dropIds = includedMembers.map((c) => c.id).filter((id) => id !== representative.id);
     setBusy(true);
     try {
+      if (dropIds.length > 0 && !confirmed) {
+        const remote = await contactMergePreview(representative.id, dropIds);
+        if (remoteDeletionNotes(remote, t).length > 0) {
+          setConfirmRemote(remote);
+          return;
+        }
+      }
+      setConfirmRemote(null);
       if (dropIds.length > 0) {
         await contactMerge(representative.id, dropIds);
       }
       await contactUpsert({ ...draft, id: representative.id });
       dropCurrent();
+      setMerges((n) => n + 1);
       onMerged();
     } catch {
       /* noop */
@@ -208,6 +227,7 @@ export function ContactDuplicates({
                 ? t('dupes.none')
                 : t('dupes.summary', { groups: groups.length, extra: totalMergeable })}
           </div>
+          <GoogleDuplicateNotice reloadKey={merges} />
         </div>
 
         <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
@@ -314,7 +334,7 @@ export function ContactDuplicates({
                 長い編集フォームを下までスクロールしなくても実行できるようにするため。 */}
             <div className="mt-4 flex flex-wrap items-center gap-3">
               <button
-                onClick={saveMaster}
+                onClick={() => void saveMaster()}
                 disabled={busy || !draft || draft.display_name.trim() === ''}
                 className="flex items-center gap-1.5 rounded-md bg-emerald-500/80 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
               >
@@ -461,6 +481,18 @@ export function ContactDuplicates({
           </div>
         )}
       </section>
+      {confirmRemote && (
+        <ConfirmDialog
+          title={t('dupes.googleMergeTitle')}
+          body={t('dupes.googleMergeBody')}
+          notes={remoteDeletionNotes(confirmRemote, t)}
+          confirmLabel={t('dupes.saveMaster')}
+          danger
+          busy={busy}
+          onConfirm={() => void saveMaster(true)}
+          onCancel={() => setConfirmRemote(null)}
+        />
+      )}
     </div>
   );
 }

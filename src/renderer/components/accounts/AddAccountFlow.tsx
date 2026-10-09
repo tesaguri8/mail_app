@@ -34,12 +34,15 @@ export function AddAccountFlow({
   servers,
   creds,
   onChanged,
+  onCreated,
   onClose,
 }: {
   profiles: AccountProfile[];
   servers: ServerAccountSummary[];
   creds: GoogleCredentialsStatus | null;
   onChanged: () => void;
+  /** カードができた（または中身が入った）アドレス。一覧ではそのカードを開く。 */
+  onCreated: (email: string) => void;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -83,6 +86,7 @@ export function AddAccountFlow({
     setError('');
     try {
       const a = await googleConnect(services.calendar, services.contacts, email);
+      onCreated(a.email);
       onChanged();
       const lines = [t('account.addGoogleDone', { email: a.email })];
       if (!sameAddress(a.email, email))
@@ -210,6 +214,7 @@ export function AddAccountFlow({
           provider={provider}
           servers={servers}
           onAdded={(a) => {
+            onCreated(a.email);
             onChanged();
             // 最初の同期（バックグラウンド。進捗は共通の表示）。
             sync.start(a.id, a.email, 'sync');

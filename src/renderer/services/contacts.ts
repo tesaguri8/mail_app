@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import type { MergeRemoteDeletion } from '@bindings/MergeRemoteDeletion';
 import type { ContactSummary } from '@bindings/ContactSummary';
 import type { ContactListItem } from '@bindings/ContactListItem';
 import type { ContactInput } from '@bindings/ContactInput';
@@ -51,7 +52,18 @@ export const contactFindMatches = (
     excludeId,
   });
 
-/** 複数連絡先を 1 件（keepId）に統合。 */
+/** 統合したら Google 側から消すことになる件数（アカウントごと）。読むだけ（確認画面用）。 */
+export const contactMergePreview = (keepId: number, dropIds: number[]) =>
+  invoke<MergeRemoteDeletion[]>('contact_merge_preview', { keepId, dropIds });
+
+/** 以前の統合で残った Google の重複（1 人に同じアカウントの ID が 2 つ以上）の件数。読むだけ。 */
+export const contactGoogleDuplicates = () =>
+  invoke<MergeRemoteDeletion[]>('contact_google_duplicates');
+
+/** 以前の統合で残った Google の重複を、統合と同じ規則で片付ける（次の同期で Google 側から削除）。 */
+export const contactGoogleDuplicatesTidy = () => invoke<number>('contact_google_duplicates_tidy');
+
+/** 複数連絡先を 1 件（keepId）に統合。同じ Google アカウントの ID は 1 つ残し、余りは次の同期で削除。 */
 export const contactMerge = (keepId: number, dropIds: number[]) =>
   invoke<ContactSummary>('contact_merge', { keepId, dropIds });
 

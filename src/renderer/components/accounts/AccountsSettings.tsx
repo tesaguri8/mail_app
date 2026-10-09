@@ -28,14 +28,11 @@ import { type ConnState, isTauri, sameAddress } from './shared';
 export function AccountsSettings({
   accounts,
   onChanged,
-  openProfileId,
 }: {
   /** メールアカウント（アプリ全体で持っている一覧。件数などの更新で新しい配列になる）。 */
   accounts: AccountSummary[];
   /** メールアカウントが変わったとき（アプリ全体の一覧を読み直す）。 */
   onChanged: () => void;
-  /** 最初から開いておくカード（他の画面から特定のアカウントを指して来たとき）。省けば全部閉じる。 */
-  openProfileId?: number;
 }) {
   const { t } = useTranslation();
   const [profiles, setProfiles] = useState<AccountProfile[]>([]);
@@ -45,9 +42,8 @@ export function AccountsSettings({
   const [creds, setCreds] = useState<GoogleCredentialsStatus | null>(null);
   const [adding, setAdding] = useState(false);
   const [conn, setConn] = useState<Record<number, ConnState>>({});
-  // 開いているカード（同時に 1 枚だけ。null＝全部閉じる）。
-  const [openId, setOpenId] = useState<number | null>(openProfileId ?? null);
-  useEffect(() => setOpenId(openProfileId ?? null), [openProfileId]);
+  // 開いているカード（同時に 1 枚だけ。最初は全部閉じる＝null）。
+  const [openId, setOpenId] = useState<number | null>(null);
   // 追加の流れで作ったカードのアドレス。一覧に現れたら、そのカードを開く。
   const [created, setCreated] = useState<string | null>(null);
   useEffect(() => {

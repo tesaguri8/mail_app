@@ -34,4 +34,8 @@ conflicts: number,
 /**
  * 未照合の件数（「住所録へ反映」の対象数）。
  */
-unlinked: number, };
+unlinked: number, 
+/**
+ * 1 回の同期で送る上限・Google の上限（429）で送り切れず、次の同期へ回した件数。
+ */
+deferred: number, };

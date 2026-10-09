@@ -675,7 +675,8 @@
       "contactsCreated": "新規 {{count}} 人",
       "contactsLinked": "既存につないだ {{count}} 人",
       "contactsAmbiguous": "重複整理の候補 {{count}} 人",
-      "contactsConflicts": "Google 側が先に更新されていて送れなかった {{count}} 件（次回に送ります）"
+      "contactsConflicts": "Google 側が先に更新されていて送れなかった {{count}} 件（次回に送ります）",
+      "contactsDeferred": "送り切れなかった {{count}} 件（次の同期で送ります）"
     }
   },
   "dataloc": {

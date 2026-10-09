@@ -41,6 +41,7 @@ export function summarizeGoogleSync(r: GoogleSyncResult, t: Translate): string {
       ['contactsLinked', m?.linked ?? 0],
       ['contactsAmbiguous', m?.ambiguous ?? 0],
       ['contactsConflicts', c.conflicts],
+      ['contactsDeferred', c.deferred],
     ]);
     sections.push(
       t('settings.syncSection.contacts', {

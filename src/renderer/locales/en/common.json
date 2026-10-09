@@ -675,7 +675,8 @@
       "contactsCreated": "{{count}} new",
       "contactsLinked": "{{count}} linked to existing",
       "contactsAmbiguous": "{{count}} to review in Duplicates",
-      "contactsConflicts": "{{count}} not sent because Google changed first (will retry)"
+      "contactsConflicts": "{{count}} not sent because Google changed first (will retry)",
+      "contactsDeferred": "{{count}} not sent yet (sent on the next sync)"
     }
   },
   "dataloc": {

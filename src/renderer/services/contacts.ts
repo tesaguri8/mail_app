@@ -7,6 +7,8 @@ import type { ContactSummary } from '@bindings/ContactSummary';
 import type { ContactListItem } from '@bindings/ContactListItem';
 import type { ContactInput } from '@bindings/ContactInput';
 import type { ImportReport } from '@bindings/ImportReport';
+import type { ContactExportReport } from '@bindings/ContactExportReport';
+import type { VcardVersion } from '@bindings/VcardVersion';
 import type { DuplicateGroup } from '@bindings/DuplicateGroup';
 import type { ContactMatch } from '@bindings/ContactMatch';
 
@@ -33,6 +35,10 @@ export const contactDelete = (id: number) => changed(invoke<void>('contact_delet
 
 /** 論理削除した連絡先を復元。 */
 export const contactRestore = (id: number) => changed(invoke<void>('contact_restore', { id }));
+
+/** 連絡先を vCard ファイルに書き出す（ids が null ならゴミ箱を除く全員）。 */
+export const contactExport = (path: string, ids: number[] | null, version: VcardVersion) =>
+  invoke<ContactExportReport>('contact_export', { path, ids, version });
 
 /** 連絡先ファイルをインポート（.vcf = vCard / .csv = Google CSV）。 */
 export const contactImport = (path: string) => changed(invoke<ImportReport>('contact_import', { path }));

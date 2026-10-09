@@ -1,12 +1,12 @@
 use crate::models::{
     AccountInput, AccountProfile, AccountProvider, AccountSummary, AppInfo, AttachmentMeta, AttachmentSummary, AutoconfigResult,
-    AttendeeInput, CalendarInput, CalendarSummary, ContactInput, ContactListItem, ContactMatch,
+    AttendeeInput, CalendarInput, CalendarSummary, ContactExportReport, ContactInput, ContactListItem, ContactMatch,
     ContactSummary, DataLocation, DbInfo, DraftContent, DraftInput, DuplicateGroup, EventAttendee,
     EventInput, EventSummary, GoogleAccount, GoogleDisconnectResult, GoogleSyncResult,
     GoogleCredentialsStatus, GoogleService,
     GreenDomainEntry,
     HomeUnreadCounts, IcsImportReport, ImportReport, MailDetail,
-    MailSummary, MergeRemoteDeletion, OrgChangeImpact, OrgDuplicateGroup, OrgLinkSuggestion, OrganizationDetail, OrganizationInput, OrganizationSummary, PostalAddress,
+    MailSummary, MergeRemoteDeletion, OrgChangeImpact, OrgDuplicateGroup, OrgLinkSuggestion, OrganizationDetail, OrganizationInput, OrganizationSummary, PostalAddress, VcardVersion,
     RebuildAction,
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSenderConflict, SpamSettings, SpamVerdict,
@@ -14,6 +14,7 @@ use crate::models::{
     SyncResult, TagSummary, ThreadListItem, ThreadView, UnlinkedOrgName,
 };
 use crate::services::autoconfig;
+use crate::services::contact_export;
 use crate::services::datadir;
 use crate::services::dataver;
 use crate::services::gcsv;
@@ -1901,6 +1902,33 @@ pub fn contact_import(store: State<Store>, path: String) -> Result<ImportReport,
         vcard::parse(&text)
     };
     store.import_contacts(&parsed).map_err(|e| e.to_string())
+}
+
+/// 連絡先を vCard ファイルに書き出す（`ids` が None ならゴミ箱を除く全員）。
+/// 数千件を組み立てるので、画面を止めないよう spawn_blocking に載せる。
+#[tauri::command]
+pub async fn contact_export(
+    app: AppHandle,
+    path: String,
+    ids: Option<Vec<i64>>,
+    version: VcardVersion,
+) -> Result<ContactExportReport, String> {
+    // PRODID は製品名（tauri.conf.json の productName。config/app-identity.json から生成）。
+    let product = app.config().product_name.clone().unwrap_or_default();
+    let prodid = format!("-//Tesaguri//{product}//JA");
+    tauri::async_runtime::spawn_blocking(move || {
+        contact_export::export_vcard(
+            &app.state::<Store>(),
+            std::path::Path::new(&path),
+            ids.as_deref(),
+            version,
+            &prodid,
+        )
+        .map(|n| ContactExportReport { exported: n as i32 })
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 重複候補（同一の正規化表示名でまとめたグループ）を返す。整理 UI 用。

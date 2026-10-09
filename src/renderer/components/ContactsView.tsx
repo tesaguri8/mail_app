@@ -16,6 +16,7 @@ import {
 import { trashRetentionGet } from '../services/trash';
 import { trashDaysLeft } from '../utils/trash';
 import { ContactDuplicates } from './ContactDuplicates';
+import { ContactExport, type ExportOutcome } from './ContactExport';
 import { DupModeToggle, OrgDuplicates } from './OrgDuplicates';
 import { ContactEditor, type EditorRequest, type ContactPrefill } from './ContactEditor';
 import { TagFilter } from './TagFilter';
@@ -77,6 +78,8 @@ export function ContactsView({
   const [importing, setImporting] = useState(false);
   const [report, setReport] = useState<ImportReport | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  // 書き出した人数（一覧の上に出す）。
+  const [exported, setExported] = useState<number | null>(null);
   const [cleanup, setCleanup] = useState(false);
   // 重複整理のモード（連絡先の重複／組織名の統一）。
   const [dupMode, setDupMode] = useState<'contacts' | 'orgs'>('contacts');
@@ -99,6 +102,18 @@ export function ContactsView({
   const shownItems = items.filter((c) =>
     source === 'googleDup' ? googleDupIds.has(c.id) : matchesSource(c.links, source)
   );
+  // 「いまの一覧」を書き出せるのは、検索・タグ・同期先で絞り込んでいるときだけ（ゴミ箱は書き出さない）。
+  const exportIds =
+    !showDeleted && (!isDefaultView || source !== 'all') ? shownItems.map((c) => c.id) : null;
+  const onExported = (o: ExportOutcome) => {
+    if (o.ok) {
+      setImportError(null);
+      setExported(o.exported);
+    } else {
+      setExported(null);
+      setImportError(t('contact.exportFailed', { error: o.error }));
+    }
+  };
   // 数千件を全部描くと重いので、見えている行だけ描く。
   const rows = useVirtualRows<HTMLUListElement>(shownItems.length, ROW_HEIGHT);
 
@@ -378,6 +393,7 @@ export function ContactsView({
             >
               <Download size={17} />
             </button>
+            <ContactExport filteredIds={exportIds} onDone={onExported} />
             <button
               onClick={startNew}
               title={t('contact.new')}
@@ -396,6 +412,15 @@ export function ContactsView({
               onClick={() => setImportError(null)}
               className="shrink-0 text-red-200/60 hover:text-white"
             >
+              ×
+            </button>
+          </div>
+        )}
+
+        {exported !== null && (
+          <div className="mx-3 mb-2 flex items-center justify-between gap-2 rounded-md bg-white/10 px-3 py-2 text-xs text-white/70">
+            <span>{t('contact.exportResult', { count: exported })}</span>
+            <button onClick={() => setExported(null)} className="shrink-0 text-white/40 hover:text-white/80">
               ×
             </button>
           </div>

@@ -4,7 +4,7 @@
 //! 使う操作（一覧・取得・保存・削除・取り込み）をまとめる。重複整理は `contact_dedupe`、
 //! 組織カードは `organizations` / `org_tidy`、Google との同期は `contact_sync`。
 
-use super::contact_rows::{load_contact, query_summaries, SUMMARY_ORDER};
+use super::contact_rows::{load_all_full, load_contact, query_summaries, SUMMARY_ORDER};
 use super::contact_tags::{add_tags, set_tags};
 use super::contact_write::{mark_dirty, write_contact, OrgLinking, WriteOptions};
 use super::Store;
@@ -134,6 +134,27 @@ impl Store {
             .list_contacts(query, groups, include_deleted)?
             .into_iter()
             .map(ContactListItem::from)
+            .collect())
+    }
+
+    /// 書き出す連絡先の中身（子テーブル・タグまで）。ゴミ箱は含めない。
+    ///
+    /// `ids` が Some ならその人だけ（一覧で絞り込んでいる分）、None なら全員。並びは一覧と同じ。
+    /// 参照専用の接続で読むので、同期の書き込みに待たされない。
+    ///
+    /// # Errors
+    /// DB の読み出しに失敗したとき。
+    pub fn contacts_for_export(&self, ids: Option<&[i64]>) -> rusqlite::Result<Vec<ContactFields>> {
+        let all = {
+            let conn = self.read_conn.lock().unwrap();
+            load_all_full(&conn)?
+        };
+        let wanted: Option<std::collections::HashSet<i64>> =
+            ids.map(|ids| ids.iter().copied().collect());
+        Ok(all
+            .into_iter()
+            .filter(|c| wanted.as_ref().map_or(true, |w| w.contains(&(c.id as i64))))
+            .map(|c| c.fields)
             .collect())
     }
 

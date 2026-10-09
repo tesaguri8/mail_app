@@ -389,3 +389,22 @@ fn relocate_moves_db_and_updates_path() {
     drop(s);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn export_takes_everyone_or_the_given_ids_without_trash() {
+    let s = store();
+    s.upsert_contact(&person("書出 一郎", &[])).unwrap();
+    let b = s.upsert_contact(&person("書出 二郎", &[])).unwrap();
+    let gone = s.upsert_contact(&person("書出 削除", &[])).unwrap();
+    s.delete_contact(gone.id as i64).unwrap();
+
+    let names = |v: Vec<ContactFields>| v.into_iter().map(|c| c.display_name).collect::<Vec<_>>();
+    let all = names(s.contacts_for_export(None).unwrap());
+    assert_eq!(all.len(), 2, "ゴミ箱は書き出さない: {all:?}");
+    let only_b = names(
+        s.contacts_for_export(Some(&[b.id as i64, gone.id as i64]))
+            .unwrap(),
+    );
+    assert_eq!(only_b, vec!["書出 二郎".to_string()]);
+    assert!(s.contacts_for_export(Some(&[])).unwrap().is_empty());
+}

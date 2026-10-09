@@ -15,6 +15,7 @@
 use crate::models::{ContactAddress, ContactFields, ContactSummary};
 use crate::services::contact_fields::{address_line, same_address};
 use crate::services::dedupe::{digits, fold, fold_remove_ws};
+use crate::services::distinct::DistinctPairs;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// まとめて統合する 1 組。`keep` に残し、`drops` を消す（既存の統合と同じ）。
@@ -118,7 +119,8 @@ fn info_count(c: &ContactSummary) -> usize {
 
 /// 確実な重複の組を返す（2 件以上の組だけ）。残す 1 件は既存の統合と同じく、情報量の多いもの、
 /// 同じなら先に並んでいるもの（表示名は組の中で同じなので「最多一致」は効かない）。
-pub fn sure_groups(contacts: &[ContactSummary]) -> Vec<SureGroup> {
+/// 利用者が「別人」と記録した対（`distinct`）は同じ組にしない（組を分け直す）。
+pub fn sure_groups(contacts: &[ContactSummary], distinct: &DistinctPairs) -> Vec<SureGroup> {
     let mut by_key: BTreeMap<Key, Vec<&ContactSummary>> = BTreeMap::new();
     contacts
         .iter()
@@ -130,7 +132,9 @@ pub fn sure_groups(contacts: &[ContactSummary]) -> Vec<SureGroup> {
         });
     let mut groups: Vec<SureGroup> = by_key
         .into_values()
-        .filter(|m| m.len() > 1 && !conflicts(m))
+        .filter(|m| m.len() > 1)
+        .flat_map(|m| distinct.split(m, |c| i64::from(c.id)))
+        .filter(|m| !conflicts(m))
         .map(|members| {
             // max_by_key は同点で後ろを返すので、先に並んだものを残すよう逆順から探す。
             let keep = members
@@ -185,7 +189,7 @@ mod tests {
             contact(3, "末松信吾", &["s@x.jp"], &["(090) 1111 2222"]),
         ];
         assert_eq!(
-            sure_groups(&cs),
+            sure_groups(&cs, &DistinctPairs::default()),
             vec![SureGroup {
                 keep: 1,
                 drops: vec![2, 3]
@@ -202,7 +206,7 @@ mod tests {
             // 片方にだけメールが多い（集合が違う）。
             contact(4, "山田", &["a@x.jp", "c@x.jp"], &["0311112222"]),
         ];
-        assert!(sure_groups(&cs).is_empty());
+        assert!(sure_groups(&cs, &DistinctPairs::default()).is_empty());
     }
 
     #[test]
@@ -214,7 +218,7 @@ mod tests {
             contact(3, "佐藤", &[], &[]),
             contact(4, "佐藤", &[], &[]),
         ];
-        assert!(sure_groups(&cs).is_empty());
+        assert!(sure_groups(&cs, &DistinctPairs::default()).is_empty());
     }
 
     #[test]
@@ -224,13 +228,16 @@ mod tests {
         a.fields.birthday = Some("1980-01-01".into());
         b.fields.birthday = Some("1981-01-01".into());
         assert!(
-            sure_groups(&[a.clone(), b.clone()]).is_empty(),
+            sure_groups(&[a.clone(), b.clone()], &DistinctPairs::default()).is_empty(),
             "誕生日が違う"
         );
 
         // 片方だけが持っている値は食い違いではない（和集合で埋まる）。
         b.fields.birthday = None;
-        assert_eq!(sure_groups(&[a.clone(), b.clone()]).len(), 1);
+        assert_eq!(
+            sure_groups(&[a.clone(), b.clone()], &DistinctPairs::default()).len(),
+            1
+        );
 
         let addr = |city: &str| ContactAddress {
             city: Some(city.into()),
@@ -239,12 +246,12 @@ mod tests {
         a.fields.addresses = vec![addr("那覇市")];
         b.fields.addresses = vec![addr("名護市")];
         assert!(
-            sure_groups(&[a.clone(), b.clone()]).is_empty(),
+            sure_groups(&[a.clone(), b.clone()], &DistinctPairs::default()).is_empty(),
             "住所が違う"
         );
         b.fields.addresses = vec![addr("那覇市")];
         assert_eq!(
-            sure_groups(&[a.clone(), b.clone()]).len(),
+            sure_groups(&[a.clone(), b.clone()], &DistinctPairs::default()).len(),
             1,
             "住所が同じならまとめる"
         );
@@ -260,25 +267,39 @@ mod tests {
             street: Some("沖縄県名護市大南二丁目1番1号".into()),
             ..Default::default()
         }];
-        assert_eq!(sure_groups(&[a.clone(), b.clone()]).len(), 1, "書き方違い");
+        assert_eq!(
+            sure_groups(&[a.clone(), b.clone()], &DistinctPairs::default()).len(),
+            1,
+            "書き方違い"
+        );
         // 都道府県・市区町村だけの住所は詳しい住所と同じとはみなさない（食い違いとして除く）。
         b.fields.addresses = vec![ContactAddress {
             region: Some("沖縄県".into()),
             ..Default::default()
         }];
-        assert!(sure_groups(&[a.clone(), b.clone()]).is_empty(), "県だけ");
+        assert!(
+            sure_groups(&[a.clone(), b.clone()], &DistinctPairs::default()).is_empty(),
+            "県だけ"
+        );
         // 欄が空の住所は持っていないのと同じ。
         b.fields.addresses = vec![ContactAddress {
             label: Some("自宅".into()),
             ..Default::default()
         }];
-        assert_eq!(sure_groups(&[a.clone(), b.clone()]).len(), 1, "空の住所");
+        assert_eq!(
+            sure_groups(&[a.clone(), b.clone()], &DistinctPairs::default()).len(),
+            1,
+            "空の住所"
+        );
         // 番地が違えば別の住所。
         b.fields.addresses = vec![ContactAddress {
             street: Some("沖縄県名護市大南二丁目2番1号".into()),
             ..Default::default()
         }];
-        assert!(sure_groups(&[a, b]).is_empty(), "番地が違う");
+        assert!(
+            sure_groups(&[a, b], &DistinctPairs::default()).is_empty(),
+            "番地が違う"
+        );
     }
 
     #[test]
@@ -287,14 +308,25 @@ mod tests {
         let mut b = contact(6, "高橋", &["t@x.jp"], &[]);
         b.fields.note = Some("メモ".into());
         let c = contact(7, "高橋", &["t@x.jp"], &[]);
-        assert_eq!(sure_groups(&[a.clone(), b, c.clone()])[0].keep, 6);
-        assert_eq!(sure_groups(&[a, c])[0].keep, 5, "同じなら先に並んだもの");
+        assert_eq!(
+            sure_groups(&[a.clone(), b, c.clone()], &DistinctPairs::default())[0].keep,
+            6
+        );
+        assert_eq!(
+            sure_groups(&[a, c], &DistinctPairs::default())[0].keep,
+            5,
+            "同じなら先に並んだもの"
+        );
     }
 
     #[test]
     fn deleted_contacts_are_ignored() {
         let mut b = contact(2, "伊藤", &["i@x.jp"], &[]);
         b.deleted_at = Some("2026-10-01".into());
-        assert!(sure_groups(&[contact(1, "伊藤", &["i@x.jp"], &[]), b]).is_empty());
+        assert!(sure_groups(
+            &[contact(1, "伊藤", &["i@x.jp"], &[]), b],
+            &DistinctPairs::default()
+        )
+        .is_empty());
     }
 }

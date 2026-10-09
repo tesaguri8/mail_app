@@ -9,6 +9,7 @@ import type { ContactInput } from '@bindings/ContactInput';
 import type { ImportReport } from '@bindings/ImportReport';
 import type { DuplicateGroup } from '@bindings/DuplicateGroup';
 import type { ContactMatch } from '@bindings/ContactMatch';
+import type { DistinctPair } from '@bindings/DistinctPair';
 
 // Tauri v2 は camelCase の引数キーを snake_case の Rust 引数へ自動変換する。
 /** 連絡先一覧（一覧に出す分だけの軽い形）。開いたら contactGet で全項目を取る。 */
@@ -86,8 +87,22 @@ export const contactSureMergePreview = () =>
 export const contactSureMerge = () => changed(invoke<SureMergeResult>('contact_sure_merge'));
 
 /** 複数連絡先を 1 件（keepId）に統合。同じ Google アカウントの ID は 1 つ残し、余りは次の同期で削除。 */
-export const contactMerge = (keepId: number, dropIds: number[]) =>
-  changed(invoke<ContactSummary>('contact_merge', { keepId, dropIds }));
+/** 統合する。`distinctIds` は組にいたがチェックを外した人で、統合後の 1 人と「別人」として
+ *  記録する（次から同じ組に出さない）。 */
+export const contactMerge = (keepId: number, dropIds: number[], distinctIds: number[] = []) =>
+  changed(invoke<ContactSummary>('contact_merge', { keepId, dropIds, distinctIds }));
+
+/** 組の人どうしを「別人」として記録する（重複の整理の「別人（統合しない）」）。連絡先の中身は
+ *  変えないので同期の合図は出さない。 */
+export const contactMarkDistinct = (ids: number[]) =>
+  invoke<number>('contact_mark_distinct', { ids });
+
+/** 「別人」として記録した対の一覧（取り消しの入口用）。 */
+export const contactDistinctPairs = () => invoke<DistinctPair[]>('contact_distinct_pairs');
+
+/** 「別人」の記録を取り消す（次からまた同じ組に出る）。 */
+export const contactUnmarkDistinct = (a: number, b: number) =>
+  invoke<number>('contact_unmark_distinct', { a, b });
 
 /** 連絡先の同期先に Google アカウントを加える（作成待ちを置き、次の同期で作る）。 */
 export const contactSyncTargetAdd = (contactId: number, accountId: number) =>

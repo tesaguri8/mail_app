@@ -21,7 +21,8 @@ pub(super) const SUMMARY_COLS: &str = "c.id, c.display_name, c.name_prefix, c.fa
      (SELECT value FROM contact_emails WHERE contact_id = c.id ORDER BY position, id LIMIT 1), \
      (SELECT value FROM contact_phones WHERE contact_id = c.id ORDER BY position, id LIMIT 1), \
      (SELECT name FROM contact_organizations WHERE contact_id = c.id \
-      ORDER BY position, id LIMIT 1)";
+      ORDER BY position, id LIMIT 1), \
+     c.uid";
 
 /// 一覧の並び（お気に入り → よみ → 表示名）。
 pub(super) const SUMMARY_ORDER: &str =
@@ -58,6 +59,8 @@ fn summary_from_row(r: &Row) -> rusqlite::Result<ContactSummary> {
         primary_email: r.get(21)?,
         primary_phone: r.get(22)?,
         primary_organization: r.get(23)?,
+        // 0064 のトリガーで必ず振られる（空になるのは振る前の行を読んだときだけ）。
+        uid: r.get::<_, Option<String>>(24)?.unwrap_or_default(),
         links: Vec::new(),
     })
 }

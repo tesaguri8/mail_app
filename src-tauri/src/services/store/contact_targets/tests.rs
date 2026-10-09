@@ -131,7 +131,7 @@ fn merging_carries_requests_and_drops_redundant_ones() {
         .unwrap();
     s.request_contact_create(drop, a).unwrap();
     s.request_contact_create(drop, b).unwrap();
-    s.merge_contacts(keep, &[drop]).unwrap();
+    s.merge_contacts(keep, &[drop], &[]).unwrap();
     // a は既につながっているので作らない。b の作成待ちは残す側へ寄る。
     let links = s.get_contact(keep).unwrap().links;
     let states: Vec<(i32, ContactLinkState)> =

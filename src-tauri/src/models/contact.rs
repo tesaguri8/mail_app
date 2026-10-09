@@ -264,6 +264,10 @@ pub struct ContactFields {
 #[ts(export, export_to = "../../src/bindings/")]
 pub struct ContactSummary {
     pub id: i32,
+    /// 端末をまたいで同じ人を指す ID（UUID v4・小文字ハイフン区切り）。行の `id` は DB の中だけの
+    /// 番号で、入れ直しや書き出し/取り込みで変わる。統合では残る側の uid を使う（マイグレーション
+    /// 0064・docs/CONTACT_MODEL.md §1-1）。
+    pub uid: String,
     #[serde(flatten)]
     pub fields: ContactFields,
     /// 並び替え用（よみ優先。保存時に組み立てる）。
@@ -280,6 +284,16 @@ pub struct ContactSummary {
     pub primary_organization: Option<String>,
     /// つながっているサービス（無ければ Rondine のみ）。一覧でも充填する。
     pub links: Vec<ContactLink>,
+}
+
+/// 「別人」として記録した 2 人（重複の整理で同じ組にしない。取り消しの入口用）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct DistinctPair {
+    pub a_id: i32,
+    pub a_name: String,
+    pub b_id: i32,
+    pub b_name: String,
 }
 
 /// 郵便番号表から引いた住所 1 件（日本）。住所欄の自動入力に使う。

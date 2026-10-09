@@ -7,10 +7,12 @@
 
 use crate::models::{ContactFields, ContactSummary, DuplicateGroup};
 use crate::services::contact_fields::{address_line, phonetic_name};
+use crate::services::distinct::DistinctPairs;
 use std::collections::HashMap;
 
-/// 連絡先群を重複候補グループに束ねる（2件以上のみ、確信度順）。
-pub fn group(contacts: &[ContactSummary]) -> Vec<DuplicateGroup> {
+/// 連絡先群を重複候補グループに束ねる（2件以上のみ、確信度順）。利用者が「別人」と記録した
+/// 対（`distinct`）は比べずにつながず、なお同じ組に入ったら組を分け直す。
+pub fn group(contacts: &[ContactSummary], distinct: &DistinctPairs) -> Vec<DuplicateGroup> {
     let recs: Vec<Rec> = contacts
         .iter()
         .map(|c| Rec::from_fields(&c.fields))
@@ -58,7 +60,11 @@ pub fn group(contacts: &[ContactSummary]) -> Vec<DuplicateGroup> {
     let mut uf_all = UnionFind::new(n);
     let mut uf_med = UnionFind::new(n);
     let mut uf_high = UnionFind::new(n);
+    let id = |i: usize| i64::from(contacts[i].id);
     for (i, j) in pairs {
+        if distinct.contains(id(i), id(j)) {
+            continue;
+        }
         if let Some(c) = compare(&recs[i], &recs[j]) {
             uf_all.union(i, j);
             if c >= Confidence::Medium {
@@ -76,9 +82,11 @@ pub fn group(contacts: &[ContactSummary]) -> Vec<DuplicateGroup> {
         comps.entry(uf_all.find(i)).or_default().push(i);
     }
 
+    // 別人の対が橋渡しで同じ組に入ったら分け直す（1 人になった人は外れる）。
     let mut groups: Vec<DuplicateGroup> = comps
         .into_values()
         .filter(|m| m.len() > 1)
+        .flat_map(|m| distinct.split(m, |&i| id(i)))
         .map(|members| {
             // ボトルネック確信度: 全員が High だけで一体なら High、次に Medium、無ければ Low。
             let hroot = uf_high.find(members[0]);
@@ -525,7 +533,7 @@ mod tests {
             c(1, "末松信吾", Some("s@x.jp"), Some("090-1111-2222"), None),
             c(2, "S. Suematsu", Some("s@x.jp"), Some("09011112222"), None),
         ];
-        let g = group(&list);
+        let g = group(&list, &DistinctPairs::default());
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].confidence, "medium");
         assert_eq!(g[0].contacts.len(), 2);
@@ -538,7 +546,7 @@ mod tests {
             c(1, "末松 信吾", None, Some("090-1111-2222"), None),
             c(2, "信吾 末松", None, Some("09011112222"), None),
         ];
-        let g = group(&list);
+        let g = group(&list, &DistinctPairs::default());
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].confidence, "high");
     }
@@ -550,7 +558,7 @@ mod tests {
             c(1, "田中一郎", Some("info@acme.co.jp"), None, None),
             c(2, "鈴木花子", Some("info@acme.co.jp"), None, None),
         ];
-        assert!(group(&list).is_empty());
+        assert!(group(&list, &DistinctPairs::default()).is_empty());
     }
 
     #[test]
@@ -560,7 +568,7 @@ mod tests {
             c(1, "末松 信吾", Some("a@b.jp"), None, None),
             c(2, "信吾 末松", Some("a@b.jp"), None, None),
         ];
-        let g = group(&list);
+        let g = group(&list, &DistinctPairs::default());
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].confidence, "high");
     }
@@ -571,7 +579,7 @@ mod tests {
             c(1, "山田太郎", None, None, None),
             c(2, "山田太郎", None, None, None),
         ];
-        let g = group(&list);
+        let g = group(&list, &DistinctPairs::default());
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].confidence, "low");
     }
@@ -582,7 +590,7 @@ mod tests {
             c(1, "山田太郎", None, None, Some("株式会社テスト")),
             c(2, "山田太郎", None, None, Some("(株)テスト")),
         ];
-        let g = group(&list);
+        let g = group(&list, &DistinctPairs::default());
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].confidence, "medium");
     }
@@ -602,7 +610,7 @@ mod tests {
         a.fields.emails = vec![val("primary@x.jp"), val("shared@y.jp")];
         let mut b = c(2, "末松信吾", None, None, None);
         b.fields.emails = vec![val("other@z.jp"), val("shared@y.jp")];
-        let g = group(&[a, b]);
+        let g = group(&[a, b], &DistinctPairs::default());
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].confidence, "high");
     }
@@ -614,7 +622,7 @@ mod tests {
         a.fields.phones = vec![val("03-5287-3625")];
         let mut b = c(2, "鈴木花子", None, None, None);
         b.fields.phones = vec![val("(03) 5287-3625")];
-        assert!(group(&[a, b]).is_empty());
+        assert!(group(&[a, b], &DistinctPairs::default()).is_empty());
     }
 
     #[test]
@@ -624,7 +632,7 @@ mod tests {
         a.fields.phones = vec![val("03-5287-3625")];
         let mut b = c(2, "田中 一郎", None, None, None);
         b.fields.phones = vec![val("(03) 5287-3625")];
-        let g = group(&[a, b]);
+        let g = group(&[a, b], &DistinctPairs::default());
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].confidence, "medium");
     }

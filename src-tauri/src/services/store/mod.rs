@@ -5,6 +5,7 @@ mod bodyrepair;
 mod calendar_sync;
 mod calendars;
 mod contact_dedupe;
+mod contact_distinct;
 mod contact_groups;
 mod contact_lookup;
 mod contact_rows;

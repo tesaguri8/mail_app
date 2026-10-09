@@ -103,7 +103,7 @@ fn duplicates_are_grouped_and_merge_unions_and_keeps_flags() {
         "候補は中身まで充填する"
     );
 
-    let merged = s.merge_contacts(id_a, &[id_b]).unwrap();
+    let merged = s.merge_contacts(id_a, &[id_b], &[]).unwrap();
     assert_eq!(s.list_contacts(None, &[], false).unwrap().len(), 1);
     assert!(merged.fields.is_favorite && merged.fields.is_business);
     assert_eq!(merged.fields.phonetic_family.as_deref(), Some("タナカ"));
@@ -137,7 +137,7 @@ fn merging_moves_every_link_to_the_survivor() {
         )
         .unwrap();
     }
-    let merged = s.merge_contacts(keep, &[drop_id]).unwrap();
+    let merged = s.merge_contacts(keep, &[drop_id], &[]).unwrap();
     assert_eq!(merged.links.len(), 1, "消える側のつながりは残す側へ移る");
     let conn = s.conn.lock().unwrap();
     let (cid, dirty): (i64, i64) = conn
@@ -191,7 +191,7 @@ fn merging_two_ids_of_one_account_keeps_one_and_deletes_the_other() {
     assert_eq!((preview[0].account_id as i64, preview[0].count), (a, 1));
     assert_eq!(preview[0].account_label, "a@gmail.com");
 
-    s.merge_contacts(keep, &[drop_id]).unwrap();
+    s.merge_contacts(keep, &[drop_id], &[]).unwrap();
     assert_eq!(link_state(&s, "people/keep"), Some((keep, false)));
     assert_eq!(link_state(&s, "people/drop"), Some((keep, true)));
 
@@ -227,7 +227,7 @@ fn merging_keeps_the_first_id_when_the_survivor_had_none() {
     let keep = google_person(&s, a, "山田", &[]);
     let d1 = google_person(&s, a, "山田太郎", &["people/1"]);
     let d2 = google_person(&s, a, "山田 太郎", &["people/2"]);
-    s.merge_contacts(keep, &[d1, d2]).unwrap();
+    s.merge_contacts(keep, &[d1, d2], &[]).unwrap();
     assert_eq!(link_state(&s, "people/1"), Some((keep, false)));
     assert_eq!(link_state(&s, "people/2"), Some((keep, true)));
 }
@@ -243,14 +243,14 @@ fn merging_deletes_nothing_across_accounts_one_sided_or_disconnected() {
     let keep = google_person(&s, a, "佐藤", &["people/a"]);
     let drop_id = google_person(&s, b, "佐藤 一", &["people/b"]);
     assert!(s.merge_remote_preview(keep, &[drop_id]).unwrap().is_empty());
-    s.merge_contacts(keep, &[drop_id]).unwrap();
+    s.merge_contacts(keep, &[drop_id], &[]).unwrap();
     assert_eq!(link_state(&s, "people/a"), Some((keep, false)));
     assert_eq!(link_state(&s, "people/b"), Some((keep, false)));
 
     // 片方だけ Google。
     let keep = google_person(&s, a, "鈴木", &[]);
     let drop_id = google_person(&s, a, "鈴木 花子", &["people/s"]);
-    s.merge_contacts(keep, &[drop_id]).unwrap();
+    s.merge_contacts(keep, &[drop_id], &[]).unwrap();
     assert_eq!(link_state(&s, "people/s"), Some((keep, false)));
 
     // 解除中のアカウントは送らない作法なので、削除待ちにしない（2 つともつながったまま）。
@@ -258,7 +258,7 @@ fn merging_deletes_nothing_across_accounts_one_sided_or_disconnected() {
     let drop_id = google_person(&s, b, "高橋 次郎", &["people/t2"]);
     s.disconnect_google_account(b).unwrap();
     assert!(s.merge_remote_preview(keep, &[drop_id]).unwrap().is_empty());
-    s.merge_contacts(keep, &[drop_id]).unwrap();
+    s.merge_contacts(keep, &[drop_id], &[]).unwrap();
     assert_eq!(link_state(&s, "people/t1"), Some((keep, false)));
     assert_eq!(link_state(&s, "people/t2"), Some((keep, false)));
 }

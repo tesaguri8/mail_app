@@ -22,4 +22,5 @@ pub mod selfmark;
 pub mod smtp;
 pub mod spam;
 pub mod store;
+pub mod sure_duplicates;
 pub mod vcard;

@@ -296,3 +296,55 @@ fn tidying_existing_duplicate_ids_uses_the_same_rule() {
     assert!(s.duplicate_remote_ids().unwrap().is_empty());
     assert_eq!(s.tidy_duplicate_remote_ids().unwrap(), 0);
 }
+
+/// 確実な重複をまとめて統合: 下見の件数と実行の結果がそろい、Google の余りは削除待ちになる。
+/// 確実でない組（メールが違う）は触らない。
+#[test]
+fn bulk_merge_merges_only_sure_groups_and_queues_google_deletes() {
+    let s = store();
+    let a = s.upsert_google_account("a@gmail.com", None, None).unwrap();
+    let with = |name: &str, email: &str, ext: &str| {
+        let id = s.upsert_contact(&person(name, &[email])).unwrap().id as i64;
+        let conn = s.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO contact_identities (provider, account_id, external_id, contact_id) \
+             VALUES ('google', ?1, ?2, ?3)",
+            params![a, ext, id],
+        )
+        .unwrap();
+        id
+    };
+    let k1 = with("山城智史", "t@x.jp", "people/1");
+    with("山城 智史", "T@x.jp", "people/2");
+    with("山城智史", "t@x.jp", "people/3");
+    let k2 = with("上地賢", "k@x.jp", "people/4");
+    with("上地賢", "k@x.jp", "people/5");
+    // 名前は同じでもメールが違う → 確実ではない。
+    with("儀間哲二", "g1@x.jp", "people/6");
+    with("儀間哲二", "g2@x.jp", "people/7");
+
+    let p = s.sure_merge_preview().unwrap();
+    assert_eq!(p.groups.len(), 2);
+    assert_eq!(p.contacts, 5);
+    // 残す 1 件は一覧で先に並んだもの（情報量が同じとき）。どれでも組の中の 1 人。
+    let mut counts: Vec<i32> = p.groups.iter().map(|g| g.count).collect();
+    counts.sort();
+    assert_eq!(counts, vec![2, 3]);
+    assert!(p.groups.iter().any(|g| g.keep_id as i64 == k2));
+    assert!(p
+        .groups
+        .iter()
+        .all(|g| g.keep_id as i64 != k1 || g.count == 3));
+    assert_eq!(p.remote_deletions.len(), 1);
+    assert_eq!(p.remote_deletions[0].count, 3);
+
+    let r = s.merge_sure_duplicates().unwrap();
+    assert_eq!((r.groups, r.merged, r.remote_deletions), (2, 3, 3));
+    // 送信の計画: 残した 2 件を更新・余り 3 件を削除（儀間の 2 人は触らない）。
+    let plan = s.list_contacts_to_push(a).unwrap();
+    assert_eq!(plan.iter().filter(|p| p.deleted).count(), 3);
+    assert_eq!(plan.iter().filter(|p| !p.deleted).count(), 2);
+    assert_eq!(link_state(&s, "people/6").map(|(_, u)| u), Some(false));
+    // まとめたあとは、もう確実な組は無い。
+    assert!(s.sure_merge_preview().unwrap().groups.is_empty());
+}

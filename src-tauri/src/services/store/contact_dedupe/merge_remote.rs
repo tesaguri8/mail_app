@@ -104,7 +104,10 @@ pub(super) fn summarize(links: &[MergeLink]) -> Vec<MergeRemoteDeletion> {
 }
 
 /// 足し合わせる（アカウントごとの件数を合算する）。
-fn add_up(into: &mut BTreeMap<i64, MergeRemoteDeletion>, more: Vec<MergeRemoteDeletion>) {
+pub(super) fn add_up(
+    into: &mut BTreeMap<i64, MergeRemoteDeletion>,
+    more: Vec<MergeRemoteDeletion>,
+) {
     for d in more {
         into.entry(i64::from(d.account_id))
             .and_modify(|e| e.count += d.count)

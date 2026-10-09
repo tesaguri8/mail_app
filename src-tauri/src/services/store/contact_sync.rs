@@ -366,6 +366,28 @@ impl Store {
         }
     }
 
+    /// このつながりへの未送信の印だけを落とす（送る中身が Google と同じだったとき）。台帳の
+    /// etag・snapshot はそのまま。
+    ///
+    /// # Errors
+    /// DB の書き込みに失敗したとき。
+    pub fn mark_contact_identity_clean(
+        &self,
+        account_id: i64,
+        external_id: &str,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let linked = identity_contact(&conn, account_id, external_id)?;
+        conn.execute(
+            &format!("UPDATE contact_identities SET dirty = 0 WHERE {GOOGLE_ROW}"),
+            params![account_id, external_id],
+        )?;
+        match linked {
+            Some(cid) => refresh_contact_dirty(&conn, cid),
+            None => Ok(()),
+        }
+    }
+
     /// 台帳 1 件を読み出す。
     ///
     /// # Errors

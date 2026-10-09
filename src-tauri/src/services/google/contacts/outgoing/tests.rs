@@ -253,3 +253,35 @@ fn the_rest_of_a_single_value_field_is_sent_without_read_only_keys() {
     assert_eq!(bio[0]["value"], "古いメモ");
     assert!(bio[0].get("metadata").is_none());
 }
+
+/// 送る中身が Google から最後に読んだ内容と同じかどうか（同じなら送らない）。
+#[test]
+fn same_as_google_compares_what_would_be_sent() {
+    let mut local = contact("山田太郎");
+    local.emails = vec![value(Some("仕事"), "taro@x.jp", false)];
+    local.tags = vec!["取引先".into(), "沖縄".into()];
+    let snapshot = local.clone();
+    assert!(same_as_google(&local, &snapshot));
+
+    // Google へ送らない Rondine 固有の項目は比べない。
+    let mut flags = local.clone();
+    flags.is_business = !flags.is_business;
+    flags.allow_remote_images = !flags.allow_remote_images;
+    assert!(same_as_google(&flags, &snapshot), "取引先・外部画像許可");
+
+    // タグは並びを問わない。
+    let mut reordered = local.clone();
+    reordered.tags.reverse();
+    assert!(same_as_google(&reordered, &snapshot));
+
+    // 送る中身が違えば送る。
+    let mut email = local.clone();
+    email.emails.push(value(None, "taro@y.jp", false));
+    assert!(!same_as_google(&email, &snapshot), "メールが増えた");
+    let mut fav = local.clone();
+    fav.is_favorite = !fav.is_favorite;
+    assert!(!same_as_google(&fav, &snapshot), "お気に入り");
+    let mut tag = local;
+    tag.tags.push("家族".into());
+    assert!(!same_as_google(&tag, &snapshot), "タグ");
+}

@@ -415,6 +415,8 @@ pub struct GcontactsSyncResult {
     pub unlinked: i32,
     /// 1 回の同期で送る上限・Google の上限（429）で送り切れず、次の同期へ回した件数。
     pub deferred: i32,
+    /// 送る中身が Google と同じだったので送らずに片付けた件数。
+    pub unchanged: i32,
 }
 
 /// 照合フェーズ（台帳 → 住所録）の結果サマリ。プレビューと適用で同じ形を返す。

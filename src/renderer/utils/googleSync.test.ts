@@ -35,6 +35,7 @@ describe('summarizeGoogleSync', () => {
         conflicts: 0,
         unlinked: 0,
         deferred: 0,
+        unchanged: 0,
       },
       matched: { linked: 2, created: 10, ambiguous: 1 },
     };
@@ -55,10 +56,11 @@ describe('summarizeGoogleSync', () => {
         conflicts: 0,
         unlinked: 0,
         deferred: 3193,
+        unchanged: 1059,
       },
     };
     expect(summarizeGoogleSync(r, t)).toBe(
-      'contacts: contactsPushed=200 / contactsDeletedOut=2000 / contactsDeferred=3193'
+      'contacts: contactsPushed=200 / contactsDeletedOut=2000 / contactsUnchanged=1059 / contactsDeferred=3193'
     );
   });
 

@@ -12,8 +12,8 @@
 //! 呼び名・旧姓・住所）。片方だけが持っている値は食い違いとはみなさない（和集合で埋まる）。
 //! 複数持てる欄（組織・URL・記念日・関係・SNS・カスタム・タグ）は和集合で困らないので見ない。
 
-use crate::models::{ContactFields, ContactSummary};
-use crate::services::contact_fields::same_address;
+use crate::models::{ContactAddress, ContactFields, ContactSummary};
+use crate::services::contact_fields::{address_line, same_address};
 use crate::services::dedupe::{digits, fold, fold_remove_ws};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -68,12 +68,19 @@ fn scalars(f: &ContactFields) -> [Option<String>; 12] {
 /// 2 人の住所が食い違うか。どちらも住所を持っていて、片方の住所がすべてもう片方のどれかと
 /// 同じ場所（[`same_address`]。書き方の違いは同じとみなす）でもなく、その逆でもないとき。
 fn addresses_differ(a: &ContactFields, b: &ContactFields) -> bool {
-    let covered = |x: &ContactFields, y: &ContactFields| {
-        x.addresses
+    // 欄が空の住所（ラベルだけ）は持っていないのと同じ。
+    let filled = |f: &ContactFields| -> Vec<ContactAddress> {
+        f.addresses
             .iter()
-            .all(|p| y.addresses.iter().any(|q| same_address(p, q)))
+            .filter(|x| !address_line(x).trim().is_empty())
+            .cloned()
+            .collect()
     };
-    !a.addresses.is_empty() && !b.addresses.is_empty() && !covered(a, b) && !covered(b, a)
+    let (a, b) = (filled(a), filled(b));
+    let covered = |x: &[ContactAddress], y: &[ContactAddress]| {
+        x.iter().all(|p| y.iter().any(|q| same_address(p, q)))
+    };
+    !a.is_empty() && !b.is_empty() && !covered(&a, &b) && !covered(&b, &a)
 }
 
 /// 組の中で、和集合にすると困る欄が食い違っているか。1 つきりの欄は、値を持つ人どうしで
@@ -254,6 +261,18 @@ mod tests {
             ..Default::default()
         }];
         assert_eq!(sure_groups(&[a.clone(), b.clone()]).len(), 1, "書き方違い");
+        // 都道府県・市区町村だけの住所は詳しい住所と同じとはみなさない（食い違いとして除く）。
+        b.fields.addresses = vec![ContactAddress {
+            region: Some("沖縄県".into()),
+            ..Default::default()
+        }];
+        assert!(sure_groups(&[a.clone(), b.clone()]).is_empty(), "県だけ");
+        // 欄が空の住所は持っていないのと同じ。
+        b.fields.addresses = vec![ContactAddress {
+            label: Some("自宅".into()),
+            ..Default::default()
+        }];
+        assert_eq!(sure_groups(&[a.clone(), b.clone()]).len(), 1, "空の住所");
         // 番地が違えば別の住所。
         b.fields.addresses = vec![ContactAddress {
             street: Some("沖縄県名護市大南二丁目2番1号".into()),

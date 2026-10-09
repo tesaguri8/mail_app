@@ -105,6 +105,8 @@ impl Pusher<'_> {
             changes.into_iter().partition(|c| c.deleted);
         // 削除で向こうの ID が無いものは送信対象に出てこない（作成待ちは削除済みを除く）。
         let deletes: Vec<String> = deletes.into_iter().filter_map(|c| c.external_id).collect();
+        // 中身が Google と同じ更新は送らずに印を落とす（上限の枠を使わせない）。
+        let writes = self.drop_unchanged(writes, result)?;
         let plan = PushPlan::of(deletes.len(), writes.len());
         result.deferred += plan.deferred as i32;
         log::info!(
@@ -151,6 +153,41 @@ impl Pusher<'_> {
             }
         }
         Ok(())
+    }
+
+    /// 更新のうち、送る中身が Google から最後に読んだ内容と同じものを送らずに片付け（未送信の印を
+    /// 落とす）、送る必要のあるものだけを返す。作成（向こうの ID が無い）と、snapshot が無いものは送る。
+    fn drop_unchanged(
+        &self,
+        writes: Vec<ContactPush>,
+        result: &mut GcontactsSyncResult,
+    ) -> Result<Vec<ContactPush>, SyncError> {
+        let mut keep = Vec::with_capacity(writes.len());
+        for ch in writes {
+            let snapshot = match ch.external_id.as_deref() {
+                Some(gid) => self
+                    .store
+                    .contact_identity(self.account_id, gid)?
+                    .and_then(|i| i.snapshot)
+                    .map(|s| (gid.to_string(), s)),
+                None => None,
+            };
+            match snapshot {
+                Some((gid, s)) if outgoing::same_as_google(&ch.contact, &s) => {
+                    self.store
+                        .mark_contact_identity_clean(self.account_id, &gid)?;
+                    result.unchanged += 1;
+                }
+                _ => keep.push(ch),
+            }
+        }
+        if result.unchanged > 0 {
+            log::info!(
+                "push_contacts: 中身が Google と同じ {} 件は送らずに片付けました",
+                result.unchanged
+            );
+        }
+        Ok(keep)
     }
 
     /// 削除をまとめて送る（件数は [`PushPlan`] で決めた分）。送れたつながりは片付ける。まとめて消せなかった組は 1 件ずつに戻す
@@ -474,6 +511,70 @@ pub async fn sync_account(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::store::test_support::person;
+    use rusqlite::params;
+
+    /// 溜まった更新のうち、中身が Google と同じものは送らずに印を落とし、違うものだけを送る。
+    #[test]
+    fn unchanged_updates_are_settled_without_sending() {
+        let store = Store::open_in_memory_for_test();
+        let account = store
+            .upsert_google_account("a@gmail.com", None, None)
+            .unwrap();
+        let same = store.upsert_contact(&person("山田", &["y@x.jp"])).unwrap();
+        let changed = store.upsert_contact(&person("佐藤", &["s@x.jp"])).unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            // 「同じ」は今の内容そのまま、「変わった」はメールが違う内容を Google から読んだことにする。
+            let mut old = changed.fields.clone();
+            old.emails[0].value = "old@x.jp".into();
+            for (cid, ext, snap) in [
+                (
+                    same.id,
+                    "people/same",
+                    serde_json::to_string(&same.fields).unwrap(),
+                ),
+                (
+                    changed.id,
+                    "people/changed",
+                    serde_json::to_string(&old).unwrap(),
+                ),
+            ] {
+                conn.execute(
+                    "INSERT INTO contact_identities \
+                         (provider, account_id, external_id, contact_id, snapshot, dirty) \
+                     VALUES ('google', ?1, ?2, ?3, ?4, 1)",
+                    params![account, ext, cid, snap],
+                )
+                .unwrap();
+            }
+        }
+        let client = reqwest::Client::new();
+        let groups = HashMap::new();
+        let pusher = Pusher {
+            store: &store,
+            client: &client,
+            token: "",
+            account_id: account,
+            groups: &groups,
+        };
+        let writes = store.list_contacts_to_push(account).unwrap();
+        assert_eq!(writes.len(), 2);
+        let mut result = GcontactsSyncResult::default();
+        let left = pusher.drop_unchanged(writes, &mut result).unwrap();
+
+        assert_eq!(result.unchanged, 1);
+        assert_eq!(
+            left.iter()
+                .map(|c| c.external_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("people/changed")]
+        );
+        // 片付けた分は次の送信対象に出てこない。
+        let next = store.list_contacts_to_push(account).unwrap();
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].external_id.as_deref(), Some("people/changed"));
+    }
 
     #[test]
     fn push_plan_sends_up_to_the_limits_and_defers_the_rest() {

@@ -543,7 +543,16 @@
       "high": "ほぼ確実",
       "medium": "候補",
       "low": "要確認"
-    }
+    },
+    "googleDeleteLine": "Google 連絡先からも {{count}} 件削除して 1 件にまとめます（{{account}}）",
+    "googleTrashNote": "削除は次の同期で送ります。Google 側で消した連絡先は、30 日間は Google 連絡先のゴミ箱から戻せます。",
+    "googleMergeTitle": "Google 連絡先も 1 件にまとめます",
+    "googleMergeBody": "まとめる連絡先は、同じ Google アカウントに別々の連絡先として入っています。Rondine で統合すると、Google 側も 1 件だけ残して統合後の内容にそろえます。",
+    "googleLeftover": "Google 連絡先に重複が {{count}} 件残っています。まとめますか？",
+    "googleLeftoverRun": "まとめる",
+    "googleLeftoverTitle": "Google 連絡先の重複をまとめます",
+    "googleLeftoverBody": "以前に Rondine で統合した連絡先のうち、Google 側ではまだ別々の連絡先として残っているものを、1 件だけ残して削除します。Rondine の連絡先は変わりません。",
+    "googleLeftoverDone": "{{count}} 件を次の同期で Google 連絡先から削除します。"
   },
   "greeting": {
     "morning": "おはようございます",

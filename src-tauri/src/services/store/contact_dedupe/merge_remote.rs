@@ -116,11 +116,13 @@ pub(super) fn add_up(
 }
 
 /// すでに同じ Google アカウントの ID が 2 つ以上ぶら下がっている連絡先（この取り決めより前の
-/// 統合で寄せた人）。ゴミ箱の人は除く（削除の送信で全部消える）。
+/// 統合で寄せた人）。ゴミ箱の人は除く（削除の送信で全部消える）。解除中のアカウントの分も除く
+/// （片付けの対象にしないので、数えると「片付けても減らない重複」が残って見える）。
 fn contacts_with_duplicate_ids(conn: &Connection) -> rusqlite::Result<Vec<i64>> {
     let mut stmt = conn.prepare(
         "SELECT DISTINCT ci.contact_id FROM contact_identities ci \
          JOIN contacts c ON c.id = ci.contact_id AND c.deleted_at IS NULL \
+         JOIN google_accounts ga ON ga.id = ci.account_id AND ga.disconnected_at IS NULL \
          WHERE ci.provider = 'google' AND ci.unlink_requested = 0 \
          GROUP BY ci.contact_id, ci.account_id HAVING count(*) > 1 \
          ORDER BY ci.contact_id",
@@ -165,14 +167,55 @@ impl Store {
     pub fn tidy_duplicate_remote_ids(&self) -> rusqlite::Result<usize> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        let mut marked = 0;
-        for cid in contacts_with_duplicate_ids(&tx)? {
-            marked += mark_surplus(&tx, &load_links(&tx, cid, &[])?)?;
-            refresh_contact_dirty(&tx, cid)?;
-        }
+        let marked = contacts_with_duplicate_ids(&tx)?
+            .into_iter()
+            .try_fold(0, |n, cid| tidy_one(&tx, cid).map(|k| n + k))?;
         tx.commit()?;
         Ok(marked)
     }
+
+    /// Google の重複が残っている連絡先の ID（連絡先の一覧の「Google に重複あり」の絞り込み用）。
+    /// 読むだけ。
+    ///
+    /// # Errors
+    /// DB の読み出しに失敗したとき。
+    pub fn contacts_with_duplicate_remote_ids(&self) -> rusqlite::Result<Vec<i64>> {
+        let conn = self.conn.lock().unwrap();
+        contacts_with_duplicate_ids(&conn)
+    }
+
+    /// その人に残っている Google の重複を、片付けたら消すことになる件数（アカウントごと）。
+    /// 読むだけ。連絡先の詳細の同期先の欄で「1 件にまとめる」を出すかに使う。
+    ///
+    /// # Errors
+    /// DB の読み出しに失敗したとき。
+    pub fn duplicate_remote_ids_for(
+        &self,
+        contact_id: i64,
+    ) -> rusqlite::Result<Vec<MergeRemoteDeletion>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(summarize(&load_links(&conn, contact_id, &[])?))
+    }
+
+    /// その人に残っている Google の重複だけを、統合と同じ規則で片付ける（アカウントごとに 1 つ
+    /// 残し、余りを削除待ちにする。次の同期で Google 側から削除する）。削除待ちにした件数を返す。
+    ///
+    /// # Errors
+    /// DB の書き込みに失敗したとき（巻き戻す）。
+    pub fn tidy_duplicate_remote_ids_for(&self, contact_id: i64) -> rusqlite::Result<usize> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let marked = tidy_one(&tx, contact_id)?;
+        tx.commit()?;
+        Ok(marked)
+    }
+}
+
+/// 1 人分の重複を片付ける（余りを削除待ちにし、その人の未送信の印を付け直す）。
+fn tidy_one(conn: &Connection, contact_id: i64) -> rusqlite::Result<usize> {
+    let marked = mark_surplus(conn, &load_links(conn, contact_id, &[])?)?;
+    refresh_contact_dirty(conn, contact_id)?;
+    Ok(marked)
 }
 
 /// 余るつながりを削除待ちにする（統合のトランザクションの中で、つながりを寄せる前に呼ぶ）。

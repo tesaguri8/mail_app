@@ -65,6 +65,43 @@ impl PushPlan {
     }
 }
 
+/// まとめて送るラベル・スターの付け外し（グループごとに、付ける人・外す人）。
+#[derive(Debug, Default)]
+struct MembershipChanges {
+    /// ラベル名 → （付ける resourceName, 外す resourceName）。
+    by_tag: std::collections::BTreeMap<String, (Vec<String>, Vec<String>)>,
+    /// スター（お気に入り）の（付ける, 外す）。
+    starred: (Vec<String>, Vec<String>),
+}
+
+impl MembershipChanges {
+    /// 1 人分の差（`wanted` が Rondine、`current` が読み直した Google 側）を足す。
+    fn add(&mut self, rn: &str, wanted: &ContactFields, current: &ContactFields) {
+        if wanted.is_favorite != current.is_favorite {
+            let side = if wanted.is_favorite {
+                &mut self.starred.0
+            } else {
+                &mut self.starred.1
+            };
+            side.push(rn.to_string());
+        }
+        for name in wanted.tags.iter().filter(|w| !current.tags.contains(w)) {
+            self.by_tag
+                .entry(name.clone())
+                .or_default()
+                .0
+                .push(rn.to_string());
+        }
+        for name in current.tags.iter().filter(|c| !wanted.tags.contains(c)) {
+            self.by_tag
+                .entry(name.clone())
+                .or_default()
+                .1
+                .push(rn.to_string());
+        }
+    }
+}
+
 /// 送信を続けるか（Google の上限で止めたら残りを次の同期へ回す）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Flow {
@@ -124,30 +161,31 @@ impl Pusher<'_> {
             result.deferred += writes.len() as i32;
             return Ok(());
         }
-        for (i, ch) in writes.iter().enumerate() {
-            let outcome = match ch.external_id.as_deref() {
-                Some(gid) => self.push_update(ch, gid).await,
-                None => self.push_create(ch).await,
-            };
-            match outcome {
+        // 更新は [`api::BATCH_UPDATE_MAX`] 件ずつまとめて送る（1 件ずつだと 1 件あたり 2〜3 回の
+        // 呼び出しで約 5 秒かかり、200 件で 17 分かかっていた。vaio の実測 2026-10-09）。
+        let (updates, creates): (Vec<&ContactPush>, Vec<&ContactPush>) =
+            writes.iter().partition(|c| c.external_id.is_some());
+        for (i, chunk) in updates.chunks(api::BATCH_UPDATE_MAX).enumerate() {
+            if self.push_update_batch(chunk, result).await? == Flow::Stopped {
+                let rest = updates.len() - i * api::BATCH_UPDATE_MAX + creates.len();
+                result.deferred += rest as i32;
+                log::warn!("push_contacts: Google の上限で止めました。残り {rest} 件は次の同期で");
+                return Ok(());
+            }
+        }
+        for (i, ch) in creates.iter().enumerate() {
+            match self.push_create(ch).await {
                 Ok(()) => result.pushed += 1,
-                Err(SyncError::Api(ApiError::EtagConflict)) => {
-                    log::warn!(
-                        "push_contacts: etag 不一致 id={}（次回に持ち越し）",
-                        ch.contact_id
-                    );
-                    result.conflicts += 1;
-                }
                 Err(SyncError::Api(ApiError::RateLimited(_))) => {
-                    result.deferred += (writes.len() - i) as i32;
+                    result.deferred += (creates.len() - i) as i32;
                     log::warn!(
                         "push_contacts: Google の上限で止めました。残り {} 件は次の同期で",
-                        writes.len() - i
+                        creates.len() - i
                     );
                     break;
                 }
                 Err(e) => log::warn!(
-                    "push_contacts: 送信失敗 id={}（スキップ）: {e}",
+                    "push_contacts: 作成失敗 id={}（スキップ）: {e}",
                     ch.contact_id
                 ),
             }
@@ -247,15 +285,130 @@ impl Pusher<'_> {
         Ok(())
     }
 
-    /// 連携済み → 送る直前に読み直し、それを土台に Rondine が扱う部分だけを上書きして送る。
-    async fn push_update(&self, ch: &ContactPush, gid: &str) -> Result<(), SyncError> {
-        let base = api::with_retry(|| api::get_person(self.client, self.token, gid)).await?;
-        let current = person_fields(&base, self.groups);
-        let body = outgoing::person_body(&ch.contact, Some(&base));
-        let g =
-            api::with_retry(|| api::update_contact(self.client, self.token, gid, &body)).await?;
-        let rn = g.resource_name.clone().unwrap_or_else(|| gid.to_string());
-        self.finish(ch, &rn, &g, &current).await
+    /// 更新をまとめて送る（最大 [`api::BATCH_UPDATE_MAX`] 件）。送る直前にまとめて読み直し
+    /// （`people:batchGet`）、それを土台に Rondine が扱う部分だけを上書きして、まとめて更新する
+    /// （`people:batchUpdateContacts`）。etag 不一致の分は未送信のまま次回へ（今の作法のまま）。
+    /// ラベル・スターの所属は、送れた分をグループごとにまとめて `members:modify` で送る。
+    /// Google の上限（429）で止めたら [`Flow::Stopped`]。
+    async fn push_update_batch(
+        &self,
+        chunk: &[&ContactPush],
+        result: &mut GcontactsSyncResult,
+    ) -> Result<Flow, SyncError> {
+        let names: Vec<String> = chunk.iter().filter_map(|c| c.external_id.clone()).collect();
+        let bases = match api::with_retry(|| api::batch_get_people(self.client, self.token, &names))
+            .await
+        {
+            Ok(b) => b,
+            Err(ApiError::RateLimited(_)) => return Ok(Flow::Stopped),
+            Err(e) => return Err(e.into()),
+        };
+        let mut bodies = HashMap::new();
+        let mut current: HashMap<String, ContactFields> = HashMap::new();
+        for ch in chunk {
+            let Some(gid) = ch.external_id.as_deref() else {
+                continue;
+            };
+            match bases.get(gid) {
+                Some(base) => {
+                    bodies.insert(
+                        gid.to_string(),
+                        outgoing::person_body(&ch.contact, Some(base)),
+                    );
+                    current.insert(gid.to_string(), person_fields(base, self.groups));
+                }
+                // Google 側にもう無い（向こうで消された）。次の取り込みの削除通知で片付く。
+                None => log::warn!("push_contacts: Google 側に無いので更新しません {gid}"),
+            }
+        }
+        let outcomes =
+            match api::with_retry(|| api::batch_update_contacts(self.client, self.token, &bodies))
+                .await
+            {
+                Ok(o) => o,
+                Err(ApiError::RateLimited(_)) => return Ok(Flow::Stopped),
+                Err(e) => return Err(e.into()),
+            };
+        let mut members = MembershipChanges::default();
+        for ch in chunk {
+            let Some(gid) = ch.external_id.as_deref() else {
+                continue;
+            };
+            match outcomes.get(gid) {
+                Some(api::BatchUpdateOutcome::Updated(sent)) => {
+                    let rn = sent
+                        .resource_name
+                        .clone()
+                        .unwrap_or_else(|| gid.to_string());
+                    let snapshot = incoming::fields_from_person(sent, self.groups);
+                    self.store.mark_contact_pushed(
+                        self.account_id,
+                        ch.contact_id,
+                        &rn,
+                        sent.etag.as_deref(),
+                        snapshot.as_ref(),
+                    )?;
+                    if let Some(cur) = current.get(gid) {
+                        members.add(&rn, &ch.contact, cur);
+                    }
+                    result.pushed += 1;
+                }
+                Some(api::BatchUpdateOutcome::EtagConflict) => {
+                    log::warn!(
+                        "push_contacts: etag 不一致 id={}（次回に持ち越し）",
+                        ch.contact_id
+                    );
+                    result.conflicts += 1;
+                }
+                Some(api::BatchUpdateOutcome::Failed(why)) => log::warn!(
+                    "push_contacts: 更新失敗 id={}（スキップ）: {why}",
+                    ch.contact_id
+                ),
+                None => {}
+            }
+        }
+        if let Err(e) = self.push_membership_changes(&members).await {
+            log::warn!("push_contacts: ラベルの反映に失敗: {e}");
+        }
+        Ok(Flow::Continue)
+    }
+
+    /// まとめたラベル・スターの付け外しを、グループごとに `members:modify` で送る。
+    async fn push_membership_changes(&self, m: &MembershipChanges) -> Result<(), SyncError> {
+        for (name, (add, remove)) in &m.by_tag {
+            let id = if add.is_empty() {
+                self.store.contact_group_id(self.account_id, name)?
+            } else {
+                self.group_id_or_create(name).await?
+            };
+            if let Some(id) = id {
+                self.modify_members(&id, add, remove).await?;
+            }
+        }
+        let (add, remove) = &m.starred;
+        self.modify_members(STARRED_GROUP, add, remove).await
+    }
+
+    /// `members:modify` を上限ごとに分けて送る。
+    async fn modify_members(
+        &self,
+        group_id: &str,
+        add: &[String],
+        remove: &[String],
+    ) -> Result<(), SyncError> {
+        for a in add.chunks(api::MEMBERS_MODIFY_MAX) {
+            api::with_retry(|| {
+                api::modify_contact_group_members(self.client, self.token, group_id, a, &[])
+            })
+            .await?;
+        }
+        for r in remove.chunks(api::MEMBERS_MODIFY_MAX) {
+            api::with_retry(|| {
+                api::modify_contact_group_members(self.client, self.token, group_id, &[], r)
+            })
+            .await?;
+        }
+        Ok(())
     }
 
     /// 作成待ち → 新規作成（利用者がこの人の同期先にこのアカウントを選んだときだけここへ来る）。
@@ -574,6 +727,40 @@ mod tests {
         let next = store.list_contacts_to_push(account).unwrap();
         assert_eq!(next.len(), 1);
         assert_eq!(next[0].external_id.as_deref(), Some("people/changed"));
+    }
+
+    /// まとめて送るラベル・スターの付け外しは、グループごとに付ける人・外す人へ集まる。
+    #[test]
+    fn membership_changes_are_grouped_per_label() {
+        let f = |tags: &[&str], fav: bool| ContactFields {
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+            is_favorite: fav,
+            ..Default::default()
+        };
+        let mut m = MembershipChanges::default();
+        m.add(
+            "people/1",
+            &f(&["家族", "取引先"], true),
+            &f(&["取引先"], false),
+        );
+        m.add("people/2", &f(&["家族"], false), &f(&["旧ラベル"], false));
+        m.add("people/3", &f(&[], false), &f(&[], true));
+        assert_eq!(
+            m.by_tag.get("家族"),
+            Some(&(vec!["people/1".to_string(), "people/2".to_string()], vec![]))
+        );
+        assert_eq!(
+            m.by_tag.get("旧ラベル"),
+            Some(&(vec![], vec!["people/2".to_string()]))
+        );
+        assert!(
+            !m.by_tag.contains_key("取引先"),
+            "変わらないラベルは送らない"
+        );
+        assert_eq!(
+            m.starred,
+            (vec!["people/1".to_string()], vec!["people/3".to_string()])
+        );
     }
 
     #[test]

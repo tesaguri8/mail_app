@@ -92,7 +92,7 @@ export function AddAccountFlow({
       if (!sameAddress(a.email, email))
         lines.push(t('account.googleOtherAddress', { email: a.email }));
       // 最初の同期。連絡先は今の「反映」の規則（高確信だけつなぎ、迷ったら重複整理）で住所録へ。
-      const r = await googleSync(a.id, a.sync_contacts);
+      const r = await googleSync(a.id, { calendar: true, contacts: a.sync_contacts });
       const summary = summarizeGoogleSync(r, t);
       if (summary) lines.push(summary);
       [r.calendar_error, r.contacts_error].forEach((e) => e && lines.push(`✕ ${e}`));

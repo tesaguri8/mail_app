@@ -19,11 +19,6 @@ sync_calendar: boolean,
  */
 sync_contacts: boolean, 
 /**
- * 新しく作る連絡先の同期先に、既定でこのアカウントを入れるか（既定 false。新規作成の画面の
- * 最初のチェックにだけ効く。どこにもつながっていない連絡先を勝手に作ることはしない）。
- */
-push_new_contacts: boolean, 
-/**
  * カレンダーの最終同期時刻（UTC 文字列）。未同期なら None。
  */
 last_calendar_sync_at: string | null, 

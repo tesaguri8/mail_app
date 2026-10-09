@@ -5,7 +5,7 @@ import type { AccountSummary } from '@bindings/AccountSummary';
 import type { SyncProgress } from '@bindings/SyncProgress';
 import { mailSync } from '../services/mail';
 import { googleAccounts, googleSync } from '../services/google';
-import { contactsDue } from '../utils/googleSyncSchedule';
+import { debounce, LOCAL_CHANGE_DEBOUNCE_MS, LOCAL_CHANGE_EVENT } from '../utils/localChange';
 import { getAutoSyncInterval, PREFS_EVENT } from '../config/prefs';
 import { activityStart, activityStop, activityUpdate } from '../stores/activity';
 
@@ -21,16 +21,23 @@ export const CALENDAR_SYNCED_EVENT = 'rondine:calendar-synced';
 export const CONTACTS_SYNCED_EVENT = 'rondine:contacts-synced';
 
 /**
- * 自動同期（docs 仕様: ホーム/メールボタン押下時＋ホーム・メールモード滞在中の定期同期）。
- * - active の間、設定（getAutoSyncInterval, 0=オフ）の間隔で全アカウントを順に同期する。
- * - 戻り値 syncNow で任意タイミングの即時同期も呼べる（ボタン押下時用）。
- * - 多重実行はガードし、1 巡完了ごとに MAIL_SYNCED_EVENT を発火する。
+ * 自動同期（利用者の判断 2026-10-09: どの画面にいても動く／連絡先も毎回／変更したら即送る）。
+ * - Rondine が起動している間、設定（getAutoSyncInterval, 0=オフ）の間隔で全メールアカウントと
+ *   Google（カレンダー・連絡先）を同期する。画面によって止めない（以前はホーム/メール/
+ *   カレンダーにいる間だけで、連絡先の画面に居続けると送られなかった）。
+ * - 流れは 2 本: ① メール → Google カレンダー、② Google の連絡先。連絡先の送信（数千件の
+ *   更新など）が長くても、メール・カレンダーの巡回を塞がない。
+ * - 連絡先・組織を変えたら（`utils/localChange` の合図）、まとめ待ちのあと ② だけを回す
+ *   （メールのサーバーは叩かないので、メールのクールダウン中でも送る）。
+ * - 戻り値 syncNow で任意タイミングの即時同期も呼べる（ボタン押下時用。両方の流れを回す）。
+ * - 多重実行は流れごとにガードし、回っている間の依頼は終わってからすぐ回し直す。① が 1 巡
+ *   完了するごとに MAIL_SYNCED_EVENT を発火する。
  */
 /** 全アカウントの同期が失敗（接続不可等）した後、自動再試行を止める時間（ミリ秒）。
  *  遮断中のサーバーへ叩き続けて遮断を延長させないための安全弁。手動同期には効かない。 */
 const AUTOSYNC_COOLDOWN_MS = 5 * 60 * 1000;
 
-export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => void {
+export function useAutoSync(accounts: AccountSummary[]): () => void {
   const { t } = useTranslation();
   const busy = useRef(false);
   // 巡回中に来た同期の依頼。捨てると次の定期同期（既定 30 秒後）まで取りに行かないので、
@@ -38,10 +45,11 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
   // 起動直後がこれに当たる: アカウント一覧が届く前（空）の巡回がカレンダー同期で塞がっている間に、
   // 一覧が届いてからの即時同期が来て弾かれ、メールを 30 秒取りに行かなかった（利用者報告 2026-10-07）。
   const again = useRef(false);
-  // 起動してから連絡先を同期した Google アカウント（起動直後の 1 回を必ず回すため）。
-  const contactsSynced = useRef<Set<number>>(new Set());
   // 回し直しは最新のアカウント一覧で行うため、最新の syncNow を指しておく。
   const syncNowRef = useRef<() => void>(() => undefined);
+  // ② 連絡先の流れ（① とは別に回す）。
+  const contactsBusy = useRef(false);
+  const contactsAgain = useRef(false);
   // 直近の一括失敗でクールダウン中なら、この時刻まで自動（定期）同期を止める。
   const cooldownUntil = useRef(0);
   // フッター表示のアカウント名解決用に最新の一覧を保持（syncNow を作り直さずに参照する）。
@@ -50,8 +58,51 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
   // アカウント増減にだけ追従（unread_count 等の変化で作り直さない）。
   const idsKey = accounts.map((a) => a.id).join(',');
 
+  // ② 連絡先の流れ: 連絡先を同期している Google アカウントを順に（push → pull → 住所録へ反映）。
+  // 取り込みは同期トークンの増分で、送信待ちが溜まっていればここで続きを送る。
+  const syncContacts = useCallback(() => {
+    if (!isTauri) return;
+    if (contactsBusy.current) {
+      contactsAgain.current = true;
+      return;
+    }
+    contactsBusy.current = true;
+    (async () => {
+      let changed = false;
+      try {
+        for (const g of await googleAccounts()) {
+          // 解除中のアカウントは同期しない（再接続で再開する）。
+          if (g.disconnected_at != null || !g.sync_contacts) continue;
+          try {
+            const r = await googleSync(g.id, { calendar: false, contacts: true });
+            const m = r.matched;
+            if (
+              (r.contacts && r.contacts.pulled + r.contacts.deleted_in > 0) ||
+              (m && m.created + m.linked > 0)
+            ) {
+              changed = true;
+            }
+          } catch {
+            // アカウント単位の失敗は無視して次へ。
+          }
+        }
+      } catch {
+        // 連携アカウント一覧の取得失敗は無視（未連携なら送受信するものは無い）。
+      } finally {
+        contactsBusy.current = false;
+      }
+      if (changed) window.dispatchEvent(new Event(CONTACTS_SYNCED_EVENT));
+      if (contactsAgain.current) {
+        contactsAgain.current = false;
+        syncContacts();
+      }
+    })();
+  }, []);
+
+  // ① メール → Google カレンダー（と、② を起こす）。
   const syncNow = useCallback(() => {
     if (!isTauri) return;
+    syncContacts();
     if (busy.current) {
       again.current = true;
       return;
@@ -73,7 +124,7 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
       const unlistenP =
         ids.length > 0
           ? listen<SyncProgress>('sync:progress', (e) =>
-              showProgress(e.payload.current, e.payload.total),
+              showProgress(e.payload.current, e.payload.total)
             )
           : null;
       let synced = false;
@@ -95,34 +146,21 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
             failed = true;
           }
         }
-        // Google も同じ間隔で同期する（メールの成否とは独立）。カレンダーは毎回、連絡先は起動直後と
-        // 前回から間が空いたときだけ（重いため）。連絡先は取り込みに続けて住所録へ反映する
-        // （「今すぐ同期」と同じ）。変化があればカレンダー表示・住所録へ再読み込みを促す。
+        // Google カレンダーも同じ間隔で同期する（メールの成否とは独立）。変化があればカレンダー
+        // 表示へ再読み込みを促す。連絡先は ② の流れで回す。
         try {
           let calChanged = false;
-          let contactsChanged = false;
           for (const g of await googleAccounts()) {
             // 解除中のアカウントは同期しない（再接続で再開する）。
-            if (g.disconnected_at != null) continue;
-            const withContacts = contactsDue(g, Date.now(), contactsSynced.current.has(g.id));
-            if (!g.sync_calendar && !withContacts) continue;
+            if (g.disconnected_at != null || !g.sync_calendar) continue;
             try {
-              const r = await googleSync(g.id, withContacts);
-              if (withContacts) contactsSynced.current.add(g.id);
+              const r = await googleSync(g.id, { calendar: true, contacts: false });
               if (r.calendar && r.calendar.pulled + r.calendar.deleted_in > 0) calChanged = true;
-              const m = r.matched;
-              if (
-                (r.contacts && r.contacts.pulled + r.contacts.deleted_in > 0) ||
-                (m && m.created + m.linked > 0)
-              ) {
-                contactsChanged = true;
-              }
             } catch {
               // アカウント単位の失敗は無視して次へ。
             }
           }
           if (calChanged) window.dispatchEvent(new Event(CALENDAR_SYNCED_EVENT));
-          if (contactsChanged) window.dispatchEvent(new Event(CONTACTS_SYNCED_EVENT));
         } catch {
           // 連携アカウント一覧の取得失敗は無視（未連携なら送受信するものは無い）。
         }
@@ -141,7 +179,7 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
         syncNowRef.current();
       }
     })();
-  }, [idsKey, t]);
+  }, [idsKey, t, syncContacts]);
   syncNowRef.current = syncNow;
 
   // 設定変更（間隔）に追従する。
@@ -152,21 +190,33 @@ export function useAutoSync(active: boolean, accounts: AccountSummary[]): () => 
     return () => window.removeEventListener(PREFS_EVENT, onPrefs);
   }, []);
 
-  // 対象モードに入った時に即同期（起動直後のホーム表示・ホーム↔メール遷移を含む）。
-  // クールダウン中（直近の接続失敗後）は自動では叩かない（手動同期は別途可）。
+  // 起動直後（アカウント一覧が変わったときも）に即同期。クールダウン中（直近の接続失敗後）は
+  // 自動では叩かない（手動同期は別途可）。
   useEffect(() => {
-    if (active && Date.now() >= cooldownUntil.current) syncNow();
-  }, [active, syncNow]);
+    if (Date.now() >= cooldownUntil.current) syncNow();
+  }, [syncNow]);
 
-  // 滞在中は設定間隔で定期同期（0=オフ）。直近の一括失敗でクールダウン中は
+  // 設定間隔で定期同期（0=オフ）。どの画面にいても動く。直近の一括失敗でクールダウン中は
   // 定期同期をスキップして、遮断中のサーバーを叩き続けないようにする（手動同期は別途可）。
   useEffect(() => {
-    if (!active || intervalSec <= 0) return;
+    if (intervalSec <= 0) return;
     const h = setInterval(() => {
       if (Date.now() >= cooldownUntil.current) syncNow();
     }, intervalSec * 1000);
     return () => clearInterval(h);
-  }, [active, intervalSec, syncNow]);
+  }, [intervalSec, syncNow]);
+
+  // 連絡先・組織を変えたら、まとめ待ちのあと ② 連絡先の流れだけを回す（変更したら即送る）。
+  // 自動同期をオフ（0）にしていても送る（オフは定期の取りに行きを止める設定で、変更を手元に
+  // 溜めておく設定ではない）。
+  useEffect(() => {
+    const d = debounce(syncContacts, LOCAL_CHANGE_DEBOUNCE_MS);
+    window.addEventListener(LOCAL_CHANGE_EVENT, d.call);
+    return () => {
+      window.removeEventListener(LOCAL_CHANGE_EVENT, d.call);
+      d.cancel();
+    };
+  }, [syncContacts]);
 
   return syncNow;
 }

@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { changed } from '../utils/localChange';
 import type { MergeRemoteDeletion } from '@bindings/MergeRemoteDeletion';
 import type { SureMergePreview } from '@bindings/SureMergePreview';
 import type { SureMergeResult } from '@bindings/SureMergeResult';
@@ -25,16 +26,16 @@ export const contactLookupEmail = (email: string) =>
   invoke<ContactSummary[]>('contact_lookup_email', { email });
 
 export const contactUpsert = (input: ContactInput) =>
-  invoke<ContactSummary>('contact_upsert', { input });
+  changed(invoke<ContactSummary>('contact_upsert', { input }));
 
 /** 連絡先を論理削除（ゴミ箱へ。保持期間後に完全削除）。 */
-export const contactDelete = (id: number) => invoke<void>('contact_delete', { id });
+export const contactDelete = (id: number) => changed(invoke<void>('contact_delete', { id }));
 
 /** 論理削除した連絡先を復元。 */
-export const contactRestore = (id: number) => invoke<void>('contact_restore', { id });
+export const contactRestore = (id: number) => changed(invoke<void>('contact_restore', { id }));
 
 /** 連絡先ファイルをインポート（.vcf = vCard / .csv = Google CSV）。 */
-export const contactImport = (path: string) => invoke<ImportReport>('contact_import', { path });
+export const contactImport = (path: string) => changed(invoke<ImportReport>('contact_import', { path }));
 
 /** 重複候補（正規化表示名でグループ化）を取得。 */
 export const contactFindDuplicates = () => invoke<DuplicateGroup[]>('contact_find_duplicates');
@@ -63,7 +64,18 @@ export const contactGoogleDuplicates = () =>
   invoke<MergeRemoteDeletion[]>('contact_google_duplicates');
 
 /** 以前の統合で残った Google の重複を、統合と同じ規則で片付ける（次の同期で Google 側から削除）。 */
-export const contactGoogleDuplicatesTidy = () => invoke<number>('contact_google_duplicates_tidy');
+export const contactGoogleDuplicatesTidy = () => changed(invoke<number>('contact_google_duplicates_tidy'));
+
+/** Google の重複が残っている連絡先の ID（一覧の「Google に重複あり」の絞り込み用）。読むだけ。 */
+export const contactGoogleDuplicateIds = () => invoke<number[]>('contact_google_duplicate_ids');
+
+/** その人に残っている Google の重複を、片付けたら消す件数（アカウントごと）。読むだけ。 */
+export const contactGoogleDuplicatesOf = (contactId: number) =>
+  invoke<MergeRemoteDeletion[]>('contact_google_duplicates_of', { contactId });
+
+/** その人に残っている Google の重複だけを片付ける（次の同期で Google 側から削除）。 */
+export const contactGoogleDuplicatesTidyOf = (contactId: number) =>
+  changed(invoke<number>('contact_google_duplicates_tidy_of', { contactId }));
 
 /** 確実な重複（名前・メールの集合・電話の集合が同じで、食い違う欄が無い組）をまとめて統合したら
  *  どうなるか。読むだけ（組の一覧・件数・Google から消す件数）。 */
@@ -71,17 +83,17 @@ export const contactSureMergePreview = () =>
   invoke<SureMergePreview>('contact_sure_merge_preview');
 
 /** 確実な重複をまとめて統合する（実行のときに組を数え直す。Google の余りは次の同期で削除）。 */
-export const contactSureMerge = () => invoke<SureMergeResult>('contact_sure_merge');
+export const contactSureMerge = () => changed(invoke<SureMergeResult>('contact_sure_merge'));
 
 /** 複数連絡先を 1 件（keepId）に統合。同じ Google アカウントの ID は 1 つ残し、余りは次の同期で削除。 */
 export const contactMerge = (keepId: number, dropIds: number[]) =>
-  invoke<ContactSummary>('contact_merge', { keepId, dropIds });
+  changed(invoke<ContactSummary>('contact_merge', { keepId, dropIds }));
 
 /** 連絡先の同期先に Google アカウントを加える（作成待ちを置き、次の同期で作る）。 */
 export const contactSyncTargetAdd = (contactId: number, accountId: number) =>
-  invoke<void>('contact_sync_target_add', { contactId, accountId });
+  changed(invoke<void>('contact_sync_target_add', { contactId, accountId }));
 
 /** 連絡先とそのアカウントの同期をやめる。deleteRemote なら次の同期で向こうの連絡先も削除する
  *  （偽ならつながりだけ外し、向こうは残る）。Rondine の連絡先はどちらでも残る。 */
 export const contactSyncStop = (contactId: number, accountId: number, deleteRemote: boolean) =>
-  invoke<void>('contact_sync_stop', { contactId, accountId, deleteRemote });
+  changed(invoke<void>('contact_sync_stop', { contactId, accountId, deleteRemote }));

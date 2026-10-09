@@ -403,7 +403,8 @@
       "all": "All",
       "google": "Google",
       "icloud": "iCloud",
-      "rondine": "Rondine"
+      "rondine": "Rondine",
+      "googleDup": "Dupes {{count}}"
     },
     "sourceEmpty": "No contacts match this filter.",
     "link": {
@@ -417,13 +418,18 @@
       "all": "All contacts",
       "google": "Contacts synced with Google",
       "icloud": "Contacts synced with iCloud",
-      "rondine": "Contacts not synced with any service (Rondine only)"
+      "rondine": "Contacts not synced with any service (Rondine only)",
+      "googleDup": "Contacts with two or more entries in the same Google account (left over from earlier merges; tidy them up from the sync section of the contact)"
     },
     "deleteTitle": "Delete contact",
     "deleteAlsoRemote": "It will also be deleted from your {{service}} contacts (the deletion is sent on the next sync).",
     "syncTargets": "Sync to",
     "syncSaveTo": "Also save to {{service}} ({{account}})",
     "syncTargetsHint": "Contacts are saved in Rondine first. They are saved to the checked services on the next sync.",
+    "syncDuplicates": "{{total}} entries in Google Contacts ({{account}})",
+    "syncDuplicatesRun": "Merge into one in Google",
+    "syncDuplicatesTitle": "Merge Google duplicates",
+    "syncDuplicatesBody": "Delete {{count}} from Google and keep one ({{account}}). The Rondine contact does not change.",
     "syncPendingCreate": "To be created",
     "syncPendingDelete": "To be deleted",
     "syncStopTitle": "Stop syncing with {{account}}",
@@ -552,8 +558,8 @@
     "googleTrashNote": "Deletions are sent on the next sync. Contacts deleted in Google can be restored from the Google Contacts trash for 30 days.",
     "googleMergeTitle": "Merge in Google Contacts too",
     "googleMergeBody": "Some of these contacts are separate entries in the same Google account. Merging in Rondine keeps just one of them in Google and updates it with the merged details.",
-    "googleLeftover": "{{count}} duplicates remain in Google Contacts. Merge them?",
-    "googleLeftoverRun": "Merge",
+    "googleLeftover": "Google side: {{count}} duplicates remain. Merge them?",
+    "googleLeftoverRun": "Merge in Google",
     "googleLeftoverTitle": "Merge duplicates in Google Contacts",
     "googleLeftoverBody": "Contacts you merged earlier in Rondine are still separate entries in Google. Keep one of each and delete the rest in Google. Your Rondine contacts are not changed.",
     "googleLeftoverDone": "{{count}} will be deleted from Google Contacts on the next sync.",
@@ -653,7 +659,6 @@
     "gcalError": "Error: {{message}}",
     "gcontactsLastSync": "Contacts last imported: {{when}}",
     "gcontactsNeverSynced": "Contacts never imported",
-    "gcontactsPushNew": "Save new contacts to Google by default (pre-checked when creating a contact)",
     "trashPurgeRun": "Delete permanently",
     "gcalReconnect": "Reconnect",
     "gcalDisconnectedBadge": "Disconnected",

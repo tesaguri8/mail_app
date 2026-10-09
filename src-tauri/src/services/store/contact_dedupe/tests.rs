@@ -297,6 +297,50 @@ fn tidying_existing_duplicate_ids_uses_the_same_rule() {
     assert_eq!(s.tidy_duplicate_remote_ids().unwrap(), 0);
 }
 
+/// 1 人ずつ片付ける: その人の余りだけを削除待ちにし、ほかの人は触らない。絞り込み（重複の
+/// 残る人の ID）から外れる。解除中のアカウントの重複は数えず、片付けもしない。
+#[test]
+fn tidying_one_person_leaves_the_others_and_skips_disconnected() {
+    let s = store();
+    let a = s.upsert_google_account("a@gmail.com", None, None).unwrap();
+    let b = s.upsert_google_account("b@gmail.com", None, None).unwrap();
+    let p = google_person(&s, a, "伊藤", &["people/i1", "people/i2"]);
+    let q = google_person(&s, a, "加藤", &["people/k1", "people/k2", "people/k3"]);
+    let r = google_person(&s, b, "佐藤", &["people/s1", "people/s2"]);
+    s.disconnect_google_account(b).unwrap();
+
+    assert_eq!(s.contacts_with_duplicate_remote_ids().unwrap(), vec![p, q]);
+    let found = s.duplicate_remote_ids_for(q).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!((found[0].account_id as i64, found[0].count), (a, 2));
+    assert_eq!(link_state(&s, "people/k2"), Some((q, false)), "数えるだけ");
+
+    assert_eq!(s.tidy_duplicate_remote_ids_for(q).unwrap(), 2);
+    assert_eq!(link_state(&s, "people/k1"), Some((q, false)));
+    assert_eq!(link_state(&s, "people/k2"), Some((q, true)));
+    assert_eq!(link_state(&s, "people/k3"), Some((q, true)));
+    // 詳細の印は、残る 1 本を見て「同期中」のまま（削除待ちの余りに引きずられない）。
+    let links = s.get_contact(q).unwrap().links;
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0].state, crate::models::ContactLinkState::Synced);
+    assert_eq!(
+        link_state(&s, "people/i2"),
+        Some((p, false)),
+        "ほかの人は触らない"
+    );
+    assert_eq!(s.contacts_with_duplicate_remote_ids().unwrap(), vec![p]);
+    assert_eq!(
+        s.duplicate_remote_ids().unwrap()[0].count,
+        1,
+        "一括の件数も減る"
+    );
+
+    // 解除中は対象外。
+    assert!(s.duplicate_remote_ids_for(r).unwrap().is_empty());
+    assert_eq!(s.tidy_duplicate_remote_ids_for(r).unwrap(), 0);
+    assert_eq!(link_state(&s, "people/s2"), Some((r, false)));
+}
+
 /// 確実な重複をまとめて統合: 下見の件数と実行の結果がそろい、Google の余りは削除待ちになる。
 /// 確実でない組（メールが違う）は触らない。
 #[test]

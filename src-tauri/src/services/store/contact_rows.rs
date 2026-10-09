@@ -315,10 +315,11 @@ fn load_links(conn: &Connection, scope: Scope) -> rusqlite::Result<HashMap<i64, 
     } else {
         where_sql
     };
-    // state: 0 = 同期中 / 1 = 作成待ち / 2 = 削除待ち（同じアカウントに複数あれば大きいほう）。
+    // state: 0 = 同期中 / 1 = 作成待ち / 2 = 削除待ち。同じアカウントに複数あれば生きているほう
+    // （小さいほう）。重複を片付けて余りが削除待ちになっても、残る 1 本は同期中のまま見せる。
     let sql = format!(
         "SELECT t.contact_id, t.provider, t.account_id, ga.email, \
-                ga.disconnected_at IS NOT NULL, MAX(t.state), \
+                ga.disconnected_at IS NOT NULL, MIN(t.state), \
                 COALESCE(p.display_name, ga.email) \
          FROM ( \
              SELECT contact_id, provider, account_id, \

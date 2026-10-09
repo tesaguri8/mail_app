@@ -3,18 +3,30 @@ import { useTranslation } from 'react-i18next';
 import { RefreshCcw } from 'lucide-react';
 import type { ContactLink } from '@bindings/ContactLink';
 import type { GoogleAccount } from '@bindings/GoogleAccount';
+import type { MergeRemoteDeletion } from '@bindings/MergeRemoteDeletion';
 import { googleAccounts } from '../services/google';
-import { contactSyncStop, contactSyncTargetAdd } from '../services/contacts';
+import {
+  contactGoogleDuplicatesOf,
+  contactGoogleDuplicatesTidyOf,
+  contactSyncStop,
+  contactSyncTargetAdd,
+} from '../services/contacts';
+import { getNewContactTarget, setNewContactTarget } from '../config/prefs';
 import { ConfirmDialog } from './ConfirmDialog';
+import { GoogleDuplicateBar } from './GoogleDuplicateNotice';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 /** 同期先に選べるアカウント（連携中＝解除中でない、かつ連絡先を同期している）。 */
 export const selectableAccount = (a: GoogleAccount) => a.sync_contacts && a.disconnected_at == null;
 
-/** 新規作成の画面で最初からチェックを入れるアカウント（「既定で Google にも保存」）。 */
-export const defaultTargets = (accounts: GoogleAccount[]): Set<number> =>
-  new Set(accounts.filter((a) => selectableAccount(a) && a.push_new_contacts).map((a) => a.id));
+/** 新規作成の画面で最初からチェックを入れるアカウント（選べるもののうち、前回外していないもの。
+ *  未記録はオン）。`isOn` はアカウント別の前回の選択（既定は端末に覚えたもの）。 */
+export const defaultTargets = (
+  accounts: GoogleAccount[],
+  isOn: (accountId: number) => boolean = getNewContactTarget
+): Set<number> =>
+  new Set(accounts.filter((a) => selectableAccount(a) && isOn(a.id)).map((a) => a.id));
 
 /**
  * 連絡先の「同期先」（docs/CONTACT_MODEL.md §3「同期先は 1 人ずつ選ぶ」）。
@@ -49,6 +61,21 @@ export function ContactSyncTargets({
     account: GoogleAccount;
     deleteRemote: boolean;
   } | null>(null);
+  // 同じ Google アカウントに 2 件以上ある（以前の統合の名残）。アカウントごとの余りの件数。
+  const [dupes, setDupes] = useState<MergeRemoteDeletion[]>([]);
+  // 「1 件にまとめる」の確認（null＝出していない）。
+  const [tidying, setTidying] = useState<MergeRemoteDeletion | null>(null);
+
+  // つながりが変わるたびに数え直す（まとめたあと・同期先を変えたあと）。
+  useEffect(() => {
+    if (!isTauri || contactId === null) {
+      setDupes([]);
+      return;
+    }
+    contactGoogleDuplicatesOf(contactId)
+      .then(setDupes)
+      .catch(() => setDupes([]));
+  }, [contactId, links]);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -57,7 +84,7 @@ export function ContactSyncTargets({
       .catch(() => setAccounts([]));
   }, []);
 
-  // 新規の画面を開いたら、「既定で Google にも保存」のアカウントに最初からチェックを入れる（外せる）。
+  // 新規の画面を開いたら、選べるアカウントに最初からチェックを入れる（前回外したものは外したまま）。
   useEffect(() => {
     if (contactId === null && selected === null && accounts.length > 0) {
       onSelectedChange(defaultTargets(accounts));
@@ -88,6 +115,8 @@ export function ContactSyncTargets({
       const next = new Set(selected ?? []);
       if (next.has(a.id)) next.delete(a.id);
       else next.add(a.id);
+      // 変えた選択は、次に新しく作るときの既定にする（メールからの追加でも同じ）。
+      setNewContactTarget(a.id, next.has(a.id));
       onSelectedChange(next);
       return;
     }
@@ -100,6 +129,15 @@ export function ContactSyncTargets({
     } else {
       setStopping({ account: a, deleteRemote: false });
     }
+  };
+
+  // その人の重複だけを片付ける（1 つ残し、余りは次の同期で Google から削除。一括と同じ規則）。
+  const tidy = () => {
+    if (contactId === null) return;
+    setTidying(null);
+    void run(async () => {
+      await contactGoogleDuplicatesTidyOf(contactId);
+    });
   };
 
   const stop = () => {
@@ -157,8 +195,33 @@ export function ContactSyncTargets({
           );
         })}
       </ul>
+      {dupes.map((d) => (
+        <div key={d.account_id} className="mt-1">
+          <GoogleDuplicateBar
+            text={t('contact.syncDuplicates', { total: d.count + 1, account: d.account_label })}
+            actionLabel={t('contact.syncDuplicatesRun')}
+            onAction={() => setTidying(d)}
+            disabled={busy}
+          />
+        </div>
+      ))}
       <p className="mt-1 text-[11px] text-white/40">{t('contact.syncTargetsHint')}</p>
       {error && <p className="mt-1 text-xs text-red-300">{error}</p>}
+
+      {tidying && (
+        <ConfirmDialog
+          title={t('contact.syncDuplicatesTitle')}
+          body={t('contact.syncDuplicatesBody', {
+            count: tidying.count,
+            account: tidying.account_label,
+          })}
+          notes={[t('dupes.googleTrashNote')]}
+          confirmLabel={t('contact.syncDuplicatesRun')}
+          danger
+          onConfirm={tidy}
+          onCancel={() => setTidying(null)}
+        />
+      )}
 
       {stopping && (
         <ConfirmDialog

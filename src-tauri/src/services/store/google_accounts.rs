@@ -53,7 +53,7 @@ impl GoogleService {
 }
 
 fn row_to_account(r: &Row) -> rusqlite::Result<GoogleAccount> {
-    let scopes: Option<String> = r.get(8)?;
+    let scopes: Option<String> = r.get(7)?;
     Ok(GoogleAccount {
         id: r.get::<_, i64>(0)? as i32,
         email: r.get(1)?,
@@ -61,8 +61,7 @@ fn row_to_account(r: &Row) -> rusqlite::Result<GoogleAccount> {
         sync_contacts: r.get::<_, i64>(3)? != 0,
         last_calendar_sync_at: r.get(4)?,
         last_contacts_sync_at: r.get(5)?,
-        push_new_contacts: r.get::<_, i64>(6)? != 0,
-        disconnected_at: r.get(7)?,
+        disconnected_at: r.get(6)?,
         calendar_granted: GoogleService::Calendar.is_granted(scopes.as_deref()),
         contacts_granted: GoogleService::Contacts.is_granted(scopes.as_deref()),
     })
@@ -71,7 +70,7 @@ fn row_to_account(r: &Row) -> rusqlite::Result<GoogleAccount> {
 /// 一覧・単票で共通に使う選択列（row_to_account の並びと対応）。
 const ACCOUNT_COLUMNS: &str =
     "id, email, sync_calendar, sync_contacts, last_calendar_sync_at, last_contacts_sync_at, \
-     push_new_contacts, disconnected_at, granted_scopes";
+     disconnected_at, granted_scopes";
 
 impl Store {
     /// Google アカウントを登録（既存なら external_id と許可スコープを更新）し、行 id を返す。

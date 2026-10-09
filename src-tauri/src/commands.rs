@@ -1950,6 +1950,37 @@ pub fn contact_google_duplicates_tidy(store: State<Store>) -> Result<usize, Stri
     store.tidy_duplicate_remote_ids().map_err(|e| e.to_string())
 }
 
+/// Google の重複が残っている連絡先の ID（連絡先の一覧の「Google に重複あり」の絞り込み用）。
+#[tauri::command]
+pub fn contact_google_duplicate_ids(store: State<Store>) -> Result<Vec<i64>, String> {
+    store
+        .contacts_with_duplicate_remote_ids()
+        .map_err(|e| e.to_string())
+}
+
+/// その人に残っている Google の重複を、片付けたら消すことになる件数（アカウントごと）。読むだけ。
+#[tauri::command]
+pub fn contact_google_duplicates_of(
+    store: State<Store>,
+    contact_id: i64,
+) -> Result<Vec<MergeRemoteDeletion>, String> {
+    store
+        .duplicate_remote_ids_for(contact_id)
+        .map_err(|e| e.to_string())
+}
+
+/// その人に残っている Google の重複だけを片付ける（余りを削除待ちにし、次の同期で Google 側から
+/// 削除する）。削除待ちにした件数を返す。
+#[tauri::command]
+pub fn contact_google_duplicates_tidy_of(
+    store: State<Store>,
+    contact_id: i64,
+) -> Result<usize, String> {
+    store
+        .tidy_duplicate_remote_ids_for(contact_id)
+        .map_err(|e| e.to_string())
+}
+
 /// 確実な重複（名前・メールの集合・電話の集合が同じで、食い違う欄が無い組）をまとめて統合したら
 /// どうなるか。読むだけ。重複の整理の「確実な重複をまとめて統合」の下見。
 #[tauri::command]
@@ -2628,16 +2659,18 @@ pub async fn google_disconnect(
 
 /// Google アカウント 1 件を同期する（「今すぐ同期」・自動同期）。
 ///
-/// カレンダー（有効なら）と、`contacts` を立てたときは連絡先（push → pull）も同期し、
-/// 続けて未照合の連絡先を住所録へ反映する（`services::google::account`）。自動同期は連絡先を
-/// 毎回は同期しない（重いため）ので、その判断は呼び出し側が `contacts` で渡す。
+/// `calendar` を立てたらカレンダー（有効なら）、`contacts` を立てたら連絡先（push → pull）を
+/// 同期し、続けて未照合の連絡先を住所録へ反映する（`services::google::account`）。自動同期は
+/// カレンダーと連絡先を別々の流れで呼ぶ（連絡先の送信が長くてもメール・カレンダーを塞がない）。
 #[tauri::command]
 pub async fn google_sync(
     app: AppHandle,
     store: State<'_, Store>,
     account_id: i64,
+    calendar: bool,
     contacts: bool,
 ) -> Result<GoogleSyncResult, String> {
+    log::info!("google_sync: account {account_id} calendar={calendar} contacts={contacts}");
     google_ensure_connected(store.inner(), account_id)?;
     let account = store
         .google_account(account_id)
@@ -2650,7 +2683,7 @@ pub async fn google_sync(
         store.inner(),
         &access,
         &account,
-        google::account::SyncScope { contacts },
+        google::account::SyncScope { calendar, contacts },
     )
     .await)
 }
@@ -2690,19 +2723,6 @@ pub fn contact_sync_stop(
 ) -> Result<(), String> {
     store
         .stop_contact_sync(contact_id, account_id, delete_remote)
-        .map_err(|e| e.to_string())
-}
-
-/// 「新しく作る連絡先は、既定で Google にも保存する」を切り替える（新規作成の画面で最初から
-/// チェックを入れるかの既定。どこにもつながっていない連絡先を勝手に作ることはしない）。
-#[tauri::command]
-pub fn gcontacts_set_push_new(
-    store: State<Store>,
-    account_id: i64,
-    enabled: bool,
-) -> Result<(), String> {
-    store
-        .set_push_new_contacts(account_id, enabled)
         .map_err(|e| e.to_string())
 }
 

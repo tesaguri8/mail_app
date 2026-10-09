@@ -15,6 +15,7 @@ const PHONE_AUTOFORMAT_KEY = 'rondine.phoneAutoformat';
 const COMPOSE_AUTOSAVE_KEY = 'rondine.composeAutosave';
 /** 「最後に使った署名」はアカウント別に持つ（キーは `<接頭辞><アカウントid>`）。 */
 const LAST_SIGNATURE_PREFIX = 'rondine.lastSignature.';
+const NEW_CONTACT_TARGET_PREFIX = 'rondine.newContactTarget.';
 export const PREFS_EVENT = 'rondine:prefs';
 
 /** 本文埋め込み画像（inline asset）を自動取得して表示するか。既定: オン。 */
@@ -137,6 +138,20 @@ export function setLastSignature(accountId: number, signatureId: number | null):
     `${LAST_SIGNATURE_PREFIX}${accountId}`,
     signatureId == null ? '' : String(signatureId),
   );
+}
+
+/**
+ * 新しく作る連絡先の同期先に、このアカウントへ最初からチェックを入れるか（アカウント別）。
+ * docs/CONTACTS_SYNC.md §2-5（利用者の判断 2026-10-09: 設定には置かず、既定はオン、
+ * 作成の画面で変えたら次からはその選択を使う）。端末ごとの画面の既定なので DB には持たない。
+ */
+export function getNewContactTarget(accountId: number): boolean {
+  return localStorage.getItem(`${NEW_CONTACT_TARGET_PREFIX}${accountId}`) !== '0';
+}
+
+/** 作成の画面で変えた同期先のチェックを、そのアカウントの次回の既定として覚える。 */
+export function setNewContactTarget(accountId: number, on: boolean): void {
+  localStorage.setItem(`${NEW_CONTACT_TARGET_PREFIX}${accountId}`, on ? '1' : '0');
 }
 
 /** 実効の自動同期間隔（秒）。オフなら 0（useAutoSync が参照）。 */

@@ -185,6 +185,11 @@ impl Store {
                 linked_contact_ids(&conn, account_id)?,
             )
         };
+        // 未照合が無ければ住所録を読まない（自動同期は毎回これを通るので、全員を中身まで読む
+        // 重い処理を空回りさせない）。
+        if remote.is_empty() {
+            return Ok((remote, Vec::new()));
+        }
         let locals = self.contacts_for_dedupe()?;
         let plan = contact_match::plan(&remote, &locals, &already_linked);
         Ok((remote, plan))
@@ -228,19 +233,6 @@ impl Store {
         }
         tx.commit()?;
         Ok(report)
-    }
-
-    /// 上の設定を変える。
-    ///
-    /// # Errors
-    /// DB の書き込みに失敗したとき。
-    pub fn set_push_new_contacts(&self, account_id: i64, enabled: bool) -> rusqlite::Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "UPDATE google_accounts SET push_new_contacts = ?2 WHERE id = ?1",
-            params![account_id, enabled as i64],
-        )?;
-        Ok(())
     }
 
     /// このアカウントへ送るべきローカル変更を送信順に返す。

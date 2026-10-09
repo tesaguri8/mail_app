@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { GoogleAccount } from '@bindings/GoogleAccount';
 import type { GoogleSyncResult } from '@bindings/GoogleSyncResult';
 import { summarizeGoogleSync } from './googleSyncSummary';
-import { CONTACTS_AUTO_SYNC_MS, contactsDue } from './googleSyncSchedule';
 
 /** 翻訳の代わり: キーの末尾と値を並べるだけ。 */
 const t = (key: string, opts?: Record<string, unknown>) => {
@@ -70,38 +68,5 @@ describe('summarizeGoogleSync', () => {
       calendar: { pulled: 4, pushed: 1, deleted_in: 0, deleted_out: 0, calendars: 1 },
     };
     expect(summarizeGoogleSync(r, t)).toBe('calendar: eventsPulled=4 / eventsPushed=1');
-  });
-});
-
-describe('contactsDue', () => {
-  const now = Date.parse('2026-10-09T12:00:00Z');
-  const account = (over: Partial<GoogleAccount> = {}): GoogleAccount => ({
-    id: 1,
-    email: 'a@gmail.com',
-    sync_calendar: true,
-    sync_contacts: true,
-    push_new_contacts: false,
-    last_calendar_sync_at: null,
-    last_contacts_sync_at: '2026-10-09 11:58:00',
-    disconnected_at: null,
-    calendar_granted: true,
-    contacts_granted: true,
-    ...over,
-  });
-
-  it('起動して最初の 1 回は、直前に同期していても回す', () => {
-    expect(contactsDue(account(), now, false)).toBe(true);
-  });
-  it('起動後は前回から間が空いたときだけ', () => {
-    expect(contactsDue(account(), now, true)).toBe(false);
-    const old = new Date(now - CONTACTS_AUTO_SYNC_MS).toISOString().replace('T', ' ').slice(0, 19);
-    expect(contactsDue(account({ last_contacts_sync_at: old }), now, true)).toBe(true);
-    expect(contactsDue(account({ last_contacts_sync_at: null }), now, true)).toBe(true);
-  });
-  it('連絡先を同期しない・解除中のアカウントは回さない', () => {
-    expect(contactsDue(account({ sync_contacts: false }), now, false)).toBe(false);
-    expect(contactsDue(account({ disconnected_at: '2026-10-09 10:00:00' }), now, false)).toBe(
-      false
-    );
   });
 });

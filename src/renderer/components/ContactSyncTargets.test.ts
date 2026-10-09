@@ -7,7 +7,6 @@ const account = (id: number, over: Partial<GoogleAccount> = {}): GoogleAccount =
   email: `a${id}@gmail.com`,
   sync_calendar: true,
   sync_contacts: true,
-  push_new_contacts: false,
   last_calendar_sync_at: null,
   last_contacts_sync_at: null,
   disconnected_at: null,
@@ -23,12 +22,16 @@ describe('同期先に選べるアカウント', () => {
     expect(selectableAccount(account(3, { disconnected_at: '2026-10-09 10:00:00' }))).toBe(false);
   });
 
-  it('新規の既定は「既定で Google にも保存」のアカウントだけ（解除中は除く）', () => {
+  it('新規の既定は選べるアカウントすべて（前回外したもの・解除中・連絡先を同期していないものは除く）', () => {
     const accounts = [
-      account(1, { push_new_contacts: true }),
+      account(1),
       account(2),
-      account(3, { push_new_contacts: true, disconnected_at: '2026-10-09 10:00:00' }),
+      account(3, { disconnected_at: '2026-10-09 10:00:00' }),
+      account(4, { sync_contacts: false }),
     ];
-    expect([...defaultTargets(accounts)]).toEqual([1]);
+    // 未記録はオン。
+    expect([...defaultTargets(accounts, () => true)]).toEqual([1, 2]);
+    // 前回 2 を外した。
+    expect([...defaultTargets(accounts, (id) => id !== 2)]).toEqual([1]);
   });
 });

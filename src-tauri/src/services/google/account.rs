@@ -5,6 +5,8 @@
 //! 別々に押していたが、分けている意味が無い（利用者の判断 2026-10-09）ので一本化した。
 //!
 //! - カレンダーと連絡先は独立に進める。片方が失敗しても、もう片方は続け、失敗は結果に添える
+//! - 自動同期はカレンダーと連絡先を別々の呼び出しで流す（[`SyncScope`]。連絡先の送信が長くても
+//!   メール・カレンダーの巡回を塞がないため / 利用者の判断 2026-10-09）。「今すぐ同期」は両方
 //! - 連絡先は push → pull → 照合の適用（[`Store::apply_contact_matches`]。規則は今までどおり:
 //!   高確信は既存へつなぐ、それ以外は新規として起こし、迷ったものは重複整理の候補になる）
 //! - 解除中のアカウントの扱い・アクセストークンの取得は呼び出し側（commands 層）
@@ -18,7 +20,9 @@ use crate::services::store::Store;
 /// 同期する範囲。
 #[derive(Debug, Clone, Copy)]
 pub struct SyncScope {
-    /// 連絡先も同期するか（同期をオンにしているアカウントでは、自動同期も毎回 true で呼ぶ）。
+    /// カレンダーを同期するか（アカウントで有効にしていなければ true でも同期しない）。
+    pub calendar: bool,
+    /// 連絡先を同期するか（アカウントで有効にしていて許可が無ければ true でも同期しない）。
     pub contacts: bool,
 }
 
@@ -30,8 +34,8 @@ fn contacts_allowed(account: &GoogleAccount, scopes: Option<&str>) -> bool {
     account.sync_contacts && scopes.is_some_and(|g| g.split(' ').any(|s| s == SCOPE_CONTACTS))
 }
 
-/// アカウント 1 件を同期する。カレンダー（有効なら）→ 連絡先（範囲に含め、有効で許可が
-/// あれば）の順。
+/// アカウント 1 件を同期する。カレンダー（範囲に含め、有効なら）→ 連絡先（範囲に含め、有効で
+/// 許可があれば）の順。
 ///
 /// 失敗は種類ごとに結果へ入れて返す（カレンダーが失敗しても連絡先は進める）。
 pub async fn sync_account(
@@ -43,7 +47,7 @@ pub async fn sync_account(
     let account_id = i64::from(account.id);
     let mut out = GoogleSyncResult::default();
 
-    if account.sync_calendar {
+    if scope.calendar && account.sync_calendar {
         match calendar_sync::sync_account(store, access_token, account_id).await {
             Ok(r) => out.calendar = Some(r),
             Err(e) => out.calendar_error = Some(e),

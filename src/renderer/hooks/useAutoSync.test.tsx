@@ -6,19 +6,23 @@ import type { AccountSummary } from '@bindings/AccountSummary';
 import type { GoogleAccount } from '@bindings/GoogleAccount';
 
 // 自動同期の決まり（利用者の判断 2026-10-09）: どの画面にいても動く／連絡先も毎回同期する／
-// 連絡先を変えたら、まとめ待ちのあと Google だけを同期する。
+// 連絡先を変えたら、まとめ待ちのあと連絡先だけを同期する。連絡先はメール・カレンダーとは別の流れ。
+
+const EMPTY_RESULT = vi.hoisted(() => ({
+  calendar: null,
+  calendar_error: null,
+  contacts: null,
+  matched: null,
+  contacts_error: null,
+}));
 
 const mocks = vi.hoisted(() => {
   // isTauri の判定（モジュールを読む時点で見る）。
   (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
   return {
     mailSync: vi.fn(async () => ({ stored: 0 })),
-    googleSync: vi.fn(async () => ({
-      calendar: null,
-      calendar_error: null,
-      contacts: null,
-      matched: null,
-      contacts_error: null,
+    googleSync: vi.fn(async (_id: number, _scope: { calendar: boolean; contacts: boolean }) => ({
+      ...EMPTY_RESULT,
     })),
     googleAccounts: vi.fn(async () => [] as GoogleAccount[]),
     interval: { sec: 30 },
@@ -73,7 +77,8 @@ const advance = (ms: number) =>
 beforeEach(() => {
   vi.useFakeTimers();
   mocks.mailSync.mockClear();
-  mocks.googleSync.mockClear();
+  mocks.googleSync.mockReset();
+  mocks.googleSync.mockResolvedValue({ ...EMPTY_RESULT });
   mocks.googleAccounts.mockReset();
   mocks.googleAccounts.mockResolvedValue([google()]);
   mocks.interval.sec = 30;
@@ -95,16 +100,21 @@ const mount = async (accounts: AccountSummary[] = [mailAccount]) => {
   await advance(0);
 };
 
+const CAL = { calendar: true, contacts: false };
+const CONTACTS = { calendar: false, contacts: true };
+
 describe('useAutoSync', () => {
   it('起動直後に同期し、連絡先も毎回同期する（10 分の間隔は無い）', async () => {
     await mount();
     expect(mocks.mailSync).toHaveBeenCalledWith(10);
-    expect(mocks.googleSync).toHaveBeenLastCalledWith(1, true);
+    expect(mocks.googleSync).toHaveBeenCalledWith(1, CAL);
+    expect(mocks.googleSync).toHaveBeenCalledWith(1, CONTACTS);
+    expect(mocks.googleSync).toHaveBeenCalledTimes(2);
 
     // 次の巡回（30 秒後）でも連絡先を同期する。
     await advance(30_000);
-    expect(mocks.googleSync).toHaveBeenCalledTimes(2);
-    expect(mocks.googleSync).toHaveBeenLastCalledWith(1, true);
+    expect(mocks.googleSync).toHaveBeenCalledTimes(4);
+    expect(mocks.googleSync.mock.calls.filter((c) => c[1].contacts)).toHaveLength(2);
   });
 
   it('画面の指定は無く、設定の間隔でずっと回る（どの画面にいても動く）', async () => {
@@ -113,7 +123,26 @@ describe('useAutoSync', () => {
     expect(mocks.mailSync).toHaveBeenCalledTimes(4);
   });
 
-  it('連絡先を変えたら、まとめ待ちのあと Google だけを 1 回同期する', async () => {
+  it('連絡先の送信が長くても、メール・カレンダーの巡回は塞がれない', async () => {
+    // 連絡先の同期だけ終わらない（数千件の送信中）。
+    let finish = () => undefined as void;
+    mocks.googleSync.mockImplementation(async (_id, scope) => {
+      if (scope.contacts) await new Promise<void>((r) => (finish = r));
+      return { ...EMPTY_RESULT };
+    });
+    await mount();
+    await advance(60_000);
+    expect(mocks.mailSync).toHaveBeenCalledTimes(3);
+    expect(mocks.googleSync.mock.calls.filter((c) => c[1].calendar)).toHaveLength(3);
+    // 連絡先は 1 本だけ走り、待っている間の依頼は終わってから 1 回にまとめて回す。
+    expect(mocks.googleSync.mock.calls.filter((c) => c[1].contacts)).toHaveLength(1);
+    await act(async () => finish());
+    await advance(0);
+    expect(mocks.googleSync.mock.calls.filter((c) => c[1].contacts)).toHaveLength(2);
+    await act(async () => finish());
+  });
+
+  it('連絡先を変えたら、まとめ待ちのあと連絡先だけを 1 回同期する', async () => {
     await mount();
     mocks.mailSync.mockClear();
     mocks.googleSync.mockClear();
@@ -127,7 +156,7 @@ describe('useAutoSync', () => {
     expect(mocks.googleSync).not.toHaveBeenCalled();
     await advance(1);
     expect(mocks.googleSync).toHaveBeenCalledTimes(1);
-    expect(mocks.googleSync).toHaveBeenLastCalledWith(1, true);
+    expect(mocks.googleSync).toHaveBeenLastCalledWith(1, CONTACTS);
     // メールのサーバーは叩かない。
     expect(mocks.mailSync).not.toHaveBeenCalled();
   });
@@ -146,6 +175,7 @@ describe('useAutoSync', () => {
   it('連絡先の同期をしていないアカウントは、連絡先を同期しない', async () => {
     mocks.googleAccounts.mockResolvedValue([google({ sync_contacts: false })]);
     await mount();
-    expect(mocks.googleSync).toHaveBeenLastCalledWith(1, false);
+    expect(mocks.googleSync).toHaveBeenCalledTimes(1);
+    expect(mocks.googleSync).toHaveBeenLastCalledWith(1, CAL);
   });
 });

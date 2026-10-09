@@ -75,7 +75,7 @@ export function GoogleServices({
 
   // 同期して結果を出す。片方だけ失敗しても、もう片方の結果は出す。
   const syncNow = async (id: number, contacts: boolean) => {
-    const r = await googleSync(id, contacts);
+    const r = await googleSync(id, { calendar: true, contacts });
     setMessage(summarizeGoogleSync(r, t) || null);
     const errors = [r.calendar_error, r.contacts_error].filter((e): e is string => !!e);
     if (errors.length > 0) setError(errors.join(' / '));

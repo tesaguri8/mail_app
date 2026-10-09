@@ -2628,17 +2628,18 @@ pub async fn google_disconnect(
 
 /// Google アカウント 1 件を同期する（「今すぐ同期」・自動同期）。
 ///
-/// カレンダー（有効なら）と、`contacts` を立てたときは連絡先（push → pull）も同期し、
-/// 続けて未照合の連絡先を住所録へ反映する（`services::google::account`）。自動同期は連絡先を
-/// 毎回は同期しない（重いため）ので、その判断は呼び出し側が `contacts` で渡す。
+/// `calendar` を立てたらカレンダー（有効なら）、`contacts` を立てたら連絡先（push → pull）を
+/// 同期し、続けて未照合の連絡先を住所録へ反映する（`services::google::account`）。自動同期は
+/// カレンダーと連絡先を別々の流れで呼ぶ（連絡先の送信が長くてもメール・カレンダーを塞がない）。
 #[tauri::command]
 pub async fn google_sync(
     app: AppHandle,
     store: State<'_, Store>,
     account_id: i64,
+    calendar: bool,
     contacts: bool,
 ) -> Result<GoogleSyncResult, String> {
-    log::info!("google_sync: account {account_id} contacts={contacts}");
+    log::info!("google_sync: account {account_id} calendar={calendar} contacts={contacts}");
     google_ensure_connected(store.inner(), account_id)?;
     let account = store
         .google_account(account_id)
@@ -2651,7 +2652,7 @@ pub async fn google_sync(
         store.inner(),
         &access,
         &account,
-        google::account::SyncScope { contacts },
+        google::account::SyncScope { calendar, contacts },
     )
     .await)
 }

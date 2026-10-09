@@ -39,7 +39,11 @@ export const googleSetService = (accountId: number, service: GoogleService, enab
 export const googleDisconnect = (accountId: number, purge: boolean) =>
   invoke<GoogleDisconnectResult>('google_disconnect', { accountId, purge });
 
-/** アカウント 1 件を同期する。カレンダーと、contacts=true なら連絡先（push → pull）も同期し、
- *  取り込んだ連絡先を住所録へ反映する（「今すぐ同期」は常に true。自動同期は間隔を空けて true）。 */
-export const googleSync = (accountId: number, contacts: boolean) =>
-  invoke<GoogleSyncResult>('google_sync', { accountId, contacts });
+/** Google の同期の範囲。アカウントで有効にしていない種類は、true でも同期しない。 */
+export type GoogleSyncScope = { calendar: boolean; contacts: boolean };
+
+/** アカウント 1 件を同期する。範囲に含めたカレンダーと連絡先（push → pull）を同期し、
+ *  取り込んだ連絡先を住所録へ反映する（「今すぐ同期」は両方。自動同期はカレンダーと連絡先を
+ *  別々の流れで呼ぶ — 連絡先の送信が長くてもメール・カレンダーを塞がないため）。 */
+export const googleSync = (accountId: number, scope: GoogleSyncScope) =>
+  invoke<GoogleSyncResult>('google_sync', { accountId, ...scope });

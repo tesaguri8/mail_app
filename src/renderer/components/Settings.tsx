@@ -47,8 +47,7 @@ import {
   mailTrashRetentionSet,
   mailTrashPurge,
 } from '../services/trash';
-import { AccountSetup } from './AccountSetup';
-import { SyncSettings } from './SyncSettings';
+import { AccountsSettings } from './accounts/AccountsSettings';
 import { ConfirmDialog } from './ConfirmDialog';
 import { SignatureManager } from './SignatureManager';
 import { TagManager } from './TagManager';
@@ -64,7 +63,6 @@ type Section =
   | 'signatures'
   | 'tags'
   | 'display'
-  | 'sync'
   | 'spam'
   | 'data'
   | 'about';
@@ -100,7 +98,6 @@ export function Settings({
     { key: 'signatures', label: t('settings.signatures') },
     { key: 'tags', label: t('settings.tags') },
     { key: 'display', label: t('settings.display') },
-    { key: 'sync', label: t('settings.syncMenu') },
     { key: 'spam', label: t('settings.spam') },
     { key: 'data', label: t('settings.data') },
     { key: 'about', label: t('settings.about') },
@@ -124,11 +121,10 @@ export function Settings({
       </nav>
 
       <div className="min-h-0 overflow-y-auto p-5">
-        {section === 'accounts' && <AccountSetup accounts={accounts} onChanged={onChanged} />}
+        {section === 'accounts' && <AccountsSettings accounts={accounts} onChanged={onChanged} />}
         {section === 'signatures' && <SignatureManager />}
         {section === 'tags' && <TagManager />}
         {section === 'display' && <DisplaySettings />}
-        {section === 'sync' && <SyncSettings />}
         {section === 'spam' && <SpamSettings />}
         {section === 'data' && (
           <div className="space-y-6">

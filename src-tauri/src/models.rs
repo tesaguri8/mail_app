@@ -111,6 +111,9 @@ pub struct ServerAccountSummary {
     pub smtp_host: String,
     pub smtp_port: u16,
     pub username: String,
+    /// この設定を使っているメールアカウント（`accounts.id`）。複数なら共有している
+    /// （カードの「メール」の詳細で共有先として見せる）。
+    pub account_ids: Vec<i32>,
 }
 
 /// メール一覧表示用（軽量）。

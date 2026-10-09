@@ -5,9 +5,9 @@ import type { CountryCode } from 'libphonenumber-js';
 import type { ContactValue } from '@bindings/ContactValue';
 import type { ContactAddress } from '@bindings/ContactAddress';
 import { countryOptions, parseStored, toE164 } from '../utils/phone';
-import { formatPostal } from '../utils/postal';
-import { getPhoneRegion, getPostalAutoformat } from '../config/prefs';
+import { getPhoneRegion } from '../config/prefs';
 import { LABEL_LIST_IDS, LABEL_LISTS, type LabelListKind } from '../utils/contactLabels';
+import { AddressFields } from './AddressFields';
 
 /** ラベル・サービス名の候補（datalist）。各行の input が list で参照するので、
  *  これらの行エディタを置く画面に 1 度だけ置く。 */
@@ -412,18 +412,8 @@ export function AddressRows({
 }) {
   const { t } = useTranslation();
   const dnd = useDnd(addresses, onChange);
-  // 郵便番号の整形基準は既定の国（自動整形オフなら素通し）。
-  const postalRegion = getPostalAutoformat() ? getPhoneRegion() : '';
   const set = (i: number, patch: Partial<ContactAddress>) =>
     onChange(addresses.map((a, idx) => (idx === i ? { ...a, ...patch } : a)));
-  const field = (i: number, key: keyof ContactAddress, ph: string, w = '') => (
-    <input
-      className={`rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15 ${w}`}
-      placeholder={ph}
-      value={(addresses[i][key] as string | null) ?? ''}
-      onChange={(e) => set(i, { [key]: e.target.value.trim() === '' ? null : e.target.value })}
-    />
-  );
   return (
     <div>
       <span className="mb-1 flex items-center gap-1.5 text-[11px] text-white/50">
@@ -459,19 +449,7 @@ export function AddressRows({
                 <X size={13} />
               </button>
             </div>
-            <div className="grid grid-cols-2 gap-1.5">
-              <input
-                className="rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
-                placeholder={t('contact.postal')}
-                value={formatPostal(a.postal ?? '', postalRegion)}
-                onChange={(e) => set(i, { postal: e.target.value.trim() === '' ? null : e.target.value })}
-              />
-              {field(i, 'region', t('contact.region'))}
-              {field(i, 'city', t('contact.city'))}
-              {field(i, 'street', t('contact.street'))}
-              {field(i, 'extended', t('contact.extended'), 'col-span-2')}
-              {field(i, 'country', t('contact.country'), 'col-span-2')}
-            </div>
+            <AddressFields value={a} onPatch={(p) => set(i, p)} countryCode={a.country_code} />
           </div>
         ))}
       </div>

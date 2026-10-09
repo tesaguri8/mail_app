@@ -21,6 +21,7 @@ import type { OrganizationSummary } from '@bindings/OrganizationSummary';
 import { organizationUpsert } from '../services/organizations';
 import type { OrgOverlap } from '../utils/orgOverlap';
 import { Field } from './ContactValueEditor';
+import { AddressFields } from './AddressFields';
 import { displayPhone, parseStored, toE164 } from '../utils/phone';
 import { formatPostal } from '../utils/postal';
 import { getPhoneRegion, getPhoneStyle, getPostalAutoformat } from '../config/prefs';
@@ -120,18 +121,9 @@ export function OrgCardFields({
   onChange: (next: OrganizationInput) => void;
 }) {
   const { t } = useTranslation();
-  const postalRegion = getPostalAutoformat() ? getPhoneRegion() : '';
   const a = draft.address;
   const setAddress = (patch: Partial<OrgAddress>) =>
     onChange({ ...draft, address: { ...a, ...patch } });
-  const addressField = (key: keyof OrgAddress, ph: string, w = '') => (
-    <input
-      className={`rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15 ${w}`}
-      placeholder={ph}
-      value={a[key] ?? ''}
-      onChange={(e) => setAddress({ [key]: nullify(e.target.value) })}
-    />
-  );
   return (
     <div className="space-y-3">
       <div className="flex gap-2">
@@ -164,19 +156,7 @@ export function OrgCardFields({
           <MapPin size={15} />
           {t('org.location')}
         </span>
-        <div className="grid grid-cols-2 gap-1.5">
-          <input
-            className="rounded bg-white/10 px-2 py-1.5 text-sm outline-none focus:bg-white/15"
-            placeholder={t('contact.postal')}
-            value={formatPostal(a.postal ?? '', postalRegion)}
-            onChange={(e) => setAddress({ postal: nullify(e.target.value) })}
-          />
-          {addressField('region', t('contact.region'))}
-          {addressField('city', t('contact.city'))}
-          {addressField('street', t('contact.street'))}
-          {addressField('extended', t('contact.extended'), 'col-span-2')}
-          {addressField('country', t('contact.country'), 'col-span-2')}
-        </div>
+        <AddressFields value={a} onPatch={setAddress} />
       </div>
       <Field icon={<StickyNote size={15} />} label={t('contact.note')}>
         <textarea

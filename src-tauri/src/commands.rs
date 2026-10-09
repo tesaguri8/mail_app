@@ -6,7 +6,7 @@ use crate::models::{
     GoogleCredentialsStatus, GoogleService,
     GreenDomainEntry,
     HomeUnreadCounts, IcsImportReport, ImportReport, MailDetail,
-    MailSummary, MergeRemoteDeletion, OrgChangeImpact, OrgDuplicateGroup, OrgLinkSuggestion, OrganizationDetail, OrganizationInput, OrganizationSummary,
+    MailSummary, MergeRemoteDeletion, OrgChangeImpact, OrgDuplicateGroup, OrgLinkSuggestion, OrganizationDetail, OrganizationInput, OrganizationSummary, PostalAddress,
     RebuildAction,
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSenderConflict, SpamSettings, SpamVerdict,
@@ -20,6 +20,7 @@ use crate::services::gcsv;
 use crate::services::google;
 use crate::services::imap_sync;
 use crate::services::media;
+use crate::services::postal;
 use crate::services::smtp;
 use crate::services::spam;
 use crate::services::store::{NewAccount, NewAttachment, NewServerAccount, PurgeRef, Store};
@@ -1605,6 +1606,31 @@ pub fn spam_settings_set(store: State<Store>, settings: SpamSettings) -> Result<
     store
         .set_spam_settings(&normalized)
         .map_err(|e| e.to_string())
+}
+
+/// 郵便番号から住所（都道府県・市区町村・町域）を引く（同梱の郵便番号表。外部へは送らない）。
+/// 初回は表の展開があるので、画面を止めないよう spawn_blocking に載せる。
+#[tauri::command]
+pub async fn postal_lookup_by_code(code: String) -> Result<Vec<PostalAddress>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        postal::lookup_by_code(&code).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 住所（都道府県・市区町村・町域以降）から郵便番号の候補を引く（同梱の郵便番号表）。
+#[tauri::command]
+pub async fn postal_lookup_by_address(
+    region: String,
+    city: String,
+    street: String,
+) -> Result<Vec<PostalAddress>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        postal::lookup_by_address(&region, &city, &street).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 連絡先一覧（`query` で名前/よみ/メール/組織を絞り込み、`groups` のいずれかのタグで絞り込み）。

@@ -13,6 +13,7 @@ import {
 } from '../services/contacts';
 import { getNewContactTarget, setNewContactTarget } from '../config/prefs';
 import { ConfirmDialog } from './ConfirmDialog';
+import { GoogleDuplicateBar } from './GoogleDuplicateNotice';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -195,20 +196,13 @@ export function ContactSyncTargets({
         })}
       </ul>
       {dupes.map((d) => (
-        <div
-          key={d.account_id}
-          className="mt-1 flex items-center gap-2 rounded-md bg-amber-400/10 px-2.5 py-1.5 text-xs text-amber-100/90"
-        >
-          <span className="min-w-0 flex-1">
-            {t('contact.syncDuplicates', { total: d.count + 1, account: d.account_label })}
-          </span>
-          <button
-            onClick={() => setTidying(d)}
+        <div key={d.account_id} className="mt-1">
+          <GoogleDuplicateBar
+            text={t('contact.syncDuplicates', { total: d.count + 1, account: d.account_label })}
+            actionLabel={t('contact.syncDuplicatesRun')}
+            onAction={() => setTidying(d)}
             disabled={busy}
-            className="shrink-0 rounded bg-white/15 px-2 py-1 font-medium hover:bg-white/25"
-          >
-            {t('contact.syncDuplicatesRun')}
-          </button>
+          />
         </div>
       ))}
       <p className="mt-1 text-[11px] text-white/40">{t('contact.syncTargetsHint')}</p>

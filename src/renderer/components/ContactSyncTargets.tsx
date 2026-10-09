@@ -3,8 +3,14 @@ import { useTranslation } from 'react-i18next';
 import { RefreshCcw } from 'lucide-react';
 import type { ContactLink } from '@bindings/ContactLink';
 import type { GoogleAccount } from '@bindings/GoogleAccount';
+import type { MergeRemoteDeletion } from '@bindings/MergeRemoteDeletion';
 import { googleAccounts } from '../services/google';
-import { contactSyncStop, contactSyncTargetAdd } from '../services/contacts';
+import {
+  contactGoogleDuplicatesOf,
+  contactGoogleDuplicatesTidyOf,
+  contactSyncStop,
+  contactSyncTargetAdd,
+} from '../services/contacts';
 import { getNewContactTarget, setNewContactTarget } from '../config/prefs';
 import { ConfirmDialog } from './ConfirmDialog';
 
@@ -54,6 +60,21 @@ export function ContactSyncTargets({
     account: GoogleAccount;
     deleteRemote: boolean;
   } | null>(null);
+  // 同じ Google アカウントに 2 件以上ある（以前の統合の名残）。アカウントごとの余りの件数。
+  const [dupes, setDupes] = useState<MergeRemoteDeletion[]>([]);
+  // 「1 件にまとめる」の確認（null＝出していない）。
+  const [tidying, setTidying] = useState<MergeRemoteDeletion | null>(null);
+
+  // つながりが変わるたびに数え直す（まとめたあと・同期先を変えたあと）。
+  useEffect(() => {
+    if (!isTauri || contactId === null) {
+      setDupes([]);
+      return;
+    }
+    contactGoogleDuplicatesOf(contactId)
+      .then(setDupes)
+      .catch(() => setDupes([]));
+  }, [contactId, links]);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -107,6 +128,15 @@ export function ContactSyncTargets({
     } else {
       setStopping({ account: a, deleteRemote: false });
     }
+  };
+
+  // その人の重複だけを片付ける（1 つ残し、余りは次の同期で Google から削除。一括と同じ規則）。
+  const tidy = () => {
+    if (contactId === null) return;
+    setTidying(null);
+    void run(async () => {
+      await contactGoogleDuplicatesTidyOf(contactId);
+    });
   };
 
   const stop = () => {
@@ -164,8 +194,40 @@ export function ContactSyncTargets({
           );
         })}
       </ul>
+      {dupes.map((d) => (
+        <div
+          key={d.account_id}
+          className="mt-1 flex items-center gap-2 rounded-md bg-amber-400/10 px-2.5 py-1.5 text-xs text-amber-100/90"
+        >
+          <span className="min-w-0 flex-1">
+            {t('contact.syncDuplicates', { total: d.count + 1, account: d.account_label })}
+          </span>
+          <button
+            onClick={() => setTidying(d)}
+            disabled={busy}
+            className="shrink-0 rounded bg-white/15 px-2 py-1 font-medium hover:bg-white/25"
+          >
+            {t('contact.syncDuplicatesRun')}
+          </button>
+        </div>
+      ))}
       <p className="mt-1 text-[11px] text-white/40">{t('contact.syncTargetsHint')}</p>
       {error && <p className="mt-1 text-xs text-red-300">{error}</p>}
+
+      {tidying && (
+        <ConfirmDialog
+          title={t('contact.syncDuplicatesTitle')}
+          body={t('contact.syncDuplicatesBody', {
+            count: tidying.count,
+            account: tidying.account_label,
+          })}
+          notes={[t('dupes.googleTrashNote')]}
+          confirmLabel={t('contact.syncDuplicatesRun')}
+          danger
+          onConfirm={tidy}
+          onCancel={() => setTidying(null)}
+        />
+      )}
 
       {stopping && (
         <ConfirmDialog

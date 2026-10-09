@@ -6,7 +6,13 @@ import type { ContactSummary } from '@bindings/ContactSummary';
 import type { ContactListItem } from '@bindings/ContactListItem';
 import type { ContactMatch } from '@bindings/ContactMatch';
 import type { ImportReport } from '@bindings/ImportReport';
-import { contactFindDuplicates, contactImport, contactList, contactRestore } from '../services/contacts';
+import {
+  contactFindDuplicates,
+  contactGoogleDuplicateIds,
+  contactImport,
+  contactList,
+  contactRestore,
+} from '../services/contacts';
 import { trashRetentionGet } from '../services/trash';
 import { trashDaysLeft } from '../utils/trash';
 import { ContactDuplicates } from './ContactDuplicates';
@@ -17,6 +23,7 @@ import { tagList } from '../services/tags';
 import type { TagSummary } from '@bindings/TagSummary';
 import { DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import { CONTACTS_SYNCED_EVENT } from '../hooks/useAutoSync';
+import { LOCAL_CHANGE_EVENT } from '../utils/localChange';
 import { useVirtualRows } from '../hooks/useVirtualRows';
 import { useContactsStore } from '../stores/contacts';
 import {
@@ -80,13 +87,18 @@ export function ContactsView({
   // 削除済み（ゴミ箱）を表示するか、と保持日数（残り日数表示用）。
   const [showDeleted, setShowDeleted] = useState(false);
   const [retention, setRetention] = useState(7);
-  // 同期先での絞り込み（一覧が links を持つので画面側で絞る）。
-  const [source, setSource] = useState<ContactSourceFilter>('all');
+  // 同期先での絞り込み（一覧が links を持つので画面側で絞る）。'googleDup' は「Google に重複あり」
+  // （同じ Google アカウントに 2 件以上。以前の統合の名残で、詳細の同期先の欄で 1 人ずつまとめる）。
+  const [source, setSource] = useState<ContactSourceFilter | 'googleDup'>('all');
+  // Google の重複が残っている連絡先の ID。
+  const [googleDupIds, setGoogleDupIds] = useState<Set<number>>(new Set());
   const isDefaultView = isDefaultQuery(query, tagFilter, showDeleted);
   // 絞り込みの結果が届くまでは、既定の一覧を出しておく（空の画面で待たせない）。
   const listed = isDefaultView ? cached : (filtered ?? cached);
   const items = listed ?? [];
-  const shownItems = items.filter((c) => matchesSource(c.links, source));
+  const shownItems = items.filter((c) =>
+    source === 'googleDup' ? googleDupIds.has(c.id) : matchesSource(c.links, source)
+  );
   // 数千件を全部描くと重いので、見えている行だけ描く。
   const rows = useVirtualRows<HTMLUListElement>(shownItems.length, ROW_HEIGHT);
 
@@ -136,6 +148,26 @@ export function ContactsView({
     const h = setTimeout(() => load(query, tagFilter), 150);
     return () => clearTimeout(h);
   }, [query, tagFilter, showDeleted, load]);
+
+  // Google の重複が残っている人を数え直す（起動時・同期のあと・まとめたあとなど手元を変えたあと）。
+  // 0 人になったら絞り込みを外す（ボタンごと消えるので）。
+  useEffect(() => {
+    if (!isTauri) return;
+    const reloadDupes = () =>
+      contactGoogleDuplicateIds()
+        .then((ids) => {
+          setGoogleDupIds(new Set(ids));
+          if (ids.length === 0) setSource((s) => (s === 'googleDup' ? 'all' : s));
+        })
+        .catch(() => undefined);
+    reloadDupes();
+    window.addEventListener(CONTACTS_SYNCED_EVENT, reloadDupes);
+    window.addEventListener(LOCAL_CHANGE_EVENT, reloadDupes);
+    return () => {
+      window.removeEventListener(CONTACTS_SYNCED_EVENT, reloadDupes);
+      window.removeEventListener(LOCAL_CHANGE_EVENT, reloadDupes);
+    };
+  }, []);
 
   // 自動同期が Google の連絡先を住所録へ反映したら、絞り込みの結果とタグを取り直す（タグも増えうる）。
   // 既定の一覧の写しは App が同じ契機で取り直す。
@@ -447,6 +479,20 @@ export function ContactsView({
               {t(`contact.source.${f}`)}
             </button>
           ))}
+          {googleDupIds.size > 0 && (
+            <button
+              onClick={() => setSource('googleDup')}
+              aria-pressed={source === 'googleDup'}
+              title={t('contact.sourceHint.googleDup')}
+              className={`min-w-0 flex-1 truncate rounded px-1.5 py-1 text-[11px] ${
+                source === 'googleDup'
+                  ? 'bg-amber-400/30 text-white'
+                  : 'text-amber-200/80 hover:text-amber-100'
+              }`}
+            >
+              {t('contact.source.googleDup', { count: googleDupIds.size })}
+            </button>
+          )}
         </div>
         <ul ref={rows.ref} onScroll={rows.onScroll} className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
           {listed === null ? null : shownItems.length === 0 ? (

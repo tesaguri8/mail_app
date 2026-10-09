@@ -1950,6 +1950,37 @@ pub fn contact_google_duplicates_tidy(store: State<Store>) -> Result<usize, Stri
     store.tidy_duplicate_remote_ids().map_err(|e| e.to_string())
 }
 
+/// Google の重複が残っている連絡先の ID（連絡先の一覧の「Google に重複あり」の絞り込み用）。
+#[tauri::command]
+pub fn contact_google_duplicate_ids(store: State<Store>) -> Result<Vec<i64>, String> {
+    store
+        .contacts_with_duplicate_remote_ids()
+        .map_err(|e| e.to_string())
+}
+
+/// その人に残っている Google の重複を、片付けたら消すことになる件数（アカウントごと）。読むだけ。
+#[tauri::command]
+pub fn contact_google_duplicates_of(
+    store: State<Store>,
+    contact_id: i64,
+) -> Result<Vec<MergeRemoteDeletion>, String> {
+    store
+        .duplicate_remote_ids_for(contact_id)
+        .map_err(|e| e.to_string())
+}
+
+/// その人に残っている Google の重複だけを片付ける（余りを削除待ちにし、次の同期で Google 側から
+/// 削除する）。削除待ちにした件数を返す。
+#[tauri::command]
+pub fn contact_google_duplicates_tidy_of(
+    store: State<Store>,
+    contact_id: i64,
+) -> Result<usize, String> {
+    store
+        .tidy_duplicate_remote_ids_for(contact_id)
+        .map_err(|e| e.to_string())
+}
+
 /// 確実な重複（名前・メールの集合・電話の集合が同じで、食い違う欄が無い組）をまとめて統合したら
 /// どうなるか。読むだけ。重複の整理の「確実な重複をまとめて統合」の下見。
 #[tauri::command]

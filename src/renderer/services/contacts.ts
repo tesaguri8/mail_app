@@ -66,6 +66,17 @@ export const contactGoogleDuplicates = () =>
 /** 以前の統合で残った Google の重複を、統合と同じ規則で片付ける（次の同期で Google 側から削除）。 */
 export const contactGoogleDuplicatesTidy = () => changed(invoke<number>('contact_google_duplicates_tidy'));
 
+/** Google の重複が残っている連絡先の ID（一覧の「Google に重複あり」の絞り込み用）。読むだけ。 */
+export const contactGoogleDuplicateIds = () => invoke<number[]>('contact_google_duplicate_ids');
+
+/** その人に残っている Google の重複を、片付けたら消す件数（アカウントごと）。読むだけ。 */
+export const contactGoogleDuplicatesOf = (contactId: number) =>
+  invoke<MergeRemoteDeletion[]>('contact_google_duplicates_of', { contactId });
+
+/** その人に残っている Google の重複だけを片付ける（次の同期で Google 側から削除）。 */
+export const contactGoogleDuplicatesTidyOf = (contactId: number) =>
+  changed(invoke<number>('contact_google_duplicates_tidy_of', { contactId }));
+
 /** 確実な重複（名前・メールの集合・電話の集合が同じで、食い違う欄が無い組）をまとめて統合したら
  *  どうなるか。読むだけ（組の一覧・件数・Google から消す件数）。 */
 export const contactSureMergePreview = () =>

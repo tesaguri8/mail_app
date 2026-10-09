@@ -403,7 +403,8 @@
       "all": "All",
       "google": "Google",
       "icloud": "iCloud",
-      "rondine": "Rondine"
+      "rondine": "Rondine",
+      "googleDup": "Google duplicates ({{count}})"
     },
     "sourceEmpty": "No contacts match this filter.",
     "link": {
@@ -417,13 +418,18 @@
       "all": "All contacts",
       "google": "Contacts synced with Google",
       "icloud": "Contacts synced with iCloud",
-      "rondine": "Contacts not synced with any service (Rondine only)"
+      "rondine": "Contacts not synced with any service (Rondine only)",
+      "googleDup": "Contacts with two or more entries in the same Google account (left over from earlier merges; tidy them up from the sync section of the contact)"
     },
     "deleteTitle": "Delete contact",
     "deleteAlsoRemote": "It will also be deleted from your {{service}} contacts (the deletion is sent on the next sync).",
     "syncTargets": "Sync to",
     "syncSaveTo": "Also save to {{service}} ({{account}})",
     "syncTargetsHint": "Contacts are saved in Rondine first. They are saved to the checked services on the next sync.",
+    "syncDuplicates": "{{total}} entries in Google Contacts ({{account}})",
+    "syncDuplicatesRun": "Merge into one",
+    "syncDuplicatesTitle": "Merge Google duplicates",
+    "syncDuplicatesBody": "Delete {{count}} from Google and keep one ({{account}}). The Rondine contact does not change.",
     "syncPendingCreate": "To be created",
     "syncPendingDelete": "To be deleted",
     "syncStopTitle": "Stop syncing with {{account}}",

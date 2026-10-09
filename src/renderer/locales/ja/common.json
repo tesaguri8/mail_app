@@ -782,7 +782,10 @@
     "addPickServices": "{{email}} で使うものを選んでください。",
     "addMailDone": "{{email}} のメールを追加しました。受信を始めています。",
     "addGoogleDone": "{{email}} で Google にログインしました。",
-    "addGoogleLogin": "連絡先・カレンダーは Google でログインして使います。ブラウザが開くので、許可してください。"
+    "addGoogleLogin": "連絡先・カレンダーは Google でログインして使います。ブラウザが開くので、許可してください。",
+    "expand": "開く",
+    "collapse": "閉じる",
+    "noServices": "未使用"
   },
   "signature": {
     "title": "署名",

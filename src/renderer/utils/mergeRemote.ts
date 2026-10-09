@@ -11,11 +11,16 @@ export const remoteDeletionTotal = (ds: MergeRemoteDeletion[]): number =>
 
 /**
  * 確認画面の補足: アカウントごとに「Google 連絡先からも N 件削除して 1 件にまとめます（アカウント名）」、
- * 最後に「Google のゴミ箱から 30 日は戻せる」。消すものが無ければ空。
+ * 最後に「Google のゴミ箱から 30 日は戻せる」。消すものが無ければ空。`lineKey` で 1 行目の文言を
+ * 差し替えられる（まとめて統合では「各組 1 件に」）。
  */
-export function remoteDeletionNotes(ds: MergeRemoteDeletion[], t: Translate): string[] {
+export function remoteDeletionNotes(
+  ds: MergeRemoteDeletion[],
+  t: Translate,
+  lineKey = 'dupes.googleDeleteLine'
+): string[] {
   const lines = ds
     .filter((d) => d.count > 0)
-    .map((d) => t('dupes.googleDeleteLine', { count: d.count, account: d.account_label }));
+    .map((d) => t(lineKey, { count: d.count, account: d.account_label }));
   return lines.length > 0 ? [...lines, t('dupes.googleTrashNote')] : [];
 }

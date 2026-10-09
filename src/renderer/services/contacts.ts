@@ -1,5 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { MergeRemoteDeletion } from '@bindings/MergeRemoteDeletion';
+import type { SureMergePreview } from '@bindings/SureMergePreview';
+import type { SureMergeResult } from '@bindings/SureMergeResult';
 import type { ContactSummary } from '@bindings/ContactSummary';
 import type { ContactListItem } from '@bindings/ContactListItem';
 import type { ContactInput } from '@bindings/ContactInput';
@@ -62,6 +64,14 @@ export const contactGoogleDuplicates = () =>
 
 /** 以前の統合で残った Google の重複を、統合と同じ規則で片付ける（次の同期で Google 側から削除）。 */
 export const contactGoogleDuplicatesTidy = () => invoke<number>('contact_google_duplicates_tidy');
+
+/** 確実な重複（名前・メールの集合・電話の集合が同じで、食い違う欄が無い組）をまとめて統合したら
+ *  どうなるか。読むだけ（組の一覧・件数・Google から消す件数）。 */
+export const contactSureMergePreview = () =>
+  invoke<SureMergePreview>('contact_sure_merge_preview');
+
+/** 確実な重複をまとめて統合する（実行のときに組を数え直す。Google の余りは次の同期で削除）。 */
+export const contactSureMerge = () => invoke<SureMergeResult>('contact_sure_merge');
 
 /** 複数連絡先を 1 件（keepId）に統合。同じ Google アカウントの ID は 1 つ残し、余りは次の同期で削除。 */
 export const contactMerge = (keepId: number, dropIds: number[]) =>

@@ -552,7 +552,17 @@
     "googleLeftoverRun": "まとめる",
     "googleLeftoverTitle": "Google 連絡先の重複をまとめます",
     "googleLeftoverBody": "以前に Rondine で統合した連絡先のうち、Google 側ではまだ別々の連絡先として残っているものを、1 件だけ残して削除します。Rondine の連絡先は変わりません。",
-    "googleLeftoverDone": "{{count}} 件を次の同期で Google 連絡先から削除します。"
+    "googleLeftoverDone": "{{count}} 件を次の同期で Google 連絡先から削除します。",
+    "sureOpen": "確実な重複をまとめて統合",
+    "sureLoading": "確実な重複を数えています…",
+    "sureNone": "まとめて統合できる確実な重複はありません。",
+    "sureTitle": "確実な重複をまとめて統合します",
+    "sureBody": "{{groups}} 組・{{contacts}} 件を {{groups}} 件にまとめます。",
+    "sureRule": "確実な重複＝表示名・メール・電話がすべて同じで、誕生日・メモ・住所などが食い違わない組です。残す 1 件は情報の多いもので、中身は全員分を足し合わせます。",
+    "sureList": "まとめる組を見る（{{groups}} 組）",
+    "sureRun": "{{groups}} 組をまとめて統合",
+    "sureDone": "{{groups}} 組をまとめました（{{merged}} 件を統合。Google 連絡先からは次の同期で {{remote}} 件削除します）。",
+    "googleDeleteLineBulk": "Google 連絡先からも {{count}} 件削除し、組ごとに 1 件にまとめます（{{account}}）"
   },
   "greeting": {
     "morning": "おはようございます",

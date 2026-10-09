@@ -27,4 +27,10 @@ describe('remoteDeletionNotes', () => {
     ]);
     expect(remoteDeletionTotal([d(1, 2), d(2, 1)])).toBe(3);
   });
+
+  it('まとめて統合では 1 行目の文言を差し替えられる', () => {
+    expect(remoteDeletionNotes([d(1, 5)], t, 'dupes.googleDeleteLineBulk')[0]).toBe(
+      'googleDeleteLineBulk 5@acct1'
+    );
+  });
 });

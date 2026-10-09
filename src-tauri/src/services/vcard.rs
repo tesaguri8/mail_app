@@ -6,17 +6,23 @@
 //! 読む項目（docs/CONTACT_MODEL.md §1 の iCloud 列）: FN・N（姓;名;ミドル;敬称;接尾辞）・
 //! NICKNAME・X-MAIDENNAME・X-PHONETIC-*-NAME・ORG・TITLE・X-PHONETIC-ORG・X-ABShowAs・EMAIL・
 //! TEL・ADR（私書箱つき）＋X-ABADR・URL・BDAY・X-ABDATE／ANNIVERSARY・X-ABRELATEDNAMES・
-//! IMPP・X-SOCIALPROFILE・NOTE・CATEGORIES。PHOTO やその他の X- プロパティは無視する。
+//! IMPP・X-SOCIALPROFILE・NOTE・CATEGORIES。Rondine が書き出した `itemN.ORG`（2 つ目以降の会社）
+//! と `itemN.X-RONDINE-CUSTOM`（カスタム項目）も読む。PHOTO やその他の X- プロパティは無視する。
+//!
+//! 書き出しは [`write`]（取り込み→書き出し→取り込みで中身が戻る）。
 //!
 //! 取り込みの出どころ（PRODID）は見ない。ファイル取り込みはどのサービスにもつながらない
 //! （Rondine の連絡先として入る）。
 
 use crate::models::{
-    ContactAddress, ContactDate, ContactFields, ContactHandle, ContactOrganization,
-    ContactRelation, ContactUrl, ContactValue, HandleKind,
+    ContactAddress, ContactCustomField, ContactDate, ContactFields, ContactHandle,
+    ContactOrganization, ContactRelation, ContactUrl, ContactValue, HandleKind,
 };
 use crate::services::contact_labels::label_from_term;
 use std::collections::HashMap;
+
+mod write;
+pub use write::generate;
 
 /// パース結果（総カード数と、連絡先として成立したもの）。
 #[derive(Debug, Default)]
@@ -206,6 +212,8 @@ struct CardAcc {
     /// よみ（姓・ミドル・名）。
     phonetic: [Option<String>; 3],
     org: Option<ContactOrganization>,
+    /// 2 つ目以降の会社（`itemN.ORG` / `itemN.TITLE`。グループ → 会社、出てきた順）。
+    extra_orgs: Vec<(String, ContactOrganization)>,
     show_as_company: bool,
     emails: Vec<Grouped<String>>,
     tels: Vec<Grouped<String>>,
@@ -214,6 +222,8 @@ struct CardAcc {
     dates: Vec<Grouped<String>>,
     relations: Vec<Grouped<String>>,
     handles: Vec<Grouped<HandleParts>>,
+    /// カスタム項目（`itemN.X-RONDINE-CUSTOM`。キーは同じグループの X-ABLabel）。
+    custom: Vec<Grouped<String>>,
     birthday: Option<String>,
     note: Option<String>,
     categories: Vec<String>,
@@ -251,7 +261,18 @@ impl CardAcc {
             }
             "X-ABRELATEDNAMES" => push_value(&mut self.relations, l, l.value()),
             "IMPP" => push_value(&mut self.handles, l, impp(l)),
-            "X-SOCIALPROFILE" => push_value(&mut self.handles, l, social(l)),
+            "X-SOCIALPROFILE" => {
+                if let Some(item) = social(l) {
+                    // TYPE はサービス名（twitter など）なので、見出しにはしない。
+                    self.handles.push(Grouped {
+                        item,
+                        group: l.group.clone(),
+                        type_label: None,
+                        pref: l.is_pref(),
+                    });
+                }
+            }
+            "X-RONDINE-CUSTOM" => push_value(&mut self.custom, l, l.value()),
             "X-ABLABEL" => {
                 if let (Some(g), Some(v)) = (l.group.clone(), l.value()) {
                     self.group_labels.insert(g, v);
@@ -279,9 +300,23 @@ impl CardAcc {
         }
     }
 
-    /// ORG（会社名;部署）・TITLE（役職）・X-PHONETIC-ORG（会社名のよみ）。最初の値を採る。
+    /// ORG（会社名;部署）・TITLE（役職）・X-PHONETIC-ORG（会社名のよみ）。グループなしは最初の
+    /// 値を採って主の会社に、`itemN.` 付きは同じグループごとに 2 つ目以降の会社にする。
     fn absorb_org(&mut self, l: &Line) {
-        let org = self.org.get_or_insert_with(ContactOrganization::default);
+        let org = match &l.group {
+            Some(g) => {
+                let i = match self.extra_orgs.iter().position(|(grp, _)| grp == g) {
+                    Some(i) => i,
+                    None => {
+                        self.extra_orgs
+                            .push((g.clone(), ContactOrganization::default()));
+                        self.extra_orgs.len() - 1
+                    }
+                };
+                &mut self.extra_orgs[i].1
+            }
+            None => self.org.get_or_insert_with(ContactOrganization::default),
+        };
         match l.name.as_str() {
             "ORG" => {
                 let parts = l.parts();
@@ -341,6 +376,26 @@ impl CardAcc {
             .org
             .clone()
             .filter(|o| o != &ContactOrganization::default());
+        let organizations: Vec<ContactOrganization> = org
+            .clone()
+            .into_iter()
+            .chain(self.extra_orgs.iter().map(|(_, o)| o.clone()))
+            .filter(|o| o != &ContactOrganization::default())
+            .collect();
+        let custom_fields: Vec<ContactCustomField> = self
+            .custom
+            .iter()
+            .filter_map(|g| {
+                let key = g
+                    .group
+                    .as_ref()
+                    .and_then(|grp| self.group_labels.get(grp))?;
+                Some(ContactCustomField {
+                    key: key.clone(),
+                    value: g.item.clone(),
+                })
+            })
+            .collect();
 
         // 表示名: FN → N（姓+名）→ 会社 → メール → 電話。全部無ければ捨てる。
         let display_name = self
@@ -366,7 +421,8 @@ impl CardAcc {
             birthday: self.birthday.clone(),
             note: self.note.clone(),
             show_as_company: self.show_as_company,
-            organizations: org.into_iter().collect(),
+            organizations,
+            custom_fields,
             emails,
             phones,
             addresses: self.addresses(),
@@ -460,13 +516,15 @@ fn vcard_date(l: &Line) -> Option<String> {
     let v = l.value()?;
     let d = v.split(['T', ' ']).next().unwrap_or("").trim();
     let compact: String = d.chars().filter(|c| *c != '-').collect();
-    let normalized = if !d.starts_with("--")
-        && compact.len() == 8
-        && compact.chars().all(|c| c.is_ascii_digit())
-    {
-        format!("{}-{}-{}", &compact[..4], &compact[4..6], &compact[6..])
-    } else {
-        d.to_string()
+    let all_digits = |s: &str| s.chars().all(|c| c.is_ascii_digit());
+    let normalized = match d.strip_prefix("--") {
+        // 4.0 の年なし（`--MMDD`）は `--MM-DD` にそろえる。
+        Some(md) if md.len() == 4 && all_digits(md) => format!("--{}-{}", &md[..2], &md[2..]),
+        Some(_) => d.to_string(),
+        None if compact.len() == 8 && all_digits(&compact) => {
+            format!("{}-{}-{}", &compact[..4], &compact[4..6], &compact[6..])
+        }
+        None => d.to_string(),
     };
     match l
         .param("X-APPLE-OMIT-YEAR")

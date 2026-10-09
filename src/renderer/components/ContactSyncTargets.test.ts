@@ -11,6 +11,8 @@ const account = (id: number, over: Partial<GoogleAccount> = {}): GoogleAccount =
   last_calendar_sync_at: null,
   last_contacts_sync_at: null,
   disconnected_at: null,
+  calendar_granted: true,
+  contacts_granted: true,
   ...over,
 });
 

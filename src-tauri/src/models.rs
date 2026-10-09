@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+mod account;
 mod contact;
+pub use account::*;
 pub use contact::*;
 
 /// 境界型の例。ts-rs により `src/bindings/AppInfo.ts` を生成する。
@@ -50,6 +52,8 @@ pub struct AccountInput {
     pub imap_port: u16,
     pub smtp_host: String,
     pub smtp_port: u16,
+    /// 追加の流れで選んだ提供元（カードの見出し）。None ならアドレスとサーバーから推し量る。
+    pub provider: Option<AccountProvider>,
 }
 
 /// アカウント一覧表示用（資格情報は含めない）。
@@ -107,6 +111,9 @@ pub struct ServerAccountSummary {
     pub smtp_host: String,
     pub smtp_port: u16,
     pub username: String,
+    /// この設定を使っているメールアカウント（`accounts.id`）。複数なら共有している
+    /// （カードの「メール」の詳細で共有先として見せる）。
+    pub account_ids: Vec<i32>,
 }
 
 /// メール一覧表示用（軽量）。
@@ -264,6 +271,8 @@ pub struct CalendarSummary {
     pub source: String,
     /// Google 連携カレンダーの場合の連携アカウント（メール）。ローカルは None。
     pub account_email: Option<String>,
+    /// 連携アカウントの名前（設定のカードの呼び名。付けていなければアドレス）。見出しに使う。
+    pub account_label: Option<String>,
     /// 連携アカウントが解除中（写しは残るが同期されない）。ローカルは false。
     pub account_disconnected: bool,
     /// Google の権限。'owner' | 'writer' | 'reader' | 'freeBusyReader'。書き込み可否の表示に使う。
@@ -343,6 +352,19 @@ pub struct GoogleAccount {
     pub last_contacts_sync_at: Option<String>,
     /// 解除中になった時刻（UTC 文字列）。None＝連携中。解除中は同期せず、記録は残す。
     pub disconnected_at: Option<String>,
+    /// カレンダーの権限を許可済みか（偽ならオンにする前に Google でログインし直す）。
+    pub calendar_granted: bool,
+    /// 連絡先の権限を許可済みか（偽ならオンにする前に Google でログインし直す）。
+    pub contacts_granted: bool,
+}
+
+/// 1 つの Google アカウントが兼ねる同期サービス（カードのスイッチ 1 つずつ）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+#[serde(rename_all = "lowercase")]
+pub enum GoogleService {
+    Calendar,
+    Contacts,
 }
 
 /// Google 連携の解除の結果。

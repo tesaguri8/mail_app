@@ -1,6 +1,7 @@
 use super::Store;
 use crate::models::ServerAccountSummary;
 use rusqlite::{params, OptionalExtension};
+use std::collections::HashMap;
 
 /// メールサーバーアカウント設定（接続＋ログイン）の作成入力。
 pub struct NewServerAccount {
@@ -42,19 +43,33 @@ impl Store {
 
     pub fn list_server_accounts(&self) -> rusqlite::Result<Vec<ServerAccountSummary>> {
         let conn = self.conn.lock().unwrap();
+        let mut users: HashMap<i64, Vec<i32>> = HashMap::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT server_account_id, id FROM accounts \
+                 WHERE server_account_id IS NOT NULL ORDER BY COALESCE(sort_order, id), id",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
+            for row in rows {
+                let (server, account) = row?;
+                users.entry(server).or_default().push(account as i32);
+            }
+        }
         let mut stmt = conn.prepare(
             "SELECT id, name, imap_host, imap_port, smtp_host, smtp_port, username
              FROM server_accounts ORDER BY id",
         )?;
         let rows = stmt.query_map([], |r| {
+            let id: i64 = r.get(0)?;
             Ok(ServerAccountSummary {
-                id: r.get::<_, i64>(0)? as i32,
+                id: id as i32,
                 name: r.get(1)?,
                 imap_host: r.get(2)?,
                 imap_port: r.get::<_, i64>(3)? as u16,
                 smtp_host: r.get(4)?,
                 smtp_port: r.get::<_, i64>(5)? as u16,
                 username: r.get(6)?,
+                account_ids: users.remove(&id).unwrap_or_default(),
             })
         })?;
         rows.collect()

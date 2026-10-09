@@ -318,7 +318,8 @@ fn load_links(conn: &Connection, scope: Scope) -> rusqlite::Result<HashMap<i64, 
     // state: 0 = 同期中 / 1 = 作成待ち / 2 = 削除待ち（同じアカウントに複数あれば大きいほう）。
     let sql = format!(
         "SELECT t.contact_id, t.provider, t.account_id, ga.email, \
-                ga.disconnected_at IS NOT NULL, MAX(t.state) \
+                ga.disconnected_at IS NOT NULL, MAX(t.state), \
+                COALESCE(p.display_name, ga.email) \
          FROM ( \
              SELECT contact_id, provider, account_id, \
                     CASE WHEN unlink_requested = 1 THEN 2 ELSE 0 END AS state \
@@ -327,6 +328,7 @@ fn load_links(conn: &Connection, scope: Scope) -> rusqlite::Result<HashMap<i64, 
              SELECT contact_id, provider, account_id, 1 FROM contact_create_requests \
          ) t \
          LEFT JOIN google_accounts ga ON t.provider = 'google' AND ga.id = t.account_id \
+         LEFT JOIN account_profiles p ON p.id = ga.profile_id \
          {cond} GROUP BY t.contact_id, t.provider, t.account_id \
          ORDER BY t.contact_id, t.provider, t.account_id"
     );
@@ -341,15 +343,17 @@ fn load_links(conn: &Connection, scope: Scope) -> rusqlite::Result<HashMap<i64, 
             r.get::<_, Option<String>>(3)?,
             r.get::<_, Option<bool>>(4)?.unwrap_or(false),
             r.get::<_, i64>(5)?,
+            r.get::<_, Option<String>>(6)?,
         ))
     })?;
     for row in rows {
-        let (cid, provider, account_id, account_email, disconnected, state) = row?;
+        let (cid, provider, account_id, account_email, disconnected, state, account_label) = row?;
         if let Some(provider) = ContactProvider::from_db(&provider) {
             out.entry(cid).or_default().push(ContactLink {
                 provider,
                 account_id: account_id as i32,
                 account_email,
+                account_label,
                 disconnected,
                 state: match state {
                     1 => ContactLinkState::PendingCreate,

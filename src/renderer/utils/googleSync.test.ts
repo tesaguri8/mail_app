@@ -62,6 +62,8 @@ describe('contactsDue', () => {
     last_calendar_sync_at: null,
     last_contacts_sync_at: '2026-10-09 11:58:00',
     disconnected_at: null,
+    calendar_granted: true,
+    contacts_granted: true,
     ...over,
   });
 

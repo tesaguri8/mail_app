@@ -280,6 +280,12 @@ const MIGRATIONS: &[Migration] = &[
         version: 62,
         sql: include_str!("migrations/0062_contact_sync_targets.sql"),
     },
+    Migration {
+        // 63 はアカウントの一本化（アドレスごとのカード account_profiles と、メール・Google
+        // 連携からの profile_id。docs/ACCOUNTS.md）。
+        version: 63,
+        sql: include_str!("migrations/0063_account_profiles.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
@@ -418,8 +424,10 @@ mod tests {
                uid_validity INTEGER, last_uid INTEGER,
                PRIMARY KEY (account_id, folder));
              -- 実在の v35 DB にある基盤テーブル（accounts=0001 / attachments=0006）。
-             -- 0044(accounts 列追加)・0045(attachments/emails のデータ更新)が動くよう用意する。
-             CREATE TABLE accounts (id INTEGER PRIMARY KEY, email TEXT);
+             -- 0044(accounts 列追加)・0045(attachments/emails のデータ更新)・
+             -- 0063(サーバーから提供元を推し量る)が動くよう用意する。
+             CREATE TABLE accounts (id INTEGER PRIMARY KEY, email TEXT, imap_host TEXT,
+               sort_order INTEGER);
              CREATE TABLE attachments (id INTEGER PRIMARY KEY, email_id INTEGER NOT NULL,
                filename TEXT, kind TEXT, content_type TEXT, content_id TEXT, size INTEGER);
              -- 組織（0026 で作成・0027 で deleted_at 追加）。0052(組織カードの列追加)が動くよう用意する。
@@ -657,6 +665,111 @@ mod tests {
             .query_row("SELECT count(*) FROM event_attendees", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0);
+    }
+
+    /// 0063: 既存のメールアカウントと Google 連携を、アドレスごとのカードにまとめる。
+    /// メールと Google が同じアドレス（大文字小文字違い）・Google だけ・メールだけ・
+    /// サーバー設定を共有する 2 アドレス・同じアドレスの重複登録を含める。
+    #[test]
+    fn migration_0063_groups_mail_and_google_by_address() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        run_until(&conn, 62).unwrap();
+        conn.execute_batch(
+            "INSERT INTO server_accounts (id, imap_host, smtp_host, username)
+                 VALUES (1, 'mail.example.com', 'mail.example.com', 'shared');
+             INSERT INTO server_accounts (id, imap_host, smtp_host, username)
+                 VALUES (2, 'imap.gmail.com', 'smtp.gmail.com', 'smt@gmail.com');
+             INSERT INTO server_accounts (id, imap_host, smtp_host, username)
+                 VALUES (3, 'imap.mail.me.com', 'smtp.mail.me.com', 'me@mac.com');
+             -- 並び順: info(0) → Gmail(1) → support(2) → iCloud(3)。Gmail は重複登録あり。
+             INSERT INTO accounts (id, email, imap_host, smtp_host, server_account_id, sort_order)
+                 VALUES (10, 'info@example.com', 'mail.example.com', 'mail.example.com', 1, 0);
+             INSERT INTO accounts (id, email, imap_host, smtp_host, server_account_id, sort_order)
+                 VALUES (11, 'Smt@Gmail.com', 'imap.gmail.com', 'smtp.gmail.com', 2, 1);
+             INSERT INTO accounts (id, email, imap_host, smtp_host, server_account_id, sort_order)
+                 VALUES (12, 'support@example.com', 'mail.example.com', 'mail.example.com', 1, 2);
+             INSERT INTO accounts (id, email, imap_host, smtp_host, server_account_id, sort_order)
+                 VALUES (13, 'me@mac.com', 'imap.mail.me.com', 'smtp.mail.me.com', 3, 3);
+             INSERT INTO accounts (id, email, imap_host, smtp_host, server_account_id, sort_order)
+                 VALUES (14, 'smt@gmail.com', 'imap.gmail.com', 'smtp.gmail.com', 2, 9);
+             -- メールと同じアドレスの Google 連携と、Google だけ（連絡先・カレンダーだけ）。
+             INSERT INTO google_accounts (id, email) VALUES (1, 'smt@gmail.com');
+             INSERT INTO google_accounts (id, email) VALUES (2, 'calendar.only@gmail.com');
+             INSERT INTO contacts (id, display_name) VALUES (1, '山田');
+             INSERT INTO contact_identities (provider, account_id, external_id, contact_id)
+                 VALUES ('google', 1, 'people/c1', 1);",
+        )
+        .unwrap();
+
+        run(&conn).unwrap();
+
+        let cards: Vec<(i64, String, String, i64)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, provider, email, sort_order FROM account_profiles \
+                     ORDER BY sort_order, id",
+                )
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        let summary: Vec<(&str, &str)> = cards
+            .iter()
+            .map(|(_, p, e, _)| (p.as_str(), e.as_str()))
+            .collect();
+        // アドレスごとに 1 枚。並びはメールの並び順、Google だけのものは後ろ。
+        assert_eq!(
+            summary,
+            vec![
+                ("imap", "info@example.com"),
+                ("google", "Smt@Gmail.com"),
+                ("imap", "support@example.com"),
+                ("icloud", "me@mac.com"),
+                ("google", "calendar.only@gmail.com"),
+            ]
+        );
+        let card_of = |email: &str| -> i64 {
+            cards
+                .iter()
+                .find(|c| c.2.eq_ignore_ascii_case(email))
+                .map(|c| c.0)
+                .unwrap()
+        };
+        let profile = |sql: &str, id: i64| -> Option<i64> {
+            conn.query_row(sql, [id], |r| r.get(0)).unwrap()
+        };
+        let mail = "SELECT profile_id FROM accounts WHERE id = ?1";
+        let google = "SELECT profile_id FROM google_accounts WHERE id = ?1";
+        // メールと Google が同じアドレス → 同じカード。重複登録も同じカード。
+        assert_eq!(profile(mail, 11), Some(card_of("smt@gmail.com")));
+        assert_eq!(profile(mail, 14), Some(card_of("smt@gmail.com")));
+        assert_eq!(profile(google, 1), Some(card_of("smt@gmail.com")));
+        // Google だけ。
+        assert_eq!(profile(google, 2), Some(card_of("calendar.only@gmail.com")));
+        // サーバー設定を共有していても、カードはアドレスごと。サーバー設定はそのまま。
+        assert_ne!(profile(mail, 10), profile(mail, 12));
+        let shared: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM accounts WHERE server_account_id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(shared, 2);
+        // 連絡先のつながりは google_accounts.id を指したまま。
+        let linked: i64 = conn
+            .query_row("SELECT account_id FROM contact_identities", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(linked, 1);
+        let fk: i64 = conn
+            .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(fk, 0);
     }
 
     /// 0055（calendar_accounts → google_accounts）の更新パス。既に Google カレンダーを

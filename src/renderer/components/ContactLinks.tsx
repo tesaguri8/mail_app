@@ -21,6 +21,9 @@ export const matchesSource = (links: ContactLink[], f: ContactSourceFilter): boo
   return links.some((l) => l.provider === f);
 };
 
+/** つながりの相手のアカウント名（設定のカードの呼び名。無ければアドレス）。 */
+const linkName = (l: ContactLink) => l.account_label ?? l.account_email;
+
 function ProviderMark({ provider, size }: { provider: ContactProvider | 'rondine'; size: number }) {
   switch (provider) {
     case 'google':
@@ -57,7 +60,7 @@ export function ContactLinkMarks({ links }: { links: ContactLink[] }) {
         const title = mine
           .map(
             (l) =>
-              `${t(`contact.link.${p}`)}${l.account_email ? ` · ${l.account_email}` : ''}` +
+              `${t(`contact.link.${p}`)}${linkName(l) ? ` · ${linkName(l)}` : ''}` +
               (l.disconnected ? ` (${t('contact.link.disconnected')})` : ''),
           )
           .join('\n');
@@ -98,7 +101,7 @@ export function ContactLinkChips({ links }: { links: ContactLink[] }) {
         >
           <ProviderMark provider={l.provider} size={12} />
           {t(`contact.link.${l.provider}`)}
-          {l.account_email && <span className="text-white/45">{l.account_email}</span>}
+          {linkName(l) && <span className="text-white/45">{linkName(l)}</span>}
           {l.disconnected && (
             <span className="rounded bg-amber-400/20 px-1 text-[10px] text-amber-200">
               {t('contact.link.disconnected')}

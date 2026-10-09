@@ -67,11 +67,15 @@ fn make_pkce() -> Result<(String, String), String> {
 /// `scope` は `super::scopes()` で組み立てたスペース区切りの要求スコープ。既に別サービスで
 /// 連携済みのアカウントを追加同意させる場合も、この関数に新しいスコープ集合を渡せばよい
 /// （`include_granted_scopes` により既存の許可は失われない）。
+///
+/// `login_hint` はアカウント選択画面で先に選んでおくアドレス（カードのアドレス）。利用者は
+/// 別のアカウントも選べるので、戻ったアドレスを正とする。
 pub async fn run_flow(
     app: &AppHandle,
     client_id: &str,
     client_secret: &str,
     scope: &str,
+    login_hint: Option<&str>,
 ) -> Result<(TokenSet, String), String> {
     // 1) ループバックの待受を確保（ポートは OS 任せ）。
     let listener =
@@ -85,7 +89,7 @@ pub async fn run_flow(
     // 2) PKCE と state を用意し、認可 URL を組み立てる。
     let (verifier, challenge) = make_pkce()?;
     let state = random_urlsafe(24)?;
-    let auth_url = reqwest::Url::parse_with_params(
+    let mut auth_url = reqwest::Url::parse_with_params(
         super::AUTH_ENDPOINT,
         &[
             ("client_id", client_id),
@@ -102,6 +106,9 @@ pub async fn run_flow(
         ],
     )
     .map_err(|e| format!("認可 URL を作成できません: {e}"))?;
+    if let Some(hint) = login_hint.map(str::trim).filter(|h| !h.is_empty()) {
+        auth_url.query_pairs_mut().append_pair("login_hint", hint);
+    }
 
     // 3) 既定ブラウザで同意画面を開く。
     app.opener()

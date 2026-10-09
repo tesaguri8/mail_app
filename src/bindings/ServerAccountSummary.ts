@@ -3,4 +3,9 @@
 /**
  * メールサーバーアカウント設定（接続＋ログイン）。再利用・紐づけ用。
  */
-export type ServerAccountSummary = { id: number, name: string | null, imap_host: string, imap_port: number, smtp_host: string, smtp_port: number, username: string, };
+export type ServerAccountSummary = { id: number, name: string | null, imap_host: string, imap_port: number, smtp_host: string, smtp_port: number, username: string, 
+/**
+ * この設定を使っているメールアカウント（`accounts.id`）。複数なら共有している
+ * （カードの「メール」の詳細で共有先として見せる）。
+ */
+account_ids: Array<number>, };

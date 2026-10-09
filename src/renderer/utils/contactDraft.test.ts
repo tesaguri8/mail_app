@@ -19,6 +19,7 @@ describe('matchesSource', () => {
     provider: 'google',
     account_id: 1,
     account_email: 'a@x.jp',
+    account_label: 'a@x.jp',
     disconnected: false,
     state: 'synced',
   };
@@ -26,6 +27,7 @@ describe('matchesSource', () => {
     provider: 'icloud',
     account_id: 2,
     account_email: null,
+    account_label: null,
     disconnected: false,
     state: 'synced',
   };

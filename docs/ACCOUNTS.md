@@ -1,6 +1,6 @@
 # アカウントの一本化（メール・連絡先・カレンダー）
 
-**ステータス:** 設計承認済み（2026-10-09）。連絡先ごとの同期先（`feat/contact-sync-targets`）の後に着手する。
+**ステータス:** 実装済み（2026-10-09・`feat/accounts-unified`）。iCloud の連絡先・カレンダー（§3 の 6）は後続。
 
 ## 0. 方針
 
@@ -59,7 +59,8 @@
 ### 2-3. データ
 
 - **「アカウント」の表を 1 つ足し、各サービスの表がそこを指す**（今の 3 表は残す。中身を作り直さない）。
-  - `account_profiles`（仮）: `id` / `provider`（google / icloud / imap）/ `email` / `display_name` / `sort_order`
+  - `account_profiles`: `id` / `provider`（google / icloud / imap）/ `email` / `display_name` / `sort_order`
+    （マイグレーション 0063。アドレスは大文字小文字を区別せず一意）
   - `accounts`（メール）・`google_accounts`（OAuth）に `profile_id` を足す。iCloud の CardDAV/CalDAV は後続で同じく `profile_id` を持つ表にする。
   - 既存のデータは、同じメールアドレスの `accounts` と `google_accounts` を 1 つの profile にまとめるマイグレーションで移す。
 - **つながり表（`contact_identities`）の `account_id` は今のまま**（`google_accounts.id` を指す）。印に出す名前は profile から引く。
@@ -85,3 +86,29 @@
   サーバー設定（`server_accounts`）を複数アドレスで共有していても、カードはアドレスの数だけ並べ、
   サーバー設定はカードの「メール」の詳細から共有先として見せる。
 - 未定: メールの別名（エイリアス）や送信専用アドレスの扱い。
+
+## 5. 実装メモ（2026-10-09）
+
+- **カードは中身が付くときに作り、中身が全部なくなったら消す**（`store::account_profiles` の
+  `ensure_profile` / `prune_profile`）。メールの追加（`insert_account`）と Google の連携
+  （`upsert_google_account`）でアドレスのカードを作り、メールを外す（`delete_account`）・Google を
+  完全に解除する（`purge_google_account`）とき、ほかに中身が無ければ片付ける。一時的な解除では
+  行が残るのでカードも残る。空のカードは置かない（追加の流れの途中で止めても残らない）。
+- **提供元**は追加の流れで選んだもの。選ばなかった（以前の登録）・移行では、Google 連携がある・
+  Gmail / iCloud のサーバーかドメインかで推し量る（0063 と `AccountProvider::infer` が同じ規則）。
+  その他で足したアドレスに後から Google でログインすると Google に上げる（下げはしない）。
+- **呼び名**（`display_name`）は利用者が付けるカードの名前。差出人名は今までどおりメール側
+  （`accounts.display_name`）。呼び名が無ければアドレスで出す。連絡先の印・カレンダーの見出しは
+  `account_label`（呼び名か、無ければアドレス）。
+- **並び順**はカード単位（`account_profile_reorder`）。メールの一覧（左の欄・ホーム）の並びも
+  カードの順にそろえる。
+- **Google のスイッチ**: オンにするとき、権限があれば `google_set_service` でオンにして同期、
+  無ければ（未連携・解除中・スコープ不足）`google_connect(calendar, contacts, login_hint)` で
+  そのサービスの権限だけを求める。もともとオンで許可が残っているサービスはそのまま残し、
+  求めなかったサービスを勝手にオンにはしない。オフは同期を止めるだけ（記録は残す）。
+- **メールのスイッチ**: オンはカードのアドレスでメールの入力（App 用パスワード）を開く。オフは
+  確認のうえメールアカウントを外す（手元のメールは消える。サーバーのメールは残る）。
+- **サーバー設定の共有先**: `server_account_list` に、その設定を使っているメールアカウントを
+  添え（`account_ids`）、メールの詳細で「このサーバー設定を共有: …」と出す。
+- 画面は `components/accounts/`（AccountsSettings / AccountCard / GoogleServices / MailAccountForm /
+  MailAccountDetails / AddAccountFlow / GoogleDisconnectDialog / GoogleCredentialsPanel）。

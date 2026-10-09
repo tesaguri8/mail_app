@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { AutoconfigResult } from '@bindings/AutoconfigResult';
 import type { AccountInput } from '@bindings/AccountInput';
+import type { AccountProfile } from '@bindings/AccountProfile';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { ServerAccountSummary } from '@bindings/ServerAccountSummary';
 
@@ -11,6 +12,17 @@ export const accountAdd = (input: AccountInput, password: string) =>
   invoke<AccountSummary>('account_add', { input, password });
 
 export const accountList = () => invoke<AccountSummary[]>('account_list');
+
+/** 設定の「アカウント」のカード一覧（アドレスごと。中身はメール・Google 連携の id で指す）。 */
+export const accountProfiles = () => invoke<AccountProfile[]>('account_profiles');
+
+/** カードの並び順を保存（渡した ID 順。メールの一覧の並びもそろう）。 */
+export const accountProfileReorder = (ids: number[]) =>
+  invoke<void>('account_profile_reorder', { ids });
+
+/** カードの呼び名を変える（null・空ならアドレスで出す）。 */
+export const accountProfileRename = (profileId: number, name: string | null) =>
+  invoke<void>('account_profile_rename', { profileId, name });
 
 export const serverAccountList = () => invoke<ServerAccountSummary[]>('server_account_list');
 

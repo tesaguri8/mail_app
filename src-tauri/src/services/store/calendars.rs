@@ -15,14 +15,19 @@ fn row_to_calendar(r: &Row) -> rusqlite::Result<CalendarSummary> {
         access_role: r.get(8)?,
         account_email: r.get(9)?,
         account_disconnected: r.get::<_, Option<bool>>(10)?.unwrap_or(false),
+        account_label: r.get(11)?,
     })
 }
 
-// account_email は相関サブクエリで引く（calendars 側だけ SELECT すればよく、JOIN 不要）。
-const CAL_COLS: &str = "id, name, color, kind, visible, is_default, sort_order, source, access_role, \
+// account_email・account_label は相関サブクエリで引く（calendars 側だけ SELECT すればよく、JOIN 不要）。
+const CAL_COLS: &str =
+    "id, name, color, kind, visible, is_default, sort_order, source, access_role, \
     (SELECT email FROM google_accounts a WHERE a.id = calendars.account_id) AS account_email, \
     (SELECT disconnected_at IS NOT NULL FROM google_accounts a WHERE a.id = calendars.account_id) \
-        AS account_disconnected";
+        AS account_disconnected, \
+    (SELECT COALESCE(p.display_name, a.email) FROM google_accounts a \
+        LEFT JOIN account_profiles p ON p.id = a.profile_id \
+        WHERE a.id = calendars.account_id) AS account_label";
 
 impl Store {
     /// カレンダー一覧（既定→種別→並び順→名前）。マイを先、他を後に並べる。

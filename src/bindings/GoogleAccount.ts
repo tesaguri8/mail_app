@@ -34,4 +34,12 @@ last_contacts_sync_at: string | null,
 /**
  * 解除中になった時刻（UTC 文字列）。None＝連携中。解除中は同期せず、記録は残す。
  */
-disconnected_at: string | null, };
+disconnected_at: string | null, 
+/**
+ * カレンダーの権限を許可済みか（偽ならオンにする前に Google でログインし直す）。
+ */
+calendar_granted: boolean, 
+/**
+ * 連絡先の権限を許可済みか（偽ならオンにする前に Google でログインし直す）。
+ */
+contacts_granted: boolean, };

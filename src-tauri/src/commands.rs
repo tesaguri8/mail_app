@@ -1,9 +1,9 @@
 use crate::models::{
-    AccountInput, AccountSummary, AppInfo, AttachmentMeta, AttachmentSummary, AutoconfigResult,
+    AccountInput, AccountProfile, AccountProvider, AccountSummary, AppInfo, AttachmentMeta, AttachmentSummary, AutoconfigResult,
     AttendeeInput, CalendarInput, CalendarSummary, ContactInput, ContactListItem, ContactMatch,
     ContactSummary, DataLocation, DbInfo, DraftContent, DraftInput, DuplicateGroup, EventAttendee,
     EventInput, EventSummary, GoogleAccount, GoogleDisconnectResult, GoogleSyncResult,
-    GoogleCredentialsStatus,
+    GoogleCredentialsStatus, GoogleService,
     GreenDomainEntry,
     HomeUnreadCounts, IcsImportReport, ImportReport, MailDetail,
     MailSummary, OrgChangeImpact, OrgDuplicateGroup, OrgLinkSuggestion, OrganizationDetail, OrganizationInput, OrganizationSummary,
@@ -22,9 +22,7 @@ use crate::services::imap_sync;
 use crate::services::media;
 use crate::services::smtp;
 use crate::services::spam;
-use crate::services::store::{
-    GoogleService, NewAccount, NewAttachment, NewServerAccount, PurgeRef, Store,
-};
+use crate::services::store::{NewAccount, NewAttachment, NewServerAccount, PurgeRef, Store};
 use crate::services::vcard;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -180,8 +178,12 @@ pub fn account_add(
         })
         .map_err(|e| e.to_string())?;
 
+    let provider = input
+        .provider
+        .unwrap_or_else(|| AccountProvider::infer(&input.email, &input.imap_host));
     let id = store
         .insert_account(&NewAccount {
+            provider,
             email: input.email.clone(),
             display_name: input.display_name.clone(),
             username: input.username.clone(),
@@ -207,6 +209,32 @@ pub fn account_add(
         total_count: 0,
         server_total_count: 0,
     })
+}
+
+/// 設定の「アカウント」のカード一覧（アドレスごと。docs/ACCOUNTS.md）。
+#[tauri::command]
+pub fn account_profiles(store: State<Store>) -> Result<Vec<AccountProfile>, String> {
+    store.list_account_profiles().map_err(|e| e.to_string())
+}
+
+/// カードの並び順を保存する（メールの一覧の並びもカードの順にそろう）。
+#[tauri::command]
+pub fn account_profile_reorder(store: State<Store>, ids: Vec<i64>) -> Result<(), String> {
+    store
+        .reorder_account_profiles(&ids)
+        .map_err(|e| e.to_string())
+}
+
+/// カードの呼び名を変える（空ならアドレスで出す）。
+#[tauri::command]
+pub fn account_profile_rename(
+    store: State<Store>,
+    profile_id: i64,
+    name: Option<String>,
+) -> Result<(), String> {
+    store
+        .rename_account_profile(profile_id, name.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 /// 登録済みアカウント一覧（資格情報は含めない）。
@@ -2292,7 +2320,7 @@ async fn gcal_handle_move(
 fn google_read_credentials(app: &AppHandle, store: &Store) -> Result<(String, String), String> {
     let (client_id, client_secret) = google_resolve_credentials(app, store);
     let client_id = client_id.ok_or(
-        "Google の Client ID が未設定です。設定 > 同期 の Google 欄で入力（または .env の GOOGLE_CLIENT_ID）してください",
+        "Google の Client ID が未設定です。設定 > アカウント の「Google の接続設定（開発用）」で入力（または .env の GOOGLE_CLIENT_ID）してください",
     )?;
     let client_secret = client_secret
         .ok_or("Google の Client Secret が未設定です（.env の GOOGLE_CLIENT_SECRET でも可）")?;
@@ -2348,22 +2376,44 @@ pub fn google_accounts(store: State<Store>) -> Result<Vec<GoogleAccount>, String
 
 /// Google アカウントを連携する（OAuth 同意フロー → refresh_token を keyring に保存）。
 ///
-/// `contacts` を立てると連絡先スコープも要求する。既にカレンダーだけで連携済みの
-/// アカウントに後から足す場合もこのコマンドを呼べばよく、`include_granted_scopes` に
-/// より既存の許可は失われない。
+/// `calendar` / `contacts` は、このログインでオンにしたいサービス（カードのスイッチ）。
+/// そのスコープだけを要求し、`include_granted_scopes` により既存の許可は失われない（連携済みの
+/// アカウントに後からサービスを足す場合も、このコマンドを呼べばよい）。
+///
+/// オンにするのは「要求して実際に許可された」サービスと、もともとオンで許可が残っている
+/// サービス。要求しなかったサービスを勝手にオンにはしない（新規の行はカレンダーが既定で
+/// オンなので、ここで実際の選択にそろえる）。
+///
+/// `login_hint` はカードのアドレス。利用者が別のアカウントを選んだら、そのアドレスのカードに入る。
 #[tauri::command]
 pub async fn google_connect(
     app: AppHandle,
     store: State<'_, Store>,
+    calendar: bool,
     contacts: bool,
+    login_hint: Option<String>,
 ) -> Result<GoogleAccount, String> {
-    let (client_id, client_secret) = google_read_credentials(&app, store.inner())?;
-    let mut wanted = vec![google::SCOPE_CALENDAR];
-    if contacts {
-        wanted.push(google::SCOPE_CONTACTS);
+    if !calendar && !contacts {
+        return Err("連絡先かカレンダーのどちらかを選んでください".into());
     }
+    let (client_id, client_secret) = google_read_credentials(&app, store.inner())?;
+    let wanted: Vec<&str> = [
+        (calendar, GoogleService::Calendar),
+        (contacts, GoogleService::Contacts),
+    ]
+    .iter()
+    .filter(|(on, _)| *on)
+    .map(|(_, s)| s.scope())
+    .collect();
     let scope = google::scopes(&wanted);
-    let (tokens, email) = google::oauth::run_flow(&app, &client_id, &client_secret, &scope).await?;
+    let (tokens, email) = google::oauth::run_flow(
+        &app,
+        &client_id,
+        &client_secret,
+        &scope,
+        login_hint.as_deref(),
+    )
+    .await?;
     let refresh = tokens.refresh_token.ok_or(
         "refresh_token を取得できませんでした（同意画面で要求した権限を許可してください）",
     )?;
@@ -2371,26 +2421,69 @@ pub async fn google_connect(
     keyring::Entry::new(&service, &google_refresh_key(&email))
         .and_then(|e| e.set_password(&refresh))
         .map_err(|e| format!("認証情報を保存できません: {e}"))?;
-    let id = store
-        .upsert_google_account(&email, None, tokens.granted_scopes.as_deref())
-        .map_err(|e| e.to_string())?;
-    store
-        .set_google_account_service(id, GoogleService::Calendar, true)
-        .map_err(|e| e.to_string())?;
-    // 実際に許可されたスコープで判断する（同意画面で連絡先だけ外されることがある）。
-    let granted_contacts = tokens
-        .granted_scopes
-        .as_deref()
-        .is_some_and(|g| g.split(' ').any(|s| s == google::SCOPE_CONTACTS));
-    store
-        .set_google_account_service(id, GoogleService::Contacts, granted_contacts)
-        .map_err(|e| e.to_string())?;
-    store
+    // 連携し直す前のスイッチ（新規なら両方オフ扱い）。
+    let before = store
         .list_google_accounts()
         .map_err(|e| e.to_string())?
         .into_iter()
-        .find(|a| i64::from(a.id) == id)
+        .find(|a| a.email == email);
+    let id = store
+        .upsert_google_account(&email, None, tokens.granted_scopes.as_deref())
+        .map_err(|e| e.to_string())?;
+    // 実際に許可されたスコープで判断する（同意画面で片方だけ外されることがある）。
+    [
+        (
+            GoogleService::Calendar,
+            calendar,
+            before.as_ref().is_some_and(|a| a.sync_calendar),
+        ),
+        (
+            GoogleService::Contacts,
+            contacts,
+            before.as_ref().is_some_and(|a| a.sync_contacts),
+        ),
+    ]
+    .into_iter()
+    .try_for_each(|(svc, requested, was_on)| {
+        let on = (requested || was_on) && svc.is_granted(tokens.granted_scopes.as_deref());
+        store.set_google_account_service(id, svc, on)
+    })
+    .map_err(|e| e.to_string())?;
+    store
+        .google_account(id)
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| "連携アカウントを保存できませんでした".into())
+}
+
+/// Google 連携のサービス（カードの「連絡先」「カレンダー」のスイッチ）を切り替える。
+///
+/// オンにできるのは、そのサービスの権限を許可済みのときだけ（未許可なら `google_connect` で
+/// ログインし直す）。オフにしても、取り込んだ連絡先・予定と連携そのものは残る（同期が止まるだけ）。
+#[tauri::command]
+pub fn google_set_service(
+    store: State<Store>,
+    account_id: i64,
+    service: GoogleService,
+    enabled: bool,
+) -> Result<GoogleAccount, String> {
+    let account = store
+        .google_account(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("連携アカウントが見つかりません")?;
+    let granted = match service {
+        GoogleService::Calendar => account.calendar_granted,
+        GoogleService::Contacts => account.contacts_granted,
+    };
+    if enabled && !granted {
+        return Err("この機能の権限がまだありません。Google でログインし直してください".into());
+    }
+    store
+        .set_google_account_service(account_id, service, enabled)
+        .map_err(|e| e.to_string())?;
+    store
+        .google_account(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "連携アカウントが見つかりません".into())
 }
 
 /// 解除中のアカウントで同期を始めないための確認（分かる文言で止める）。

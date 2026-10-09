@@ -11,16 +11,11 @@
 //! - **完全に解除**（[`Store::purge_google_account`]）: つながりを外し、カレンダーと予定の写し・
 //!   行を消す。どちらも Google 側の連絡先・予定には触れない
 
+use super::account_profiles::{ensure_profile, prune_profile};
 use super::Store;
-use crate::models::GoogleAccount;
+use crate::models::{AccountProvider, GoogleAccount, GoogleService};
+use crate::services::google::{SCOPE_CALENDAR, SCOPE_CONTACTS};
 use rusqlite::{params, OptionalExtension, Row};
-
-/// 1 つの Google アカウントが兼ねる同期サービス。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GoogleService {
-    Calendar,
-    Contacts,
-}
 
 impl GoogleService {
     /// 有効フラグを保持する列名。
@@ -38,9 +33,27 @@ impl GoogleService {
             Self::Contacts => "last_contacts_sync_at",
         }
     }
+
+    /// このサービスに要る OAuth スコープ。
+    pub const fn scope(self) -> &'static str {
+        match self {
+            Self::Calendar => SCOPE_CALENDAR,
+            Self::Contacts => SCOPE_CONTACTS,
+        }
+    }
+
+    /// 許可済みスコープ（スペース区切り）にこのサービスの分が入っているか。
+    ///
+    /// 未記録（0055 以前に連携した旧レコード）はカレンダーだけで連携したものと見なす。
+    pub fn is_granted(self, granted_scopes: Option<&str>) -> bool {
+        granted_scopes.map_or(self == Self::Calendar, |g| {
+            g.split(' ').any(|s| s == self.scope())
+        })
+    }
 }
 
 fn row_to_account(r: &Row) -> rusqlite::Result<GoogleAccount> {
+    let scopes: Option<String> = r.get(8)?;
     Ok(GoogleAccount {
         id: r.get::<_, i64>(0)? as i32,
         email: r.get(1)?,
@@ -50,13 +63,15 @@ fn row_to_account(r: &Row) -> rusqlite::Result<GoogleAccount> {
         last_contacts_sync_at: r.get(5)?,
         push_new_contacts: r.get::<_, i64>(6)? != 0,
         disconnected_at: r.get(7)?,
+        calendar_granted: GoogleService::Calendar.is_granted(scopes.as_deref()),
+        contacts_granted: GoogleService::Contacts.is_granted(scopes.as_deref()),
     })
 }
 
 /// 一覧・単票で共通に使う選択列（row_to_account の並びと対応）。
 const ACCOUNT_COLUMNS: &str =
     "id, email, sync_calendar, sync_contacts, last_calendar_sync_at, last_contacts_sync_at, \
-     push_new_contacts, disconnected_at";
+     push_new_contacts, disconnected_at, granted_scopes";
 
 impl Store {
     /// Google アカウントを登録（既存なら external_id と許可スコープを更新）し、行 id を返す。
@@ -67,27 +82,38 @@ impl Store {
     /// `granted_scopes` は同意で実際に許可されたスコープ（スペース区切り）。要求と一致しない
     /// ことがあるため、トークン応答の値をそのまま記録する。後から別サービスを有効化する際に
     /// 再同意が要るかの判定に使う。
+    ///
+    /// このアドレスのカード（`account_profiles`）が無ければ作ってつなぐ（メールで登録済みの
+    /// アドレスなら、そのカードに入る）。
+    ///
+    /// # Errors
+    /// DB の書き込みに失敗したとき（カードの作成ごと巻き戻す）。
     pub fn upsert_google_account(
         &self,
         email: &str,
         external_id: Option<&str>,
         granted_scopes: Option<&str>,
     ) -> rusqlite::Result<i64> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "INSERT INTO google_accounts (provider, email, external_id, granted_scopes) \
-             VALUES ('google', ?1, ?2, ?3) \
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let profile_id = ensure_profile(&tx, email, AccountProvider::Google)?;
+        tx.execute(
+            "INSERT INTO google_accounts (provider, email, external_id, granted_scopes, profile_id) \
+             VALUES ('google', ?1, ?2, ?3, ?4) \
              ON CONFLICT(provider, email) DO UPDATE SET \
                  external_id = COALESCE(?2, external_id), \
                  granted_scopes = COALESCE(?3, granted_scopes), \
-                 disconnected_at = NULL",
-            params![email, external_id, granted_scopes],
+                 disconnected_at = NULL, \
+                 profile_id = ?4",
+            params![email, external_id, granted_scopes, profile_id],
         )?;
-        conn.query_row(
+        let id = tx.query_row(
             "SELECT id FROM google_accounts WHERE provider = 'google' AND email = ?1",
             params![email],
             |r| r.get(0),
-        )
+        )?;
+        tx.commit()?;
+        Ok(id)
     }
 
     /// 連携済み Google アカウント一覧。
@@ -226,6 +252,7 @@ impl Store {
     /// - アカウントの行を消す
     ///
     /// ローカル専用のカレンダー・予定と、Google 側の連絡先・予定には触れない。
+    /// このアドレスにメールが無ければ、カード（`account_profiles`）も片付ける。
     ///
     /// # Errors
     /// DB の書き込みに失敗したとき（全体を巻き戻す）。
@@ -268,10 +295,19 @@ impl Store {
             "DELETE FROM calendars WHERE account_id = ?1",
             params![account_id],
         )?;
+        let profile_id: Option<i64> = tx
+            .query_row(
+                "SELECT profile_id FROM google_accounts WHERE id = ?1",
+                params![account_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
         tx.execute(
             "DELETE FROM google_accounts WHERE id = ?1",
             params![account_id],
         )?;
+        profile_id.map_or(Ok(()), |p| prune_profile(&tx, p))?;
         tx.commit()
     }
 }

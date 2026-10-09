@@ -8,7 +8,8 @@ import { AddressBook } from './components/AddressBook';
 import { CalendarView } from './components/CalendarView';
 import { Settings } from './components/Settings';
 import { accountList } from './services/accounts';
-import { useAutoSync, MAIL_SYNCED_EVENT } from './hooks/useAutoSync';
+import { useAutoSync, MAIL_SYNCED_EVENT, CONTACTS_SYNCED_EVENT } from './hooks/useAutoSync';
+import { useContactsStore } from './stores/contacts';
 import { useReminders } from './hooks/useReminders';
 import { SyncProvider } from './components/SyncProvider';
 import type { AccountSummary } from '@bindings/AccountSummary';
@@ -16,6 +17,9 @@ import type { AccountSummary } from '@bindings/AccountSummary';
 import { BACKGROUNDS, getBackgroundIndex, setBackgroundIndex } from './config/backgrounds';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+/** 起動から連絡先一覧を先読みするまでの待ち（ms）。 */
+const CONTACTS_PREFETCH_DELAY_MS = 3000;
 
 /** 背景の濃さ・文字色スライダーの共通最大値（85%）。 */
 export const BAR_MAX = 0.85;
@@ -105,6 +109,19 @@ export default function App() {
     window.addEventListener(MAIL_SYNCED_EVENT, refreshAccounts);
     return () => window.removeEventListener(MAIL_SYNCED_EVENT, refreshAccounts);
   }, [refreshAccounts]);
+
+  // 連絡先の一覧を先に読んでおく（初めて連絡先タブに入ったときも待たせない）。起動直後の
+  // 同期・描画と取り合わないよう少し遅らせる。自動同期で連絡先が変わったら写しも取り直す。
+  useEffect(() => {
+    if (!isTauri) return;
+    const refresh = () => void useContactsStore.getState().refresh();
+    const h = setTimeout(refresh, CONTACTS_PREFETCH_DELAY_MS);
+    window.addEventListener(CONTACTS_SYNCED_EVENT, refresh);
+    return () => {
+      clearTimeout(h);
+      window.removeEventListener(CONTACTS_SYNCED_EVENT, refresh);
+    };
+  }, []);
 
   const openMail = (accountId: number, mailId?: number) => {
     // 特定メールを開く操作（ホームの新着クリック等）では、保持していた作成セッションは畳む

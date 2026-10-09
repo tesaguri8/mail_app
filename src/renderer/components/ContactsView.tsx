@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Download, Gem, Layers, Plus, RotateCcw, Search, Trash2, User, X } from 'lucide-react';
 import type { ContactSummary } from '@bindings/ContactSummary';
+import type { ContactListItem } from '@bindings/ContactListItem';
 import type { ContactMatch } from '@bindings/ContactMatch';
 import type { ImportReport } from '@bindings/ImportReport';
 import { contactFindDuplicates, contactImport, contactList, contactRestore } from '../services/contacts';
@@ -16,6 +17,8 @@ import { tagList } from '../services/tags';
 import type { TagSummary } from '@bindings/TagSummary';
 import { DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import { CONTACTS_SYNCED_EVENT } from '../hooks/useAutoSync';
+import { useVirtualRows } from '../hooks/useVirtualRows';
+import { useContactsStore } from '../stores/contacts';
 import {
   CONTACT_SOURCE_FILTERS,
   ContactLinkMarks,
@@ -27,6 +30,14 @@ import {
 export type { ContactPrefill };
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+/** 既定の一覧（検索語・タグ絞り込み・ゴミ箱表示が無い）か。この一覧だけを手元に写しておく。 */
+function isDefaultQuery(query: string, tags: Set<number>, showDeleted: boolean): boolean {
+  return !query.trim() && tags.size === 0 && !showDeleted;
+}
+
+/** 一覧の 1 行の高さ（px）。仮想スクロールのため全行で揃える（アバター 32 ＋ 2 行の文字 ＋ 上下の余白）。 */
+const ROW_HEIGHT = 52;
 
 /**
  * 住所録（アドレス帳）。左に検索付き一覧、右に詳細・編集フォーム（ContactEditor）。
@@ -46,7 +57,12 @@ export function ContactsView({
   onOpenIdConsumed?: () => void;
 } = {}) {
   const { t } = useTranslation();
-  const [items, setItems] = useState<ContactSummary[]>([]);
+  // 既定の一覧（検索・絞り込み・ゴミ箱なし）は手元の写しをすぐ出し、裏で取り直す。
+  const cached = useContactsStore((s) => s.items);
+  const refreshCached = useContactsStore((s) => s.refresh);
+  const removeCached = useContactsStore((s) => s.remove);
+  // 検索・タグ絞り込み・ゴミ箱表示のときの結果（その都度取りに行く）。
+  const [filtered, setFiltered] = useState<ContactListItem[] | null>(null);
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<number | null>(null);
   // 編集フォームに「何を開くか」の指示。null＝何も開いていない。
@@ -66,7 +82,13 @@ export function ContactsView({
   const [retention, setRetention] = useState(7);
   // 同期先での絞り込み（一覧が links を持つので画面側で絞る）。
   const [source, setSource] = useState<ContactSourceFilter>('all');
+  const isDefaultView = isDefaultQuery(query, tagFilter, showDeleted);
+  // 絞り込みの結果が届くまでは、既定の一覧を出しておく（空の画面で待たせない）。
+  const listed = isDefaultView ? cached : (filtered ?? cached);
+  const items = listed ?? [];
   const shownItems = items.filter((c) => matchesSource(c.links, source));
+  // 数千件を全部描くと重いので、見えている行だけ描く。
+  const rows = useVirtualRows<HTMLUListElement>(shownItems.length, ROW_HEIGHT);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -78,13 +100,23 @@ export function ContactsView({
   const load = useCallback(
     (q: string, groups: Set<number>) => {
       if (!isTauri) return;
+      if (isDefaultQuery(q, groups, showDeleted)) {
+        void refreshCached();
+        return;
+      }
       // 削除済み表示のときはゴミ箱（削除済みのみ）を出す。
       contactList(q, [...groups], showDeleted)
-        .then((r) => setItems(showDeleted ? r.filter((c) => c.deleted_at != null) : r))
+        .then((r) => setFiltered(showDeleted ? r.filter((c) => c.deleted_at != null) : r))
         .catch(() => undefined);
     },
-    [showDeleted],
+    [showDeleted, refreshCached],
   );
+
+  // 保存・削除・同期などのあと: いま見ている一覧と、既定の一覧の写しの両方を取り直す。
+  const reload = useCallback(() => {
+    load(query, tagFilter);
+    if (!isDefaultQuery(query, tagFilter, showDeleted)) void refreshCached();
+  }, [load, query, tagFilter, showDeleted, refreshCached]);
 
   const reloadTags = useCallback(() => {
     if (!isTauri) return;
@@ -94,25 +126,31 @@ export function ContactsView({
   }, []);
   useEffect(reloadTags, [reloadTags]);
 
-  // 検索語・タグ絞り込みの変化に追随（軽いデバウンス）。
+  // 検索語・タグ絞り込みの変化に追随（打鍵中は軽いデバウンス）。既定の一覧（タブに入ったとき・
+  // 検索を消したとき）は待たずに取り直す（写しは既に出ているので、差し替えるだけ）。
   useEffect(() => {
+    if (isDefaultQuery(query, tagFilter, showDeleted)) {
+      load(query, tagFilter);
+      return;
+    }
     const h = setTimeout(() => load(query, tagFilter), 150);
     return () => clearTimeout(h);
-  }, [query, tagFilter, load]);
+  }, [query, tagFilter, showDeleted, load]);
 
-  // 自動同期が Google の連絡先を住所録へ反映したら、一覧を取り直す（タグも増えうる）。
+  // 自動同期が Google の連絡先を住所録へ反映したら、絞り込みの結果とタグを取り直す（タグも増えうる）。
+  // 既定の一覧の写しは App が同じ契機で取り直す。
   useEffect(() => {
     const onSynced = () => {
-      load(query, tagFilter);
+      if (!isDefaultQuery(query, tagFilter, showDeleted)) load(query, tagFilter);
       reloadTags();
     };
     window.addEventListener(CONTACTS_SYNCED_EVENT, onSynced);
     return () => window.removeEventListener(CONTACTS_SYNCED_EVENT, onSynced);
-  }, [query, tagFilter, load, reloadTags]);
+  }, [query, tagFilter, showDeleted, load, reloadTags]);
 
-  const openContact = (c: ContactSummary) => {
+  const openContact = (c: ContactListItem) => {
     setSelectedId(c.id);
-    // 一覧は軽量（複数値が空）なので、seed を渡しつつ編集フォーム側でフル取得させる。
+    // 一覧は一覧に出す分だけなので、seed（つながり）を渡しつつ編集フォーム側でフル取得させる。
     setRequest({ kind: 'existing', id: c.id, seed: c });
   };
 
@@ -167,13 +205,15 @@ export function ContactsView({
   // 保存完了: 選択を保存された連絡先に合わせ、一覧・タグを取り直す。
   const handleSaved = (c: ContactSummary) => {
     setSelectedId(c.id);
-    load(query, tagFilter);
+    reload();
     reloadTags();
   };
 
   // 削除完了: 一覧から外し、開いていたのがそれなら閉じる。
   const handleDeleted = (id: number) => {
-    setItems((prev) => prev.filter((c) => c.id !== id));
+    removeCached(id);
+    setFiltered((prev) => prev?.filter((c) => c.id !== id) ?? null);
+    reload();
     if (selectedId === id) {
       setSelectedId(null);
       setRequest(null);
@@ -200,7 +240,7 @@ export function ContactsView({
     try {
       const result = await contactImport(path);
       setReport(result);
-      load(query, tagFilter); // 取り込み後に一覧を更新
+      reload(); // 取り込み後に一覧を更新
       reloadTags(); // 取り込みで作られたタグを反映
     } catch (e) {
       setImportError(`取り込みに失敗しました: ${String(e)}`);
@@ -213,7 +253,7 @@ export function ContactsView({
   const restore = async (id: number) => {
     try {
       await contactRestore(id);
-      load(query, tagFilter);
+      reload();
     } catch {
       /* noop */
     }
@@ -228,7 +268,7 @@ export function ContactsView({
     return dupMode === 'orgs' ? (
       <OrgDuplicates
         modeToggle={<DupModeToggle mode={dupMode} onChange={setDupMode} />}
-        onMerged={() => load(query, tagFilter)}
+        onMerged={reload}
         onExit={exitCleanup}
       />
     ) : (
@@ -236,7 +276,7 @@ export function ContactsView({
         focusContactId={cleanupFocusId}
         mode={dupMode}
         onModeChange={setDupMode}
-        onMerged={() => load(query, tagFilter)}
+        onMerged={reload}
         onExit={exitCleanup}
       />
     );
@@ -408,8 +448,8 @@ export function ContactsView({
             </button>
           ))}
         </div>
-        <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-          {shownItems.length === 0 ? (
+        <ul ref={rows.ref} onScroll={rows.onScroll} className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+          {listed === null ? null : shownItems.length === 0 ? (
             <li className="px-2 py-6 text-center text-sm text-white/45">
               {showDeleted
                 ? t('contact.trashEmpty')
@@ -418,63 +458,67 @@ export function ContactsView({
                   : t('contact.empty')}
             </li>
           ) : (
-            shownItems.map((c) =>
-              c.deleted_at ? (
-                // 削除済み（ゴミ箱）: 赤字＋残り日数＋復元。
-                <li key={c.id}>
-                  <div className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-500/15 text-xs font-semibold uppercase text-red-200">
-                      {c.display_name.trim().charAt(0) || <User size={15} />}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-red-200">
-                        {c.display_name || t('contact.untitled')}
+            <>
+              <li aria-hidden style={{ height: rows.padTop }} />
+              {shownItems.slice(rows.start, rows.end).map((c) =>
+                c.deleted_at ? (
+                  // 削除済み（ゴミ箱）: 赤字＋残り日数＋復元。
+                  <li key={c.id} style={{ height: ROW_HEIGHT }}>
+                    <div className="flex h-full w-full items-center gap-2.5 rounded-md px-2.5 py-2">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-500/15 text-xs font-semibold uppercase text-red-200">
+                        {c.display_name.trim().charAt(0) || <User size={15} />}
                       </span>
-                      <span className="block truncate text-xs text-red-300/70">
-                        {t('contact.trashDaysLeft', {
-                          count: trashDaysLeft(c.deleted_at, retention),
-                        })}
-                      </span>
-                    </span>
-                    <button
-                      onClick={() => restore(c.id)}
-                      title={t('contact.restore')}
-                      aria-label={t('contact.restore')}
-                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white"
-                    >
-                      <RotateCcw size={15} />
-                    </button>
-                  </div>
-                </li>
-              ) : (
-                <li key={c.id}>
-                  <button
-                    onClick={() => openContact(c)}
-                    className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left ${
-                      selectedId === c.id ? 'bg-white/20' : 'hover:bg-white/10'
-                    }`}
-                  >
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/15 text-xs font-semibold uppercase">
-                      {c.display_name.trim().charAt(0) || <User size={15} />}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-1 truncate text-sm font-medium">
-                        {c.is_favorite && (
-                          <Gem size={12} className="shrink-0 fill-sky-300/30 text-sky-300" />
-                        )}
-                        {c.display_name || t('contact.untitled')}
-                      </span>
-                      {(c.primary_organization || c.primary_email) && (
-                        <span className="block truncate text-xs text-white/45">
-                          {c.primary_organization || c.primary_email}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium text-red-200">
+                          {c.display_name || t('contact.untitled')}
                         </span>
-                      )}
-                    </span>
-                    <ContactLinkMarks links={c.links} />
-                  </button>
-                </li>
-              ),
-            )
+                        <span className="block truncate text-xs text-red-300/70">
+                          {t('contact.trashDaysLeft', {
+                            count: trashDaysLeft(c.deleted_at, retention),
+                          })}
+                        </span>
+                      </span>
+                      <button
+                        onClick={() => restore(c.id)}
+                        title={t('contact.restore')}
+                        aria-label={t('contact.restore')}
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white"
+                      >
+                        <RotateCcw size={15} />
+                      </button>
+                    </div>
+                  </li>
+                ) : (
+                  <li key={c.id} style={{ height: ROW_HEIGHT }}>
+                    <button
+                      onClick={() => openContact(c)}
+                      className={`flex h-full w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left ${
+                        selectedId === c.id ? 'bg-white/20' : 'hover:bg-white/10'
+                      }`}
+                    >
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/15 text-xs font-semibold uppercase">
+                        {c.display_name.trim().charAt(0) || <User size={15} />}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-1 truncate text-sm font-medium">
+                          {c.is_favorite && (
+                            <Gem size={12} className="shrink-0 fill-sky-300/30 text-sky-300" />
+                          )}
+                          {c.display_name || t('contact.untitled')}
+                        </span>
+                        {(c.primary_organization || c.primary_email) && (
+                          <span className="block truncate text-xs text-white/45">
+                            {c.primary_organization || c.primary_email}
+                          </span>
+                        )}
+                      </span>
+                      <ContactLinkMarks links={c.links} />
+                    </button>
+                  </li>
+                ),
+              )}
+              <li aria-hidden style={{ height: rows.padBottom }} />
+            </>
           )}
         </ul>
       </aside>

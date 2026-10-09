@@ -1,13 +1,15 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { ContactSummary } from '@bindings/ContactSummary';
+import type { ContactListItem } from '@bindings/ContactListItem';
 import type { ContactInput } from '@bindings/ContactInput';
 import type { ImportReport } from '@bindings/ImportReport';
 import type { DuplicateGroup } from '@bindings/DuplicateGroup';
 import type { ContactMatch } from '@bindings/ContactMatch';
 
 // Tauri v2 は camelCase の引数キーを snake_case の Rust 引数へ自動変換する。
+/** 連絡先一覧（一覧に出す分だけの軽い形）。開いたら contactGet で全項目を取る。 */
 export const contactList = (query?: string, groups?: number[], includeDeleted = false) =>
-  invoke<ContactSummary[]>('contact_list', {
+  invoke<ContactListItem[]>('contact_list', {
     query: query ?? null,
     groups: groups && groups.length > 0 ? groups : null,
     includeDeleted,

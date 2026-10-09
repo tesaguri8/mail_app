@@ -112,6 +112,18 @@ fn every_field_round_trips_through_the_tables() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].primary_phone.as_deref(), Some("090-1111-2222"));
     assert!(listed[0].fields.emails.is_empty());
+
+    // 連絡先タブの一覧は、一覧に出す分だけの軽い形で返す。
+    let items = s.list_contact_items(None, &[], false).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, got.id);
+    assert_eq!(items[0].display_name, got.fields.display_name);
+    assert_eq!(items[0].primary_email.as_deref(), Some("taro@x.jp"));
+    assert_eq!(
+        items[0].primary_organization.as_deref(),
+        Some("株式会社テスト")
+    );
+    assert!(items[0].deleted_at.is_none());
 }
 
 #[test]

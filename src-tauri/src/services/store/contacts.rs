@@ -8,7 +8,7 @@ use super::contact_rows::{load_contact, query_summaries, SUMMARY_ORDER};
 use super::contact_tags::{add_tags, set_tags};
 use super::contact_write::{mark_dirty, write_contact, OrgLinking, WriteOptions};
 use super::Store;
-use crate::models::{ContactFields, ContactInput, ContactSummary, ImportReport};
+use crate::models::{ContactFields, ContactInput, ContactListItem, ContactSummary, ImportReport};
 use crate::services::contact_fields::fill_from_import;
 use crate::services::name_norm::match_rank;
 use crate::services::vcard::ParseResult;
@@ -84,6 +84,8 @@ impl Store {
     /// - `groups`: 非空なら、いずれかのタグを持つ連絡先に絞る（OR）
     /// - `include_deleted`: true なら論理削除済みも含める
     ///
+    /// 参照専用の接続で読むので、同期などの書き込みが走っていても待たされない。
+    ///
     /// # Errors
     /// DB の読み出しに失敗したとき。
     pub fn list_contacts(
@@ -108,13 +110,31 @@ impl Store {
         }
         let binds: Vec<&dyn ToSql> = groups.iter().map(|g| g as &dyn ToSql).collect();
         let rows = {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.read_conn.lock().unwrap();
             query_summaries(&conn, &conds.join(" AND "), SUMMARY_ORDER, &binds)?
         };
         Ok(match query.map(str::trim).filter(|q| !q.is_empty()) {
             Some(q) => filter_contacts_by_query(rows, q),
             None => rows,
         })
+    }
+
+    /// 連絡先一覧を、一覧に出す分だけの軽い形で返す（連絡先タブの一覧用）。
+    /// 引数と絞り込みは [`Store::list_contacts`] と同じ。
+    ///
+    /// # Errors
+    /// DB の読み出しに失敗したとき。
+    pub fn list_contact_items(
+        &self,
+        query: Option<&str>,
+        groups: &[i64],
+        include_deleted: bool,
+    ) -> rusqlite::Result<Vec<ContactListItem>> {
+        Ok(self
+            .list_contacts(query, groups, include_deleted)?
+            .into_iter()
+            .map(ContactListItem::from)
+            .collect())
     }
 
     /// 1 人の連絡先を、子テーブル・タグ・つながりまで充填して返す。

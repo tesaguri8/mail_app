@@ -19,7 +19,7 @@ import { signatureList } from '../../services/signatures';
 import { AccountCard } from './AccountCard';
 import { AddAccountFlow } from './AddAccountFlow';
 import { GoogleCredentialsPanel } from './GoogleCredentialsPanel';
-import { type ConnState, isTauri } from './shared';
+import { type ConnState, isTauri, sameAddress } from './shared';
 
 /**
  * 設定の「アカウント」（docs/ACCOUNTS.md）。アドレスごとに 1 枚のカードを並べ、その中で
@@ -42,6 +42,17 @@ export function AccountsSettings({
   const [creds, setCreds] = useState<GoogleCredentialsStatus | null>(null);
   const [adding, setAdding] = useState(false);
   const [conn, setConn] = useState<Record<number, ConnState>>({});
+  // 開いているカード（同時に 1 枚だけ。最初は全部閉じる＝null）。
+  const [openId, setOpenId] = useState<number | null>(null);
+  // 追加の流れで作ったカードのアドレス。一覧に現れたら、そのカードを開く。
+  const [created, setCreated] = useState<string | null>(null);
+  useEffect(() => {
+    if (!created) return;
+    const p = profiles.find((x) => sameAddress(x.email, created));
+    if (!p) return;
+    setOpenId(p.id);
+    setCreated(null);
+  }, [created, profiles]);
 
   const load = () => {
     if (!isTauri) return;
@@ -169,6 +180,8 @@ export function AccountsSettings({
             conn={conn}
             onCheckConn={(id) => void checkConn(id, true)}
             onChanged={changed}
+            open={openId === p.id}
+            onToggleOpen={() => setOpenId(openId === p.id ? null : p.id)}
             // 追加の途中は並べ替えない。
             onDragHandleDown={profiles.length > 1 && !adding ? () => setArmed(p.id) : undefined}
           />
@@ -181,6 +194,7 @@ export function AccountsSettings({
           servers={servers}
           creds={creds}
           onChanged={changed}
+          onCreated={setCreated}
           onClose={() => setAdding(false)}
         />
       ) : (

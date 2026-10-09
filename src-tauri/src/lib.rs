@@ -161,6 +161,8 @@ pub fn run() {
             commands::contact_find_matches,
             commands::contact_merge,
             commands::contact_merge_preview,
+            commands::contact_sure_merge_preview,
+            commands::contact_sure_merge,
             commands::contact_google_duplicates,
             commands::contact_google_duplicates_tidy,
             commands::event_list,

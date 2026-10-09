@@ -34,6 +34,7 @@ import {
 import { remoteDeletionNotes } from '../utils/mergeRemote';
 import { ConfirmDialog } from './ConfirmDialog';
 import { GoogleDuplicateNotice } from './GoogleDuplicateNotice';
+import { SureMergePanel } from './SureMergePanel';
 import {
   AddressRows,
   LabelDatalists,
@@ -227,6 +228,13 @@ export function ContactDuplicates({
                 ? t('dupes.none')
                 : t('dupes.summary', { groups: groups.length, extra: totalMergeable })}
           </div>
+          <SureMergePanel
+            onMerged={() => {
+              load();
+              setMerges((n) => n + 1);
+              onMerged();
+            }}
+          />
           <GoogleDuplicateNotice reloadKey={merges} />
         </div>
 

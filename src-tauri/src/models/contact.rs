@@ -382,3 +382,40 @@ pub struct MergeRemoteDeletion {
     /// 削除する件数（残す 1 件は含まない）。
     pub count: i32,
 }
+
+/// まとめて統合する 1 組（確実な重複。下見の一覧用）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct SureMergeGroup {
+    /// 残す連絡先。
+    pub keep_id: i32,
+    pub display_name: String,
+    /// 組の件数（残す 1 件を含む）。
+    pub count: i32,
+    /// 見分けるための主なメール・電話（組の中で同じ）。
+    pub email: Option<String>,
+    pub phone: Option<String>,
+}
+
+/// 確実な重複をまとめて統合したらどうなるか（読むだけ）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct SureMergePreview {
+    pub groups: Vec<SureMergeGroup>,
+    /// 組に入っている連絡先の数（統合後は組の数になる）。
+    pub contacts: i32,
+    /// Google 側から消すことになる件数（アカウントごと）。
+    pub remote_deletions: Vec<MergeRemoteDeletion>,
+}
+
+/// 確実な重複をまとめて統合した結果。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct SureMergeResult {
+    /// まとめた組の数（＝残った連絡先の数）。
+    pub groups: i32,
+    /// 消えた（残す側へまとめた）連絡先の数。
+    pub merged: i32,
+    /// Google 側から消すために削除待ちにした件数（次の同期で送る）。
+    pub remote_deletions: i32,
+}

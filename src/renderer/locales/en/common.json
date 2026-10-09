@@ -552,7 +552,17 @@
     "googleLeftoverRun": "Merge",
     "googleLeftoverTitle": "Merge duplicates in Google Contacts",
     "googleLeftoverBody": "Contacts you merged earlier in Rondine are still separate entries in Google. Keep one of each and delete the rest in Google. Your Rondine contacts are not changed.",
-    "googleLeftoverDone": "{{count}} will be deleted from Google Contacts on the next sync."
+    "googleLeftoverDone": "{{count}} will be deleted from Google Contacts on the next sync.",
+    "sureOpen": "Merge all sure duplicates",
+    "sureLoading": "Counting sure duplicates…",
+    "sureNone": "There are no sure duplicates to merge.",
+    "sureTitle": "Merge all sure duplicates",
+    "sureBody": "Merge {{contacts}} contacts in {{groups}} groups into {{groups}}.",
+    "sureRule": "Sure duplicates have the same name, emails and phones, with no conflicting birthday, notes or addresses. The richest contact is kept and everyone's details are combined.",
+    "sureList": "Show the groups ({{groups}})",
+    "sureRun": "Merge {{groups}} groups",
+    "sureDone": "Merged {{groups}} groups ({{merged}} contacts). {{remote}} will be deleted from Google Contacts on the next sync.",
+    "googleDeleteLineBulk": "Also delete {{count}} from Google Contacts, keeping one per group ({{account}})"
   },
   "greeting": {
     "morning": "Good morning",
@@ -675,7 +685,9 @@
       "contactsCreated": "{{count}} new",
       "contactsLinked": "{{count}} linked to existing",
       "contactsAmbiguous": "{{count}} to review in Duplicates",
-      "contactsConflicts": "{{count}} not sent because Google changed first (will retry)"
+      "contactsConflicts": "{{count}} not sent because Google changed first (will retry)",
+      "contactsDeferred": "{{count}} not sent yet (sent on the next sync)",
+      "contactsUnchanged": "{{count}} unchanged (not sent)"
     }
   },
   "dataloc": {

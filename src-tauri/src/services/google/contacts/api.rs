@@ -12,9 +12,50 @@ pub enum ApiError {
     /// 送った etag が古い（Google 側が先に更新されている）。読み直してから送り直す。
     #[error("Google 側が先に更新されています（etag 不一致）")]
     EtagConflict,
+    /// 書き込み・読み取りの上限に達した（429、または 403 の RATE_LIMIT_EXCEEDED）。
+    /// `Retry-After` が返ればその秒数。[`with_retry`] が待って送り直す。
+    #[error("Google の上限に達しました（しばらく待ってから続けます）")]
+    RateLimited(Option<u64>),
+    /// 相手の連絡先がもう無い（404）。削除ならもう消えているので成功とみなせる。
+    #[error("Google 側に連絡先がありません")]
+    NotFound,
     /// その他のエラー（メッセージ）。
     #[error("{0}")]
     Message(String),
+}
+
+/// 上限（429）のときに送り直す回数。
+const RATE_LIMIT_RETRIES: u32 = 4;
+/// `Retry-After` が無いときの最初の待ち（秒）。回ごとに倍にする。
+const RATE_LIMIT_BASE_WAIT: u64 = 5;
+/// 1 回の待ちの上限（秒）。
+const RATE_LIMIT_MAX_WAIT: u64 = 60;
+
+/// 上限（[`ApiError::RateLimited`]）なら待って送り直す。`Retry-After` があればその秒数、無ければ
+/// 5・10・20・40 秒と倍にして待つ（1 回の待ちは 60 秒まで）。送り直しても上限のままなら、その
+/// エラーを返す（呼び出し側は送信を止め、残りを次の同期へ回す）。上限以外のエラーはそのまま返す。
+pub async fn with_retry<T, F, Fut>(mut call: F) -> Result<T, ApiError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, ApiError>>,
+{
+    let mut attempt = 0;
+    loop {
+        match call().await {
+            Err(ApiError::RateLimited(after)) if attempt < RATE_LIMIT_RETRIES => {
+                let wait = after
+                    .unwrap_or(RATE_LIMIT_BASE_WAIT << attempt)
+                    .min(RATE_LIMIT_MAX_WAIT);
+                log::info!(
+                    "People API の上限: {wait} 秒待って送り直します（{}回目）",
+                    attempt + 1
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+                attempt += 1;
+            }
+            other => return other,
+        }
+    }
 }
 
 impl From<reqwest::Error> for ApiError {
@@ -288,7 +329,27 @@ async fn check(resp: reqwest::Response) -> Result<reqwest::Response, ApiError> {
         return Ok(resp);
     }
     let status = resp.status();
+    let retry_after = resp
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok());
     let body = resp.text().await.unwrap_or_default();
+    if status.as_u16() == 429
+        || (status.as_u16() == 403
+            && [
+                "RATE_LIMIT_EXCEEDED",
+                "rateLimitExceeded",
+                "RESOURCE_EXHAUSTED",
+            ]
+            .iter()
+            .any(|k| body.contains(k)))
+    {
+        return Err(ApiError::RateLimited(retry_after));
+    }
+    if status.as_u16() == 404 {
+        return Err(ApiError::NotFound);
+    }
     // 失効時は 400 EXPIRED_SYNC_TOKEN で返ることがあり、410 とは限らない。本文でも判定する。
     if status.as_u16() == 410 || body.contains("EXPIRED_SYNC_TOKEN") {
         return Err(ApiError::SyncTokenExpired);
@@ -433,6 +494,29 @@ pub async fn delete_contact(
     Ok(())
 }
 
+/// `batchDeleteContacts` で一度に消せる件数の上限（People API の仕様）。
+pub const BATCH_DELETE_MAX: usize = 500;
+
+/// 連絡先をまとめて削除する（`people:batchDeleteContacts`。1 回 [`BATCH_DELETE_MAX`] 件まで）。
+/// 1 件でも消せないものがあると全体が失敗しうるので、呼び出し側は失敗したら 1 件ずつに戻す。
+pub async fn batch_delete_contacts(
+    client: &reqwest::Client,
+    token: &str,
+    resource_names: &[String],
+) -> Result<(), ApiError> {
+    if resource_names.is_empty() {
+        return Ok(());
+    }
+    let resp = client
+        .post(format!("{}/people:batchDeleteContacts", super::API_BASE))
+        .bearer_auth(token)
+        .json(&serde_json::json!({ "resourceNames": resource_names }))
+        .send()
+        .await?;
+    check(resp).await?;
+    Ok(())
+}
+
 /// 連絡先グループ（ラベル）を 1 つ作る（`contactGroups.create`）。
 pub async fn create_contact_group(
     client: &reqwest::Client,
@@ -477,4 +561,46 @@ pub async fn modify_contact_group_members(
         .await?;
     check(resp).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn with_retry_waits_through_rate_limits_then_succeeds() {
+        let calls = Cell::new(0);
+        let r = tauri::async_runtime::block_on(with_retry(|| {
+            calls.set(calls.get() + 1);
+            let n = calls.get();
+            async move {
+                if n < 3 {
+                    Err(ApiError::RateLimited(Some(0)))
+                } else {
+                    Ok(n)
+                }
+            }
+        }));
+        assert_eq!(r.unwrap(), 3);
+    }
+
+    #[test]
+    fn with_retry_gives_up_after_the_retries_and_passes_other_errors() {
+        let calls = Cell::new(0);
+        let r: Result<(), _> = tauri::async_runtime::block_on(with_retry(|| {
+            calls.set(calls.get() + 1);
+            async { Err(ApiError::RateLimited(Some(0))) }
+        }));
+        assert!(matches!(r, Err(ApiError::RateLimited(_))));
+        assert_eq!(calls.get(), 1 + RATE_LIMIT_RETRIES);
+
+        let calls = Cell::new(0);
+        let r: Result<(), _> = tauri::async_runtime::block_on(with_retry(|| {
+            calls.set(calls.get() + 1);
+            async { Err(ApiError::NotFound) }
+        }));
+        assert!(matches!(r, Err(ApiError::NotFound)));
+        assert_eq!(calls.get(), 1, "上限以外は送り直さない");
+    }
 }

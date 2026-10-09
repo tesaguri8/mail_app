@@ -231,46 +231,54 @@ impl Store {
     ) -> rusqlite::Result<ContactSummary> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        // 同じ Google アカウントの ID は 1 つだけ残し、余りは次の同期で Google 側から消す
-        // （寄せる前に、どれが残す側のものかを見て決める）。
-        merge_remote::mark_surplus(&tx, &merge_remote::load_links(&tx, keep_id, drop_ids)?)?;
-        let keep = load_contact(&tx, keep_id)?;
-        let drops = drop_ids
-            .iter()
-            .map(|id| load_contact(&tx, *id))
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        let parts: Vec<_> = std::iter::once(&keep.fields)
-            .chain(drops.iter().map(|d| &d.fields))
-            .collect();
-        let merged = union_merge(&parts);
-        for id in drop_ids {
-            tx.execute(
-                "UPDATE contact_identities SET contact_id = ?1 WHERE contact_id = ?2",
-                params![keep_id, id],
-            )?;
-            // 作成待ちも残す側へ寄せる（同じアカウントの重なりは主キーで 1 つになる）。
-            tx.execute(
-                "UPDATE OR IGNORE contact_create_requests SET contact_id = ?1 WHERE contact_id = ?2",
-                params![keep_id, id],
-            )?;
-            tx.execute("DELETE FROM contacts WHERE id = ?1", params![id])?;
-        }
-        write_contact(
-            &tx,
-            Some(keep_id),
-            &merged,
-            WriteOptions {
-                mark_dirty: true,
-                org_linking: OrgLinking::ExistingOnly,
-            },
-        )?;
-        set_tags(&tx, keep_id, &merged.tags)?;
-        drop_redundant_create_requests(&tx, keep_id)?;
+        merge_in(&tx, keep_id, drop_ids)?;
         tx.commit()?;
         load_contact(&conn, keep_id)
     }
 }
 
+/// 統合の本体（呼び出し側のトランザクションの中で行う。1 件ずつの統合とまとめての統合で共有）。
+/// Google 側から消すために削除待ちにしたつながりの数を返す。
+fn merge_in(tx: &Connection, keep_id: i64, drop_ids: &[i64]) -> rusqlite::Result<usize> {
+    // 同じ Google アカウントの ID は 1 つだけ残し、余りは次の同期で Google 側から消す
+    // （寄せる前に、どれが残す側のものかを見て決める）。
+    let marked = merge_remote::mark_surplus(tx, &merge_remote::load_links(tx, keep_id, drop_ids)?)?;
+    let keep = load_contact(tx, keep_id)?;
+    let drops = drop_ids
+        .iter()
+        .map(|id| load_contact(tx, *id))
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let parts: Vec<_> = std::iter::once(&keep.fields)
+        .chain(drops.iter().map(|d| &d.fields))
+        .collect();
+    let merged = union_merge(&parts);
+    for id in drop_ids {
+        tx.execute(
+            "UPDATE contact_identities SET contact_id = ?1 WHERE contact_id = ?2",
+            params![keep_id, id],
+        )?;
+        // 作成待ちも残す側へ寄せる（同じアカウントの重なりは主キーで 1 つになる）。
+        tx.execute(
+            "UPDATE OR IGNORE contact_create_requests SET contact_id = ?1 WHERE contact_id = ?2",
+            params![keep_id, id],
+        )?;
+        tx.execute("DELETE FROM contacts WHERE id = ?1", params![id])?;
+    }
+    write_contact(
+        tx,
+        Some(keep_id),
+        &merged,
+        WriteOptions {
+            mark_dirty: true,
+            org_linking: OrgLinking::ExistingOnly,
+        },
+    )?;
+    set_tags(tx, keep_id, &merged.tags)?;
+    drop_redundant_create_requests(tx, keep_id)?;
+    Ok(marked)
+}
+
+mod bulk;
 mod merge_remote;
 
 #[cfg(test)]

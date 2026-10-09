@@ -10,7 +10,7 @@ use crate::models::{
     RebuildAction,
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSenderConflict, SpamSettings, SpamVerdict,
-    StorageInfo, SyncListed, SyncProgress,
+    StorageInfo, SureMergePreview, SureMergeResult, SyncListed, SyncProgress,
     SyncResult, TagSummary, ThreadListItem, ThreadView, UnlinkedOrgName,
 };
 use crate::services::autoconfig;
@@ -1922,6 +1922,32 @@ pub fn contact_google_duplicates(store: State<Store>) -> Result<Vec<MergeRemoteD
 #[tauri::command]
 pub fn contact_google_duplicates_tidy(store: State<Store>) -> Result<usize, String> {
     store.tidy_duplicate_remote_ids().map_err(|e| e.to_string())
+}
+
+/// 確実な重複（名前・メールの集合・電話の集合が同じで、食い違う欄が無い組）をまとめて統合したら
+/// どうなるか。読むだけ。重複の整理の「確実な重複をまとめて統合」の下見。
+#[tauri::command]
+pub async fn contact_sure_merge_preview(app: AppHandle) -> Result<SureMergePreview, String> {
+    // 全員を中身まで読むので、画面を止めないよう spawn_blocking に載せる。
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Store>()
+            .sure_merge_preview()
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 確実な重複をまとめて統合する（1 トランザクション。Google の余りは次の同期で削除）。
+#[tauri::command]
+pub async fn contact_sure_merge(app: AppHandle) -> Result<SureMergeResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Store>()
+            .merge_sure_duplicates()
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 複数の連絡先を 1 件（keep_id）に統合し、統合後の連絡先を返す。

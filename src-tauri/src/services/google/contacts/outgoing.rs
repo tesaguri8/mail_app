@@ -216,6 +216,24 @@ fn names(f: &ContactFields, base: &[Value]) -> Value {
     )
 }
 
+/// 送ろうとしている内容が、Google から最後に読んだ内容（台帳の snapshot）と同じか。同じなら
+/// 送る必要が無い（統合で「残した 1 件を更新」が大量に溜まるが、中身はほとんど同じ）。
+///
+/// 送信用に組み立てた形（[`person_body`]）どうしで比べるので、Google へ送らない Rondine 固有の
+/// 項目（取引先フラグ・外部画像許可）は自然に比較から外れる。ラベル（タグ）とお気に入りは
+/// 本文とは別の経路（`members:modify`）で送るので、それも比べる（タグは集合で）。
+pub fn same_as_google(local: &ContactFields, snapshot: &ContactFields) -> bool {
+    let tags = |f: &ContactFields| {
+        f.tags
+            .iter()
+            .map(|t| t.trim().to_string())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    person_body(local, None) == person_body(snapshot, None)
+        && local.is_favorite == snapshot.is_favorite
+        && tags(local) == tags(snapshot)
+}
+
 /// 連絡先 1 件を People API の書き込み本文にする。
 ///
 /// `base` は送る直前に読み直した Person（作成のときは None）。その etag を本文に入れる

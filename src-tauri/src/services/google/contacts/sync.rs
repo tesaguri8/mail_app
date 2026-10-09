@@ -35,6 +35,43 @@ fn push_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+/// 1 回の同期で送る更新・作成の上限。残りは未送信の印のまま次の同期で送る（1 件ごとに
+/// 読み直しと更新の 2 回を呼ぶので、Google の毎分の上限に収まるよう抑える）。
+const WRITE_LIMIT_PER_SYNC: usize = 200;
+/// 1 回の同期で送る削除の上限（`batchDeleteContacts` 4 回分）。
+const DELETE_LIMIT_PER_SYNC: usize = 4 * api::BATCH_DELETE_MAX;
+
+/// 1 回の同期で送る件数の割り振り（上限を超えた分は次の同期へ回す）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PushPlan {
+    /// この同期で送る削除の件数。
+    pub deletes_now: usize,
+    /// この同期で送る更新・作成の件数。
+    pub writes_now: usize,
+    /// 次の同期へ回す件数。
+    pub deferred: usize,
+}
+
+impl PushPlan {
+    /// 未送信の削除・更新作成の件数から、この同期で送る分を決める。
+    pub(crate) fn of(deletes: usize, writes: usize) -> Self {
+        let deletes_now = deletes.min(DELETE_LIMIT_PER_SYNC);
+        let writes_now = writes.min(WRITE_LIMIT_PER_SYNC);
+        Self {
+            deletes_now,
+            writes_now,
+            deferred: (deletes - deletes_now) + (writes - writes_now),
+        }
+    }
+}
+
+/// 送信を続けるか（Google の上限で止めたら残りを次の同期へ回す）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Flow {
+    Continue,
+    Stopped,
+}
+
 /// 送信の文脈（1 アカウントぶん）。
 struct Pusher<'a> {
     store: &'a Store,
@@ -48,6 +85,12 @@ struct Pusher<'a> {
 impl Pusher<'_> {
     /// 未送信のローカル変更を Google へ送る。
     ///
+    /// 削除を先に、[`api::BATCH_DELETE_MAX`] 件ずつまとめて送る（統合で数千件の削除が溜まることが
+    /// ある）。続けて更新・作成を 1 件ずつ送る。1 回の同期で送る件数は [`PushPlan`] で決め
+    /// （削除 [`DELETE_LIMIT_PER_SYNC`] 件・更新と作成 [`WRITE_LIMIT_PER_SYNC`] 件まで）、残りは
+    /// 未送信の印のまま次の同期で送る（`deferred`）。Google の上限（429）は [`api::with_retry`] が待って送り直し、それでも上限なら
+    /// そこで止めて残りを次の同期へ回す。
+    ///
     /// 1 件の失敗で全体を止めない（ログして次へ）。etag 不一致は送らずに未送信のまま残す
     /// （次の同期で読み直して送る）。
     async fn push_all(&self, result: &mut GcontactsSyncResult) -> Result<(), SyncError> {
@@ -58,28 +101,50 @@ impl Pusher<'_> {
             self.account_id,
             changes.len()
         );
-        for ch in changes {
-            let outcome = match (ch.deleted, ch.external_id.as_deref()) {
-                (true, Some(gid)) => self
-                    .push_delete(gid)
-                    .await
-                    .map(|()| result.deleted_out += 1),
-                // 削除で向こうの ID が無いものは送信対象に出てこない（作成待ちは削除済みを除く）。
-                (true, None) => Ok(()),
-                (false, Some(gid)) => self
-                    .push_update(&ch, gid)
-                    .await
-                    .map(|()| result.pushed += 1),
-                (false, None) => self.push_create(&ch).await.map(|()| result.pushed += 1),
+        let (deletes, writes): (Vec<ContactPush>, Vec<ContactPush>) =
+            changes.into_iter().partition(|c| c.deleted);
+        // 削除で向こうの ID が無いものは送信対象に出てこない（作成待ちは削除済みを除く）。
+        let deletes: Vec<String> = deletes.into_iter().filter_map(|c| c.external_id).collect();
+        // 中身が Google と同じ更新は送らずに印を落とす（上限の枠を使わせない）。
+        let writes = self.drop_unchanged(writes, result)?;
+        let plan = PushPlan::of(deletes.len(), writes.len());
+        result.deferred += plan.deferred as i32;
+        log::info!(
+            "push_contacts: この同期で 削除 {} 件・更新/作成 {} 件を送り、{} 件は次の同期へ",
+            plan.deletes_now,
+            plan.writes_now,
+            plan.deferred
+        );
+        let writes = &writes[..plan.writes_now];
+        if self
+            .push_deletes(&deletes[..plan.deletes_now], result)
+            .await?
+            == Flow::Stopped
+        {
+            result.deferred += writes.len() as i32;
+            return Ok(());
+        }
+        for (i, ch) in writes.iter().enumerate() {
+            let outcome = match ch.external_id.as_deref() {
+                Some(gid) => self.push_update(ch, gid).await,
+                None => self.push_create(ch).await,
             };
             match outcome {
-                Ok(()) => {}
+                Ok(()) => result.pushed += 1,
                 Err(SyncError::Api(ApiError::EtagConflict)) => {
                     log::warn!(
                         "push_contacts: etag 不一致 id={}（次回に持ち越し）",
                         ch.contact_id
                     );
                     result.conflicts += 1;
+                }
+                Err(SyncError::Api(ApiError::RateLimited(_))) => {
+                    result.deferred += (writes.len() - i) as i32;
+                    log::warn!(
+                        "push_contacts: Google の上限で止めました。残り {} 件は次の同期で",
+                        writes.len() - i
+                    );
+                    break;
                 }
                 Err(e) => log::warn!(
                     "push_contacts: 送信失敗 id={}（スキップ）: {e}",
@@ -90,19 +155,105 @@ impl Pusher<'_> {
         Ok(())
     }
 
-    /// ローカルで削除 → Google 側も削除し、つながりを外す。
+    /// 更新のうち、送る中身が Google から最後に読んだ内容と同じものを送らずに片付け（未送信の印を
+    /// 落とす）、送る必要のあるものだけを返す。作成（向こうの ID が無い）と、snapshot が無いものは送る。
+    fn drop_unchanged(
+        &self,
+        writes: Vec<ContactPush>,
+        result: &mut GcontactsSyncResult,
+    ) -> Result<Vec<ContactPush>, SyncError> {
+        let mut keep = Vec::with_capacity(writes.len());
+        for ch in writes {
+            let snapshot = match ch.external_id.as_deref() {
+                Some(gid) => self
+                    .store
+                    .contact_identity(self.account_id, gid)?
+                    .and_then(|i| i.snapshot)
+                    .map(|s| (gid.to_string(), s)),
+                None => None,
+            };
+            match snapshot {
+                Some((gid, s)) if outgoing::same_as_google(&ch.contact, &s) => {
+                    self.store
+                        .mark_contact_identity_clean(self.account_id, &gid)?;
+                    result.unchanged += 1;
+                }
+                _ => keep.push(ch),
+            }
+        }
+        if result.unchanged > 0 {
+            log::info!(
+                "push_contacts: 中身が Google と同じ {} 件は送らずに片付けました",
+                result.unchanged
+            );
+        }
+        Ok(keep)
+    }
+
+    /// 削除をまとめて送る（件数は [`PushPlan`] で決めた分）。送れたつながりは片付ける。まとめて消せなかった組は 1 件ずつに戻す
+    /// （1 件でも消せないものがあると全体が失敗しうるため）。Google の上限で止めたら
+    /// [`Flow::Stopped`]（残りは次の同期）。
+    async fn push_deletes(
+        &self,
+        now: &[String],
+        result: &mut GcontactsSyncResult,
+    ) -> Result<Flow, SyncError> {
+        let mut done = 0;
+        for chunk in now.chunks(api::BATCH_DELETE_MAX) {
+            match api::with_retry(|| api::batch_delete_contacts(self.client, self.token, chunk))
+                .await
+            {
+                Ok(()) => {
+                    for gid in chunk {
+                        self.store.forget_contact_identity(self.account_id, gid)?;
+                    }
+                    result.deleted_out += chunk.len() as i32;
+                    done += chunk.len();
+                }
+                Err(ApiError::RateLimited(_)) => {
+                    result.deferred += (now.len() - done) as i32;
+                    log::warn!(
+                        "push_contacts: Google の上限で削除を止めました。残り {} 件は次の同期で",
+                        now.len() - done
+                    );
+                    return Ok(Flow::Stopped);
+                }
+                Err(e) => {
+                    log::warn!("push_contacts: まとめて削除できなかったので 1 件ずつ送ります: {e}");
+                    for (j, gid) in chunk.iter().enumerate() {
+                        match self.push_delete(gid).await {
+                            Ok(()) => result.deleted_out += 1,
+                            Err(SyncError::Api(ApiError::RateLimited(_))) => {
+                                result.deferred += (now.len() - done - j) as i32;
+                                return Ok(Flow::Stopped);
+                            }
+                            Err(e) => log::warn!("push_contacts: 削除失敗 {gid}（スキップ）: {e}"),
+                        }
+                    }
+                    done += chunk.len();
+                }
+            }
+        }
+        Ok(Flow::Continue)
+    }
+
+    /// 1 件削除し、つながりを外す。Google 側にもう無ければ（404）消えているので成功とみなす。
     async fn push_delete(&self, gid: &str) -> Result<(), SyncError> {
-        api::delete_contact(self.client, self.token, gid).await?;
+        match api::with_retry(|| api::delete_contact(self.client, self.token, gid)).await {
+            Ok(()) | Err(ApiError::NotFound) => {}
+            Err(e) => return Err(e.into()),
+        }
         self.store.forget_contact_identity(self.account_id, gid)?;
         Ok(())
     }
 
     /// 連携済み → 送る直前に読み直し、それを土台に Rondine が扱う部分だけを上書きして送る。
     async fn push_update(&self, ch: &ContactPush, gid: &str) -> Result<(), SyncError> {
-        let base = api::get_person(self.client, self.token, gid).await?;
+        let base = api::with_retry(|| api::get_person(self.client, self.token, gid)).await?;
         let current = person_fields(&base, self.groups);
         let body = outgoing::person_body(&ch.contact, Some(&base));
-        let g = api::update_contact(self.client, self.token, gid, &body).await?;
+        let g =
+            api::with_retry(|| api::update_contact(self.client, self.token, gid, &body)).await?;
         let rn = g.resource_name.clone().unwrap_or_else(|| gid.to_string());
         self.finish(ch, &rn, &g, &current).await
     }
@@ -110,7 +261,7 @@ impl Pusher<'_> {
     /// 作成待ち → 新規作成（利用者がこの人の同期先にこのアカウントを選んだときだけここへ来る）。
     async fn push_create(&self, ch: &ContactPush) -> Result<(), SyncError> {
         let body = outgoing::person_body(&ch.contact, None);
-        let g = api::create_contact(self.client, self.token, &body).await?;
+        let g = api::with_retry(|| api::create_contact(self.client, self.token, &body)).await?;
         match g.resource_name.clone() {
             Some(rn) => self.finish(ch, &rn, &g, &ContactFields::default()).await,
             // resourceName が返らないことは無いはずだが、返らなければ紐付けようが無いので
@@ -355,4 +506,93 @@ pub async fn sync_account(
     store.touch_google_account_synced(account_id, GoogleService::Contacts)?;
     result.unlinked = store.count_unlinked_identities(account_id)? as i32;
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::store::test_support::person;
+    use rusqlite::params;
+
+    /// 溜まった更新のうち、中身が Google と同じものは送らずに印を落とし、違うものだけを送る。
+    #[test]
+    fn unchanged_updates_are_settled_without_sending() {
+        let store = Store::open_in_memory_for_test();
+        let account = store
+            .upsert_google_account("a@gmail.com", None, None)
+            .unwrap();
+        let same = store.upsert_contact(&person("山田", &["y@x.jp"])).unwrap();
+        let changed = store.upsert_contact(&person("佐藤", &["s@x.jp"])).unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            // 「同じ」は今の内容そのまま、「変わった」はメールが違う内容を Google から読んだことにする。
+            let mut old = changed.fields.clone();
+            old.emails[0].value = "old@x.jp".into();
+            for (cid, ext, snap) in [
+                (
+                    same.id,
+                    "people/same",
+                    serde_json::to_string(&same.fields).unwrap(),
+                ),
+                (
+                    changed.id,
+                    "people/changed",
+                    serde_json::to_string(&old).unwrap(),
+                ),
+            ] {
+                conn.execute(
+                    "INSERT INTO contact_identities \
+                         (provider, account_id, external_id, contact_id, snapshot, dirty) \
+                     VALUES ('google', ?1, ?2, ?3, ?4, 1)",
+                    params![account, ext, cid, snap],
+                )
+                .unwrap();
+            }
+        }
+        let client = reqwest::Client::new();
+        let groups = HashMap::new();
+        let pusher = Pusher {
+            store: &store,
+            client: &client,
+            token: "",
+            account_id: account,
+            groups: &groups,
+        };
+        let writes = store.list_contacts_to_push(account).unwrap();
+        assert_eq!(writes.len(), 2);
+        let mut result = GcontactsSyncResult::default();
+        let left = pusher.drop_unchanged(writes, &mut result).unwrap();
+
+        assert_eq!(result.unchanged, 1);
+        assert_eq!(
+            left.iter()
+                .map(|c| c.external_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("people/changed")]
+        );
+        // 片付けた分は次の送信対象に出てこない。
+        let next = store.list_contacts_to_push(account).unwrap();
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].external_id.as_deref(), Some("people/changed"));
+    }
+
+    #[test]
+    fn push_plan_sends_up_to_the_limits_and_defers_the_rest() {
+        // 統合で溜まった数千件: 1 回目は削除 2000・更新 200、残りは次の同期。
+        let p = PushPlan::of(2754, 2639);
+        assert_eq!(
+            (p.deletes_now, p.writes_now, p.deferred),
+            (2000, 200, 754 + 2439)
+        );
+        // 上限より少なければ全部送る。
+        assert_eq!(
+            PushPlan::of(3, 2),
+            PushPlan {
+                deletes_now: 3,
+                writes_now: 2,
+                deferred: 0
+            }
+        );
+        assert_eq!(PushPlan::of(0, 0).deferred, 0);
+    }
 }

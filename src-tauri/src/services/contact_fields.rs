@@ -10,6 +10,7 @@
 
 use crate::models::{ContactAddress, ContactFields, ContactOrganization, ContactValue, HandleKind};
 use crate::services::dedupe::{digits, fold, normalize_org};
+use std::collections::BTreeMap;
 
 /// よみ（姓・ミドル・名を空白でつないだもの）。どれも無ければ None。
 pub fn phonetic_name(f: &ContactFields) -> Option<String> {
@@ -23,6 +24,99 @@ pub fn phonetic_name(f: &ContactFields) -> Option<String> {
 /// 並び替え用の名前（よみ優先。無ければ表示名）。
 pub fn sort_name(f: &ContactFields) -> String {
     phonetic_name(f).unwrap_or_else(|| f.display_name.trim().to_string())
+}
+
+/// 住所の文字の集まり（全角半角・大文字小文字をそろえた英数字と漢字かなの出現数）。区切り・
+/// 空白・記号は数えない。欄の分け方や語順の違いを吸収して比べるための材料。
+fn address_chars(a: &ContactAddress) -> BTreeMap<char, usize> {
+    fold(&address_line(a))
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .fold(BTreeMap::new(), |mut m, c| {
+            *m.entry(c).or_insert(0) += 1;
+            m
+        })
+}
+
+/// `small` の文字がすべて `large` に（数も含めて）入っているか。
+fn chars_within(small: &BTreeMap<char, usize>, large: &BTreeMap<char, usize>) -> bool {
+    small
+        .iter()
+        .all(|(c, n)| large.get(c).is_some_and(|m| m >= n))
+}
+
+/// 2 つの住所が、同じ場所の書き方違いとみなせるか（欄の分け方・語順・郵便番号の有無の違いを吸収）。
+///
+/// - 文字の集まりが同じなら同じ
+/// - そうでなければ、短いほうの文字（番地の数字も含む）が長いほうに全部含まれ、かつ短いほうが
+///   **番地の数字を含み、長いほうの 3 分の 1 以上の文字数**があるときだけ同じ（郵便番号と建物名が
+///   足された詳しい住所も同じとみなせる長さ）。都道府県や市区町村だけの
+///   住所（「東京都」「沖縄県 名護市」）は、詳しい住所と同じ場所とはみなさない（どこにでも
+///   含まれてしまうため）
+///
+/// 建物名や番地が違えば別の住所。
+pub fn same_address(a: &ContactAddress, b: &ContactAddress) -> bool {
+    let (x, y) = (address_chars(a), address_chars(b));
+    if x == y {
+        return true;
+    }
+    let len = |m: &BTreeMap<char, usize>| m.values().sum::<usize>();
+    let (short, long) = if len(&x) <= len(&y) {
+        (&x, &y)
+    } else {
+        (&y, &x)
+    };
+    let has_number = short.keys().any(|c| c.is_ascii_digit());
+    has_number && len(short) * 3 >= len(long) && chars_within(short, long)
+}
+
+/// 住所の欄のうち値が入っている数（構造の多さ）。
+fn filled_parts(a: &ContactAddress) -> usize {
+    [
+        &a.postal,
+        &a.region,
+        &a.city,
+        &a.street,
+        &a.extended,
+        &a.po_box,
+        &a.country,
+        &a.country_code,
+    ]
+    .into_iter()
+    .filter(|v| v.as_deref().is_some_and(|s| !s.trim().is_empty()))
+    .count()
+}
+
+/// 同じ場所の 2 つの書き方から 1 つを選ぶ。欄に分かれている（構造の多い）ほうを残し、同じなら
+/// 詳しい（文字の多い）ほうを残す。残すほうに無い郵便番号・国・ラベルだけをもう片方から補う
+/// （ほかの欄まで補うと、1 行に詰めた住所が欄に重なって同じ内容が二重になるため）。
+fn better_address(x: &ContactAddress, y: &ContactAddress) -> ContactAddress {
+    let len = |a: &ContactAddress| address_chars(a).values().sum::<usize>();
+    let (mut keep, other) = if (filled_parts(y), len(y)) > (filled_parts(x), len(x)) {
+        (y.clone(), x)
+    } else {
+        (x.clone(), y)
+    };
+    for (dst, src) in [
+        (&mut keep.postal, &other.postal),
+        (&mut keep.country, &other.country),
+        (&mut keep.country_code, &other.country_code),
+        (&mut keep.label, &other.label),
+    ] {
+        fill_scalar(dst, src);
+    }
+    keep
+}
+
+/// 住所を足し合わせる。同じ場所の書き方違い（[`same_address`]）は 1 つにまとめる
+/// （[`better_address`]）。
+fn merge_addresses(dst: &mut Vec<ContactAddress>, src: &[ContactAddress]) {
+    for a in src {
+        match dst.iter_mut().find(|d| same_address(d, a)) {
+            Some(d) => *d = better_address(d, a),
+            None => dst.push(a.clone()),
+        }
+    }
 }
 
 /// 構造化住所を 1 行の文字列へ（一覧・重複判定用）。
@@ -207,7 +301,7 @@ pub fn union_merge(parts: &[&ContactFields]) -> ContactFields {
         merge_orgs(&mut out.organizations, &p.organizations);
         push_unique(&mut out.emails, &p.emails, |v| email_key(&v.value));
         push_unique(&mut out.phones, &p.phones, |v| phone_key(&v.value));
-        push_unique(&mut out.addresses, &p.addresses, |a| fold(&address_line(a)));
+        merge_addresses(&mut out.addresses, &p.addresses);
         push_unique(&mut out.urls, &p.urls, |u| u.value.trim().to_string());
         push_unique(&mut out.dates, &p.dates, |d| d.date.trim().to_string());
         push_unique(&mut out.relations, &p.relations, |r| fold(&r.name));
@@ -261,6 +355,123 @@ fn merge_orgs(dst: &mut Vec<ContactOrganization>, src: &[ContactOrganization]) {
 mod tests {
     use super::*;
     use crate::models::ContactHandle;
+
+    fn street(s: &str) -> ContactAddress {
+        ContactAddress {
+            street: Some(s.into()),
+            ..Default::default()
+        }
+    }
+
+    /// 同じ場所とみなす境界。都道府県・市区町村だけの住所は、詳しい住所と同じとはみなさない。
+    #[test]
+    fn same_address_needs_a_specific_shorter_side() {
+        let full = street("東京都千代田区丸の内1-1");
+        assert!(!same_address(&street("東京都"), &full), "都道府県だけ");
+        assert!(
+            !same_address(&street("東京都千代田区"), &full),
+            "市区町村まで（番地が無い）"
+        );
+        assert!(!same_address(&street("1"), &full), "数字だけ（短すぎる）");
+        assert!(!same_address(&ContactAddress::default(), &full), "空");
+        assert!(
+            same_address(&street("東京都"), &street("東京都")),
+            "まったく同じは同じ"
+        );
+        // 郵便番号の有無・欄の分け方・語順の違いは同じ。
+        assert!(same_address(
+            &street("〒100-0005 東京都千代田区丸の内1-1"),
+            &ContactAddress {
+                region: Some("東京都".into()),
+                city: Some("千代田区".into()),
+                street: Some("丸の内 1-1".into()),
+                ..Default::default()
+            }
+        ));
+        // 番地が違えば別。
+        assert!(!same_address(&street("東京都千代田区丸の内1-2"), &full));
+    }
+
+    /// 和集合で 1 行にするとき、どちらの順でも同じものが残る: 欄に分かれたほうを残して郵便番号を
+    /// 補う（1 行に詰めた住所で置き換えない）。構造が同じなら詳しいほう（建物名つき）を残す。
+    #[test]
+    fn union_keeps_the_better_address_in_either_order() {
+        let f = |a: &ContactAddress| ContactFields {
+            addresses: vec![a.clone()],
+            ..Default::default()
+        };
+        let structured = ContactAddress {
+            region: Some("沖縄県".into()),
+            city: Some("名護市".into()),
+            extended: Some("1番 5丁目 大北".into()),
+            street: Some("3".into()),
+            country_code: Some("JP".into()),
+            ..Default::default()
+        };
+        let flat = ContactAddress {
+            postal: Some("9050019".into()),
+            region: Some("沖縄県名護市大北5丁目1番3号".into()),
+            ..Default::default()
+        };
+        let expected = ContactAddress {
+            postal: Some("9050019".into()),
+            ..structured.clone()
+        };
+        assert_eq!(
+            union_merge(&[&f(&structured), &f(&flat)]).addresses,
+            vec![expected.clone()]
+        );
+        assert_eq!(
+            union_merge(&[&f(&flat), &f(&structured)]).addresses,
+            vec![expected]
+        );
+
+        let short = street("沖縄県名護市大南2-1-1");
+        let long = street("905-0015 沖縄県名護市大南2-1-1 名護ビル3F");
+        assert_eq!(
+            union_merge(&[&f(&short), &f(&long)]).addresses,
+            vec![long.clone()]
+        );
+        assert_eq!(
+            union_merge(&[&f(&long), &f(&short)]).addresses,
+            vec![long.clone()]
+        );
+        // 市区町村だけの住所は詳しい住所に吸収しない（両方残す）。
+        let city = street("沖縄県名護市");
+        assert_eq!(
+            union_merge(&[&f(&city), &f(&long)]).addresses,
+            vec![city, long]
+        );
+    }
+
+    /// 統合の和集合: 同じ住所の書き方違いは 1 つにし、情報の多いほうを残す。別の住所は両方残す。
+    #[test]
+    fn union_merge_folds_differently_written_addresses() {
+        let addr = |postal: Option<&str>, street: &str| ContactAddress {
+            postal: postal.map(str::to_string),
+            street: Some(street.into()),
+            ..Default::default()
+        };
+        let a = ContactFields {
+            addresses: vec![addr(None, "沖縄県 名護市 大南 二丁目 1番 1")],
+            ..Default::default()
+        };
+        let b = ContactFields {
+            addresses: vec![
+                addr(Some("905-0015"), "沖縄県名護市大南二丁目1番1号"),
+                addr(None, "沖縄県那覇市泉崎1-1-1"),
+            ],
+            ..Default::default()
+        };
+        let merged = union_merge(&[&a, &b]);
+        assert_eq!(
+            merged.addresses,
+            vec![
+                addr(Some("905-0015"), "沖縄県名護市大南二丁目1番1号"),
+                addr(None, "沖縄県那覇市泉崎1-1-1")
+            ]
+        );
+    }
 
     fn email(v: &str, shared: bool) -> ContactValue {
         ContactValue {

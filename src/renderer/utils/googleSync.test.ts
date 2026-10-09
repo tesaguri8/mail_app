@@ -34,11 +34,33 @@ describe('summarizeGoogleSync', () => {
         skipped: 0,
         conflicts: 0,
         unlinked: 0,
+        deferred: 0,
+        unchanged: 0,
       },
       matched: { linked: 2, created: 10, ambiguous: 1 },
     };
     expect(summarizeGoogleSync(r, t)).toBe(
       'calendar: none | contacts: contactsPulled=12 / contactsDeletedIn=1 / contactsCreated=10 / contactsLinked=2 / contactsAmbiguous=1'
+    );
+  });
+
+  it('送り切れずに次の同期へ回した件数も出す（統合で大量に溜まったとき）', () => {
+    const r: GoogleSyncResult = {
+      ...empty,
+      contacts: {
+        pulled: 0,
+        pushed: 200,
+        deleted_in: 0,
+        deleted_out: 2000,
+        skipped: 0,
+        conflicts: 0,
+        unlinked: 0,
+        deferred: 3193,
+        unchanged: 1059,
+      },
+    };
+    expect(summarizeGoogleSync(r, t)).toBe(
+      'contacts: contactsPushed=200 / contactsDeletedOut=2000 / contactsUnchanged=1059 / contactsDeferred=3193'
     );
   });
 

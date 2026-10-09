@@ -404,7 +404,7 @@
       "google": "Google",
       "icloud": "iCloud",
       "rondine": "Rondine",
-      "googleDup": "Google に重複あり（{{count}}）"
+      "googleDup": "重複 {{count}}"
     },
     "sourceEmpty": "この絞り込みに当たる連絡先はありません。",
     "link": {

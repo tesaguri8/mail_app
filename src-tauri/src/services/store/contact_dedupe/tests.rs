@@ -319,6 +319,10 @@ fn tidying_one_person_leaves_the_others_and_skips_disconnected() {
     assert_eq!(link_state(&s, "people/k1"), Some((q, false)));
     assert_eq!(link_state(&s, "people/k2"), Some((q, true)));
     assert_eq!(link_state(&s, "people/k3"), Some((q, true)));
+    // 詳細の印は、残る 1 本を見て「同期中」のまま（削除待ちの余りに引きずられない）。
+    let links = s.get_contact(q).unwrap().links;
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0].state, crate::models::ContactLinkState::Synced);
     assert_eq!(
         link_state(&s, "people/i2"),
         Some((p, false)),

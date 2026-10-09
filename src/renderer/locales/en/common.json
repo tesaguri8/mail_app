@@ -404,7 +404,7 @@
       "google": "Google",
       "icloud": "iCloud",
       "rondine": "Rondine",
-      "googleDup": "Google duplicates ({{count}})"
+      "googleDup": "Dupes {{count}}"
     },
     "sourceEmpty": "No contacts match this filter.",
     "link": {

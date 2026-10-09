@@ -229,8 +229,8 @@ SNS のハンドル（Google に対応する項目が無い）。取り込みで
   「1 件にまとめる」を出す（`contact_google_duplicates_of`）。確認（「N−1 件を Google から削除して
   1 件にまとめます」と Google のゴミ箱から 30 日は戻せる旨）のあと、その人だけを同じ規則で
   片付ける（`contact_google_duplicates_tidy_of`。`merge_remote.rs` の `load_links` /
-  `mark_surplus` を通す）。連絡先の一覧の同期先の絞り込みの並びに「Google に重複あり（人数）」を
-  出し、残っている人だけに絞れる（`contact_google_duplicate_ids`。0 人なら出さない）。一括の
+  `mark_surplus` を通す）。連絡先の一覧の同期先の絞り込みの並びに「Google に重複あり」を
+  出し（「重複 N」。説明は吹き出し）、残っている人だけに絞れる（`contact_google_duplicate_ids`。0 人なら出さない）。一括の
   「まとめますか？」も残し、1 人ずつ片付けた分だけ件数が減る。解除中のアカウントの重複は
   どちらでも数えず、片付けもしない
 

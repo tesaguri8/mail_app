@@ -17,6 +17,7 @@ import type { TagSummary } from '@bindings/TagSummary';
 import { DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import { CONTACTS_SYNCED_EVENT } from '../hooks/useAutoSync';
 import { useVirtualRows } from '../hooks/useVirtualRows';
+import { useContactsStore } from '../stores/contacts';
 import {
   CONTACT_SOURCE_FILTERS,
   ContactLinkMarks,
@@ -28,6 +29,11 @@ import {
 export type { ContactPrefill };
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+/** 既定の一覧（検索語・タグ絞り込み・ゴミ箱表示が無い）か。この一覧だけを手元に写しておく。 */
+function isDefaultQuery(query: string, tags: Set<number>, showDeleted: boolean): boolean {
+  return !query.trim() && tags.size === 0 && !showDeleted;
+}
 
 /** 一覧の 1 行の高さ（px）。仮想スクロールのため全行で揃える（アバター 32 ＋ 2 行の文字 ＋ 上下の余白）。 */
 const ROW_HEIGHT = 52;
@@ -50,7 +56,12 @@ export function ContactsView({
   onOpenIdConsumed?: () => void;
 } = {}) {
   const { t } = useTranslation();
-  const [items, setItems] = useState<ContactSummary[]>([]);
+  // 既定の一覧（検索・絞り込み・ゴミ箱なし）は手元の写しをすぐ出し、裏で取り直す。
+  const cached = useContactsStore((s) => s.items);
+  const refreshCached = useContactsStore((s) => s.refresh);
+  const removeCached = useContactsStore((s) => s.remove);
+  // 検索・タグ絞り込み・ゴミ箱表示のときの結果（その都度取りに行く）。
+  const [filtered, setFiltered] = useState<ContactSummary[] | null>(null);
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<number | null>(null);
   // 編集フォームに「何を開くか」の指示。null＝何も開いていない。
@@ -70,6 +81,10 @@ export function ContactsView({
   const [retention, setRetention] = useState(7);
   // 同期先での絞り込み（一覧が links を持つので画面側で絞る）。
   const [source, setSource] = useState<ContactSourceFilter>('all');
+  const isDefaultView = isDefaultQuery(query, tagFilter, showDeleted);
+  // 絞り込みの結果が届くまでは、既定の一覧を出しておく（空の画面で待たせない）。
+  const listed = isDefaultView ? cached : (filtered ?? cached);
+  const items = listed ?? [];
   const shownItems = items.filter((c) => matchesSource(c.links, source));
   // 数千件を全部描くと重いので、見えている行だけ描く。
   const rows = useVirtualRows<HTMLUListElement>(shownItems.length, ROW_HEIGHT);
@@ -84,13 +99,23 @@ export function ContactsView({
   const load = useCallback(
     (q: string, groups: Set<number>) => {
       if (!isTauri) return;
+      if (isDefaultQuery(q, groups, showDeleted)) {
+        void refreshCached();
+        return;
+      }
       // 削除済み表示のときはゴミ箱（削除済みのみ）を出す。
       contactList(q, [...groups], showDeleted)
-        .then((r) => setItems(showDeleted ? r.filter((c) => c.deleted_at != null) : r))
+        .then((r) => setFiltered(showDeleted ? r.filter((c) => c.deleted_at != null) : r))
         .catch(() => undefined);
     },
-    [showDeleted],
+    [showDeleted, refreshCached],
   );
+
+  // 保存・削除・同期などのあと: いま見ている一覧と、既定の一覧の写しの両方を取り直す。
+  const reload = useCallback(() => {
+    load(query, tagFilter);
+    if (!isDefaultQuery(query, tagFilter, showDeleted)) void refreshCached();
+  }, [load, query, tagFilter, showDeleted, refreshCached]);
 
   const reloadTags = useCallback(() => {
     if (!isTauri) return;
@@ -100,21 +125,27 @@ export function ContactsView({
   }, []);
   useEffect(reloadTags, [reloadTags]);
 
-  // 検索語・タグ絞り込みの変化に追随（軽いデバウンス）。
+  // 検索語・タグ絞り込みの変化に追随（打鍵中は軽いデバウンス）。既定の一覧（タブに入ったとき・
+  // 検索を消したとき）は待たずに取り直す（写しは既に出ているので、差し替えるだけ）。
   useEffect(() => {
+    if (isDefaultQuery(query, tagFilter, showDeleted)) {
+      load(query, tagFilter);
+      return;
+    }
     const h = setTimeout(() => load(query, tagFilter), 150);
     return () => clearTimeout(h);
-  }, [query, tagFilter, load]);
+  }, [query, tagFilter, showDeleted, load]);
 
-  // 自動同期が Google の連絡先を住所録へ反映したら、一覧を取り直す（タグも増えうる）。
+  // 自動同期が Google の連絡先を住所録へ反映したら、絞り込みの結果とタグを取り直す（タグも増えうる）。
+  // 既定の一覧の写しは App が同じ契機で取り直す。
   useEffect(() => {
     const onSynced = () => {
-      load(query, tagFilter);
+      if (!isDefaultQuery(query, tagFilter, showDeleted)) load(query, tagFilter);
       reloadTags();
     };
     window.addEventListener(CONTACTS_SYNCED_EVENT, onSynced);
     return () => window.removeEventListener(CONTACTS_SYNCED_EVENT, onSynced);
-  }, [query, tagFilter, load, reloadTags]);
+  }, [query, tagFilter, showDeleted, load, reloadTags]);
 
   const openContact = (c: ContactSummary) => {
     setSelectedId(c.id);
@@ -173,13 +204,15 @@ export function ContactsView({
   // 保存完了: 選択を保存された連絡先に合わせ、一覧・タグを取り直す。
   const handleSaved = (c: ContactSummary) => {
     setSelectedId(c.id);
-    load(query, tagFilter);
+    reload();
     reloadTags();
   };
 
   // 削除完了: 一覧から外し、開いていたのがそれなら閉じる。
   const handleDeleted = (id: number) => {
-    setItems((prev) => prev.filter((c) => c.id !== id));
+    removeCached(id);
+    setFiltered((prev) => prev?.filter((c) => c.id !== id) ?? null);
+    reload();
     if (selectedId === id) {
       setSelectedId(null);
       setRequest(null);
@@ -206,7 +239,7 @@ export function ContactsView({
     try {
       const result = await contactImport(path);
       setReport(result);
-      load(query, tagFilter); // 取り込み後に一覧を更新
+      reload(); // 取り込み後に一覧を更新
       reloadTags(); // 取り込みで作られたタグを反映
     } catch (e) {
       setImportError(`取り込みに失敗しました: ${String(e)}`);
@@ -219,7 +252,7 @@ export function ContactsView({
   const restore = async (id: number) => {
     try {
       await contactRestore(id);
-      load(query, tagFilter);
+      reload();
     } catch {
       /* noop */
     }
@@ -234,7 +267,7 @@ export function ContactsView({
     return dupMode === 'orgs' ? (
       <OrgDuplicates
         modeToggle={<DupModeToggle mode={dupMode} onChange={setDupMode} />}
-        onMerged={() => load(query, tagFilter)}
+        onMerged={reload}
         onExit={exitCleanup}
       />
     ) : (
@@ -242,7 +275,7 @@ export function ContactsView({
         focusContactId={cleanupFocusId}
         mode={dupMode}
         onModeChange={setDupMode}
-        onMerged={() => load(query, tagFilter)}
+        onMerged={reload}
         onExit={exitCleanup}
       />
     );
@@ -415,7 +448,7 @@ export function ContactsView({
           ))}
         </div>
         <ul ref={rows.ref} onScroll={rows.onScroll} className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-          {shownItems.length === 0 ? (
+          {listed === null ? null : shownItems.length === 0 ? (
             <li className="px-2 py-6 text-center text-sm text-white/45">
               {showDeleted
                 ? t('contact.trashEmpty')

@@ -11,6 +11,7 @@ pub mod contact_match;
 pub mod datadir;
 pub mod dataver;
 pub mod dedupe;
+pub mod distinct;
 pub mod gcsv;
 pub mod google;
 pub mod ics;

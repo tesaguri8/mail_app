@@ -26,13 +26,16 @@ import type { ContactAddress } from '@bindings/ContactAddress';
 import type { MergeRemoteDeletion } from '@bindings/MergeRemoteDeletion';
 import {
   contactGet,
+  contactMarkDistinct,
   contactMerge,
   contactMergePreview,
   contactUpsert,
   contactFindDuplicates,
 } from '../services/contacts';
 import { remoteDeletionNotes } from '../utils/mergeRemote';
+import { excludedFromMerge } from '../utils/distinct';
 import { ConfirmDialog } from './ConfirmDialog';
+import { DistinctPairsPanel } from './DistinctPairsPanel';
 import { GoogleDuplicateNotice } from './GoogleDuplicateNotice';
 import { SureMergePanel } from './SureMergePanel';
 import {
@@ -160,6 +163,22 @@ export function ContactDuplicates({
     setSelected((i) => Math.max(0, Math.min(i, groups.length - 2)));
   };
 
+  // 「別人（統合しない）」: 組の人どうしを別人として記録し、次から出さない（利用者の判断
+  // 2026-10-10。以前は画面から外すだけで、開き直すたびに同じ組が戻っていた）。
+  const markDistinct = async () => {
+    if (!group || busy) return;
+    setBusy(true);
+    try {
+      await contactMarkDistinct(group.contacts.map((c) => c.id));
+      dropCurrent();
+      setMerges((n) => n + 1);
+    } catch {
+      /* noop */
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const patch = (p: Partial<ContactInput>) => setDraft((d) => (d ? { ...d, ...p } : d));
   const nullify = (s: string) => (s.trim() === '' ? null : s);
 
@@ -178,8 +197,13 @@ export function ContactDuplicates({
         }
       }
       setConfirmRemote(null);
-      if (dropIds.length > 0) {
-        await contactMerge(representative.id, dropIds);
+      // チェックを外した人は、統合後の 1 人と別人として記録する（次から同じ組に出さない）。
+      const distinctIds = excludedFromMerge(
+        (group?.contacts ?? []).map((c) => c.id),
+        included
+      );
+      if (dropIds.length > 0 || distinctIds.length > 0) {
+        await contactMerge(representative.id, dropIds, distinctIds);
       }
       await contactUpsert({ ...draft, id: representative.id });
       dropCurrent();
@@ -236,6 +260,7 @@ export function ContactDuplicates({
             }}
           />
           <GoogleDuplicateNotice reloadKey={merges} />
+          <DistinctPairsPanel reloadKey={merges} onUndo={load} />
         </div>
 
         <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
@@ -350,7 +375,8 @@ export function ContactDuplicates({
                 {t('dupes.saveMaster')}
               </button>
               <button
-                onClick={dropCurrent}
+                onClick={() => void markDistinct()}
+                disabled={busy}
                 className="flex items-center gap-1.5 rounded-md border border-white/20 px-3 py-2 text-sm text-white/70 hover:bg-white/10"
               >
                 <UserX size={15} />

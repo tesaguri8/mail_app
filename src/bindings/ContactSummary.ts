@@ -14,6 +14,12 @@ import type { ContactValue } from "./ContactValue";
  */
 export type ContactSummary = { id: number, 
 /**
+ * 端末をまたいで同じ人を指す ID（UUID v4・小文字ハイフン区切り）。行の `id` は DB の中だけの
+ * 番号で、入れ直しや書き出し/取り込みで変わる。統合では残る側の uid を使う（マイグレーション
+ * 0064・docs/CONTACT_MODEL.md §1-1）。
+ */
+uid: string, 
+/**
  * 並び替え用（よみ優先。保存時に組み立てる）。
  */
 sort_name: string | null, 

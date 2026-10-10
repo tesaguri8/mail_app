@@ -1,7 +1,7 @@
 use crate::models::{
     AccountInput, AccountProfile, AccountProvider, AccountSummary, AppInfo, AttachmentMeta, AttachmentSummary, AutoconfigResult,
     AttendeeInput, CalendarInput, CalendarSummary, ContactExportReport, ContactInput, ContactListItem, ContactMatch,
-    ContactSummary, DataLocation, DbInfo, DraftContent, DraftInput, DuplicateGroup, EventAttendee,
+    ContactSummary, DataLocation, DbInfo, DistinctPair, DraftContent, DraftInput, DuplicateGroup, EventAttendee,
     EventInput, EventSummary, GoogleAccount, GoogleDisconnectResult, GoogleSyncResult,
     GoogleCredentialsStatus, GoogleService,
     GreenDomainEntry,
@@ -2044,12 +2044,31 @@ pub fn contact_merge(
     store: State<Store>,
     keep_id: i64,
     drop_ids: Vec<i64>,
+    distinct_ids: Vec<i64>,
 ) -> Result<ContactSummary, String> {
-    if drop_ids.is_empty() {
-        return store.get_contact(keep_id).map_err(|e| e.to_string());
-    }
     store
-        .merge_contacts(keep_id, &drop_ids)
+        .merge_contacts(keep_id, &drop_ids, &distinct_ids)
+        .map_err(|e| e.to_string())
+}
+
+/// 組の人どうしを「別人」として記録する（重複の整理の「別人（統合しない）」。次から同じ組に
+/// 出さない）。新しく記録した対の数を返す。
+#[tauri::command]
+pub fn contact_mark_distinct(store: State<Store>, ids: Vec<i64>) -> Result<usize, String> {
+    store.mark_contacts_distinct(&ids).map_err(|e| e.to_string())
+}
+
+/// 「別人」として記録した対の一覧（取り消しの入口用）。
+#[tauri::command]
+pub fn contact_distinct_pairs(store: State<Store>) -> Result<Vec<DistinctPair>, String> {
+    store.distinct_pairs().map_err(|e| e.to_string())
+}
+
+/// 「別人」の記録を取り消す（次の重複の検出から、また同じ組に出る）。
+#[tauri::command]
+pub fn contact_unmark_distinct(store: State<Store>, a: i64, b: i64) -> Result<usize, String> {
+    store
+        .unmark_contacts_distinct(a, b)
         .map_err(|e| e.to_string())
 }
 

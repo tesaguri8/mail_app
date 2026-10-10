@@ -41,7 +41,7 @@ export const organizationFindDuplicates = () =>
 export const organizationMerge = (keepId: number, dropIds: number[], name: string) =>
   changed(invoke<OrganizationSummary>('organization_merge', { keepId, dropIds, name }));
 
-// ── 整理（docs/CONTACT_MODEL.md §4-1）。どれも候補を出すだけで、作る・つなぐは人が選ぶ。
+// ── 整理（docs/CONTACT_MODEL.md §1-5-1）。どれも候補を出すだけで、作る・つなぐは人が選ぶ。
 
 /** 組織カードになっていない会社名（正規化名でまとめ、人数の多い順）。 */
 export const organizationUnlinkedNames = () =>

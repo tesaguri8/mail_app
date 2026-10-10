@@ -3,6 +3,7 @@
 //! 判定の物差しは `services::dedupe`（record linkage）。照合（Google から取り込んだ人を住所録の
 //! 誰と結び付けるか）も同じ物差しを使うので、照合で決めきれずに新規にした人はここで拾える。
 
+use super::contact_distinct::{inherit, load_distinct, record};
 use super::contact_rows::{load_all_full, load_contact};
 use super::contact_tags::set_tags;
 use super::contact_targets::drop_redundant_create_requests;
@@ -113,13 +114,15 @@ fn email_norm(v: &str) -> String {
 
 impl Store {
     /// 重複候補を record linkage で束ねて返す（2 件以上のみ、確信度順）。候補の連絡先は
-    /// 子テーブルまで充填して返す（整理画面で中身を見比べるため）。
+    /// 子テーブルまで充填して返す（整理画面で中身を見比べるため）。「別人」と記録した対は
+    /// 同じ組にしない。
     ///
     /// # Errors
     /// DB の読み出しに失敗したとき。
     pub fn find_duplicate_groups(&self) -> rusqlite::Result<Vec<DuplicateGroup>> {
         let contacts = self.contacts_for_dedupe()?;
-        Ok(crate::services::dedupe::group(&contacts))
+        let distinct = load_distinct(&self.conn.lock().unwrap())?;
+        Ok(crate::services::dedupe::group(&contacts, &distinct))
     }
 
     /// 削除済みを除く全員を中身まで充填して返す（重複検出と照合で共有する材料）。
@@ -222,16 +225,26 @@ impl Store {
     /// 持っていたものを優先）、余りを削除待ちにする（次の同期で Google 側から削除する。
     /// 解除中のアカウントは除く。`merge_remote`）。
     ///
+    /// `distinct_ids` は組にいたが統合でチェックを外した人。統合後の 1 人と「別人」として記録し、
+    /// 次から同じ組に出さない（利用者の判断 2026-10-10）。
+    ///
     /// # Errors
     /// DB の書き込みに失敗したとき（全体を巻き戻す）。
     pub fn merge_contacts(
         &self,
         keep_id: i64,
         drop_ids: &[i64],
+        distinct_ids: &[i64],
     ) -> rusqlite::Result<ContactSummary> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        merge_in(&tx, keep_id, drop_ids)?;
+        // 消える人がいなければ中身は変えない（送信待ちにもしない）。
+        if !drop_ids.is_empty() {
+            merge_in(&tx, keep_id, drop_ids)?;
+        }
+        distinct_ids
+            .iter()
+            .try_for_each(|id| record(&tx, keep_id, *id).map(|_| ()))?;
         tx.commit()?;
         load_contact(&conn, keep_id)
     }
@@ -257,6 +270,8 @@ fn merge_in(tx: &Connection, keep_id: i64, drop_ids: &[i64]) -> rusqlite::Result
             "UPDATE contact_identities SET contact_id = ?1 WHERE contact_id = ?2",
             params![keep_id, id],
         )?;
+        // 「別人」の記録も残す側へ付け替える（消すと CASCADE で消えるので先に）。
+        inherit(tx, keep_id, *id)?;
         // 作成待ちも残す側へ寄せる（同じアカウントの重なりは主キーで 1 つになる）。
         tx.execute(
             "UPDATE OR IGNORE contact_create_requests SET contact_id = ?1 WHERE contact_id = ?2",

@@ -2,7 +2,9 @@
 //!
 //! 基準は `services::sure_duplicates`（1 つの関数）。統合そのものは 1 件ずつの統合と同じ
 //! `merge_in`（Google の余りを削除待ちにする規則 `merge_remote` もそこを通る）。新しい経路は作らない。
+//! 「別人」と記録した対はまとめない（`contact_distinct`）。
 
+use super::super::contact_distinct::load_distinct;
 use super::super::contact_rows::load_all_full;
 use super::super::Store;
 use super::merge_in;
@@ -20,7 +22,7 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let contacts = load_all_full(&conn)?;
         let by_id: HashMap<i64, _> = contacts.iter().map(|c| (i64::from(c.id), c)).collect();
-        let found = sure_groups(&contacts);
+        let found = sure_groups(&contacts, &load_distinct(&conn)?);
         let mut remote = BTreeMap::new();
         let mut groups = Vec::with_capacity(found.len());
         for g in &found {
@@ -54,7 +56,7 @@ impl Store {
     pub fn merge_sure_duplicates(&self) -> rusqlite::Result<SureMergeResult> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        let found = sure_groups(&load_all_full(&tx)?);
+        let found = sure_groups(&load_all_full(&tx)?, &load_distinct(&tx)?);
         let mut result = SureMergeResult::default();
         for g in &found {
             result.remote_deletions += merge_in(&tx, g.keep, &g.drops)? as i32;

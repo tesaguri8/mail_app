@@ -1,4 +1,4 @@
-//! 組織カード（会社・組織）の読み書き。docs/CONTACT_MODEL.md §4。
+//! 組織カード（会社・組織）の読み書き。docs/CONTACT_MODEL.md §1-5。
 //!
 //! 個人の連絡先は `contact_organizations.org_id` でカードを指す。カードの代表電話・FAX・
 //! 代表メール・URL・所在地はどのサービスにも送らない（向こうに「組織」という単位が無い）。

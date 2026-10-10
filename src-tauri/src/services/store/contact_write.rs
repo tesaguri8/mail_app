@@ -10,7 +10,7 @@ use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use std::collections::HashSet;
 
-/// 会社名から組織カードを引くときの振る舞い（docs/CONTACT_MODEL.md §4）。
+/// 会社名から組織カードを引くときの振る舞い（docs/CONTACT_MODEL.md §1-5）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum OrgLinking {
     /// 編集画面から: 人が新しく入れた会社名は、カードが無ければ作る。

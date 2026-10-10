@@ -286,6 +286,12 @@ const MIGRATIONS: &[Migration] = &[
         version: 63,
         sql: include_str!("migrations/0063_account_profiles.sql"),
     },
+    Migration {
+        // 64 は連絡先の uid（端末をまたいで同じ人を指す ID）と「別人」の記録
+        // （contact_distinct_pairs。docs/CONTACT_MODEL.md §1-1・§1-5）。
+        version: 64,
+        sql: include_str!("migrations/0064_contact_uid_distinct.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

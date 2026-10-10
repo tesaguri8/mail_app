@@ -36,13 +36,29 @@
 | `is_business` / `allow_remote_images` | 取引先 / 外部画像許可（Rondine 固有） | 送らない | 送らない |
 | `dirty` | 未送信のローカル変更（つながりの `dirty` のどれかが 1）。作成待ちは別の表（`contact_create_requests`）で持つ | — | — |
 | `created_at` / `updated_at` / `deleted_at` | 作成 / 更新 / 論理削除 | — | — |
-| `uid` | 端末をまたいで同じ人を指す ID（UUID v4・小文字ハイフン区切り。0064） | — | `UID`（書き出し/取り込みは feat/contacts-export） |
+| `uid` | 端末をまたいで同じ人を指す ID（UUID v4・小文字ハイフン区切り。0064） | — | `UID`（3.0 は素の UUID・4.0 は `urn:uuid:`。下の「vCard の UID」） |
 
 **`uid`（利用者の判断 2026-10-10）。**行の `id` は DB の中だけの番号で、入れ直しや書き出し/取り込みで
 変わる。人を指す鍵（「別人」の記録 §1-5 など）には `uid` を使い、入れ直し・書き出し/取り込みでも
 保つ。どの作成経路（新規作成・取り込み・Google からの起こし）でも振られるよう、DB のトリガーが
 「空なら振る」（一意の索引つき。既存の表に NOT NULL の列は後から足せないため）。統合では残る側の
 `uid` を使い、消える側の `uid` は捨てる。境界型は `ContactSummary.uid`。
+
+**vCard の UID（書き出し・取り込み）。**書き出しは `uid` を `UID` に入れる（3.0 は素の UUID、4.0 は
+RFC 6350 が推奨する URI の `urn:uuid:…`）。取り込みは次の順で同じ人を決める（`Store::import_contacts`）:
+
+1. **UID が UUID の形で、ゴミ箱でない人の `uid` と一致する** → その人として更新する（名前やメールが
+   変わっていても同じ人。書き出した端末で直したものを取り込み直す場面）
+2. それ以外は従来の照合（メール＋表示名、無ければ電話＋表示名）。一致すればその人を更新し、
+   **この DB での `uid` を保つ**（カードの UID で書き換えない — 「別人」の記録などがこの DB の `uid` を指す）
+3. どれにも当たらず新しく作るとき、カードの UID が**どの人も持っていない**ならその UID を採る
+   （書き出した端末と同じ `uid` になり、次に取り込んだときも同じ人になる）。持っているのが
+   **ゴミ箱の人**なら同じ人とはみなさず、UID も引き継がない（一意の索引とぶつかるため、トリガーが
+   新しい `uid` を振る）
+
+UUID の形でない UID（iCloud の `…:ABPerson`、Google の独自 ID など）は Rondine が振ったものではない
+ので、人の照合には使わない（従来の照合のまま）。型は `services/contact_uid.rs` の `ContactUid`
+（`urn:uuid:` の接頭辞・大文字を吸収して小文字に揃える）。
 
 **廃止する列:** `email` / `emails` / `phone` / `address` / `organization` / `org_id` / `org_title` /
 `org_department`（子テーブルへ）、`name_kana`（`sort_name` へ）、`source` / `external_id` / `uid`

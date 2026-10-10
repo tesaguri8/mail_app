@@ -40,7 +40,8 @@ pub fn parse(text: &str) -> ParseResult {
         }
         result.total_cards += 1;
         if let Some(c) = build_contact(&idx, &row) {
-            result.contacts.push(c);
+            // Google CSV には uid が無い（照合はメール・電話と表示名で行う）。
+            result.contacts.push(c.into());
         }
     }
     result
@@ -339,7 +340,7 @@ mod tests {
 
     fn parse_one(data_row: &str) -> ContactFields {
         let text = format!("{HEADER}\n{data_row}\n");
-        parse(&text).contacts.into_iter().next().unwrap()
+        parse(&text).contacts.into_iter().next().unwrap().fields
     }
 
     #[test]
@@ -367,7 +368,7 @@ mod tests {
         let row = "太郎,山田,自宅 ::: 自宅,9050018 ::: 9050207,沖縄県 ::: 沖縄県,\
             名護市 ::: 本部町,大西1-15-5 ::: 備瀬535";
         let text = format!("{header}\n{row}\n");
-        let c = parse(&text).contacts.into_iter().next().unwrap();
+        let c = parse(&text).contacts.into_iter().next().unwrap().fields;
         assert_eq!(c.addresses.len(), 2);
         assert_eq!(c.addresses[0].postal.as_deref(), Some("9050018"));
         assert_eq!(c.addresses[0].city.as_deref(), Some("名護市"));
@@ -388,7 +389,7 @@ mod tests {
         // Notes に改行・カンマ、氏名に空白区切り（非 CJK）。
         let row = "John,,Smith,,,,,,,,\"Acme, Inc.\",,,,\"line1\nline2\",,,,john@x.com,,,,,,";
         let text = format!("{HEADER}\n{row}\n");
-        let c = parse(&text).contacts.into_iter().next().unwrap();
+        let c = parse(&text).contacts.into_iter().next().unwrap().fields;
         assert_eq!(c.display_name, "Smith John");
         assert_eq!(c.organizations[0].name.as_deref(), Some("Acme, Inc."));
         assert_eq!(c.note.as_deref(), Some("line1\nline2"));
@@ -403,7 +404,10 @@ mod tests {
             Phone 1 - Label,Phone 1 - Value";
         let row = "太郎,山田,一,Dr.,たろ,Work,https://example.com,Anniversary,2010-06-01,\
             Spouse,山田花子,Home,Skype,taro,社員番号,123,私書箱1,那覇市,* Mobile,090-1111-2222";
-        let c = parse(&format!("{header}\n{row}\n")).contacts.remove(0);
+        let c = parse(&format!("{header}\n{row}\n"))
+            .contacts
+            .remove(0)
+            .fields;
         assert_eq!(c.middle_name.as_deref(), Some("一"));
         assert_eq!(c.name_prefix.as_deref(), Some("Dr."));
         assert_eq!(c.nickname.as_deref(), Some("たろ"));

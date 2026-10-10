@@ -1,6 +1,19 @@
 use super::*;
-use crate::models::{ContactCustomField, ContactDate, ContactRelation, ContactUrl, ContactValue};
-use crate::services::vcard::parse;
+use crate::models::{
+    ContactCustomField, ContactDate, ContactFields, ContactRelation, ContactUrl, ContactValue,
+};
+use crate::services::contact_uid::ContactUid;
+use crate::services::vcard::{parse, VcardContact};
+
+const UID: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+/// uid 付きのカード。
+fn card(fields: ContactFields) -> VcardContact {
+    VcardContact {
+        uid: ContactUid::parse(UID),
+        fields,
+    }
+}
 
 fn value(label: Option<&str>, v: &str) -> ContactValue {
     ContactValue {
@@ -120,7 +133,7 @@ fn full() -> ContactFields {
 }
 
 fn round_trip(version: VcardVersion) {
-    let original = full();
+    let original = card(full());
     let text = generate(
         std::slice::from_ref(&original),
         version,
@@ -144,7 +157,7 @@ fn round_trips_every_field_in_4_0() {
 
 #[test]
 fn lines_are_folded_within_75_octets_with_crlf() {
-    let text = generate(&[full()], VcardVersion::V3, "-//Tesaguri//Test//JA");
+    let text = generate(&[card(full())], VcardVersion::V3, "-//Tesaguri//Test//JA");
     assert!(text.ends_with("END:VCARD\r\n"));
     assert!(
         !text.replace("\r\n", "").contains('\n'),
@@ -157,27 +170,31 @@ fn lines_are_folded_within_75_octets_with_crlf() {
 
 #[test]
 fn labels_use_type_or_apple_form() {
-    let text = generate(&[full()], VcardVersion::V3, "-//Tesaguri//Test//JA").replace("\r\n ", "");
+    let text =
+        generate(&[card(full())], VcardVersion::V3, "-//Tesaguri//Test//JA").replace("\r\n ", "");
     assert!(text.contains("TEL;TYPE=CELL,PREF:090-1111-2222"));
     assert!(text.contains(".X-ABLabel:_$!<Main>!$_"));
     assert!(text.contains("EMAIL;TYPE=INTERNET,WORK,PREF:taro@example.jp"));
     assert!(text.contains("BDAY;X-APPLE-OMIT-YEAR=1604:1604-12-25"));
     assert!(text.contains(".X-ABADR:jp"));
+    assert!(text.contains(&format!("\r\nUID:{UID}\r\n")));
 
-    let v4 = generate(&[full()], VcardVersion::V4, "-//Tesaguri//Test//JA").replace("\r\n ", "");
+    let v4 =
+        generate(&[card(full())], VcardVersion::V4, "-//Tesaguri//Test//JA").replace("\r\n ", "");
     assert!(v4.contains("VERSION:4.0"));
     assert!(v4.contains("TEL;TYPE=cell;PREF=1:090-1111-2222"));
     assert!(v4.contains("BDAY:--1225"));
     assert!(!v4.contains("INTERNET"));
+    assert!(v4.contains(&format!("UID:urn:uuid:{UID}")));
 }
 
 #[test]
 fn minimal_contact_round_trips() {
-    let c = ContactFields {
+    let c = VcardContact::from(ContactFields {
         display_name: "info@example.jp".into(),
         emails: vec![value(None, "info@example.jp")],
         ..Default::default()
-    };
+    });
     let back = parse(&generate(std::slice::from_ref(&c), VcardVersion::V3, "x"));
     assert_eq!(back.contacts, vec![c]);
 }

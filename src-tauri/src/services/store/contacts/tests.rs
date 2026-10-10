@@ -398,7 +398,11 @@ fn export_takes_everyone_or_the_given_ids_without_trash() {
     let gone = s.upsert_contact(&person("書出 削除", &[])).unwrap();
     s.delete_contact(gone.id as i64).unwrap();
 
-    let names = |v: Vec<ContactFields>| v.into_iter().map(|c| c.display_name).collect::<Vec<_>>();
+    let names = |v: Vec<VcardContact>| {
+        v.into_iter()
+            .map(|c| c.fields.display_name)
+            .collect::<Vec<_>>()
+    };
     let all = names(s.contacts_for_export(None).unwrap());
     assert_eq!(all.len(), 2, "ゴミ箱は書き出さない: {all:?}");
     let only_b = names(
@@ -407,4 +411,107 @@ fn export_takes_everyone_or_the_given_ids_without_trash() {
     );
     assert_eq!(only_b, vec!["書出 二郎".to_string()]);
     assert!(s.contacts_for_export(Some(&[])).unwrap().is_empty());
+}
+
+/// 1 人ぶんの vCard（uid 付き）を作って取り込む。
+fn import_card(s: &Store, uid: Option<&str>, name: &str, email: &str) -> ImportReport {
+    let card = VcardContact {
+        uid: uid.and_then(ContactUid::parse),
+        fields: ContactFields {
+            display_name: name.into(),
+            emails: vec![value(email)],
+            ..Default::default()
+        },
+    };
+    let text = vcard::generate(&[card], crate::models::VcardVersion::V3, "x");
+    s.import_contacts(&vcard::parse(&text)).unwrap()
+}
+
+fn uid_of(s: &Store, name: &str) -> String {
+    s.list_contacts(None, &[], false)
+        .unwrap()
+        .into_iter()
+        .find(|c| c.fields.display_name == name)
+        .map(|c| c.uid)
+        .unwrap()
+}
+
+const UID_A: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+#[test]
+fn import_adopts_unknown_uid_and_matches_it_next_time() {
+    let s = store();
+    let r = import_card(&s, Some(UID_A), "取込 太郎", "taro@example.jp");
+    assert_eq!(r.imported, 1);
+    assert_eq!(
+        uid_of(&s, "取込 太郎"),
+        UID_A,
+        "書き出した端末の uid を引き継ぐ"
+    );
+
+    // 名前もメールも変わっていても、uid が同じなら同じ人として更新する。
+    let r = import_card(&s, Some(UID_A), "取込 太郎（改）", "new@example.jp");
+    assert_eq!((r.imported, r.updated), (0, 1));
+    let all = s.list_contacts(None, &[], false).unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].uid, UID_A);
+}
+
+#[test]
+fn export_then_import_into_another_store_keeps_uid() {
+    let a = store();
+    let saved = a
+        .upsert_contact(&person("移送 花子", &["hanako@example.jp"]))
+        .unwrap();
+    let text = vcard::generate(
+        &a.contacts_for_export(None).unwrap(),
+        crate::models::VcardVersion::V4,
+        "x",
+    );
+    let b = store();
+    b.import_contacts(&vcard::parse(&text)).unwrap();
+    assert_eq!(uid_of(&b, "移送 花子"), saved.uid);
+}
+
+#[test]
+fn uid_of_trashed_contact_is_not_reused() {
+    let s = store();
+    import_card(&s, Some(UID_A), "削除 次郎", "jiro@example.jp");
+    let id = s.list_contacts(None, &[], false).unwrap()[0].id as i64;
+    s.delete_contact(id).unwrap();
+
+    let r = import_card(&s, Some(UID_A), "削除 次郎", "jiro@example.jp");
+    assert_eq!(r.imported, 1, "ゴミ箱の人は同じ人とみなさない");
+    let alive = uid_of(&s, "削除 次郎");
+    assert_ne!(
+        alive, UID_A,
+        "uid は一意なので、新しい人には別の uid が振られる"
+    );
+    assert!(ContactUid::parse(&alive).is_some());
+}
+
+#[test]
+fn unknown_uid_on_a_name_and_email_match_keeps_the_existing_uid() {
+    let s = store();
+    let saved = s
+        .upsert_contact(&person("既存 三郎", &["saburo@example.jp"]))
+        .unwrap();
+    let r = import_card(&s, Some(UID_A), "既存 三郎", "saburo@example.jp");
+    assert_eq!(r.updated, 1);
+    assert_eq!(
+        uid_of(&s, "既存 三郎"),
+        saved.uid,
+        "この DB での uid を保つ"
+    );
+}
+
+#[test]
+fn foreign_uid_falls_back_to_name_and_email() {
+    let s = store();
+    s.upsert_contact(&person("他社 四郎", &["shiro@example.jp"]))
+        .unwrap();
+    let text = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:ABCDEF:ABPerson\r\nFN:他社 四郎\r\n\
+                EMAIL:shiro@example.jp\r\nEND:VCARD\r\n";
+    let r = s.import_contacts(&vcard::parse(text)).unwrap();
+    assert_eq!((r.imported, r.updated), (0, 1));
 }

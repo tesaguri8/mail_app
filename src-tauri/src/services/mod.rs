@@ -8,6 +8,7 @@ pub mod contact_fields;
 pub mod contact_labels;
 pub mod contact_export;
 pub mod contact_match;
+pub mod contact_uid;
 pub mod datadir;
 pub mod dataver;
 pub mod dedupe;

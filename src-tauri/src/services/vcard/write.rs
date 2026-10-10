@@ -6,11 +6,11 @@
 //! - 2 つ目以降の会社は `itemN.ORG`/`itemN.TITLE`、住所の国コードは `itemN.X-ABADR`、
 //!   カスタム項目は `itemN.X-RONDINE-CUSTOM`（キーは `X-ABLabel`）
 //! - 年なしの日付は 3.0 では iCloud の `X-APPLE-OMIT-YEAR=1604`、4.0 の誕生日は `--MMDD`
+//! - UID は連絡先の uid（3.0 は素の UUID、4.0 は `urn:uuid:`）。取り込みで同じ人を見分ける
 //! - Rondine 固有の印（お気に入り・取引先・外部画像・共有の代表値）と写真は書き出さない
 
-use crate::models::{
-    ContactAddress, ContactFields, ContactHandle, ContactOrganization, HandleKind, VcardVersion,
-};
+use super::VcardContact;
+use crate::models::{ContactAddress, ContactHandle, ContactOrganization, HandleKind, VcardVersion};
 use crate::services::contact_labels::google_type_for;
 
 /// 1 行の最大オクテット数（CRLF を除く。RFC 6350 §3.2 / RFC 2426 §2.6）。
@@ -20,7 +20,7 @@ const FOLD_AT: usize = 75;
 const OMIT_YEAR: &str = "1604";
 
 /// 連絡先の並びを 1 つの vCard テキストにする。`prodid` は書き出したアプリ（PRODID）。
-pub fn generate(contacts: &[ContactFields], version: VcardVersion, prodid: &str) -> String {
+pub fn generate(contacts: &[VcardContact], version: VcardVersion, prodid: &str) -> String {
     contacts
         .iter()
         .map(|c| Card::new(version).write(c, prodid))
@@ -54,13 +54,21 @@ impl Card {
         }
     }
 
-    fn write(mut self, c: &ContactFields, prodid: &str) -> String {
+    fn write(mut self, card: &VcardContact, prodid: &str) -> String {
+        let c = &card.fields;
         self.line("BEGIN:VCARD");
         self.line(match self.version {
             VcardVersion::V3 => "VERSION:3.0",
             VcardVersion::V4 => "VERSION:4.0",
         });
         self.line(&format!("PRODID:{prodid}"));
+        if let Some(uid) = &card.uid {
+            // 4.0 は URI が推奨（RFC 6350 §6.7.6）なので urn:uuid:、3.0 は素の UUID。
+            match self.version {
+                VcardVersion::V3 => self.line(&format!("UID:{}", uid.as_str())),
+                VcardVersion::V4 => self.line(&format!("UID:urn:uuid:{}", uid.as_str())),
+            }
+        }
         self.line(&format!("FN:{}", text(&c.display_name)));
         self.line(&format!(
             "N:{}",

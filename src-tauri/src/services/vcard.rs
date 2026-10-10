@@ -7,7 +7,7 @@
 //! NICKNAME・X-MAIDENNAME・X-PHONETIC-*-NAME・ORG・TITLE・X-PHONETIC-ORG・X-ABShowAs・EMAIL・
 //! TEL・ADR（私書箱つき）＋X-ABADR・URL・BDAY・X-ABDATE／ANNIVERSARY・X-ABRELATEDNAMES・
 //! IMPP・X-SOCIALPROFILE・NOTE・CATEGORIES。Rondine が書き出した `itemN.ORG`（2 つ目以降の会社）
-//! と `itemN.X-RONDINE-CUSTOM`（カスタム項目）も読む。PHOTO やその他の X- プロパティは無視する。
+//! と `itemN.X-RONDINE-CUSTOM`（カスタム項目）、UUID の形の `UID`（[`ContactUid`]）も読む。PHOTO やその他の X- プロパティは無視する。
 //!
 //! 書き出しは [`write`]（取り込み→書き出し→取り込みで中身が戻る）。
 //!
@@ -19,15 +19,30 @@ use crate::models::{
     ContactOrganization, ContactRelation, ContactUrl, ContactValue, HandleKind,
 };
 use crate::services::contact_labels::label_from_term;
+use crate::services::contact_uid::ContactUid;
 use std::collections::HashMap;
 
 mod write;
 pub use write::generate;
 
+/// vCard 1 枚ぶんの連絡先（取り込みの結果・書き出しの入力）。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct VcardContact {
+    /// UID（Rondine が振った UUID の形のときだけ。ほかのアプリの独自 ID は None）。
+    pub uid: Option<ContactUid>,
+    pub fields: ContactFields,
+}
+
+impl From<ContactFields> for VcardContact {
+    fn from(fields: ContactFields) -> Self {
+        Self { uid: None, fields }
+    }
+}
+
 /// パース結果（総カード数と、連絡先として成立したもの）。
 #[derive(Debug, Default)]
 pub struct ParseResult {
-    pub contacts: Vec<ContactFields>,
+    pub contacts: Vec<VcardContact>,
     /// BEGIN:VCARD の総数（名前もメールも電話も無く捨てたものを含む）。
     pub total_cards: usize,
 }
@@ -205,6 +220,7 @@ type HandleParts = (HandleKind, Option<String>, String);
 /// カード組み立て中の中間状態。
 #[derive(Default)]
 struct CardAcc {
+    uid: Option<ContactUid>,
     fn_: Option<String>,
     n: Vec<String>,
     nickname: Option<String>,
@@ -236,6 +252,7 @@ struct CardAcc {
 impl CardAcc {
     fn absorb(&mut self, l: &Line) {
         match l.name.as_str() {
+            "UID" => self.uid = l.value().as_deref().and_then(ContactUid::parse),
             "FN" => self.fn_ = l.value(),
             "N" => self.n = l.parts(),
             "NICKNAME" => self.nickname = l.value().and_then(|v| v.split(',').find_map(non_empty)),
@@ -367,7 +384,13 @@ impl CardAcc {
             .collect()
     }
 
-    fn finish(self) -> Option<ContactFields> {
+    fn finish(self) -> Option<VcardContact> {
+        let uid = self.uid.clone();
+        self.into_fields()
+            .map(|fields| VcardContact { uid, fields })
+    }
+
+    fn into_fields(self) -> Option<ContactFields> {
         let emails = dedup_values(&self.ordered(&self.emails));
         let phones = dedup_values(&self.ordered(&self.tels));
         let n = |i: usize| self.n.get(i).and_then(|s| non_empty(s));

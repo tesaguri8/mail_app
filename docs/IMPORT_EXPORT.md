@@ -46,6 +46,7 @@
 - **見出し**: 自宅/職場/携帯/FAX/ポケベルは `TYPE`、ほか（代表・記念日・配偶者・カスタム名）は iCloud と同じ `itemN.X-ABLabel`（既知の語は `_$!<Main>!$_` 形式）
 - **書き出す項目**: 氏名（N の 5 要素）・よみ（`X-PHONETIC-*`）・ニックネーム・旧姓・会社（2 つ目以降は `itemN.ORG`/`itemN.TITLE`）・会社として表示（`X-ABShowAs`）・メール・電話・住所（国コードは `itemN.X-ABADR`）・URL・誕生日・記念日など（`X-ABDATE`）・関係（`X-ABRELATEDNAMES`）・チャット（`IMPP`）・SNS（`X-SOCIALPROFILE`）・カスタム項目（`itemN.X-RONDINE-CUSTOM`。Rondine 以外では読まれない）・メモ・タグ（`CATEGORIES`）
 - **年なしの日付**: 3.0 は iCloud の `X-APPLE-OMIT-YEAR=1604`、4.0 の誕生日は `--MMDD`
+- **UID**: 連絡先の `uid`（3.0 は素の UUID、4.0 は `urn:uuid:`）。取り込みで UID が一致する人は同じ人として更新し、新しく作るときはその UID を引き継ぐ（規則は [CONTACT_MODEL.md](CONTACT_MODEL.md) §1-1「vCard の UID」）
 - **書き出さないもの**: Rondine 固有の印（お気に入り・取引先・外部画像の許可・共有の代表値）、写真、どのサービスとつながっているか
 - **往復**: Rondine の取り込み（`vcard::parse`）と対になっており、取り込み→書き出し→取り込みで上の項目が戻る（`services/vcard/write/tests.rs`）
 - 数千件でも画面を止めないよう、組み立てと書き込みは `spawn_blocking` で行い、書き出した件数を返す（`ContactExportReport`）

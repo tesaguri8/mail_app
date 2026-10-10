@@ -5,7 +5,7 @@ fn parses_icloud_company_card() {
     let vcf = "BEGIN:VCARD\nVERSION:3.0\nFN:\nN:;;;;\nPRODID:-//Apple Inc.//Mac OS X 10.12.6//EN\nORG:アークデータ研究所;\nNOTE:ASCAL\nTEL:05037543196\nX-ABShowAs:COMPANY\nEND:VCARD\n";
     let r = parse(vcf);
     assert_eq!(r.total_cards, 1);
-    let c = &r.contacts[0];
+    let c = &r.contacts[0].fields;
     assert_eq!(c.display_name, "アークデータ研究所"); // FN/N 空 → ORG
     assert_eq!(
         c.organizations[0].name.as_deref(),
@@ -18,7 +18,7 @@ fn parses_icloud_company_card() {
 #[test]
 fn parses_name_kana_emails_pref_and_address() {
     let vcf = "BEGIN:VCARD\nVERSION:3.0\nN:愛川翼;;;;\nFN:愛川翼\nX-PHONETIC-LAST-NAME:アイカワ\nORG:有限会社愛建工業;\nTITLE:専務取締役\nEMAIL;type=INTERNET:second@example.com\nEMAIL;type=INTERNET;type=pref:rabbit@key.ocn.ne.jp\nTEL;type=pref:0997-52-4187\nTEL:090-7929-9937\nADR;type=pref:;;;;鹿児島県奄美市名瀬佐大熊町17-10AKビル2F;8940005;\nUID:ABC-123\nEND:VCARD\n";
-    let c = &parse(vcf).contacts[0];
+    let c = &parse(vcf).contacts[0].fields;
     assert_eq!(c.display_name, "愛川翼");
     assert_eq!(c.family_name.as_deref(), Some("愛川翼"));
     assert_eq!(c.phonetic_family.as_deref(), Some("アイカワ"));
@@ -40,7 +40,7 @@ fn parses_name_kana_emails_pref_and_address() {
 #[test]
 fn builds_display_from_n_and_keeps_kana_parts() {
     let vcf = "BEGIN:VCARD\nVERSION:3.0\nFN:\nN:石川;かおり;;;\nX-PHONETIC-LAST-NAME:イシカワ\nX-PHONETIC-FIRST-NAME:カオリ\nEMAIL:a@b.jp\nEMAIL:c@d.jp\nEND:VCARD\n";
-    let c = &parse(vcf).contacts[0];
+    let c = &parse(vcf).contacts[0].fields;
     assert_eq!(c.display_name, "石川かおり"); // CJK は詰める
     assert_eq!(c.phonetic_family.as_deref(), Some("イシカワ"));
     assert_eq!(c.phonetic_given.as_deref(), Some("カオリ"));
@@ -50,7 +50,7 @@ fn builds_display_from_n_and_keeps_kana_parts() {
 #[test]
 fn unfolds_and_unescapes_note() {
     let vcf = "BEGIN:VCARD\nVERSION:3.0\nFN:x\nNOTE:first line\\nlong word continu\n es here\nEND:VCARD\n";
-    let c = &parse(vcf).contacts[0];
+    let c = &parse(vcf).contacts[0].fields;
     assert_eq!(
         c.note.as_deref(),
         Some("first line\nlong word continues here")
@@ -60,7 +60,7 @@ fn unfolds_and_unescapes_note() {
 #[test]
 fn bday_strips_time_and_western_name_spaced() {
     let vcf = "BEGIN:VCARD\nVERSION:3.0\nN:Smith;John;;;\nBDAY;VALUE=date:1987-10-06\nEND:VCARD\n";
-    let c = &parse(vcf).contacts[0];
+    let c = &parse(vcf).contacts[0].fields;
     assert_eq!(c.display_name, "Smith John");
     assert_eq!(c.birthday.as_deref(), Some("1987-10-06"));
 }
@@ -76,7 +76,7 @@ fn card_without_any_identity_is_skipped() {
 #[test]
 fn types_become_labels_and_categories_become_tags() {
     let vcf = "BEGIN:VCARD\nVERSION:3.0\nFN:タグ 太郎\nTEL;type=CELL:090-1111\nTEL;type=WORK:03-2222\nCATEGORIES:施主,設計事務所\nEND:VCARD\n";
-    let c = &parse(vcf).contacts[0];
+    let c = &parse(vcf).contacts[0].fields;
     assert_eq!(c.phones[0].label.as_deref(), Some("携帯"));
     assert_eq!(c.phones[1].label.as_deref(), Some("職場"));
     assert_eq!(c.tags, vec!["施主".to_string(), "設計事務所".to_string()]);
@@ -110,7 +110,7 @@ item5.X-ABLabel:_$!<Spouse>!$_\r\n\
 IMPP;X-SERVICE-TYPE=Skype;type=HOME;type=pref:skype:taro.yamada\r\n\
 X-SOCIALPROFILE;type=twitter;x-user=taro:http://twitter.com/taro\r\n\
 END:VCARD\r\n";
-    let c = &parse(vcf).contacts[0];
+    let c = &parse(vcf).contacts[0].fields;
     assert_eq!(c.family_name.as_deref(), Some("山田"));
     assert_eq!(c.given_name.as_deref(), Some("太郎"));
     assert_eq!(c.middle_name.as_deref(), Some("一"));
@@ -149,7 +149,7 @@ END:VCARD\r\n";
 #[test]
 fn anniversary_property_gets_the_anniversary_label() {
     let vcf = "BEGIN:VCARD\nVERSION:4.0\nFN:x\nANNIVERSARY:20100601\nEND:VCARD\n";
-    let c = &parse(vcf).contacts[0];
+    let c = &parse(vcf).contacts[0].fields;
     assert_eq!(c.dates[0].date, "2010-06-01");
     assert_eq!(c.dates[0].label.as_deref(), Some("記念日"));
 }

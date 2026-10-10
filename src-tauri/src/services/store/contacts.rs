@@ -10,8 +10,9 @@ use super::contact_write::{mark_dirty, write_contact, OrgLinking, WriteOptions};
 use super::Store;
 use crate::models::{ContactFields, ContactInput, ContactListItem, ContactSummary, ImportReport};
 use crate::services::contact_fields::fill_from_import;
+use crate::services::contact_uid::ContactUid;
 use crate::services::name_norm::match_rank;
-use crate::services::vcard::ParseResult;
+use crate::services::vcard::{ParseResult, VcardContact};
 use rusqlite::{params, Connection, OptionalExtension, ToSql};
 
 /// あいまいヒットとして拾う最大件数（誤ヒットが末尾に大量に並ぶのを防ぐ上限）。
@@ -76,6 +77,36 @@ fn find_import_target(conn: &Connection, c: &ContactFields) -> rusqlite::Result<
     Ok(None)
 }
 
+/// 取り込むカードの uid が、この DB でどう使われているか。
+enum UidUse {
+    /// カードに uid が無い（ほかのアプリの書き出し・Google CSV など）。
+    Absent,
+    /// ゴミ箱でない人が持っている → その人として扱う。
+    Alive(i64),
+    /// ゴミ箱の人が持っている → 同じ人とは扱わず、uid も引き継がない（一意の索引とぶつかる）。
+    Trashed,
+    /// どの人も持っていない → 新しく作るなら、その uid を採る。
+    Unused,
+}
+
+fn uid_use(conn: &Connection, uid: Option<&ContactUid>) -> rusqlite::Result<UidUse> {
+    let Some(uid) = uid else {
+        return Ok(UidUse::Absent);
+    };
+    let found: Option<(i64, bool)> = conn
+        .query_row(
+            "SELECT id, deleted_at IS NOT NULL FROM contacts WHERE uid = ?1",
+            params![uid.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    Ok(match found {
+        Some((id, false)) => UidUse::Alive(id),
+        Some((_, true)) => UidUse::Trashed,
+        None => UidUse::Unused,
+    })
+}
+
 impl Store {
     /// 連絡先一覧（子テーブルは空・主値とつながりつき）。
     ///
@@ -137,14 +168,14 @@ impl Store {
             .collect())
     }
 
-    /// 書き出す連絡先の中身（子テーブル・タグまで）。ゴミ箱は含めない。
+    /// 書き出す連絡先の中身（uid・子テーブル・タグまで）。ゴミ箱は含めない。
     ///
     /// `ids` が Some ならその人だけ（一覧で絞り込んでいる分）、None なら全員。並びは一覧と同じ。
     /// 参照専用の接続で読むので、同期の書き込みに待たされない。
     ///
     /// # Errors
     /// DB の読み出しに失敗したとき。
-    pub fn contacts_for_export(&self, ids: Option<&[i64]>) -> rusqlite::Result<Vec<ContactFields>> {
+    pub fn contacts_for_export(&self, ids: Option<&[i64]>) -> rusqlite::Result<Vec<VcardContact>> {
         let all = {
             let conn = self.read_conn.lock().unwrap();
             load_all_full(&conn)?
@@ -154,7 +185,10 @@ impl Store {
         Ok(all
             .into_iter()
             .filter(|c| wanted.as_ref().map_or(true, |w| w.contains(&(c.id as i64))))
-            .map(|c| c.fields)
+            .map(|c| VcardContact {
+                uid: ContactUid::parse(&c.uid),
+                fields: c.fields,
+            })
             .collect())
     }
 
@@ -275,8 +309,15 @@ impl Store {
             mark_dirty: true,
             org_linking: OrgLinking::ExistingOnly,
         };
-        for c in &parsed.contacts {
-            match find_import_target(&tx, c)? {
+        for card in &parsed.contacts {
+            let c = &card.fields;
+            // uid が同じ人を最優先で同じ人とみなし、無ければ従来の照合（メール/電話＋表示名）。
+            let uid = uid_use(&tx, card.uid.as_ref())?;
+            let target = match uid {
+                UidUse::Alive(id) => Some(id),
+                UidUse::Absent | UidUse::Trashed | UidUse::Unused => find_import_target(&tx, c)?,
+            };
+            match target {
                 Some(id) => {
                     let existing = load_contact(&tx, id)?.fields;
                     let merged = fill_from_import(&existing, c);
@@ -286,6 +327,14 @@ impl Store {
                 }
                 None => {
                     let id = write_contact(&tx, None, c, opts)?;
+                    // 書き出した端末と同じ uid を引き継ぐ（次に取り込んだときも同じ人になる）。
+                    // トリガーが振った uid を置き換える。
+                    if let (UidUse::Unused, Some(u)) = (&uid, &card.uid) {
+                        tx.execute(
+                            "UPDATE contacts SET uid = ?1 WHERE id = ?2",
+                            params![u.as_str(), id],
+                        )?;
+                    }
                     add_tags(&tx, id, &c.tags)?;
                     imported += 1;
                 }

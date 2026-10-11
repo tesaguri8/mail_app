@@ -68,15 +68,23 @@ export function topVisibleIndex(tops: readonly number[], scrollTop: number): num
 }
 
 /**
- * offset 通目のバブルを上端に合わせるスクロール量（`gap` だけ上に余白を残し、0 〜 最大で頭打ち）。
+ * 各バブルの始まりの位置を、スクロールできる全体の高さに対する割合（0〜1）にする。
+ * `tops` は各バブルの上端（スクロール域の中身の先頭からの px）。高さが無ければ空。
  */
-export function scrollTopForBubble(
-  tops: readonly number[],
-  offset: number,
+export function startFractions(tops: readonly number[], scrollHeight: number): number[] {
+  if (scrollHeight <= 0) return [];
+  return tops.map((top) => Math.min(1, Math.max(0, top / scrollHeight)));
+}
+
+/**
+ * 全体に対する割合 fraction の位置を表示域の上端に合わせるスクロール量（`gap` だけ上に余白を残し、
+ * 0 〜 最大で頭打ち）。
+ */
+export function scrollTopForFraction(
+  fraction: number,
+  scrollHeight: number,
   maxScroll: number,
   gap = 0
 ): number {
-  if (tops.length === 0) return 0;
-  const i = Math.min(tops.length - 1, Math.max(0, offset));
-  return Math.min(Math.max(0, maxScroll), Math.max(0, tops[i] - gap));
+  return Math.min(Math.max(0, maxScroll), Math.max(0, fraction * scrollHeight - gap));
 }

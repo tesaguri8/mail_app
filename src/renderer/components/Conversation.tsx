@@ -52,7 +52,7 @@ import { UnseenQuotes } from './UnseenQuotes';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import type { CalendarPanelInitial } from './CalendarPanel';
 import { TimelineScrubber } from './timeline/TimelineScrubber';
-import { countByLocalDay, scrollTopForBubble, topVisibleIndex } from './timeline/dayCounts';
+import { countByLocalDay, scrollTopForFraction, startFractions } from './timeline/dayCounts';
 
 /** 全文展開時、本文カードの先頭を表示域の上端から少しだけ下げて置くための余白（px）。 */
 const EXPAND_TOP_GAP = 8;
@@ -1162,13 +1162,15 @@ export function Conversation({
   }, [view, folder]);
 
   // 日付のつまみ（docs/CONVERSATION_TIMELINE.md）。日ごとの件数は会話の並び順のまま手元で数え、
-  // 「何通目」はバブルの並びの番号そのもの。会話が画面に収まる（スクロールできない）ときは出さない。
+  // 目盛りは各バブルが実際に始まる位置（スクロールできる全体の高さに対する割合）に置く。
+  // 会話が画面に収まる（スクロールできない）ときは出さない。
   const days = useMemo(
     () => countByLocalDay(visibleMessages.map((m) => m.date)),
     [visibleMessages]
   );
   const [scrollable, setScrollable] = useState(false);
-  const [viewOffset, setViewOffset] = useState<number | null>(null);
+  const [starts, setStarts] = useState<number[]>([]);
+  const [viewRange, setViewRange] = useState<{ top: number; bottom: number } | null>(null);
   // 各バブルの上端（スクロール域の中身の先頭からの px・並び順）。
   const bubbleTops = useCallback((): number[] => {
     const el = scrollRef.current;
@@ -1185,8 +1187,20 @@ export function Conversation({
       measureFrame.current = null;
       const el = scrollRef.current;
       if (!el) return;
-      setScrollable(el.scrollHeight > el.clientHeight + 1);
-      setViewOffset(topVisibleIndex(bubbleTops(), el.scrollTop + JUMP_TOP_GAP));
+      const { scrollHeight, scrollTop, clientHeight } = el;
+      setScrollable(scrollHeight > clientHeight + 1);
+      const next = startFractions(bubbleTops(), scrollHeight);
+      // 位置が変わらなければ同じ配列のまま（スクロールのたびに目盛りを組み直さない）
+      setStarts((prev) =>
+        prev.length === next.length && prev.every((f, i) => Math.abs(f - next[i]) < 1e-4)
+          ? prev
+          : next
+      );
+      setViewRange(
+        scrollHeight > 0
+          ? { top: scrollTop / scrollHeight, bottom: (scrollTop + clientHeight) / scrollHeight }
+          : null
+      );
     });
   }, [bubbleTops]);
   // 枠の大きさ・バブルの高さ（本文の到着・全文の開閉・画像の読み込み）が変わったら測り直す。
@@ -1205,19 +1219,17 @@ export function Conversation({
     },
     []
   );
-  const jumpToBubble = useCallback(
-    (offset: number) => {
-      const el = scrollRef.current;
-      if (!el) return;
-      el.scrollTop = scrollTopForBubble(
-        bubbleTops(),
-        offset,
-        el.scrollHeight - el.clientHeight,
-        JUMP_TOP_GAP
-      );
-    },
-    [bubbleTops]
-  );
+  // つまみの押した位置（全体に対する割合）へスクロールする。バブルの点を押せば、そのバブルが上端に来る。
+  const jumpToFraction = useCallback((_offset: number, fraction: number) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = scrollTopForFraction(
+      fraction,
+      el.scrollHeight,
+      el.scrollHeight - el.clientHeight,
+      JUMP_TOP_GAP
+    );
+  }, []);
 
   if (loading && !view) {
     return (
@@ -1303,7 +1315,12 @@ export function Conversation({
       {/* 時系列バブル（古い順・自分=右／相手=左）。検索中は一致移動バーを重ねる。 */}
       <div className="relative flex min-h-0 flex-1">
         {scrollable && (
-          <TimelineScrubber days={days} viewOffset={viewOffset} onJump={jumpToBubble} />
+          <TimelineScrubber
+            days={days}
+            starts={starts}
+            viewRange={viewRange}
+            onJump={jumpToFraction}
+          />
         )}
         {terms.length > 0 && match.total > 0 && (
           <div className="absolute right-4 top-2 z-20 flex items-center gap-1 rounded-full border border-white/10 bg-neutral-800/95 px-2 py-1 text-[11px] text-white/80 shadow-lg backdrop-blur">

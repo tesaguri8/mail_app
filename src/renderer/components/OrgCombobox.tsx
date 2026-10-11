@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Building2, Check, ChevronDown, Plus, RotateCcw } from 'lucide-react';
 import type { OrganizationSummary } from '@bindings/OrganizationSummary';
-import { organizationList, organizationRestore } from '../services/organizations';
+import { organizationList } from '../services/organizations';
+import { contactRestore } from '../services/contacts';
 import { trashRetentionGet } from '../services/trash';
 import { trashDaysLeft } from '../utils/trash';
 import { OrgRegister, type OrgRegisterContext } from './OrgRegister';
@@ -87,7 +88,7 @@ export function OrgAutocomplete({
   const pick = (o: OrganizationSummary) => {
     // 削除済み（ゴミ箱）の組織を選んだら復活させてから使う。
     if (o.deleted_at && isTauri) {
-      organizationRestore(o.id).catch(() => undefined);
+      contactRestore(o.id).catch(() => undefined);
     }
     onSelect({ ...o, deleted_at: null });
     setOpen(false);

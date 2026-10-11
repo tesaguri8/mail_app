@@ -1,45 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  AlertTriangle,
-  Building2,
-  Gem,
-  Mail,
-  Phone,
-  Plus,
-  RotateCcw,
-  Save,
-  Search,
-  Trash2,
-  User,
-  Users,
-  Wand2,
-  X,
-} from 'lucide-react';
+import { Building2, Gem, Mail, Pencil, Phone, Search, User, Users, Wand2, X } from 'lucide-react';
 import type { OrganizationSummary } from '@bindings/OrganizationSummary';
-import type { OrganizationInput } from '@bindings/OrganizationInput';
 import type { OrganizationDetail } from '@bindings/OrganizationDetail';
-import {
-  organizationDelete,
-  organizationDetail,
-  organizationList,
-  organizationMerge,
-  organizationRestore,
-  organizationUpsert,
-} from '../services/organizations';
-import { trashRetentionGet } from '../services/trash';
-import { trashDaysLeft } from '../utils/trash';
-import { OrgCardFields, orgDraft } from './OrgCard';
-import { OrgAutocomplete } from './OrgCombobox';
+import { organizationDetail, organizationList } from '../services/organizations';
+import { OrgCardInfo } from './OrgCard';
 import { OrgTidy } from './OrgTidy';
-import { ConfirmDialog } from './ConfirmDialog';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 /**
- * 住所録の「組織」タブ。左＝組織一覧（検索）、右＝組織カード（会社名・代表電話・FAX・
- * 代表メール・URL・所在地・メモ）の編集と、所属連絡先・共有アドレス（共有件数つき）。
- * 共有アドレスの指定自体は連絡先編集の「共有」トグルで行う。
+ * 住所録の「組織」タブ（見る・つなぐ場所。docs/ORG_CONTACTS.md §4-3）。左＝組織一覧（検索）、
+ * 右＝代表の情報・共有アドレス（共有件数つき）・メンバー。組織も連絡先の 1 件なので、
+ * 名前や代表の情報を直すのは［連絡先で編集］から連絡先の画面で行う（ここに編集の画面は持たない）。
+ * つなぐ・まとめるは「整理」で行う。
  */
 export function OrganizationsView({
   focusId,
@@ -47,7 +21,7 @@ export function OrganizationsView({
 }: {
   /** 起動時に開く組織（重複バナー等からの遷移用）。 */
   focusId?: number | null;
-  /** 所属連絡先をクリックしたら連絡先タブで開く。 */
+  /** メンバー・組織自身を連絡先タブで開く。 */
   onOpenContact?: (id: number) => void;
 }) {
   const { t } = useTranslation();
@@ -55,67 +29,32 @@ export function OrganizationsView({
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [detail, setDetail] = useState<OrganizationDetail | null>(null);
-  // 編集中の組織カード。null＝何も開いていない。id:null＝新規。
-  const [draft, setDraft] = useState<OrganizationInput | null>(null);
-  // 変更検知の基準（読み込み/保存直後の状態）。
-  const [baseline, setBaseline] = useState('');
-  const [saved, setSaved] = useState(false);
-  // 会社名オートコンプリートの候補（自分自身は除外）と、統合確認ダイアログの表示。
-  const [orgResults, setOrgResults] = useState<OrganizationSummary[]>([]);
-  const [confirmMerge, setConfirmMerge] = useState(false);
-  // 削除済み（ゴミ箱）を表示するか、と保持日数。
-  const [showDeleted, setShowDeleted] = useState(false);
-  const [retention, setRetention] = useState(7);
-  // 組織カードの削除の確認ダイアログ（window.confirm は Linux で素通りする）。
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  // 「整理」（カードになっていない会社名・つながっていない人・重複）の画面を開いているか。
+  // 「整理」（組織になっていない会社名・つながっていない人・重複・会社名だけの連絡先）の画面。
   const [tidy, setTidy] = useState(false);
-  // 右ペイン（組織カード）のスクロール枠と、いま開いている組織の ID。
-  // 別の組織に切り替えたときだけ先頭へ戻す（保存後の開き直しでは読んでいた位置を保つ）。
+  // 右ペインのスクロール枠。別の組織に切り替えたときだけ先頭へ戻す。
   const paneRef = useRef<HTMLElement>(null);
   const openedIdRef = useRef<number | null>(null);
 
-  useEffect(() => {
+  const load = useCallback((q: string) => {
     if (!isTauri) return;
-    trashRetentionGet()
-      .then(setRetention)
+    organizationList(q, false)
+      .then(setItems)
       .catch(() => undefined);
   }, []);
-
-  const load = useCallback(
-    (q: string) => {
-      if (!isTauri) return;
-      organizationList(q, showDeleted)
-        .then((r) => setItems(showDeleted ? r.filter((o) => o.deleted_at != null) : r))
-        .catch(() => undefined);
-    },
-    [showDeleted],
-  );
 
   useEffect(() => {
     const h = setTimeout(() => load(query), 150);
     return () => clearTimeout(h);
   }, [query, load]);
 
-  const openDraft = (d: OrganizationInput) => {
-    setDraft(d);
-    setBaseline(JSON.stringify(d));
-  };
-
   const open = useCallback((id: number) => {
     if (!isTauri) return;
-    // 前の組織で読んでいた位置のままにならないよう、先頭から読めるようにする。
     if (openedIdRef.current !== id) paneRef.current?.scrollTo({ top: 0 });
     openedIdRef.current = id;
     setSelectedId(id);
-    setSaved(false);
-    setOrgResults([]); // 前の検索結果による誤った統合判定を避ける
     organizationDetail(id)
-      .then((d) => {
-        setDetail(d);
-        openDraft(orgDraft(d.org));
-      })
-      .catch(() => undefined);
+      .then(setDetail)
+      .catch(() => setDetail(null));
   }, []);
 
   // 起動時フォーカス（重複バナーからの遷移）。
@@ -123,99 +62,6 @@ export function OrganizationsView({
     if (focusId != null) open(focusId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusId]);
-
-  const startNew = () => {
-    setSelectedId(null);
-    setDetail(null);
-    openedIdRef.current = null;
-    paneRef.current?.scrollTo({ top: 0 });
-    openDraft(orgDraft(null));
-    setSaved(false);
-    setOrgResults([]);
-  };
-
-  const name = draft?.name ?? '';
-  const creating = draft !== null && draft.id === null;
-  const dirty = draft ? JSON.stringify(draft) !== baseline : false;
-
-  const patch = (next: OrganizationInput) => {
-    setDraft(next);
-    setSaved(false);
-  };
-
-  // 会社名が別の既存組織の名前に一致するか（候補は自分自身を除外済み）。
-  const nameMatch =
-    orgResults.find((o) => o.name.trim().toLowerCase() === name.trim().toLowerCase()) ?? null;
-  // 既存組織を編集していて別組織名に一致したら「統合」になる。
-  const mergeTarget = detail && !creating ? nameMatch : null;
-
-  const doSave = async () => {
-    if (!draft) return;
-    try {
-      const result = await organizationUpsert({ ...draft, name: draft.name.trim() });
-      load(query);
-      open(result.id);
-      setSaved(true);
-    } catch {
-      /* noop */
-    }
-  };
-
-  // 現在の組織を mergeTarget に統合（keep=統合先, drop=現在, 統一名=入力名）。
-  const doMerge = async () => {
-    if (!detail || !mergeTarget || !isTauri) return;
-    try {
-      await organizationMerge(mergeTarget.id, [detail.org.id], name.trim());
-      setConfirmMerge(false);
-      load(query);
-      open(mergeTarget.id);
-    } catch {
-      /* noop */
-    }
-  };
-
-  const save = () => {
-    if (name.trim() === '' || !isTauri) return;
-    if (mergeTarget) {
-      // 別組織名に一致 → 統合。確定前に確認する。
-      setConfirmMerge(true);
-      return;
-    }
-    if (creating && nameMatch) {
-      // 新規作成で既存名に一致 → 重複作成を避け、その組織を開く。
-      open(nameMatch.id);
-      return;
-    }
-    void doSave();
-  };
-
-  // 削除できるのは、所属している連絡先が 0 の既存組織だけ。
-  const canDelete = detail !== null && detail.members.length === 0;
-  const remove = async () => {
-    if (!detail || !canDelete || !isTauri) return;
-    setConfirmDelete(false);
-    try {
-      await organizationDelete(detail.org.id);
-      setSelectedId(null);
-      setDetail(null);
-      openedIdRef.current = null;
-      setDraft(null);
-      setBaseline('');
-      load(query);
-    } catch {
-      /* noop */
-    }
-  };
-
-  // ゴミ箱からの復元。
-  const restore = async (id: number) => {
-    try {
-      await organizationRestore(id);
-      load(query);
-    } catch {
-      /* noop */
-    }
-  };
 
   // 整理は専用の 2 ペイン画面を全幅で出す（住所録の重複整理と同じ）。
   if (tidy) {
@@ -256,16 +102,6 @@ export function OrganizationsView({
             )}
           </div>
           <button
-            onClick={() => setShowDeleted((v) => !v)}
-            title={t('contact.showDeleted')}
-            aria-label={t('contact.showDeleted')}
-            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 hover:bg-white/10 hover:text-white ${
-              showDeleted ? 'bg-red-500/25 text-red-200' : 'text-white/70'
-            }`}
-          >
-            <Trash2 size={16} />
-          </button>
-          <button
             onClick={() => setTidy(true)}
             title={t('orgTidy.title')}
             aria-label={t('orgTidy.title')}
@@ -273,146 +109,63 @@ export function OrganizationsView({
           >
             <Wand2 size={16} />
           </button>
-          <button
-            onClick={startNew}
-            title={t('org.new')}
-            aria-label={t('org.new')}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white"
-          >
-            <Plus size={18} />
-          </button>
         </div>
 
-        {showDeleted && (
-          <div className="mx-3 mb-1 flex items-center gap-1.5 text-[11px] text-red-200/80">
-            <Trash2 size={12} />
-            {t('contact.trashHint', { days: retention })}
-          </div>
-        )}
         <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
           {items.length === 0 ? (
-            <li className="px-2 py-6 text-center text-sm text-white/45">
-              {showDeleted ? t('contact.trashEmpty') : t('org.empty')}
-            </li>
+            <li className="px-2 py-6 text-center text-sm text-white/45">{t('org.empty')}</li>
           ) : (
-            items.map((o) =>
-              o.deleted_at ? (
-                <li key={o.id}>
-                  <div className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-red-500/15 text-red-200">
-                      <Building2 size={15} />
+            items.map((o) => (
+              <li key={o.id}>
+                <button
+                  onClick={() => open(o.id)}
+                  className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left ${
+                    selectedId === o.id ? 'bg-white/20' : 'hover:bg-white/10'
+                  }`}
+                >
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white/15">
+                    <Building2 size={15} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">{o.name}</span>
+                    <span className="block truncate text-xs text-white/45">
+                      {t('org.members', { count: o.member_count })}
                     </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-red-200">
-                        {o.name}
-                      </span>
-                      <span className="block truncate text-xs text-red-300/70">
-                        {t('contact.trashDaysLeft', {
-                          count: trashDaysLeft(o.deleted_at, retention),
-                        })}
-                      </span>
-                    </span>
-                    <button
-                      onClick={() => restore(o.id)}
-                      title={t('contact.restore')}
-                      aria-label={t('contact.restore')}
-                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white"
-                    >
-                      <RotateCcw size={15} />
-                    </button>
-                  </div>
-                </li>
-              ) : (
-                <li key={o.id}>
-                  <button
-                    onClick={() => open(o.id)}
-                    className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left ${
-                      selectedId === o.id ? 'bg-white/20' : 'hover:bg-white/10'
-                    }`}
-                  >
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white/15">
-                      <Building2 size={15} />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">{o.name}</span>
-                      <span className="block truncate text-xs text-white/45">
-                        {t('org.members', { count: o.member_count })}
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              ),
-            )
+                  </span>
+                </button>
+              </li>
+            ))
           )}
         </ul>
       </aside>
 
-      {/* 右：組織の詳細・編集 */}
+      {/* 右：組織の詳細（読み取り専用） */}
       <section ref={paneRef} className="min-h-0 flex-1 overflow-y-auto">
-        {!draft ? (
+        {!detail ? (
           <div className="flex h-full flex-col items-center justify-center gap-1 text-center">
             <Building2 size={40} className="text-white/25" />
             <p className="text-sm text-white/45">{t('org.noSelection')}</p>
           </div>
         ) : (
           <div className="mx-auto max-w-xl p-6">
-            <div className="mb-1 flex items-center gap-2">
+            <div className="mb-4 flex items-center gap-2">
               <Building2 size={22} className="shrink-0 text-white/50" />
-              <div className="min-w-0 flex-1">
-                <OrgAutocomplete
-                  value={name}
-                  excludeId={detail?.org.id ?? null}
-                  placeholder={t('org.namePlaceholder')}
-                  ariaLabel={t('org.namePlaceholder')}
-                  inputClassName="w-full rounded bg-transparent px-1 py-1 pr-9 text-xl font-semibold outline-none focus:bg-white/10"
-                  onResults={setOrgResults}
-                  onChange={(text) => patch({ ...draft, name: text })}
-                  onSelect={(o) => patch({ ...draft, name: o.name })}
-                />
-              </div>
-              <button
-                onClick={save}
-                disabled={name.trim() === '' || !dirty}
-                title={t('contact.save')}
-                aria-label={t('contact.save')}
-                className="flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-white/20 px-3.5 text-sm font-medium hover:bg-white/30 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <Save size={16} />
-                {t('contact.save')}
-              </button>
-              {saved && !dirty && (
-                <span className="shrink-0 text-sm text-emerald-300">{t('contact.saved')}</span>
+              <h2 className="min-w-0 flex-1 truncate text-xl font-semibold">{detail.org.name}</h2>
+              {onOpenContact && (
+                <button
+                  onClick={() => onOpenContact(detail.org.id)}
+                  title={t('org.editInContacts')}
+                  className="flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-white/20 px-3.5 text-sm font-medium hover:bg-white/30"
+                >
+                  <Pencil size={15} />
+                  {t('org.editInContacts')}
+                </button>
               )}
             </div>
 
-            {/* 別の既存組織名に一致 → 保存すると統合になる旨をその場で知らせる */}
-            {mergeTarget && (
-              <div className="mb-4 mt-1 flex items-center gap-1.5 text-[11px] text-amber-200">
-                <AlertTriangle size={12} className="shrink-0" />
-                {t('org.willMerge', { name: mergeTarget.name })}
-              </div>
-            )}
-            {!mergeTarget && <div className="mb-4" />}
-
-            {/* 所属 0 名: 注意を促し、削除できるようにする（削除は所属 0 のときだけ） */}
-            {canDelete && (
-              <div className="mb-4 flex items-center gap-2 rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-2.5">
-                <AlertTriangle size={16} className="shrink-0 text-amber-300" />
-                <span className="flex-1 text-xs text-amber-100">{t('org.emptyWarn')}</span>
-                <button
-                  onClick={() => setConfirmDelete(true)}
-                  className="flex shrink-0 items-center gap-1 rounded-md border border-red-400/50 bg-red-500/20 px-2.5 py-1 text-xs text-red-100 hover:bg-red-500/40"
-                >
-                  <Trash2 size={13} />
-                  {t('org.delete')}
-                </button>
-              </div>
-            )}
-
-            {/* 組織カード（代表電話・FAX・代表メール・URL・所在地・メモ）。
-                所属している連絡先では、この内容をラベル表示する。 */}
+            {/* 代表の情報（代表電話・FAX・代表メール・URL・所在地）。メモは連絡先の画面で見る。 */}
             <div className="mb-5">
-              <OrgCardFields draft={draft} onChange={patch} />
+              <OrgCardInfo org={detail.org} />
             </div>
 
             {/* 共有アドレス（組織 ＋ 値 ＋ 共有件数） */}
@@ -489,60 +242,9 @@ export function OrganizationsView({
                 )}
               </div>
             )}
-
           </div>
         )}
       </section>
-
-      {confirmDelete && detail && (
-        <ConfirmDialog
-          title={t('org.deleteTitle')}
-          body={t('org.deleteConfirm', { name: detail.org.name })}
-          confirmLabel={t('org.delete')}
-          danger
-          onConfirm={() => void remove()}
-          onCancel={() => setConfirmDelete(false)}
-        />
-      )}
-
-      {/* 統合の確認（別の既存組織名に一致した会社名で保存したとき） */}
-      {confirmMerge && detail && mergeTarget && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={() => setConfirmMerge(false)}
-        >
-          <div
-            className="w-full max-w-md rounded-lg border border-white/15 bg-[#141a2e] p-5 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="mb-2 flex items-center gap-2 text-amber-200">
-              <AlertTriangle size={18} />
-              <h3 className="text-base font-semibold">{t('org.mergeTitle')}</h3>
-            </div>
-            <p className="mb-4 text-sm text-white/70">
-              {t('org.mergeBody', {
-                from: detail.org.name,
-                to: mergeTarget.name,
-                count: detail.members.length,
-              })}
-            </p>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setConfirmMerge(false)}
-                className="rounded-md border border-white/20 px-3 py-1.5 text-sm text-white/70 hover:bg-white/10"
-              >
-                {t('org.cancel')}
-              </button>
-              <button
-                onClick={doMerge}
-                className="rounded-md bg-emerald-500/80 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500"
-              >
-                {t('org.mergeConfirm')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

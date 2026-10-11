@@ -24,7 +24,7 @@ export const emptyContactInput = (): ContactInput => ({
   maiden_name: null,
   birthday: null,
   note: null,
-  show_as_company: false,
+  kind: 'person',
   is_favorite: false,
   is_business: false,
   allow_remote_images: false,
@@ -56,7 +56,7 @@ export const contactToInput = (c: ContactSummary): ContactInput => ({
   maiden_name: c.maiden_name,
   birthday: c.birthday,
   note: c.note,
-  show_as_company: c.show_as_company,
+  kind: c.kind,
   is_favorite: c.is_favorite,
   is_business: c.is_business,
   allow_remote_images: c.allow_remote_images,
@@ -71,6 +71,28 @@ export const contactToInput = (c: ContactSummary): ContactInput => ({
   custom_fields: c.custom_fields,
   tags: c.tags,
 });
+
+/** 空の組織の下書き（新規作成用）。名前は自分の会社の行（先頭の会社）に持つ。 */
+export const emptyOrganizationInput = (): ContactInput => ({
+  ...emptyContactInput(),
+  kind: 'organization',
+  organizations: [emptyOrganization()],
+});
+
+/**
+ * 人／組織を切り替えた下書き（docs/ORG_CONTACTS.md §4-2）。組織にするときは、先頭の会社
+ * （自分の会社の行）の名前が空なら表示名を入れる。人に戻すときは何も消さない。
+ */
+export const withKind = (d: ContactInput, organization: boolean): ContactInput => {
+  if (!organization) return { ...d, kind: 'person' };
+  const first = primaryOrganization(d);
+  const name = (first.name ?? '').trim() || d.display_name.trim() || null;
+  return {
+    ...d,
+    kind: 'organization',
+    organizations: withPrimaryOrganization(d, { name, org_id: null }),
+  };
+};
 
 /** 空の会社。 */
 export const emptyOrganization = (): ContactOrganization => ({

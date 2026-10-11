@@ -286,6 +286,9 @@
     "allSelected": "すべてのタグを選択中"
   },
   "contact": {
+    "listTotal": "連絡先 {{total}} 件",
+    "listTotalOf": "連絡先 {{shown}} / {{total}} 件",
+    "trashTotal": "ゴミ箱の連絡先 {{total}} 件",
     "search": "名前・メール・組織で検索…",
     "clearSearch": "検索をクリア",
     "new": "連絡先を追加",

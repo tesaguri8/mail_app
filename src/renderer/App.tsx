@@ -10,6 +10,7 @@ import { Settings } from './components/Settings';
 import { accountList } from './services/accounts';
 import { useAutoSync, MAIL_SYNCED_EVENT, CONTACTS_SYNCED_EVENT } from './hooks/useAutoSync';
 import { useContactsStore } from './stores/contacts';
+import { useContactCountStore } from './stores/contactCount';
 import { useReminders } from './hooks/useReminders';
 import { SyncProvider } from './components/SyncProvider';
 import type { AccountSummary } from '@bindings/AccountSummary';
@@ -147,6 +148,9 @@ export default function App() {
         ? accounts.reduce((s, a) => s + a.server_total_count, 0)
         : (accounts.find((a) => a.id === mailSel)?.server_total_count ?? null);
 
+  // フッター左に出す連絡先の件数（連絡先の一覧を出しているときだけ）。
+  const contactCount = useContactCountStore((s) => s.count);
+
   // タイトルバーからの遷移。メールは特定メッセージを開かずに開く。
   // ホーム/メールは押すたびに同期（同じビューを再度押した時も含む）。
   const navigate = (v: AppView) => {
@@ -210,6 +214,7 @@ export default function App() {
           onModeChange={setBarMode}
           mailTotal={mailTotal}
           mailServerTotal={mailServerTotal}
+          contactCount={view === 'contacts' ? contactCount : null}
         />
       </div>
     </SyncProvider>

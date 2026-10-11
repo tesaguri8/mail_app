@@ -286,6 +286,9 @@
     "allSelected": "All tags selected"
   },
   "contact": {
+    "listTotal": "{{total}} contacts",
+    "listTotalOf": "{{shown}} / {{total}} contacts",
+    "trashTotal": "{{total}} contacts in trash",
     "search": "Search name, email, org…",
     "clearSearch": "Clear search",
     "new": "Add contact",

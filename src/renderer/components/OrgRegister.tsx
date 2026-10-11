@@ -11,7 +11,7 @@ import {
 } from '../services/organizations';
 import { getPhoneRegion, getPhoneStyle } from '../config/prefs';
 import { displayPhone } from '../utils/phone';
-import { orgMatchReasonLabel, othersLinked } from '../utils/orgMatch';
+import { orgMatchKey, orgMatchReasonLabel, othersLinked } from '../utils/orgMatch';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -36,6 +36,7 @@ export function OrgRegister({
   context,
   onLinked,
   onPick,
+  onMatchCount,
 }: {
   name: string;
   context: OrgRegisterContext;
@@ -43,6 +44,8 @@ export function OrgRegister({
   onLinked: (org: OrganizationSummary) => void;
   /** 候補を選んだとき（下書きだけを変える）。 */
   onPick: (org: OrganizationSummary) => void;
+  /** 似た組織の件数が届いたとき（`forKey` はどの会社名・どの人の結果か＝`orgMatchKey`）。欄の色に使う。 */
+  onMatchCount?: (forKey: string, count: number) => void;
 }) {
   const { t } = useTranslation();
   const [matches, setMatches] = useState<OrgMatch[]>([]);
@@ -61,8 +64,16 @@ export function OrgRegister({
     let alive = true;
     const h = setTimeout(() => {
       organizationMatches(name, [...context.emails], [...context.phones], context.contactId)
-        .then((m) => alive && setMatches(m))
-        .catch(() => alive && setMatches([]));
+        .then((m) => {
+          if (!alive) return;
+          setMatches(m);
+          onMatchCount?.(orgMatchKey(name, context.contactId), m.length);
+        })
+        .catch(() => {
+          if (!alive) return;
+          setMatches([]);
+          onMatchCount?.(orgMatchKey(name, context.contactId), 0);
+        });
       organizationCreateFromNameImpact(name)
         .then((impact) => alive && setOthers(othersLinked(impact.linked)))
         .catch(() => alive && setOthers(0));

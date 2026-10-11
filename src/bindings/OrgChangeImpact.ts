@@ -7,4 +7,8 @@ export type OrgChangeImpact = {
 /**
  * 会社名が変わる・会社が足されるため、次の同期でつながっているサービスへ送り直しになる人数。
  */
-resent: number, };
+resent: number, 
+/**
+ * カードにつながる人数（既につながっている人は含まない）。
+ */
+linked: number, };

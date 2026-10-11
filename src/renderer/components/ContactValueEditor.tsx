@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, GripVertical, Plus, Tag, Users, X } from 'lucide-react';
+import { GripVertical, Plus, Tag, Users, X } from 'lucide-react';
 import type { CountryCode } from 'libphonenumber-js';
 import type { ContactValue } from '@bindings/ContactValue';
 import type { ContactAddress } from '@bindings/ContactAddress';
@@ -8,6 +8,7 @@ import { countryOptions, parseStored, toE164 } from '../utils/phone';
 import { getPhoneRegion } from '../config/prefs';
 import { LABEL_LIST_IDS, LABEL_LISTS, type LabelListKind } from '../utils/contactLabels';
 import { AddressFields } from './AddressFields';
+import { ContactConflictHint, type ConflictOwner } from './ContactConflictHint';
 
 /** ラベル・サービス名の候補（datalist）。各行の input が list で参照するので、
  *  これらの行エディタを置く画面に 1 度だけ置く。 */
@@ -118,7 +119,8 @@ const emptyAddress = (): ContactAddress => ({
 
 /** メール/電話などラベル付き複数値の編集（＋追加・−削除・ラベル候補）。
  *  shareable: 各行に「共有」トグル（会社の代表アドレス等）を出す。
- *  conflicts: その値が既存連絡先と重複しているか（true なら赤字警告）。 */
+ *  conflicts: その値と一致した既存の連絡先（1 件以上なら赤字警告と ⚠ の説明を出す）。
+ *  onOpenContact: ⚠ の説明から一致した連絡先を開く。 */
 export function ValueRows({
   icon,
   label,
@@ -127,6 +129,7 @@ export function ValueRows({
   inputType = 'text',
   shareable = false,
   conflicts,
+  onOpenContact,
 }: {
   icon: React.ReactNode;
   label: string;
@@ -134,9 +137,12 @@ export function ValueRows({
   onChange: (v: ContactValue[]) => void;
   inputType?: string;
   shareable?: boolean;
-  conflicts?: (value: string) => boolean;
+  conflicts?: (value: string) => readonly ConflictOwner[];
+  onOpenContact?: (id: number) => void;
 }) {
   const { t } = useTranslation();
+  const dupKind = inputType === 'email' ? 'email' : 'phone';
+  const dupKey = dupKind === 'email' ? 'contact.dupWithEmail' : 'contact.dupWithPhone';
   const dnd = useDnd(values, onChange);
   const set = (i: number, patch: Partial<ContactValue>) =>
     onChange(values.map((v, idx) => (idx === i ? { ...v, ...patch } : v)));
@@ -148,7 +154,8 @@ export function ValueRows({
       </span>
       <div className="space-y-1.5">
         {values.map((v, i) => {
-          const conflict = !v.is_shared && (conflicts?.(v.value) ?? false);
+          const owners = v.is_shared ? [] : (conflicts?.(v.value) ?? []);
+          const conflict = owners.length > 0;
           return (
             <div
               key={i}
@@ -174,10 +181,19 @@ export function ValueRows({
                 }`}
                 value={v.value}
                 onChange={(e) => set(i, { value: e.target.value })}
-                title={conflict ? t('contact.dupInline') : undefined}
+                title={
+                  conflict
+                    ? t(dupKey, { name: owners.map((o) => o.display_name).join('、') })
+                    : undefined
+                }
               />
               {conflict && (
-                <AlertTriangle size={14} className="shrink-0 text-red-300" aria-label={t('contact.dupInline')} />
+                <ContactConflictHint
+                  owners={owners}
+                  kind={dupKind}
+                  onOpenContact={onOpenContact}
+                  onMakeShared={shareable ? () => set(i, { is_shared: true }) : undefined}
+                />
               )}
               {shareable && (
                 <button
@@ -224,15 +240,19 @@ export function PhoneRows({
   onChange,
   shareable = false,
   conflicts,
+  onOpenContact,
 }: {
   icon: React.ReactNode;
   label: string;
   values: ContactValue[];
   onChange: (v: ContactValue[]) => void;
   shareable?: boolean;
-  conflicts?: (value: string) => boolean;
+  conflicts?: (value: string) => readonly ConflictOwner[];
+  onOpenContact?: (id: number) => void;
 }) {
   const { t, i18n } = useTranslation();
+  const dupKind = 'phone';
+  const dupKey = 'contact.dupWithPhone';
   const dnd = useDnd(values, onChange);
   const region = getPhoneRegion() as CountryCode;
   const countries = useMemo(() => countryOptions(i18n.language), [i18n.language]);
@@ -247,7 +267,8 @@ export function PhoneRows({
       <div className="space-y-1.5">
         {values.map((v, i) => {
           const parsed = parseStored(v.value, region);
-          const conflict = !v.is_shared && (conflicts?.(v.value) ?? false);
+          const owners = v.is_shared ? [] : (conflicts?.(v.value) ?? []);
+          const conflict = owners.length > 0;
           return (
             <div
               key={i}
@@ -288,10 +309,19 @@ export function PhoneRows({
                 value={parsed.national}
                 onChange={(e) => set(i, { value: e.target.value })}
                 onBlur={() => set(i, { value: toE164(v.value, parsed.region) })}
-                title={conflict ? t('contact.dupInline') : undefined}
+                title={
+                  conflict
+                    ? t(dupKey, { name: owners.map((o) => o.display_name).join('、') })
+                    : undefined
+                }
               />
               {conflict && (
-                <AlertTriangle size={14} className="shrink-0 text-red-300" aria-label={t('contact.dupInline')} />
+                <ContactConflictHint
+                  owners={owners}
+                  kind={dupKind}
+                  onOpenContact={onOpenContact}
+                  onMakeShared={shareable ? () => set(i, { is_shared: true }) : undefined}
+                />
               )}
               {shareable && (
                 <button

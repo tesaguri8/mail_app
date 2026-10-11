@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Building2, Check, ChevronDown, Plus, RotateCcw, Unlink } from 'lucide-react';
+import { Building2, Check, ChevronDown, Plus, RotateCcw } from 'lucide-react';
 import type { OrganizationSummary } from '@bindings/OrganizationSummary';
 import { organizationList, organizationRestore } from '../services/organizations';
 import { trashRetentionGet } from '../services/trash';
 import { trashDaysLeft } from '../utils/trash';
+import { OrgRegister, type OrgRegisterContext } from './OrgRegister';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 const MAX_SUGGESTIONS = 8;
@@ -199,6 +200,7 @@ export function OrgCombobox({
   onChange,
   saved = false,
   label,
+  register,
 }: {
   orgId: number | null;
   name: string;
@@ -207,9 +209,13 @@ export function OrgCombobox({
   saved?: boolean;
   /** 見出し（既定は「組織・会社」）。 */
   label?: string;
+  /** 保存済みでカードにつながっていない会社名に「組織に登録」と似た組織の候補を出す手掛かり。 */
+  register?: OrgRegisterContext;
 }) {
   const { t } = useTranslation();
   const [results, setResults] = useState<OrganizationSummary[]>([]);
+  // 「組織に登録」でつないだカード（取り消しても戻らないことを知らせる）。
+  const [linked, setLinked] = useState<OrganizationSummary | null>(null);
   const query = name.trim();
   const exact = results.find((o) => o.name.toLowerCase() === query.toLowerCase()) ?? null;
   const isExisting = orgId != null || exact != null;
@@ -230,7 +236,13 @@ export function OrgCombobox({
         }}
         onSelect={(o) => onChange(o.id, o.name)}
       />
-      {query !== '' &&
+      {linked && linked.id === orgId ? (
+        <span className="mt-1 flex items-center gap-1 text-[11px] text-emerald-300">
+          <Check size={12} />
+          {t('contact.orgLinkedNow', { name: linked.name })}
+        </span>
+      ) : (
+        query !== '' &&
         (isExisting || !saved ? (
           <span
             className={`mt-1 flex items-center gap-1 text-[11px] ${
@@ -245,11 +257,19 @@ export function OrgCombobox({
               : t('contact.orgNew')}
           </span>
         ) : (
-          <span className="mt-1 flex items-center gap-1 text-[11px] text-white/45">
-            <Unlink size={12} />
-            {t('contact.orgNoCard')}
-          </span>
-        ))}
+          register && (
+            <OrgRegister
+              name={query}
+              context={register}
+              onLinked={(org) => {
+                setLinked(org);
+                onChange(org.id, org.name);
+              }}
+              onPick={(org) => onChange(org.id, org.name)}
+            />
+          )
+        ))
+      )}
     </div>
   );
 }

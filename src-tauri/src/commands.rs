@@ -6,7 +6,7 @@ use crate::models::{
     GoogleCredentialsStatus, GoogleService,
     GreenDomainEntry,
     HomeUnreadCounts, IcsImportReport, ImportReport, MailDetail,
-    MailSummary, MergeRemoteDeletion, OrgChangeImpact, OrgDuplicateGroup, OrgLinkSuggestion, OrganizationDetail, OrganizationInput, OrganizationSummary, PostalAddress, VcardVersion,
+    MailSummary, MergeRemoteDeletion, OrgChangeImpact, OrgDuplicateGroup, OrgLinkSuggestion, OrgMatch, OrganizationDetail, OrganizationInput, OrganizationSummary, PostalAddress, VcardVersion,
     RebuildAction,
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSenderConflict, SpamSettings, SpamVerdict,
@@ -1857,6 +1857,20 @@ pub fn organization_create_from_name_impact(
 ) -> Result<OrgChangeImpact, String> {
     store
         .create_org_from_name_impact(&name)
+        .map_err(|e| e.to_string())
+}
+
+/// 会社名・メール・電話から、似ている既存の組織カード（理由つき）。連絡先の詳細の「組織に登録」用。
+#[tauri::command]
+pub fn organization_matches(
+    store: State<Store>,
+    name: String,
+    emails: Vec<String>,
+    phones: Vec<String>,
+    exclude_contact: Option<i64>,
+) -> Result<Vec<OrgMatch>, String> {
+    store
+        .org_matches(&name, &emails, &phones, exclude_contact)
         .map_err(|e| e.to_string())
 }
 

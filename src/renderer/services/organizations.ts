@@ -6,6 +6,7 @@ import type { OrganizationDetail } from '@bindings/OrganizationDetail';
 import type { OrgDuplicateGroup } from '@bindings/OrgDuplicateGroup';
 import type { OrgChangeImpact } from '@bindings/OrgChangeImpact';
 import type { OrgLinkSuggestion } from '@bindings/OrgLinkSuggestion';
+import type { OrgMatch } from '@bindings/OrgMatch';
 import type { UnlinkedOrgName } from '@bindings/UnlinkedOrgName';
 
 /** 組織一覧（所属件数つき）。query があれば名前で部分一致。組織コンボボックスの候補に使う。
@@ -54,6 +55,14 @@ export const organizationCreateFromName = (name: string) =>
 /** 組織カードごとの「つながっていないが同じ組織らしい人」（理由つき）。 */
 export const organizationLinkSuggestions = () =>
   invoke<OrgLinkSuggestion[]>('organization_link_suggestions');
+
+/** 会社名・メール・電話から、似ている既存の組織カード（理由つき・多くて 8 件）。 */
+export const organizationMatches = (
+  name: string,
+  emails: string[],
+  phones: string[],
+  excludeContact: number | null
+) => invoke<OrgMatch[]>('organization_matches', { name, emails, phones, excludeContact });
 
 /** 選んだ人を組織カードにつなぐ。 */
 export const organizationLinkContacts = (orgId: number, contactIds: number[]) =>

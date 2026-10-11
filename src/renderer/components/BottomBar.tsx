@@ -44,6 +44,20 @@ export function BottomBar({
     activity && activity.total && activity.total > 0
       ? Math.min(100, Math.round(((activity.current ?? 0) / activity.total) * 100))
       : null;
+  // 件数の文言（連絡先の一覧を出していれば連絡先、メールモードならメール総数、どちらでもなければ無し）
+  const countLabel = contactCount
+    ? (() => {
+        const { key, values } = contactCountLabel(contactCount);
+        return t(key, values);
+      })()
+    : mailTotal != null
+      ? mailServerTotal != null && mailServerTotal > 0
+        ? t('mailbox.accountTotalOf', {
+            shown: mailTotal.toLocaleString(),
+            total: mailServerTotal.toLocaleString(),
+          })
+        : t('mailbox.accountTotal', { total: mailTotal.toLocaleString() })
+      : null;
   const value = mode === 'ink' ? ink : dim;
   const setValue = mode === 'ink' ? onInkChange : onDimChange;
   const pct = Math.round((value / BAR_MAX) * 100);
@@ -55,10 +69,17 @@ export function BottomBar({
 
   return (
     <div className="flex h-8 shrink-0 items-center gap-3 border-t border-white/10 px-4 text-xs text-white/55">
-      {/* 左: 作業中はその進捗、無ければ表示中アカウントのメール総数（メールモード時）か連絡先の件数 */}
+      {/* 左: 件数（連絡先の一覧なら連絡先、メールモードなら表示中アカウントのメール総数）と、
+          作業中ならその進捗を並べる。狭いときは作業名だけを縮め、件数と n/m は残す。 */}
       <div className="flex min-w-0 flex-1 items-center gap-2">
-        {activity ? (
+        {countLabel && (
+          <span className="shrink-0 whitespace-nowrap tabular-nums text-white/45">
+            {countLabel}
+          </span>
+        )}
+        {activity && (
           <>
+            {countLabel && <span className="h-3 w-px shrink-0 bg-white/15" aria-hidden />}
             <RefreshCw size={12} className="shrink-0 animate-spin text-sky-300" />
             <span className="min-w-0 truncate text-white/70">{activity.label}</span>
             {actPct != null && (
@@ -76,24 +97,6 @@ export function BottomBar({
               </>
             )}
           </>
-        ) : contactCount ? (
-          <span className="tabular-nums text-white/45">
-            {(() => {
-              const { key, values } = contactCountLabel(contactCount);
-              return t(key, values);
-            })()}
-          </span>
-        ) : (
-          mailTotal != null && (
-            <span className="tabular-nums text-white/45">
-              {mailServerTotal != null && mailServerTotal > 0
-                ? t('mailbox.accountTotalOf', {
-                    shown: mailTotal.toLocaleString(),
-                    total: mailServerTotal.toLocaleString(),
-                  })
-                : t('mailbox.accountTotal', { total: mailTotal.toLocaleString() })}
-            </span>
-          )
         )}
       </div>
       {/* 右: モード切替アイコン（背景の濃さ / 文字色）＋兼用スライダー */}

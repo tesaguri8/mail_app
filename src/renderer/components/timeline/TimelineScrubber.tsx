@@ -3,18 +3,23 @@
  *
  * Photosky の src/renderer/components/timeline/TimelineScrubber.tsx（962b00c）から写した。
  * 撮影日不明の目盛り・ラベルを落とし、色を Rondine の配色（白の濃淡＋sky）に合わせた。
+ * 目盛りの位置の決め方を外から渡せるようにした（`starts` を渡すと各件の始まりの位置に置き、
+ * 月日の札を常に出す。渡さなければ Photosky と同じ件数に比例）。
  * 設計: docs/CONVERSATION_TIMELINE.md
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { DayCount } from './dayCounts';
+import { topVisibleIndex, type DayCount } from './dayCounts';
 import {
+  buildDayLabels,
   buildTicks,
   layoutSegments,
+  layoutSegmentsAt,
   lensMagnification,
   offsetAtY,
   parentBands,
   segmentIndexAtY,
+  snapToNearest,
   yOfOffset,
   type TickLevel,
 } from './scrubberLayout';
@@ -22,10 +27,21 @@ import {
 interface TimelineScrubberProps {
   /** 日ごとの件数（一覧の並び順） */
   days: readonly DayCount[];
+  /**
+   * 各件が実際に始まる位置（全体に対する割合 0〜1・並び順に昇順）。渡すと目盛りをこの位置に置き、
+   * 各日の始まりに月日の札を常に出す（会話用）。省略すると件数に比例して置き、マウスの近くだけ
+   * 目盛りを細かくする（一覧用）
+   */
+  starts?: readonly number[];
   /** いま一覧の一番上に出ているのが何件目か（印を出す位置）。分からなければ null */
-  viewOffset: number | null;
-  /** 一覧の offset 件目へ飛ぶ（押したとき・引っ張っている間） */
-  onJump: (offset: number) => void;
+  viewOffset?: number | null;
+  /** いま見えている範囲（全体に対する割合 0〜1）。渡すと viewOffset の印の代わりに範囲を出す */
+  viewRange?: { top: number; bottom: number } | null;
+  /**
+   * 一覧の offset 件目へ飛ぶ（押したとき・引っ張っている間）。`fraction` は押した位置の
+   * 線全体に対する割合（`starts` を渡したときは、その割合の位置へスクロールすればよい）
+   */
+  onJump: (offset: number, fraction: number) => void;
 }
 
 /** 線の上下の余白（px。端の目盛りの文字が切れないように） */
@@ -45,6 +61,13 @@ const TICK_TEXT: Record<TickLevel, string> = {
   day: 'text-[9px] text-white/45',
 };
 
+/** 札と点の間をあける（点の幅 w-1.5 ＋ 余白） */
+const LABEL_RIGHT = 'right-5';
+/** 札どうしの最小の間隔（px） */
+const LABEL_MIN_GAP = 13;
+/** マウスを点へ吸い付ける距離（px。札の高さの半分ほど） */
+const SNAP_PX = 6;
+
 /** 目盛りの横棒の長さ */
 const TICK_BAR: Record<TickLevel, string> = {
   year: 'w-3',
@@ -57,7 +80,13 @@ const TICK_BAR: Record<TickLevel, string> = {
  * 日付のつまみ。最初〜最後（並び順どおり）を件数に比例して並べ、マウスの近くだけ目盛りを
  * 細かくする。押す・引っ張るとその日付へ飛ぶ。
  */
-export function TimelineScrubber({ days, viewOffset, onJump }: TimelineScrubberProps) {
+export function TimelineScrubber({
+  days,
+  starts,
+  viewOffset = null,
+  viewRange = null,
+  onJump,
+}: TimelineScrubberProps) {
   const { t, i18n } = useTranslation();
   const trackRef = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(0);
@@ -76,11 +105,30 @@ export function TimelineScrubber({ days, viewOffset, onJump }: TimelineScrubberP
     return () => observer.disconnect();
   }, []);
 
-  const segments = useMemo(() => layoutSegments(days, height), [days, height]);
-  const magnification = useMemo(() => lensMagnification(segments), [segments]);
+  // 位置に合わせる（会話）か、件数に比例（一覧）か
+  const placed = starts !== undefined;
+  const segments = useMemo(
+    () => (starts ? layoutSegmentsAt(days, starts, height) : layoutSegments(days, height)),
+    [days, starts, height]
+  );
+  // 位置に合わせるときは魚眼を使わない（札は常に出ているので拡大は要らず、引き伸ばすと
+  // 点がバブルの本当の位置からずれる）
+  const magnification = useMemo(
+    () => (placed ? 0 : lensMagnification(segments)),
+    [placed, segments]
+  );
   const ticks = useMemo(
-    () => buildTicks(segments, pointerY, height, magnification),
-    [segments, pointerY, height, magnification]
+    () => (placed ? [] : buildTicks(segments, pointerY, height, magnification)),
+    [placed, segments, pointerY, height, magnification]
+  );
+  const labels = useMemo(
+    () => (placed ? buildDayLabels(segments, LABEL_MIN_GAP) : []),
+    [placed, segments]
+  );
+  // 各件の点（位置に合わせるときだけ。札を間引いても点は全件ぶん出す）
+  const dots = useMemo(
+    () => (starts && segments.length > 0 ? starts.map((f) => f * height) : []),
+    [starts, segments, height]
   );
   // マウス位置の日を含む年・月の帯（いまどの年・月の中かを見せる）
   const bands = useMemo(
@@ -97,6 +145,18 @@ export function TimelineScrubber({ days, viewOffset, onJump }: TimelineScrubberP
         day: 'numeric',
         weekday: 'short',
       }),
+    [i18n.language]
+  );
+  // 札の書き方（「10/2」。年の変わり目は「2026/1/5」）
+  const labelFormat = useMemo(
+    () => ({
+      day: new Intl.DateTimeFormat(i18n.language, { month: 'numeric', day: 'numeric' }),
+      year: new Intl.DateTimeFormat(i18n.language, {
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+      }),
+    }),
     [i18n.language]
   );
 
@@ -122,10 +182,13 @@ export function TimelineScrubber({ days, viewOffset, onJump }: TimelineScrubberP
       frameRef.current = requestAnimationFrame(() => {
         frameRef.current = null;
         const py = pendingYRef.current;
-        if (py !== null && segments.length > 0) onJump(offsetAtY(segments, py));
+        if (py === null || segments.length === 0 || height <= 0) return;
+        const fraction = py / height;
+        const offset = starts ? (topVisibleIndex(starts, fraction) ?? 0) : offsetAtY(segments, py);
+        onJump(offset, fraction);
       });
     },
-    [segments, onJump]
+    [segments, starts, height, onJump]
   );
   useEffect(
     () => () => {
@@ -137,7 +200,9 @@ export function TimelineScrubber({ days, viewOffset, onJump }: TimelineScrubberP
   const localY = (e: React.PointerEvent) => {
     const rect = trackRef.current?.getBoundingClientRect();
     if (!rect) return 0;
-    return Math.min(rect.height, Math.max(0, e.clientY - rect.top));
+    const y = Math.min(rect.height, Math.max(0, e.clientY - rect.top));
+    // 札は点を中心に置くので、札の上半分を押しても前の件にならないよう点へ吸い付ける
+    return placed ? snapToNearest(dots, y, SNAP_PX) : y;
   };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -168,11 +233,14 @@ export function TimelineScrubber({ days, viewOffset, onJump }: TimelineScrubberP
   if (days.length === 0) return null;
 
   const markerY =
-    viewOffset !== null && segments.length > 0 ? yOfOffset(segments, viewOffset) : null;
+    viewRange === null && viewOffset !== null && segments.length > 0
+      ? yOfOffset(segments, viewOffset)
+      : null;
 
   return (
     <div
-      className="relative h-full w-16 shrink-0 select-none border-r border-white/10"
+      // 位置に合わせるときは札（「2026/10/12」）が入る幅にする
+      className={`relative h-full shrink-0 select-none border-r border-white/10 ${placed ? 'w-22' : 'w-16'}`}
       role="navigation"
       aria-label={t('timeline.label')}
     >
@@ -214,6 +282,39 @@ export function TimelineScrubber({ days, viewOffset, onJump }: TimelineScrubberP
             <span className={`h-px bg-white/35 ${TICK_BAR[tick.level]}`} />
           </div>
         ))}
+
+        {/* 各件の始まりの点（位置に合わせるとき） */}
+        {dots.map((y, i) => (
+          <div
+            key={`dot-${i}`}
+            className="pointer-events-none absolute right-2 h-px w-1.5 bg-white/45"
+            style={{ top: y }}
+          />
+        ))}
+
+        {/* 各日の始まりの札（位置に合わせるとき。詰まったところは間引く） */}
+        {labels.map((label, i) => (
+          <div
+            key={`label-${label.dateKey}-${i}`}
+            className={`pointer-events-none absolute ${LABEL_RIGHT} -translate-y-1/2 whitespace-nowrap text-[10px] leading-none tabular-nums ${
+              label.withYear ? 'font-bold text-white/85' : 'text-white/60'
+            }`}
+            style={{ top: label.y }}
+          >
+            {(label.withYear ? labelFormat.year : labelFormat.day).format(dateOf(label.dateKey))}
+          </div>
+        ))}
+
+        {/* いま見えている範囲（スクロールの割合） */}
+        {viewRange !== null && (
+          <div
+            className="pointer-events-none absolute right-0.5 w-1 rounded-full bg-sky-400/80"
+            style={{
+              top: viewRange.top * height,
+              height: Math.max(4, (viewRange.bottom - viewRange.top) * height),
+            }}
+          />
+        )}
 
         {/* いま見ている位置 */}
         {markerY !== null && (

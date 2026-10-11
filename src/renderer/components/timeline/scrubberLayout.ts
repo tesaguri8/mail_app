@@ -4,8 +4,11 @@
  * Photosky の src/renderer/components/timeline/scrubberLayout.ts（962b00c）から写した。
  * メールには撮影日不明にあたる行が無いので、その区間・目盛りは落とした。
  *
- * - 長さはメールの通数に比例（スクロールバーと同じ感覚）。メールの無い期間は詰まる
- * - 目盛りは普段は年だけ。マウスに近いところだけ 月 → 週 → 日 と細かくなる
+ * 目盛りの位置の決め方は 2 つ（docs/CONVERSATION_TIMELINE.md §2）:
+ * - 件数に比例（`layoutSegments`。一覧用・Photosky と同じ）。目盛りは普段は年だけで、
+ *   マウスに近いところだけ 月 → 週 → 日 と細かくなる
+ * - 各件が実際に始まる位置（`layoutSegmentsAt`。会話用）。各日の始まりに月日の札を常に出す
+ *   （`buildDayLabels`）
  * 設計: docs/CONVERSATION_TIMELINE.md
  */
 import type { DayCount } from './dayCounts';
@@ -34,6 +37,38 @@ export function layoutSegments(days: readonly DayCount[], height: number): Segme
     segments.push({ dateKey: day.dateKey, count: day.count, start: offset, y0, y1 });
     offset += day.count;
   }
+  return segments;
+}
+
+/**
+ * 日ごとの件数を、各件が実際に始まる位置に合わせて線の上に並べる（会話用）。
+ * `starts[i]` は i 件目の始まりの位置（全体に対する割合 0〜1・並び順に昇順）。区間の上端は
+ * その日の最初の件の始まり、下端は次の区間の上端（最後は線の下端）。
+ * `starts` が件数に足りなければ、件数に比例する配置（`layoutSegments`）に戻す。
+ */
+export function layoutSegmentsAt(
+  days: readonly DayCount[],
+  starts: readonly number[],
+  height: number
+): Segment[] {
+  const valid = days.filter((d) => d.count > 0);
+  const total = valid.reduce((sum, d) => sum + d.count, 0);
+  if (total === 0 || height <= 0) return [];
+  if (starts.length < total) return layoutSegments(days, height);
+  const segments: Segment[] = [];
+  let offset = 0;
+  let prevY = 0;
+  for (const day of valid) {
+    // 測りの誤差で逆転しても、区間の上端が前の区間より上へ戻らないようにする
+    const y0 = Math.max(prevY, Math.min(1, Math.max(0, starts[offset])) * height);
+    segments.push({ dateKey: day.dateKey, count: day.count, start: offset, y0, y1: height });
+    prevY = y0;
+    offset += day.count;
+  }
+  segments.forEach((seg, i) => {
+    const next = segments[i + 1];
+    if (next) seg.y1 = next.y0;
+  });
   return segments;
 }
 
@@ -251,4 +286,51 @@ export function parentBands(
     year: bandOf(hovered.dateKey.slice(0, 4)),
     month: bandOf(hovered.dateKey.slice(0, 7)),
   };
+}
+
+/** 日の始まりの札（会話用。各日の最初の件の位置に出す） */
+export interface DayLabel {
+  y: number;
+  dateKey: string;
+  /** 年も出すか（最初の札と、年が変わるところ） */
+  withYear: boolean;
+}
+
+/**
+ * 各日の始まりに出す月日の札を選ぶ。最初の区間と年が変わる区間は年も出す。
+ * 札どうしが minGap より近いときは、年の変わり目 → 月の変わり目 → それ以外 の順に残し、
+ * 同じ順位なら上のほうを残す（点＝目盛りは呼び出し側で全件ぶん出す）。
+ */
+export function buildDayLabels(segments: readonly Segment[], minGap: number): DayLabel[] {
+  const candidates = segments.map((seg, i) => {
+    const prev = segments[i - 1];
+    const yearChanged = !prev || prev.dateKey.slice(0, 4) !== seg.dateKey.slice(0, 4);
+    const monthChanged = !prev || prev.dateKey.slice(0, 7) !== seg.dateKey.slice(0, 7);
+    return {
+      label: { y: seg.y0, dateKey: seg.dateKey, withYear: yearChanged },
+      rank: yearChanged ? 0 : monthChanged ? 1 : 2,
+    };
+  });
+  const accepted: DayLabel[] = [];
+  candidates
+    .slice()
+    .sort((a, b) => a.rank - b.rank || a.label.y - b.label.y)
+    .forEach(({ label }) => {
+      if (accepted.every((l) => Math.abs(l.y - label.y) >= minGap)) accepted.push(label);
+    });
+  return accepted.sort((a, b) => a.y - b.y);
+}
+
+/** y から radius 以内にある最も近い位置（ys の中から）。無ければ y のまま */
+export function snapToNearest(ys: readonly number[], y: number, radius: number): number {
+  let best = y;
+  let bestDist = radius;
+  for (const v of ys) {
+    const dist = Math.abs(v - y);
+    if (dist <= bestDist) {
+      best = v;
+      bestDist = dist;
+    }
+  }
+  return best;
 }

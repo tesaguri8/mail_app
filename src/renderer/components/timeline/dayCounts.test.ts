@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { countByLocalDay, localDayKey, scrollTopForBubble, topVisibleIndex } from './dayCounts';
+import {
+  countByLocalDay,
+  localDayKey,
+  scrollTopForFraction,
+  startFractions,
+  topVisibleIndex,
+} from './dayCounts';
 
 // 端末のタイムゾーンに左右されないよう、日時はオフセット無し（ローカル時刻）で書く。
 describe('localDayKey', () => {
@@ -76,22 +82,32 @@ describe('topVisibleIndex', () => {
   });
 });
 
-describe('scrollTopForBubble', () => {
-  const tops = [12, 200, 450, 900];
-
-  it('バブルの上端から余白を引いた位置', () => {
-    expect(scrollTopForBubble(tops, 1, 10_000, 12)).toBe(188);
-    expect(scrollTopForBubble(tops, 0, 10_000, 12)).toBe(0);
+describe('startFractions', () => {
+  it('上端を全体の高さに対する割合にする（0〜1 に収める）', () => {
+    expect(startFractions([0, 250, 500, 1200], 1000)).toEqual([0, 0.25, 0.5, 1]);
+    expect(startFractions([-5], 1000)).toEqual([0]);
   });
 
-  it('最大スクロール量で頭打ち・番号は範囲に収める', () => {
-    expect(scrollTopForBubble(tops, 3, 600, 12)).toBe(600);
-    expect(scrollTopForBubble(tops, 99, 10_000, 0)).toBe(900);
-    expect(scrollTopForBubble(tops, -5, 10_000, 0)).toBe(12);
+  it('高さが無ければ空', () => {
+    expect(startFractions([0, 10], 0)).toEqual([]);
+  });
+});
+
+describe('scrollTopForFraction', () => {
+  it('割合の位置から余白を引いたスクロール量', () => {
+    expect(scrollTopForFraction(0.25, 1000, 600, 12)).toBe(238);
+    expect(scrollTopForFraction(0, 1000, 600, 12)).toBe(0);
   });
 
-  it('飛んだ先がそのまま「一番上に見えているバブル」になる', () => {
-    const scrollTop = scrollTopForBubble(tops, 2, 10_000, 12);
+  it('最大スクロール量で頭打ち', () => {
+    expect(scrollTopForFraction(0.9, 1000, 600, 12)).toBe(600);
+    expect(scrollTopForFraction(0.5, 1000, -10, 0)).toBe(0);
+  });
+
+  it('バブルの始まりの割合へ飛ぶと、そのバブルが一番上に来る', () => {
+    const tops = [12, 200, 450, 900];
+    const fractions = startFractions(tops, 1500);
+    const scrollTop = scrollTopForFraction(fractions[2], 1500, 10_000, 12);
     expect(topVisibleIndex(tops, scrollTop + 12)).toBe(2);
   });
 });

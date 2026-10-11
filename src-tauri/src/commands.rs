@@ -971,18 +971,6 @@ pub fn mail_list(
         .map_err(|e| e.to_string())
 }
 
-/// フォルダ内のスレッド総数（一覧の「表示 X / 全 Y」表示用）。`account_id` が None なら全アカウント。
-#[tauri::command]
-pub fn thread_count(
-    store: State<Store>,
-    account_id: Option<i64>,
-    folder: String,
-) -> Result<i64, String> {
-    store
-        .thread_count(account_id, &folder)
-        .map_err(|e| e.to_string())
-}
-
 /// フォルダ内のスレッドを、代表メールの日付（端末ローカル）ごとに数える（メール一覧の日付のつまみ用）。
 /// 並びと絞り込みは `thread_list` と同じで、累計がそのまま一覧の offset になる。docs/MAIL_LIST_TIMELINE.md。
 #[tauri::command]

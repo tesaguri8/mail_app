@@ -1032,28 +1032,6 @@ impl Store {
         Ok(rows)
     }
 
-    /// フォルダ内のスレッド総数（代表フラグ is_folder_rep=1 の件数）。一覧の「表示/全件」表示用。
-    /// `account_id` が None なら全アカウント横断。部分索引で高速。
-    pub fn thread_count(&self, account_id: Option<i64>, folder: &str) -> rusqlite::Result<i64> {
-        let conn = self.read_conn.lock().unwrap();
-        // 一覧と同じ実効フォルダ絞り込み（迷惑隔離 is_junk を反映）。
-        let fp = folder_predicate(folder, "", "?1");
-        match account_id {
-            Some(a) => conn.query_row(
-                &format!(
-                    "SELECT count(*) FROM emails WHERE {fp} AND account_id = ?2 AND is_folder_rep = 1"
-                ),
-                params![folder, a],
-                |r| r.get(0),
-            ),
-            None => conn.query_row(
-                &format!("SELECT count(*) FROM emails WHERE {fp} AND is_folder_rep = 1"),
-                params![folder],
-                |r| r.get(0),
-            ),
-        }
-    }
-
     /// 指定 ID 群に対し、フラグ列（is_read / is_starred / is_bookmarked）を一括更新する。
     fn set_flag(&self, column: &str, ids: &[i64], value: bool) -> rusqlite::Result<()> {
         if ids.is_empty() {
@@ -2413,9 +2391,14 @@ mod tests {
         }
         super::super::threads::process_pending_conn(&store.conn.lock().unwrap(), 1).unwrap();
 
+        // フォルダのスレッド数（日ごとの件数の合計。一覧の枠の数になる）。
+        let threads_in = |folder: &str| -> i32 {
+            let days = store.thread_day_counts(Some(1), folder).unwrap();
+            days.iter().map(|d| d.count).sum()
+        };
         // 初期: 受信箱に2件、迷惑は0件。
         assert_eq!(store.list_threads(Some(1), "inbox", 50, 0).unwrap().len(), 2);
-        assert_eq!(store.thread_count(Some(1), "inbox").unwrap(), 2);
+        assert_eq!(threads_in("inbox"), 2);
         assert_eq!(store.list_threads(Some(1), "spam", 50, 0).unwrap().len(), 0);
 
         // b を迷惑としてマーク（is_junk=1、folder は inbox のまま）。
@@ -2429,11 +2412,11 @@ mod tests {
         // 受信箱からは消え（1件）、迷惑ビューに現れる（1件）。
         let inbox = store.list_threads(Some(1), "inbox", 50, 0).unwrap();
         assert_eq!(inbox.len(), 1, "迷惑マークした b は受信箱から外れる");
-        assert_eq!(store.thread_count(Some(1), "inbox").unwrap(), 1);
+        assert_eq!(threads_in("inbox"), 1);
         let spam = store.list_threads(Some(1), "spam", 50, 0).unwrap();
         assert_eq!(spam.len(), 1, "b は迷惑ビューに現れる");
         assert_eq!(spam[0].id as i64, bid);
-        assert_eq!(store.thread_count(Some(1), "spam").unwrap(), 1);
+        assert_eq!(threads_in("spam"), 1);
 
         // 非迷惑に戻すと受信箱へ復帰。
         store.set_emails_junk(&[bid], false).unwrap();

@@ -89,16 +89,54 @@ fn synced_contacts(conn: &Connection) -> rusqlite::Result<HashSet<i64>> {
     rows.collect()
 }
 
-/// 変わる人のうち、送り直しになる人の数。
+/// 変わる人のうち、送り直しになる人の数（`linked`: カードにつながる人数）。
 fn impact_of(
     conn: &Connection,
     changed: impl IntoIterator<Item = i64>,
+    linked: usize,
 ) -> rusqlite::Result<OrgChangeImpact> {
     let synced = synced_contacts(conn)?;
     let resent: HashSet<i64> = changed.into_iter().filter(|c| synced.contains(c)).collect();
     Ok(OrgChangeImpact {
         resent: i32::try_from(resent.len()).unwrap_or(i32::MAX),
+        linked: i32::try_from(linked).unwrap_or(i32::MAX),
     })
+}
+
+/// カードごとのメールのドメイン（カードの代表メールと、つながっている人のメール。
+/// 同じ組織の手掛かりにならないドメインは除く）。
+fn card_domain_sets(
+    cards: &[(i64, String, Option<String>)],
+    rows: &[OrgRow],
+    domains: &HashMap<i64, Vec<String>>,
+) -> HashMap<i64, HashSet<String>> {
+    cards
+        .iter()
+        .map(|(org_id, _, card_email)| {
+            let set = card_email
+                .as_deref()
+                .and_then(domain_of)
+                .filter(|d| !is_unaffiliated_domain(d))
+                .into_iter()
+                .chain(
+                    members_of(rows, *org_id)
+                        .iter()
+                        .filter_map(|m| domains.get(m))
+                        .flatten()
+                        .cloned(),
+                )
+                .collect();
+            (*org_id, set)
+        })
+        .collect()
+}
+
+/// カードにつながっている人。
+fn members_of(rows: &[OrgRow], org_id: i64) -> HashSet<i64> {
+    rows.iter()
+        .filter(|r| r.org_id == Some(org_id))
+        .map(|r| r.contact_id)
+        .collect()
 }
 
 /// 会社名から組織カードを作る（同じ正規化名のカードがあればそこへつなぐ）段取り。
@@ -282,7 +320,8 @@ impl Store {
     pub fn create_org_from_name_impact(&self, name: &str) -> rusqlite::Result<OrgChangeImpact> {
         let conn = self.conn.lock().unwrap();
         let plan = create_plan(&conn, name)?;
-        impact_of(&conn, plan.renamed)
+        let linked: HashSet<i64> = plan.rows.iter().map(|(_, cid)| *cid).collect();
+        impact_of(&conn, plan.renamed, linked.len())
     }
 
     /// 組織カードごとに「つながっていないが同じ組織らしい人」を理由つきで返す（候補のある
@@ -303,27 +342,13 @@ impl Store {
                 .into_iter()
                 .map(|c| (c.id as i64, c))
                 .collect();
+        let all_cards = cards(&conn)?;
+        let mut domain_sets = card_domain_sets(&all_cards, &rows, &domains);
         let mut out = Vec::new();
-        for (org_id, card_name, card_email) in cards(&conn)? {
+        for (org_id, card_name, _) in all_cards {
             let key = key_of(Some(&card_name));
-            let members: HashSet<i64> = rows
-                .iter()
-                .filter(|r| r.org_id == Some(org_id))
-                .map(|r| r.contact_id)
-                .collect();
-            let card_domains: HashSet<String> = card_email
-                .as_deref()
-                .and_then(domain_of)
-                .filter(|d| !is_unaffiliated_domain(d))
-                .into_iter()
-                .chain(
-                    members
-                        .iter()
-                        .filter_map(|m| domains.get(m))
-                        .flatten()
-                        .cloned(),
-                )
-                .collect();
+            let members = members_of(&rows, org_id);
+            let card_domains = domain_sets.remove(&org_id).unwrap_or_default();
             // contact_id → (一致した会社名, 一致したドメイン)
             let mut found: BTreeMap<i64, (Option<String>, Option<String>)> = BTreeMap::new();
             for r in rows
@@ -417,15 +442,19 @@ impl Store {
     ) -> rusqlite::Result<OrgChangeImpact> {
         let conn = self.conn.lock().unwrap();
         let card = load_org(&conn, org_id)?;
-        let changed = link_plan(&conn, &card, contact_ids)?
+        let plan = link_plan(&conn, &card, contact_ids)?;
+        let linked = plan.len();
+        let changed = plan
             .into_iter()
             .filter(|(_, step)| {
                 matches!(step, LinkStep::Attach { renamed: true, .. } | LinkStep::Add)
             })
             .map(|(cid, _)| cid);
-        impact_of(&conn, changed)
+        impact_of(&conn, changed, linked)
     }
 }
+
+mod matches;
 
 #[cfg(test)]
 mod tests;

@@ -3,6 +3,7 @@ import { ArrowUpToLine, Briefcase, Building2, Plus, X } from 'lucide-react';
 import type { ContactOrganization } from '@bindings/ContactOrganization';
 import { Field } from './ContactValueEditor';
 import { OrgCombobox } from './OrgCombobox';
+import type { OrgRegisterContext } from './OrgRegister';
 import { emptyOrganization } from '../utils/contactDraft';
 
 const INPUT = 'w-full rounded bg-white/10 px-2.5 py-1.5 text-sm outline-none focus:bg-white/15';
@@ -16,18 +17,21 @@ const nullify = (s: string) => (s.trim() === '' ? null : s);
  * 組織カードにならない（docs/CONTACT_MODEL.md §8）ので、欄の注記を変える。
  * `children` は主の会社の直下に出すもの（組織カードの表示・重なりの通知）。
  * 会社名のよみは普段使わないので、`showPhonetic` か値があるときだけ出す。
+ * `register` は保存済みでカードにつながっていない会社名に「組織に登録」と似た組織を出す手掛かり。
  */
 export function OrgRows({
   organizations,
   onChange,
   savedNames,
   showPhonetic,
+  register,
   children,
 }: {
   organizations: ContactOrganization[];
   onChange: (orgs: ContactOrganization[]) => void;
   savedNames: ReadonlySet<string>;
   showPhonetic: boolean;
+  register?: OrgRegisterContext;
   children?: React.ReactNode;
 }) {
   const { t } = useTranslation();
@@ -78,6 +82,7 @@ export function OrgRows({
             name={o.name ?? ''}
             saved={savedNames.has((o.name ?? '').trim().toLowerCase())}
             onChange={(org_id, name) => set(i, { org_id, name: nullify(name) })}
+            register={register}
           />
           {i === 0 && children}
           {(showPhonetic || o.phonetic_name) && (

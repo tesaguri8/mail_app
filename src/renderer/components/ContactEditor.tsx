@@ -55,6 +55,7 @@ import { OrgRows } from './ContactOrgRows';
 import { OrgCardDialog, OrgCardInfo, OrgOverlapNotice } from './OrgCard';
 import { LABEL_LIST_IDS } from '../utils/contactLabels';
 import { toE164 } from '../utils/phone';
+import { conflictOwnersByValue } from '../utils/contactConflicts';
 import { findOrgOverlap, hasOrgOverlap, mergeOrgOverlap } from '../utils/orgOverlap';
 import { formatPostal } from '../utils/postal';
 import { getPhoneRegion, getPostalAutoformat } from '../config/prefs';
@@ -364,13 +365,26 @@ export function ContactEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checkKey]);
 
-  // 赤字判定用の集合（バックエンドは渡した文字列をそのまま返す）。
-  const emailConflicts = useMemo(() => new Set(matches.flatMap((m) => m.matched_emails)), [matches]);
-  const phoneConflicts = useMemo(() => new Set(matches.flatMap((m) => m.matched_phones)), [matches]);
+  // 赤字判定用: 値 → 一致した連絡先（バックエンドは渡した文字列をそのまま返す）。⚠ の説明に名前で出す。
+  const emailConflicts = useMemo(() => conflictOwnersByValue(matches, 'matched_emails'), [matches]);
+  const phoneConflicts = useMemo(() => conflictOwnersByValue(matches, 'matched_phones'), [matches]);
   // 「同名」の一致だけを本当の重複候補とみなす。共有メール/電話だけの一致（＝名前が違う）は
   // 別人（役所の代表アドレスの引き継ぎ等）の可能性が高いので、統合を強制しない。
   const nameMatches = useMemo(() => matches.filter((m) => m.matched_name), [matches]);
   const nameConflict = nameMatches.length > 0;
+
+  // 「組織に登録」の候補を探す手掛かり（共有の値も会社の手掛かりになるので含める）。
+  const orgRegister = useMemo(
+    () =>
+      draft
+        ? {
+            contactId: draft.id ?? null,
+            emails: draft.emails.map((e) => e.value.trim()).filter(Boolean),
+            phones: draft.phones.map((p) => p.value.trim()).filter(Boolean),
+          }
+        : undefined,
+    [draft],
+  );
 
   const patch = (p: Partial<ContactInput>) => {
     setDraft((d) => (d ? { ...d, ...p } : d));
@@ -702,7 +716,8 @@ export function ContactEditor({
             values={draft.emails}
             onChange={(emails) => patch({ emails })}
             shareable
-            conflicts={(v) => emailConflicts.has(v.trim())}
+            conflicts={(v) => emailConflicts.get(v.trim()) ?? []}
+            onOpenContact={onOpenContact}
           />
           <PhoneRows
             icon={<Phone size={14} />}
@@ -710,13 +725,15 @@ export function ContactEditor({
             values={draft.phones}
             onChange={(phones) => patch({ phones })}
             shareable
-            conflicts={(v) => phoneConflicts.has(v.trim())}
+            conflicts={(v) => phoneConflicts.get(v.trim()) ?? []}
+            onOpenContact={onOpenContact}
           />
           <OrgRows
             organizations={draft.organizations}
             onChange={(organizations) => patch({ organizations })}
             savedNames={savedOrgNames}
             showPhonetic={visible('nameDetails')}
+            register={orgRegister}
           >
             {/* 会社共通の情報（代表電話・FAX・代表メール・URL・所在地）はラベル表示。
                 変更は所属する全員に効くので、［編集］で組織カードを開いて行う。 */}

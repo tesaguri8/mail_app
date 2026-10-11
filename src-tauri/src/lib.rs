@@ -146,6 +146,7 @@ pub fn run() {
             commands::organization_create_from_name,
             commands::organization_create_from_name_impact,
             commands::organization_link_suggestions,
+            commands::organization_matches,
             commands::organization_link_contacts,
             commands::organization_link_contacts_impact,
             commands::trash_retention_get,

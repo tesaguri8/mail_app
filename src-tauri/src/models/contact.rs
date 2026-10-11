@@ -399,6 +399,30 @@ pub struct OrgLinkCandidate {
     pub matched_domain: Option<String>,
 }
 
+/// 連絡先の会社名・メール・電話が、既存の組織カードと似ている理由。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub enum OrgMatchReason {
+    /// 会社名が同じ（正規化後）。
+    SameName,
+    /// 会社名が似ている（組織一覧の「似た名前」の検索に当たった）。
+    SimilarName,
+    /// メールのドメインが同じ（カードの代表メール、またはつながっている人のメール）。
+    Domain { domain: String },
+    /// 電話が同じ（カードの代表電話・FAX、またはつながっている人の電話）。`phone` は
+    /// 呼び出し元が渡した値のまま。
+    Phone { phone: String },
+}
+
+/// 似ている既存の組織カード（理由つき。同じカードが複数の理由で当たれば 1 件にまとめる）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct OrgMatch {
+    pub org: super::OrganizationSummary,
+    pub reasons: Vec<OrgMatchReason>,
+}
+
 /// 組織カード 1 枚ぶんの「つながっていない人」の候補。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]
@@ -413,6 +437,8 @@ pub struct OrgLinkSuggestion {
 pub struct OrgChangeImpact {
     /// 会社名が変わる・会社が足されるため、次の同期でつながっているサービスへ送り直しになる人数。
     pub resent: i32,
+    /// カードにつながる人数（既につながっている人は含まない）。
+    pub linked: i32,
 }
 
 /// 統合で Google 側から消すことになる連絡先の件数（アカウントごと）。統合の確認画面に出す。

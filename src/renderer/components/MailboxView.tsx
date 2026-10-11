@@ -626,17 +626,19 @@ export function MailboxView({
   };
 
   // 一覧を読み直す。日ごとの件数で枠を作り直し、見せる範囲だけを読んでから差し替える（読み込み中の
-  // 空白を挟まない）。keepScroll: 同期後の再読込などで、いまの位置を保つ（見えている範囲、絞り込み中は
-  // 読み込み済みの先頭部分を読み直す）。既定はフォルダ/アカウント切替なので先頭に戻す。
-  const loadMails = (opts?: { keepScroll?: boolean }) => {
+  // 空白を挟まない）。
+  // - reset: フォルダ/アカウント切替。先頭の 1 ページを読み、先頭に戻す
+  // - それ以外（操作・同期のあと）: つまみのときは見えている範囲を読み直し、位置はそのまま
+  // - 絞り込み中は、keepScroll なら読み込み済みの先頭部分を、無ければ先頭の 1 ページを読み直す（従来どおり）
+  const loadMails = (opts?: { keepScroll?: boolean; reset?: boolean }) => {
     const token = ++loadTokenRef.current;
     inFlightRef.current = new Set();
-    const keep = opts?.keepScroll ?? false;
-    const [start, end] = !keep
+    const reset = opts?.reset ?? false;
+    const [start, end] = reset
       ? [0, PAGE_SIZE]
       : timelineModeRef.current
         ? visibleRangeRef.current
-        : [0, Math.max(PAGE_SIZE, loadedPrefix(slotsRef.current))];
+        : [0, opts?.keepScroll ? Math.max(PAGE_SIZE, loadedPrefix(slotsRef.current)) : PAGE_SIZE];
     return Promise.all([
       threadDayCounts(queryAccount, folder),
       threadList(queryAccount, folder, Math.max(1, end - start), start),
@@ -645,7 +647,7 @@ export function MailboxView({
         if (loadTokenRef.current !== token) return;
         setDays(toDayCounts(counts));
         setSlots(fillSlots(emptySlots(totalOf(counts)), start, rows));
-        if (!keep) listRef.current?.scrollTo({ top: 0 });
+        if (reset) listRef.current?.scrollTo({ top: 0 });
       })
       .catch(() => undefined);
   };
@@ -704,7 +706,7 @@ export function MailboxView({
     setOpened(null);
     resetSelection();
     if (selected != null) {
-      loadMails().then(() => {
+      loadMails({ reset: true }).then(() => {
         const pid = pendingOpen.current;
         if (pid != null) {
           pendingOpen.current = null;

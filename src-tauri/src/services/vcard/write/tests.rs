@@ -1,6 +1,7 @@
 use super::*;
 use crate::models::{
-    ContactCustomField, ContactDate, ContactFields, ContactRelation, ContactUrl, ContactValue,
+    ContactCustomField, ContactDate, ContactFields, ContactKind, ContactRelation, ContactUrl,
+    ContactValue,
 };
 use crate::services::contact_uid::ContactUid;
 use crate::services::vcard::{parse, VcardContact};
@@ -39,7 +40,7 @@ fn full() -> ContactFields {
         maiden_name: Some("佐藤".into()),
         birthday: Some("--12-25".into()),
         note: Some("1行目; セミコロン, カンマ\\バックスラッシュ\n2行目。長いメモは75オクテットで折り返す。長いメモは75オクテットで折り返す。".into()),
-        show_as_company: true,
+        kind: ContactKind::Person,
         organizations: vec![
             ContactOrganization {
                 org_id: None,

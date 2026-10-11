@@ -4,7 +4,7 @@
 //! 誰と結び付けるか）も同じ物差しを使うので、照合で決めきれずに新規にした人はここで拾える。
 
 use super::contact_distinct::{inherit, load_distinct, record};
-use super::contact_rows::{load_all_full, load_contact};
+use super::contact_rows::{load_all_full, load_all_people, load_contact};
 use super::contact_tags::set_tags;
 use super::contact_targets::drop_redundant_create_requests;
 use super::contact_write::{write_contact, OrgLinking, WriteOptions};
@@ -120,8 +120,9 @@ impl Store {
     /// # Errors
     /// DB の読み出しに失敗したとき。
     pub fn find_duplicate_groups(&self) -> rusqlite::Result<Vec<DuplicateGroup>> {
-        let contacts = self.contacts_for_dedupe()?;
-        let distinct = load_distinct(&self.conn.lock().unwrap())?;
+        let conn = self.conn.lock().unwrap();
+        let contacts = load_all_people(&conn)?;
+        let distinct = load_distinct(&conn)?;
         Ok(crate::services::dedupe::group(&contacts, &distinct))
     }
 
@@ -252,7 +253,7 @@ impl Store {
 
 /// 統合の本体（呼び出し側のトランザクションの中で行う。1 件ずつの統合とまとめての統合で共有）。
 /// Google 側から消すために削除待ちにしたつながりの数を返す。
-fn merge_in(tx: &Connection, keep_id: i64, drop_ids: &[i64]) -> rusqlite::Result<usize> {
+pub(super) fn merge_in(tx: &Connection, keep_id: i64, drop_ids: &[i64]) -> rusqlite::Result<usize> {
     // 同じ Google アカウントの ID は 1 つだけ残し、余りは次の同期で Google 側から消す
     // （寄せる前に、どれが残す側のものかを見て決める）。
     let marked = merge_remote::mark_surplus(tx, &merge_remote::load_links(tx, keep_id, drop_ids)?)?;
@@ -272,6 +273,11 @@ fn merge_in(tx: &Connection, keep_id: i64, drop_ids: &[i64]) -> rusqlite::Result
         )?;
         // 「別人」の記録も残す側へ付け替える（消すと CASCADE で消えるので先に）。
         inherit(tx, keep_id, *id)?;
+        // 消える側が組織なら、人のつながりを残す側へ付け替える（消すと SET NULL で外れるので先に）。
+        tx.execute(
+            "UPDATE contact_organizations SET org_id = ?1 WHERE org_id = ?2",
+            params![keep_id, id],
+        )?;
         // 作成待ちも残す側へ寄せる（同じアカウントの重なりは主キーで 1 つになる）。
         tx.execute(
             "UPDATE OR IGNORE contact_create_requests SET contact_id = ?1 WHERE contact_id = ?2",

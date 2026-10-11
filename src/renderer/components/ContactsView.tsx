@@ -1,9 +1,21 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
-import { Download, Gem, Layers, Plus, RotateCcw, Search, Trash2, User, X } from 'lucide-react';
+import {
+  Building2,
+  Download,
+  Gem,
+  Layers,
+  Plus,
+  RotateCcw,
+  Search,
+  Trash2,
+  User,
+  X,
+} from 'lucide-react';
 import type { ContactSummary } from '@bindings/ContactSummary';
 import type { ContactListItem } from '@bindings/ContactListItem';
+import type { ContactKind } from '@bindings/ContactKind';
 import type { ContactMatch } from '@bindings/ContactMatch';
 import type { ImportReport } from '@bindings/ImportReport';
 import {
@@ -47,6 +59,16 @@ function isDefaultQuery(query: string, tags: Set<number>, showDeleted: boolean):
 
 /** 一覧の 1 行の高さ（px）。仮想スクロールのため全行で揃える（アバター 32 ＋ 2 行の文字 ＋ 上下の余白）。 */
 const ROW_HEIGHT = 52;
+
+/** 一覧の丸の中（組織はビル、人は頭文字）。 */
+function ContactInitial({ c }: { c: ContactListItem }) {
+  if (c.kind === 'organization') return <Building2 size={15} />;
+  return <>{c.display_name.trim().charAt(0) || <User size={15} />}</>;
+}
+
+/** 一覧の 2 行目（人は会社名かメール。組織は会社名＝自分の名前なのでメールだけ）。 */
+const secondLine = (c: ContactListItem): string | null =>
+  (c.kind === 'organization' ? null : c.primary_organization) || c.primary_email;
 
 /**
  * 住所録（アドレス帳）。左に検索付き一覧、右に詳細・編集フォーム（ContactEditor）。
@@ -94,18 +116,24 @@ export function ContactsView({
   // 同期先での絞り込み（一覧が links を持つので画面側で絞る）。'googleDup' は「Google に重複あり」
   // （同じ Google アカウントに 2 件以上。以前の統合の名残で、詳細の同期先の欄で 1 人ずつまとめる）。
   const [source, setSource] = useState<ContactSourceFilter | 'googleDup'>('all');
+  // 人／組織での絞り込み（docs/ORG_CONTACTS.md §4-2）。
+  const [kindFilter, setKindFilter] = useState<'all' | ContactKind>('all');
   // Google の重複が残っている連絡先の ID。
   const [googleDupIds, setGoogleDupIds] = useState<Set<number>>(new Set());
   const isDefaultView = isDefaultQuery(query, tagFilter, showDeleted);
   // 絞り込みの結果が届くまでは、既定の一覧を出しておく（空の画面で待たせない）。
   const listed = isDefaultView ? cached : (filtered ?? cached);
   const items = listed ?? [];
-  const shownItems = items.filter((c) =>
-    source === 'googleDup' ? googleDupIds.has(c.id) : matchesSource(c.links, source)
+  const shownItems = items.filter(
+    (c) =>
+      (kindFilter === 'all' || c.kind === kindFilter) &&
+      (source === 'googleDup' ? googleDupIds.has(c.id) : matchesSource(c.links, source))
   );
   // 「いまの一覧」を書き出せるのは、検索・タグ・同期先で絞り込んでいるときだけ（ゴミ箱は書き出さない）。
   const exportIds =
-    !showDeleted && (!isDefaultView || source !== 'all') ? shownItems.map((c) => c.id) : null;
+    !showDeleted && (!isDefaultView || source !== 'all' || kindFilter !== 'all')
+      ? shownItems.map((c) => c.id)
+      : null;
   const onExported = (o: ExportOutcome) => {
     if (o.ok) {
       setImportError(null);
@@ -240,9 +268,9 @@ export function ContactsView({
     openContactById(m.id);
   };
 
-  const startNew = () => {
+  const startNew = (organization = false) => {
     setSelectedId(null);
-    setRequest({ kind: 'new' });
+    setRequest({ kind: 'new', organization });
   };
 
   // メール等からの＋追加: 名前・メールを埋めた新規フォームを開く（消費したら親へ通知）。
@@ -409,7 +437,15 @@ export function ContactsView({
             </button>
             <ContactExport filteredIds={exportIds} onDone={onExported} />
             <button
-              onClick={startNew}
+              onClick={() => startNew(true)}
+              title={t('contact.newOrganization')}
+              aria-label={t('contact.newOrganization')}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white"
+            >
+              <Building2 size={17} />
+            </button>
+            <button
+              onClick={() => startNew()}
               title={t('contact.new')}
               aria-label={t('contact.new')}
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/10 hover:text-white"
@@ -533,6 +569,21 @@ export function ContactsView({
             </button>
           )}
         </div>
+        {/* 人／組織での絞り込み */}
+        <div className="mx-3 mb-2 flex rounded-md bg-white/5 p-0.5" role="group">
+          {(['all', 'person', 'organization'] as const).map((k) => (
+            <button
+              key={k}
+              onClick={() => setKindFilter(k)}
+              aria-pressed={kindFilter === k}
+              className={`min-w-0 flex-1 truncate rounded px-1.5 py-1 text-[11px] ${
+                kindFilter === k ? 'bg-white/20 text-white' : 'text-white/55 hover:text-white/80'
+              }`}
+            >
+              {t(`contact.kind.${k}`)}
+            </button>
+          ))}
+        </div>
         <ul ref={rows.ref} onScroll={rows.onScroll} className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
           {listed === null ? null : shownItems.length === 0 ? (
             <li className="px-2 py-6 text-center text-sm text-white/45">
@@ -551,7 +602,7 @@ export function ContactsView({
                   <li key={c.id} style={{ height: ROW_HEIGHT }}>
                     <div className="flex h-full w-full items-center gap-2.5 rounded-md px-2.5 py-2">
                       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-500/15 text-xs font-semibold uppercase text-red-200">
-                        {c.display_name.trim().charAt(0) || <User size={15} />}
+                        <ContactInitial c={c} />
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-medium text-red-200">
@@ -582,7 +633,7 @@ export function ContactsView({
                       }`}
                     >
                       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/15 text-xs font-semibold uppercase">
-                        {c.display_name.trim().charAt(0) || <User size={15} />}
+                        <ContactInitial c={c} />
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center gap-1 truncate text-sm font-medium">
@@ -591,9 +642,9 @@ export function ContactsView({
                           )}
                           {c.display_name || t('contact.untitled')}
                         </span>
-                        {(c.primary_organization || c.primary_email) && (
+                        {secondLine(c) && (
                           <span className="block truncate text-xs text-white/45">
-                            {c.primary_organization || c.primary_email}
+                            {secondLine(c)}
                           </span>
                         )}
                       </span>

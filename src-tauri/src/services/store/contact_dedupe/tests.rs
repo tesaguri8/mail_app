@@ -1,5 +1,5 @@
 use super::*;
-use crate::models::ContactValue;
+use crate::models::{ContactKind, ContactValue};
 use crate::services::store::test_support::{employee, person, value};
 
 fn store() -> Store {
@@ -104,7 +104,13 @@ fn duplicates_are_grouped_and_merge_unions_and_keeps_flags() {
     );
 
     let merged = s.merge_contacts(id_a, &[id_b], &[]).unwrap();
-    assert_eq!(s.list_contacts(None, &[], false).unwrap().len(), 1);
+    let people = s
+        .list_contacts(None, &[], false)
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.fields.kind == ContactKind::Person)
+        .count();
+    assert_eq!(people, 1, "会社欄から作られた組織は数えない");
     assert!(merged.fields.is_favorite && merged.fields.is_business);
     assert_eq!(merged.fields.phonetic_family.as_deref(), Some("タナカ"));
     assert_eq!(merged.primary_organization.as_deref(), Some("B社"));

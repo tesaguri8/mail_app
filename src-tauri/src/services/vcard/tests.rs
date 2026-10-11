@@ -12,7 +12,7 @@ fn parses_icloud_company_card() {
         Some("アークデータ研究所")
     );
     assert_eq!(c.phones[0].value, "05037543196");
-    assert!(c.show_as_company);
+    assert_eq!(c.kind, ContactKind::Organization);
 }
 
 #[test]

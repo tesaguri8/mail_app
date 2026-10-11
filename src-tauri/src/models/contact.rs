@@ -192,6 +192,36 @@ pub enum ContactLinkState {
     PendingDelete,
 }
 
+/// 連絡先の種別（docs/ORG_CONTACTS.md §1-1）。組織も連絡先の 1 件で、名前とよみは自分の会社の行
+/// （`organizations` の先頭。`org_id` は None）に持つ。種別は Rondine だけが持ち、Google の取り込みでは変えない。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+#[serde(rename_all = "snake_case")]
+pub enum ContactKind {
+    #[default]
+    Person,
+    Organization,
+}
+
+impl ContactKind {
+    /// DB の `contacts.kind` の値。
+    pub fn as_db(self) -> &'static str {
+        match self {
+            Self::Person => "person",
+            Self::Organization => "organization",
+        }
+    }
+
+    /// DB の `contacts.kind` の値から（知らない値は人として扱う）。
+    pub fn from_db(s: &str) -> Self {
+        if s == "organization" {
+            Self::Organization
+        } else {
+            Self::Person
+        }
+    }
+}
+
 /// 連絡先の中身（編集できる項目のすべて）。一覧/詳細・入力・取り込みの中間表現で共有する。
 ///
 /// 子テーブル由来の配列は**先頭が主値**（`position = 0`）。一覧（`contact_list`）では
@@ -224,9 +254,9 @@ pub struct ContactFields {
     /// 誕生日（`YYYY-MM-DD` / 年なし `--MM-DD`）。
     pub birthday: Option<String>,
     pub note: Option<String>,
-    /// 会社として表示する（iCloud の X-ABShowAs:COMPANY）。
+    /// 人か組織か（iCloud の X-ABShowAs:COMPANY は組織。docs/ORG_CONTACTS.md）。
     #[serde(default)]
-    pub show_as_company: bool,
+    pub kind: ContactKind,
     /// お気に入り（Google の「スター付き」と同期）。
     #[serde(default)]
     pub is_favorite: bool,
@@ -329,6 +359,22 @@ pub struct PostalAddress {
     pub town: String,
 }
 
+/// 組織の連絡先へ切り替える候補（会社名だけの連絡先。docs/ORG_CONTACTS.md §4-1）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct CompanyOnlyCandidate {
+    /// 候補の連絡先（一覧の形）。
+    pub contact: ContactListItem,
+    /// 会社名（先頭の会社）。
+    pub company: String,
+    /// 会社の行に役職・部署が入っている（人の可能性がある。切り替える前に確かめる）。
+    pub has_title: bool,
+    /// 同じ名前（正規化後）の組織が既にある（切り替えるとその組織とまとめる）。
+    pub existing_org: Option<i32>,
+    /// 同じ会社名で、まだ組織につながっていない人の数（切り替えるとつなぐ）。
+    pub same_company_people: i32,
+}
+
 /// 連絡先一覧の 1 行（一覧に出す分だけ）。
 ///
 /// 一覧は数千件になるので、[`ContactSummary`] の全項目（ほとんど空）を IPC に載せると、
@@ -338,6 +384,8 @@ pub struct PostalAddress {
 pub struct ContactListItem {
     pub id: i32,
     pub display_name: String,
+    /// 人か組織か（一覧のアイコン・絞り込み）。
+    pub kind: ContactKind,
     /// 主メール（一覧の 2 行目。会社名が無いとき）。
     pub primary_email: Option<String>,
     /// 主の会社名（一覧の 2 行目）。
@@ -354,6 +402,7 @@ impl From<ContactSummary> for ContactListItem {
         Self {
             id: c.id,
             display_name: c.fields.display_name,
+            kind: c.fields.kind,
             primary_email: c.primary_email,
             primary_organization: c.primary_organization,
             is_favorite: c.fields.is_favorite,

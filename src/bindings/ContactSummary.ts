@@ -3,6 +3,7 @@ import type { ContactAddress } from "./ContactAddress";
 import type { ContactCustomField } from "./ContactCustomField";
 import type { ContactDate } from "./ContactDate";
 import type { ContactHandle } from "./ContactHandle";
+import type { ContactKind } from "./ContactKind";
 import type { ContactLink } from "./ContactLink";
 import type { ContactOrganization } from "./ContactOrganization";
 import type { ContactRelation } from "./ContactRelation";
@@ -96,9 +97,9 @@ maiden_name: string | null,
  */
 birthday: string | null, note: string | null, 
 /**
- * 会社として表示する（iCloud の X-ABShowAs:COMPANY）。
+ * 人か組織か（iCloud の X-ABShowAs:COMPANY は組織。docs/ORG_CONTACTS.md）。
  */
-show_as_company: boolean, 
+kind: ContactKind, 
 /**
  * お気に入り（Google の「スター付き」と同期）。
  */

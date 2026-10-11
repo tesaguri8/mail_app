@@ -40,22 +40,19 @@ pub(crate) fn card_phone_sets(
     exclude: Option<i64>,
 ) -> rusqlite::Result<HashMap<i64, HashSet<String>>> {
     let mut out: HashMap<i64, HashSet<String>> = HashMap::new();
-    let mut stmt = conn
-        .prepare("SELECT id, phone, fax FROM organizations WHERE deleted_at IS NULL ORDER BY id")?;
-    let cards = stmt.query_map([], |r| {
-        Ok((
-            r.get::<_, i64>(0)?,
-            r.get::<_, Option<String>>(1)?,
-            r.get::<_, Option<String>>(2)?,
-        ))
+    // 組織自身の電話（代表・FAX など）。電話の無い組織も、メンバーの電話を足すために入れておく。
+    let mut stmt = conn.prepare(
+        "SELECT c.id, cp.value FROM contacts c \
+         LEFT JOIN contact_phones cp ON cp.contact_id = c.id \
+         WHERE c.kind = 'organization' AND c.deleted_at IS NULL",
+    )?;
+    let org_phones = stmt.query_map([], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?))
     })?;
-    for card in cards {
-        let (org_id, phone, fax) = card?;
-        let keys = [phone, fax]
-            .into_iter()
-            .flatten()
-            .filter_map(|v| phone_match_key(&v));
-        out.entry(org_id).or_default().extend(keys);
+    for row in org_phones {
+        let (org_id, value) = row?;
+        let set = out.entry(org_id).or_default();
+        set.extend(value.as_deref().and_then(phone_match_key));
     }
     let mut stmt = conn.prepare(
         "SELECT cp.contact_id, cp.value FROM contact_phones cp \
@@ -195,22 +192,14 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::OrganizationInput;
-    use crate::services::store::test_support::{employee, value};
+    use crate::services::store::test_support::{employee, organization, value};
 
     fn store() -> Store {
         Store::open_in_memory_for_test()
     }
 
     fn card(s: &Store, name: &str, phone: Option<&str>, email: Option<&str>) -> i64 {
-        let o = s
-            .upsert_organization(&OrganizationInput {
-                name: name.into(),
-                phone: phone.map(Into::into),
-                email: email.map(Into::into),
-                ..Default::default()
-            })
-            .unwrap();
+        let o = s.upsert_contact(&organization(name, phone, email)).unwrap();
         i64::from(o.id)
     }
 

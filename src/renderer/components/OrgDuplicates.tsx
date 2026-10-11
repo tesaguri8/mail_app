@@ -130,7 +130,7 @@ export function OrgDuplicates({
     <div className="flex h-full min-h-0">
       {/* 左：グループ一覧（整理の切替が入るので、整理の画面と同じ幅） */}
       <aside className="flex w-80 shrink-0 flex-col border-r border-white/10">
-        <div className="flex items-center gap-2 p-3">
+        <div className="flex items-center gap-2 px-3 pb-2 pt-3">
           <button
             onClick={onExit}
             title={t('dupes.back')}
@@ -139,7 +139,6 @@ export function OrgDuplicates({
           >
             <ArrowLeft size={17} />
           </button>
-          {modeToggle}
           <span className="flex-1" />
           <button
             onClick={load}
@@ -151,6 +150,8 @@ export function OrgDuplicates({
             <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
+        {/* 切替（整理の 4 種類／重複整理の 2 種類）は、戻る・取り直しとは別の段に置く。 */}
+        <div className="px-3 pb-2">{modeToggle}</div>
         <div className="px-3 pb-1 text-xs text-white/45">
           {loading
             ? t('dupes.scanning')

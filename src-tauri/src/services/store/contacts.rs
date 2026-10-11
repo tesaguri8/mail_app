@@ -2,7 +2,7 @@
 //!
 //! 行の読み出しは `contact_rows`、書き込みは `contact_write` に分け、ここは画面とファイル取り込みが
 //! 使う操作（一覧・取得・保存・削除・取り込み）をまとめる。重複整理は `contact_dedupe`、
-//! 組織カードは `organizations` / `org_tidy`、Google との同期は `contact_sync`。
+//! 組織（組織の連絡先）の読み出しと整理は `organizations` / `org_tidy`、Google との同期は `contact_sync`。
 
 use super::contact_rows::{load_all_full, load_contact, query_summaries, SUMMARY_ORDER};
 use super::contact_tags::{add_tags, set_tags};
@@ -281,11 +281,6 @@ impl Store {
         let cutoff = format!("-{} days", retention_days.max(0));
         conn.execute(
             "DELETE FROM contacts WHERE deleted_at IS NOT NULL \
-             AND deleted_at <= datetime('now', ?1)",
-            params![cutoff],
-        )?;
-        conn.execute(
-            "DELETE FROM organizations WHERE deleted_at IS NOT NULL \
              AND deleted_at <= datetime('now', ?1)",
             params![cutoff],
         )?;

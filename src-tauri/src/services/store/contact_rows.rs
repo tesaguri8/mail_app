@@ -5,9 +5,9 @@
 //! （1 人ずつ引くと件数ぶんの問い合わせになるため）。
 
 use crate::models::{
-    ContactAddress, ContactCustomField, ContactDate, ContactFields, ContactHandle, ContactLink,
-    ContactLinkState, ContactOrganization, ContactProvider, ContactRelation, ContactSummary,
-    ContactUrl, ContactValue, HandleKind,
+    ContactAddress, ContactCustomField, ContactDate, ContactFields, ContactHandle, ContactKind,
+    ContactLink, ContactLinkState, ContactOrganization, ContactProvider, ContactRelation,
+    ContactSummary, ContactUrl, ContactValue, HandleKind,
 };
 use rusqlite::{params, Connection, Row, ToSql};
 use std::collections::HashMap;
@@ -15,7 +15,7 @@ use std::collections::HashMap;
 /// 一覧・詳細で読む本体の列（`c` は contacts の別名）。列順は [`summary_from_row`] と対応。
 pub(super) const SUMMARY_COLS: &str = "c.id, c.display_name, c.name_prefix, c.family_name, \
      c.middle_name, c.given_name, c.name_suffix, c.phonetic_family, c.phonetic_middle, \
-     c.phonetic_given, c.nickname, c.maiden_name, c.birthday, c.note, c.show_as_company, \
+     c.phonetic_given, c.nickname, c.maiden_name, c.birthday, c.note, c.kind, \
      c.is_favorite, c.is_business, c.allow_remote_images, c.sort_name, c.avatar_path, \
      c.deleted_at, \
      (SELECT value FROM contact_emails WHERE contact_id = c.id ORDER BY position, id LIMIT 1), \
@@ -47,7 +47,7 @@ fn summary_from_row(r: &Row) -> rusqlite::Result<ContactSummary> {
             maiden_name: r.get(11)?,
             birthday: r.get(12)?,
             note: r.get(13)?,
-            show_as_company: flag(14)?,
+            kind: ContactKind::from_db(&r.get::<_, String>(14)?),
             is_favorite: flag(15)?,
             is_business: flag(16)?,
             allow_remote_images: flag(17)?,
@@ -110,6 +110,15 @@ pub(super) fn load_all_full(conn: &Connection) -> rusqlite::Result<Vec<ContactSu
     for c in &mut rows {
         children.apply(c.id as i64, &mut c.fields);
     }
+    Ok(rows)
+}
+
+/// 削除済みを除く人（組織を除く）を中身まで充填して返す。人の重複の整理で使う
+/// （組織の代表番号・代表メールはメンバーの共有の値と重なりやすく、人と組織を比べると重複の組になる。
+/// 組織どうしは組織の重複の整理で、正規化した名前で比べる / docs/ORG_CONTACTS.md §4-2）。
+pub(super) fn load_all_people(conn: &Connection) -> rusqlite::Result<Vec<ContactSummary>> {
+    let mut rows = load_all_full(conn)?;
+    rows.retain(|c| c.fields.kind == ContactKind::Person);
     Ok(rows)
 }
 

@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { changed } from '../utils/localChange';
 import type { OrganizationSummary } from '@bindings/OrganizationSummary';
-import type { OrganizationInput } from '@bindings/OrganizationInput';
+import type { CompanyOnlyCandidate } from '@bindings/CompanyOnlyCandidate';
 import type { OrganizationDetail } from '@bindings/OrganizationDetail';
 import type { OrgDuplicateGroup } from '@bindings/OrgDuplicateGroup';
 import type { OrgChangeImpact } from '@bindings/OrgChangeImpact';
@@ -9,30 +9,21 @@ import type { OrgLinkSuggestion } from '@bindings/OrgLinkSuggestion';
 import type { OrgMatch } from '@bindings/OrgMatch';
 import type { UnlinkedOrgName } from '@bindings/UnlinkedOrgName';
 
+// 組織は連絡先の 1 件（docs/ORG_CONTACTS.md）。作る・直す・消す・戻すは連絡先と同じ
+// （services/contacts.ts）。ここは組織タブ（見る・つなぐ）と整理のための読み出しだけを持つ。
+
 /** 組織一覧（所属件数つき）。query があれば名前で部分一致。組織コンボボックスの候補に使う。
- *  includeDeleted=true で論理削除済み（ゴミ箱）も含める。 */
+ *  includeDeleted=true でゴミ箱の組織も含める。 */
 export const organizationList = (query?: string, includeDeleted = false) =>
   invoke<OrganizationSummary[]>('organization_list', { query: query ?? null, includeDeleted });
 
-/** 論理削除した組織を復元。 */
-export const organizationRestore = (id: number) =>
-  changed(invoke<void>('organization_restore', { id }));
-
-/** 単一の組織（組織カード）を取得。連絡先のラベル表示・カード編集ダイアログ用。 */
+/** 単一の組織を取得（代表の値・所属人数）。人の連絡先で組織の情報を出すのに使う。 */
 export const organizationGet = (id: number) =>
   invoke<OrganizationSummary>('organization_get', { id });
 
 /** 組織の詳細（所属連絡先＋共有アドレスを件数つきで）。 */
 export const organizationDetail = (id: number) =>
   invoke<OrganizationDetail>('organization_detail', { id });
-
-/** 組織カード（名前・よみ・メモ・代表電話/FAX/代表メール/URL・所在地）を作成/編集。
- *  input.id 指定で更新、無ければ新規。 */
-export const organizationUpsert = (input: OrganizationInput) =>
-  changed(invoke<OrganizationSummary>('organization_upsert', { input }));
-
-/** 組織を削除（所属している連絡先があるときはバックエンド側で拒否される）。 */
-export const organizationDelete = (id: number) => changed(invoke<void>('organization_delete', { id }));
 
 /** 組織名の重複候補（正規化名で束ねたグループ）を取得。 */
 export const organizationFindDuplicates = () =>
@@ -75,3 +66,11 @@ export const organizationCreateFromNameImpact = (name: string) =>
 /** 「つなぐ」の下見（次の同期で送り直しになる人数）。何も書き換えない。 */
 export const organizationLinkContactsImpact = (orgId: number, contactIds: number[]) =>
   invoke<OrgChangeImpact>('organization_link_contacts_impact', { orgId, contactIds });
+
+/** 組織の連絡先へ切り替える候補（会社名だけの連絡先）。docs/ORG_CONTACTS.md §4-1。 */
+export const organizationCompanyOnlyCandidates = () =>
+  invoke<CompanyOnlyCandidate[]>('organization_company_only_candidates');
+
+/** 会社名だけの連絡先を、その場で組織の連絡先に切り替える（同じ会社名の人もつなぐ）。切り替えた数。 */
+export const organizationConvertContacts = (contactIds: number[]) =>
+  changed(invoke<number>('organization_convert_contacts', { contactIds }));

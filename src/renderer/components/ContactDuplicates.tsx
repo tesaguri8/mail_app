@@ -671,7 +671,7 @@ function buildDraft(members: ContactSummary[], representative: ContactSummary): 
     handles: unionBy(all((c) => c.handles), (h) => `${h.kind}|${h.value}`),
     custom_fields: unionBy(all((c) => c.custom_fields), (f) => f.key),
     tags: [...new Set(ordered.flatMap((m) => m.tags))],
-    show_as_company: members.some((m) => m.show_as_company),
+    kind: members.some((m) => m.kind === 'organization') ? 'organization' : 'person',
     is_favorite: members.some((m) => m.is_favorite),
     is_business: members.some((m) => m.is_business),
     allow_remote_images: members.some((m) => m.allow_remote_images),

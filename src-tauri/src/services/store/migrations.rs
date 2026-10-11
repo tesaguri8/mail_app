@@ -298,6 +298,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 65,
         sql: include_str!("migrations/0065_email_date_ts_index.sql"),
     },
+    Migration {
+        // 66 は組織カードを連絡先に統合する（組織の連絡先。docs/ORG_CONTACTS.md §2）。
+        version: 66,
+        sql: include_str!("migrations/0066_org_contacts.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
@@ -342,6 +347,7 @@ fn run_until(conn: &Connection, target: i64) -> rusqlite::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::params;
 
     #[test]
     fn migrations_apply_and_fts_works() {
@@ -604,7 +610,8 @@ mod tests {
         )
         .unwrap();
 
-        run(&conn).unwrap();
+        // 0059 だけを当てる（0066 で組織カードは連絡先へ移る。その確かめは 0066 の試験）。
+        run_until(&conn, 59).unwrap();
 
         let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
         assert_eq!(count("SELECT count(*) FROM contacts"), 0, "連絡先は空");
@@ -831,5 +838,182 @@ mod tests {
         // 既存アカウントはカレンダー有効・連絡先は未有効。
         assert_eq!(cal, 1);
         assert_eq!(con, 0);
+    }
+
+    /// 0066: 組織カードが組織の連絡先になる。vaio に近い形（カード 17 枚・ゴミ箱のカード・
+    /// 同じ名前の会社名だけの連絡先・カードにつながった人）で、代表の情報・つながり・ゴミ箱・uid を確かめる。
+    #[test]
+    fn migration_0066_turns_org_cards_into_org_contacts() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        run_until(&conn, 65).unwrap();
+        // カード 17 枚（1 枚目は代表の情報をすべて持つ。17 枚目はゴミ箱）。
+        for i in 1..=17 {
+            conn.execute(
+                "INSERT INTO organizations (id, name, name_kana, deleted_at) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    i,
+                    format!("株式会社見本{i}"),
+                    (i == 2).then_some("みほん"),
+                    (i == 17).then_some("2026-10-01 00:00:00"),
+                ],
+            )
+            .unwrap();
+        }
+        conn.execute_batch(
+            "UPDATE organizations SET phone = '+81311112222', fax = '+81311113333',
+                 email = 'info@example.invalid', url = 'https://example.invalid',
+                 postal = '100-0001', region = '東京都', city = '千代田区', street = '見本 1-1',
+                 note = '代表の窓口' WHERE id = 1;
+             -- カード 1 につながった人（会社の行が 2 つ。2 つ目はつながっていない）。
+             INSERT INTO contacts (id, display_name, family_name, given_name)
+                 VALUES (100, '試験 太郎', '試験', '太郎');
+             INSERT INTO contact_organizations (contact_id, position, org_id, name, title)
+                 VALUES (100, 0, 1, '株式会社見本1', '部長');
+             INSERT INTO contact_organizations (contact_id, position, org_id, name)
+                 VALUES (100, 1, NULL, '架空商店');
+             -- カード 1 と同じ名前の会社名だけの連絡先（Google につながっている）。
+             INSERT INTO contacts (id, display_name) VALUES (200, '株式会社見本1');
+             INSERT INTO contact_organizations (contact_id, position, org_id, name)
+                 VALUES (200, 0, 1, '株式会社見本1');
+             INSERT INTO google_accounts (id, email) VALUES (1, 'a@example.invalid');
+             INSERT INTO contact_identities (provider, account_id, external_id, contact_id)
+                 VALUES ('google', 1, 'people/c200', 200);
+             -- 会社として表示の印がある人（姓名なし → 組織、姓名あり → 人のまま）。
+             INSERT INTO contacts (id, display_name, show_as_company) VALUES (300, '見本工務店', 1);
+             INSERT INTO contact_organizations (contact_id, position, org_id, name)
+                 VALUES (300, 0, 2, '見本工務店');
+             INSERT INTO contacts (id, display_name, family_name, show_as_company)
+                 VALUES (301, '見本 花子', '見本', 1);",
+        )
+        .unwrap();
+        let uid_before: String = conn
+            .query_row("SELECT uid FROM contacts WHERE id = 200", [], |r| r.get(0))
+            .unwrap();
+
+        run(&conn).unwrap();
+
+        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        assert_eq!(
+            count("SELECT count(*) FROM sqlite_master WHERE name = 'organizations'"),
+            0,
+            "organizations は消える"
+        );
+        // カード 17 枚 ＋ 印のあった 1 人が組織。ゴミ箱のカードはゴミ箱のまま。
+        assert_eq!(
+            count("SELECT count(*) FROM contacts WHERE kind = 'organization'"),
+            18
+        );
+        assert_eq!(
+            count("SELECT count(*) FROM contacts WHERE kind = 'organization' AND deleted_at IS NOT NULL"),
+            1
+        );
+        let org1: i64 = conn
+            .query_row(
+                "SELECT id FROM contacts WHERE kind = 'organization' AND display_name = '株式会社見本1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // 代表の情報は子テーブルへ。
+        let phones: Vec<(String, String)> = conn
+            .prepare(
+                "SELECT label, value FROM contact_phones WHERE contact_id = ?1 ORDER BY position",
+            )
+            .unwrap()
+            .query_map(params![org1], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            phones,
+            vec![
+                ("代表".to_string(), "+81311112222".to_string()),
+                ("FAX".to_string(), "+81311113333".to_string())
+            ]
+        );
+        assert_eq!(
+            count(&format!("SELECT count(*) FROM contact_emails WHERE contact_id = {org1} AND value = 'info@example.invalid'")),
+            1
+        );
+        assert_eq!(
+            count(&format!(
+                "SELECT count(*) FROM contact_urls WHERE contact_id = {org1}"
+            )),
+            1
+        );
+        assert_eq!(
+            count(&format!("SELECT count(*) FROM contact_addresses WHERE contact_id = {org1} AND city = '千代田区'")),
+            1
+        );
+        let note: String = conn
+            .query_row(
+                "SELECT note FROM contacts WHERE id = ?1",
+                params![org1],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(note, "代表の窓口");
+        // 自分の会社の行（名前・よみ。どこも指さない）。
+        let (name, kana): (String, Option<String>) = conn
+            .query_row(
+                "SELECT co.name, co.phonetic_name FROM contact_organizations co
+                 JOIN contacts c ON c.id = co.contact_id
+                 WHERE c.display_name = '株式会社見本2' AND c.kind = 'organization' AND co.org_id IS NULL",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (name.as_str(), kana.as_deref()),
+            ("株式会社見本2", Some("みほん"))
+        );
+        // 人のつながりは組織の連絡先へ付け替わる（つながっていない行はそのまま）。
+        assert_eq!(
+            count(&format!(
+                "SELECT count(*) FROM contact_organizations WHERE contact_id = 100 AND org_id = {org1} AND title = '部長'"
+            )),
+            1
+        );
+        assert_eq!(
+            count("SELECT count(*) FROM contact_organizations WHERE contact_id = 100 AND org_id IS NULL"),
+            1
+        );
+        // 会社名だけの連絡先は、まとめるまでは人のまま（まとめは起動時の Rust の処理）。uid とつながりは保つ。
+        let (kind, uid): (String, String) = conn
+            .query_row("SELECT kind, uid FROM contacts WHERE id = 200", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(
+            (kind.as_str(), uid.as_str()),
+            ("person", uid_before.as_str())
+        );
+        assert_eq!(
+            count("SELECT count(*) FROM contact_identities WHERE contact_id = 200"),
+            1
+        );
+        // 会社として表示: 姓名なしは組織（自分の会社の行はどこも指さない）、姓名ありは人のまま。
+        let k300: String = conn
+            .query_row("SELECT kind FROM contacts WHERE id = 300", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(k300, "organization");
+        assert_eq!(
+            count("SELECT count(*) FROM contact_organizations WHERE contact_id = 300 AND org_id IS NOT NULL"),
+            0
+        );
+        let k301: String = conn
+            .query_row("SELECT kind FROM contacts WHERE id = 301", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(k301, "person");
+        // 組織の連絡先にも uid が振られる。
+        assert_eq!(count("SELECT count(*) FROM contacts WHERE uid IS NULL"), 0);
+        // 組織を消すと、人の行は会社名だけ残る（ON DELETE SET NULL）。
+        conn.execute("DELETE FROM contacts WHERE id = ?1", params![org1])
+            .unwrap();
+        assert_eq!(
+            count("SELECT count(*) FROM contact_organizations WHERE contact_id = 100 AND name = '株式会社見本1' AND org_id IS NULL"),
+            1
+        );
     }
 }

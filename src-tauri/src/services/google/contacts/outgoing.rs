@@ -7,9 +7,10 @@
 //! - 土台の各要素は、同じ値（メールは小文字・電話は数字・会社は正規化名…）の要素に引き継ぐ。
 //!   Rondine が知らないキー（会社の `location` など）はそのまま残る
 //! - 読み取り専用・メタ情報（`metadata` / `displayName` / `formattedType` …）は送らない
-//! - Rondine 固有の属性（共有の印・組織カードへのつながり・取引先・外部画像許可）は送らない
+//! - Rondine 固有の属性（共有の印・組織へのつながり・人／組織の種別・取引先・外部画像許可）は送らない。
+//!   組織の連絡先は、名前を空にして会社（自分の会社の行）だけで送る
 
-use crate::models::ContactFields;
+use crate::models::{ContactFields, ContactKind};
 use crate::services::contact_fields::org_key;
 use crate::services::contact_labels::google_type_for;
 use crate::services::dedupe::{digits, fold, normalize_org};
@@ -188,7 +189,13 @@ fn im_protocol(service: &str) -> String {
 
 /// 名前。People API の displayName は読み取り専用なので姓名に分けて送る。姓名を持たない
 /// （表示名だけの）連絡先は表示名を姓に入れる（日本語の氏名は姓が先なので並びが崩れない）。
+///
+/// 組織の連絡先は名前を空にする（Google では会社名だけの連絡先になる。以前の送信で姓に入った
+/// 会社名もこれで消える / docs/ORG_CONTACTS.md §3-1）。
 fn names(f: &ContactFields, base: &[Value]) -> Value {
+    if f.kind == ContactKind::Organization {
+        return Value::Array(Vec::new());
+    }
     let (family, given) = match (text(&f.family_name), text(&f.given_name)) {
         (None, None) => (s(&f.display_name), None),
         pair => pair,
@@ -229,9 +236,14 @@ pub fn same_as_google(local: &ContactFields, snapshot: &ContactFields) -> bool {
             .map(|t| t.trim().to_string())
             .collect::<std::collections::BTreeSet<_>>()
     };
-    person_body(local, None) == person_body(snapshot, None)
+    // 種別は Rondine だけが持つ（取り込んだ snapshot は人のまま）ので、ローカルの種別で比べる。
+    let snapshot = ContactFields {
+        kind: local.kind,
+        ..snapshot.clone()
+    };
+    person_body(local, None) == person_body(&snapshot, None)
         && local.is_favorite == snapshot.is_favorite
-        && tags(local) == tags(snapshot)
+        && tags(local) == tags(&snapshot)
 }
 
 /// 連絡先 1 件を People API の書き込み本文にする。

@@ -1,21 +1,21 @@
-//! 組織カード（会社・組織）の読み書き。docs/CONTACT_MODEL.md §1-5。
+//! 組織（会社・組織）の読み出しと整理。docs/ORG_CONTACTS.md。
 //!
-//! 個人の連絡先は `contact_organizations.org_id` でカードを指す。カードの代表電話・FAX・
-//! 代表メール・URL・所在地はどのサービスにも送らない（向こうに「組織」という単位が無い）。
-//! 名前はカードが正で、つながっている人の会社名はカードの名前にそろえる。
+//! 組織は連絡先の 1 件（`contacts.kind = 'organization'`）で、書き込みは連絡先と同じ
+//! （`contact_upsert`）。ここは組織タブ（見る・つなぐ）のための読み出しと、重複の統合だけを持つ。
+//! 人は `contact_organizations.org_id` で組織を指し、人の会社名は組織の名前にそろえる。
 
-use super::contact_rows::{query_summaries, SUMMARY_ORDER};
-use super::contact_write::mark_dirty;
+use super::contact_dedupe::merge_in;
+use super::contact_rows::{load_contact, query_summaries, SUMMARY_ORDER};
+use super::contact_write::{mark_dirty, write_contact, OrgLinking, WriteOptions};
 use super::Store;
 use crate::models::{
-    OrgAddress, OrgDuplicateGroup, OrgSharedValue, OrganizationDetail, OrganizationInput,
-    OrganizationSummary,
+    OrgAddress, OrgDuplicateGroup, OrgSharedValue, OrganizationDetail, OrganizationSummary,
 };
 use crate::services::dedupe::{fold, normalize_org};
 use rusqlite::{params, Connection, Row};
 use std::collections::HashMap;
 
-/// organizations の 1 行を OrganizationSummary に写す（列順は ORG_COLS と対応）。
+/// 組織の 1 行を OrganizationSummary に写す（列順は ORG_COLS と対応）。
 fn row_to_org(r: &Row) -> rusqlite::Result<OrganizationSummary> {
     Ok(OrganizationSummary {
         id: r.get::<_, i64>(0)? as i32,
@@ -39,52 +39,65 @@ fn row_to_org(r: &Row) -> rusqlite::Result<OrganizationSummary> {
     })
 }
 
-/// 組織の取得列（別名 o の organizations と、所属人数のサブクエリ）。
-const ORG_COLS: &str = "o.id, o.name, o.name_kana, o.note, o.phone, o.fax, o.email, o.url, \
-     o.postal, o.region, o.city, o.street, o.extended, o.country, \
-     (SELECT count(DISTINCT co.contact_id) FROM contact_organizations co \
-      JOIN contacts c ON c.id = co.contact_id \
-      WHERE co.org_id = o.id AND c.deleted_at IS NULL), \
-     o.deleted_at";
+/// 組織の主な住所の 1 列（別名 c の組織の、先頭の住所）。
+fn address_col(col: &str) -> String {
+    format!(
+        "(SELECT {col} FROM contact_addresses WHERE contact_id = c.id ORDER BY position, id LIMIT 1)"
+    )
+}
 
-/// 組織カードの項目（組織名以外）。統合時に「統合先で空の項目を統合元で埋める」のに使う。
-const ORG_CARD_COLS: [&str; 12] = [
-    "name_kana",
-    "note",
-    "phone",
-    "fax",
-    "email",
-    "url",
-    "postal",
-    "region",
-    "city",
-    "street",
-    "extended",
-    "country",
-];
+/// 組織の取得列（別名 c の contacts。代表の値は子テーブルの先頭、FAX は FAX のラベルの先頭）。
+fn org_cols() -> String {
+    format!(
+        "c.id, c.display_name, \
+         (SELECT phonetic_name FROM contact_organizations WHERE contact_id = c.id \
+          ORDER BY position, id LIMIT 1), \
+         c.note, \
+         (SELECT value FROM contact_phones WHERE contact_id = c.id AND COALESCE(label, '') <> 'FAX' \
+          ORDER BY position, id LIMIT 1), \
+         (SELECT value FROM contact_phones WHERE contact_id = c.id AND label = 'FAX' \
+          ORDER BY position, id LIMIT 1), \
+         (SELECT value FROM contact_emails WHERE contact_id = c.id ORDER BY position, id LIMIT 1), \
+         (SELECT value FROM contact_urls WHERE contact_id = c.id ORDER BY position, id LIMIT 1), \
+         {}, {}, {}, {}, {}, {}, \
+         (SELECT count(DISTINCT co.contact_id) FROM contact_organizations co \
+          JOIN contacts m ON m.id = co.contact_id \
+          WHERE co.org_id = c.id AND m.deleted_at IS NULL), \
+         c.deleted_at",
+        address_col("postal"),
+        address_col("region"),
+        address_col("city"),
+        address_col("street"),
+        address_col("extended"),
+        address_col("country"),
+    )
+}
 
-/// 組織カードを 1 枚読む。
+/// 組織を 1 件読む（組織でなければ該当なし）。
 pub(super) fn load_org(conn: &Connection, id: i64) -> rusqlite::Result<OrganizationSummary> {
     conn.query_row(
-        &format!("SELECT {ORG_COLS} FROM organizations o WHERE o.id = ?1"),
+        &format!(
+            "SELECT {} FROM contacts c WHERE c.id = ?1 AND c.kind = 'organization'",
+            org_cols()
+        ),
         params![id],
         row_to_org,
     )
 }
 
-/// カードにつながっている人の会社名をカードの名前にそろえる。名前が変わった人には
+/// 組織につながっている人の会社名を組織の名前にそろえる。名前が変わった人には
 /// 送り直しの印を立てる（会社名は Google 等へ送る項目なので）。
 pub(super) fn sync_member_names(conn: &Connection, org_id: i64) -> rusqlite::Result<()> {
     let changed: Vec<i64> = {
         let mut stmt = conn.prepare(
             "SELECT DISTINCT contact_id FROM contact_organizations \
-             WHERE org_id = ?1 AND name IS NOT (SELECT name FROM organizations WHERE id = ?1)",
+             WHERE org_id = ?1 AND name IS NOT (SELECT display_name FROM contacts WHERE id = ?1)",
         )?;
         let rows = stmt.query_map(params![org_id], |r| r.get(0))?;
         rows.collect::<rusqlite::Result<_>>()?
     };
     conn.execute(
-        "UPDATE contact_organizations SET name = (SELECT name FROM organizations WHERE id = ?1) \
+        "UPDATE contact_organizations SET name = (SELECT display_name FROM contacts WHERE id = ?1) \
          WHERE org_id = ?1",
         params![org_id],
     )?;
@@ -156,23 +169,23 @@ impl Store {
             .collect();
         let mut conds: Vec<String> = Vec::new();
         if !include_deleted {
-            conds.push("o.deleted_at IS NULL".to_string());
+            conds.push("c.deleted_at IS NULL".to_string());
         }
         if !likes.is_empty() {
             let ors: Vec<String> = (1..=likes.len())
                 .map(|n| {
-                    format!("o.name LIKE ?{n} ESCAPE '\\' OR o.name_kana LIKE ?{n} ESCAPE '\\'")
+                    format!(
+                        "c.display_name LIKE ?{n} ESCAPE '\\' OR c.sort_name LIKE ?{n} ESCAPE '\\'"
+                    )
                 })
                 .collect();
             conds.push(format!("({})", ors.join(" OR ")));
         }
-        let where_sql = if conds.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conds.join(" AND "))
-        };
+        conds.push("c.kind = 'organization'".to_string());
         let mut stmt = conn.prepare(&format!(
-            "SELECT {ORG_COLS} FROM organizations o {where_sql}"
+            "SELECT {} FROM contacts c WHERE {}",
+            org_cols(),
+            conds.join(" AND ")
         ))?;
         let mut rows: Vec<OrganizationSummary> = stmt
             .query_map(rusqlite::params_from_iter(likes.iter()), row_to_org)?
@@ -188,101 +201,13 @@ impl Store {
         Ok(rows)
     }
 
-    /// 組織カードを 1 枚、所属人数つきで返す。
+    /// 組織を 1 件、所属人数つきで返す。
     ///
     /// # Errors
     /// 該当が無いときや DB の読み出しに失敗したとき。
     pub fn get_organization(&self, id: i64) -> rusqlite::Result<OrganizationSummary> {
         let conn = self.conn.lock().unwrap();
         load_org(&conn, id)
-    }
-
-    /// 組織カードを作成/編集する。`input.id` 指定で更新し、つながっている人の会社名も
-    /// 新しい名前へそろえる（名前が変われば、その人たちは次の同期で送り直す）。
-    ///
-    /// # Errors
-    /// DB の書き込みに失敗したとき。
-    pub fn upsert_organization(
-        &self,
-        input: &OrganizationInput,
-    ) -> rusqlite::Result<OrganizationSummary> {
-        let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction()?;
-        let a = &input.address;
-        let name = input.name.trim();
-        let id =
-            match input.id.map(i64::from) {
-                Some(id) => {
-                    tx.execute(
-                        "UPDATE organizations SET name = ?1, name_kana = ?2, note = ?3, \
-                     phone = ?4, fax = ?5, email = ?6, url = ?7, postal = ?8, region = ?9, \
-                     city = ?10, street = ?11, extended = ?12, country = ?13, \
-                     updated_at = CURRENT_TIMESTAMP WHERE id = ?14",
-                        params![
-                            name,
-                            input.name_kana,
-                            input.note,
-                            input.phone,
-                            input.fax,
-                            input.email,
-                            input.url,
-                            a.postal,
-                            a.region,
-                            a.city,
-                            a.street,
-                            a.extended,
-                            a.country,
-                            id,
-                        ],
-                    )?;
-                    sync_member_names(&tx, id)?;
-                    id
-                }
-                None => {
-                    tx.execute(
-                    "INSERT INTO organizations (name, name_kana, note, phone, fax, email, url, \
-                     postal, region, city, street, extended, country) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-                    params![
-                        name, input.name_kana, input.note, input.phone, input.fax, input.email,
-                        input.url, a.postal, a.region, a.city, a.street, a.extended, a.country,
-                    ],
-                )?;
-                    tx.last_insert_rowid()
-                }
-            };
-        tx.commit()?;
-        load_org(&conn, id)
-    }
-
-    /// 組織を論理削除する（ゴミ箱へ）。つながっている人（削除済みを除く）がいるときは
-    /// 削除せず false を返す（安全側）。
-    ///
-    /// # Errors
-    /// DB の書き込みに失敗したとき。
-    pub fn delete_organization(&self, id: i64) -> rusqlite::Result<bool> {
-        let conn = self.conn.lock().unwrap();
-        if load_org(&conn, id)?.member_count > 0 {
-            return Ok(false);
-        }
-        conn.execute(
-            "UPDATE organizations SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?1",
-            params![id],
-        )?;
-        Ok(true)
-    }
-
-    /// 論理削除した組織を復元する。
-    ///
-    /// # Errors
-    /// DB の書き込みに失敗したとき。
-    pub fn restore_organization(&self, id: i64) -> rusqlite::Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "UPDATE organizations SET deleted_at = NULL WHERE id = ?1",
-            params![id],
-        )?;
-        Ok(())
     }
 
     /// 組織の詳細（つながっている人＋共有アドレスを件数つきで）。住所録の「組織」タブ用。
@@ -372,8 +297,9 @@ impl Store {
         Ok(groups)
     }
 
-    /// 複数の組織を 1 件（`keep_id`）に統一する。統一名 `name` を keep に設定し、drop 側に
-    /// つながっている人を keep へ付け替え、drop 組織を削除する。統一後の組織を返す。
+    /// 複数の組織を 1 件（`keep_id`）に統一する。連絡先の統合と同じく、つながり（Google 等）・
+    /// `uid`・別人の記録・代表の値を残す側へ寄せ、人のつながり（`org_id`）も付け替える。
+    /// 統一名 `name` を残す側の名前にし、つながっている人の会社名もそろえる。統一後の組織を返す。
     ///
     /// # Errors
     /// DB の書き込みに失敗したとき（全体を巻き戻す）。
@@ -385,31 +311,44 @@ impl Store {
     ) -> rusqlite::Result<OrganizationSummary> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        // 統合先は表に残すので、万一ゴミ箱にあっても復活させる。
+        // 統合先は表に残すので、万一ゴミ箱にあっても戻す。
         tx.execute(
-            "UPDATE organizations SET name = ?1, deleted_at = NULL, \
-             updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-            params![name.trim(), keep_id],
+            "UPDATE contacts SET deleted_at = NULL WHERE id = ?1",
+            params![keep_id],
         )?;
-        // 統合先で空のカード項目は、統合元に入っていた値で埋める（消える情報をなくす）。
-        let fill = ORG_CARD_COLS
-            .iter()
-            .map(|c| format!("{c} = COALESCE({c}, (SELECT {c} FROM organizations WHERE id = ?1))"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let fill_sql = format!("UPDATE organizations SET {fill} WHERE id = ?2");
-        for did in drop_ids {
-            tx.execute(&fill_sql, params![did, keep_id])?;
-            tx.execute(
-                "UPDATE contact_organizations SET org_id = ?1 WHERE org_id = ?2",
-                params![keep_id, did],
-            )?;
-            tx.execute("DELETE FROM organizations WHERE id = ?1", params![did])?;
-        }
-        sync_member_names(&tx, keep_id)?;
+        merge_in(&tx, keep_id, drop_ids)?;
+        rename_org(&tx, keep_id, name)?;
         tx.commit()?;
         load_org(&conn, keep_id)
     }
+}
+
+/// 組織の名前を変え、つながっている人の会社名もそろえる（変わったら送り直しの印）。
+pub(super) fn rename_org(conn: &Connection, id: i64, name: &str) -> rusqlite::Result<()> {
+    let name = name.trim();
+    let mut org = load_contact(conn, id)?.fields;
+    let current = org.organizations.first().and_then(|o| o.name.as_deref());
+    if name.is_empty() || current == Some(name) {
+        return sync_member_names(conn, id);
+    }
+    match org.organizations.first_mut() {
+        Some(o) => o.name = Some(name.to_string()),
+        None => org.organizations.push(crate::models::ContactOrganization {
+            name: Some(name.to_string()),
+            ..Default::default()
+        }),
+    }
+    org.display_name = name.to_string();
+    write_contact(
+        conn,
+        Some(id),
+        &org,
+        WriteOptions {
+            mark_dirty: true,
+            org_linking: OrgLinking::ExistingOnly,
+        },
+    )?;
+    sync_member_names(conn, id)
 }
 
 #[cfg(test)]

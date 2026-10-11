@@ -15,7 +15,7 @@
 //! （Rondine の連絡先として入る）。
 
 use crate::models::{
-    ContactAddress, ContactCustomField, ContactDate, ContactFields, ContactHandle,
+    ContactAddress, ContactCustomField, ContactDate, ContactFields, ContactHandle, ContactKind,
     ContactOrganization, ContactRelation, ContactUrl, ContactValue, HandleKind,
 };
 use crate::services::contact_labels::label_from_term;
@@ -429,8 +429,18 @@ impl CardAcc {
             .or_else(|| emails.first().map(|e| e.value.clone()))
             .or_else(|| phones.first().map(|p| p.value.clone()))?;
 
+        // 「会社として表示」で姓名が空なら組織の連絡先（docs/ORG_CONTACTS.md §3-4）。
+        let kind = if self.show_as_company
+            && !family.as_deref().is_some_and(|s| !s.trim().is_empty())
+            && !given.as_deref().is_some_and(|s| !s.trim().is_empty())
+        {
+            ContactKind::Organization
+        } else {
+            ContactKind::Person
+        };
         Some(ContactFields {
             display_name,
+            kind,
             family_name: family,
             given_name: given,
             middle_name: n(2),
@@ -443,7 +453,6 @@ impl CardAcc {
             maiden_name: self.maiden.clone(),
             birthday: self.birthday.clone(),
             note: self.note.clone(),
-            show_as_company: self.show_as_company,
             organizations,
             custom_fields,
             emails,

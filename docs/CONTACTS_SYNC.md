@@ -183,8 +183,13 @@ Google の既定値 `other` は無ラベル、ユーザーのカスタム名は�
 **取らないもの**: 写真（後続）。
 
 **送らないもの（Rondine 固有）**: `is_business` / `allow_remote_images` / 共有の印（`is_shared`。
-値そのものは送る）/ 組織カードへのつながり（代表電話・FAX・代表メール）/ 旧姓・会社として表示・
+値そのものは送る）/ 人から組織へのつながり（`org_id`。会社名は送る）/ 人／組織の種別（`kind`）/ 旧姓・
 SNS のハンドル（Google に対応する項目が無い）。取り込みでも、これらは Rondine 側の値を残す。
+
+**組織の連絡先**（[ORG_CONTACTS.md](ORG_CONTACTS.md)）: 組織も連絡先の 1 件として送る。`names` を空にし、
+`organizations[0]`（自分の会社の行の名前・よみ）と、代表電話・FAX・代表メール・URL・所在地（普通の電話・
+メール・URL・住所）で送る。送る必要があるかの比較（`same_as_google`）はローカルの種別で行う
+（取り込んだ snapshot は人のまま）。
 
 ### 3-5. 照合（`services/contact_match.rs` ＋ `store/contact_sync.rs`）
 
@@ -274,7 +279,7 @@ SNS のハンドル（Google に対応する項目が無い）。取り込みで
 状態が収束する。
 
 **未送信の印はつながりごと**（`contact_identities.dirty`）。利用者の操作（`upsert_contact` /
-`delete_contact` / `restore_contact` / `merge_contacts` / 組織カードの改名 / vCard・CSV 取り込み）で
+`delete_contact` / `restore_contact` / `merge_contacts` / 組織の改名（メンバーの会社名がそろう）/ vCard・CSV 取り込み）で
 その連絡先の**全つながり**に 1 が立ち、そのつながりへ送れた時点で 0 に戻る。2 つのアカウント
 （や将来の iCloud）につながった人は、それぞれへ送る。取り込み（`apply_remote_contact`）は印を立てない。
 

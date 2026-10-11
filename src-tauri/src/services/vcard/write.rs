@@ -10,7 +10,9 @@
 //! - Rondine 固有の印（お気に入り・取引先・外部画像・共有の代表値）と写真は書き出さない
 
 use super::VcardContact;
-use crate::models::{ContactAddress, ContactHandle, ContactOrganization, HandleKind, VcardVersion};
+use crate::models::{
+    ContactAddress, ContactHandle, ContactKind, ContactOrganization, HandleKind, VcardVersion,
+};
 use crate::services::contact_labels::google_type_for;
 
 /// 1 行の最大オクテット数（CRLF を除く。RFC 6350 §3.2 / RFC 2426 §2.6）。
@@ -86,7 +88,7 @@ impl Card {
         self.opt("X-PHONETIC-MIDDLE-NAME", &c.phonetic_middle);
         self.opt("X-PHONETIC-FIRST-NAME", &c.phonetic_given);
         self.organizations(&c.organizations);
-        if c.show_as_company {
+        if c.kind == ContactKind::Organization {
             self.line("X-ABShowAs:COMPANY");
         }
         for (i, e) in c.emails.iter().enumerate() {

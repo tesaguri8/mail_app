@@ -299,7 +299,7 @@
     "kind": {
       "all": "All",
       "person": "People",
-      "organization": "Organizations"
+      "organization": "Orgs"
     },
     "panelNew": "Add to contacts",
     "panelEdit": "Edit contact",

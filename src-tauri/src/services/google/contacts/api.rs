@@ -588,7 +588,43 @@ struct BatchUpdateEntry {
     #[serde(default)]
     person: Option<GPerson>,
     #[serde(default)]
-    status: Option<serde_json::Value>,
+    status: Option<GStatus>,
+}
+
+/// 1 件ごとの結果に付く `google.rpc.Status`。成功の分にも付くことがあり、そのときは `{}`
+/// （code 0 は JSON では省かれる）。
+#[derive(Debug, Deserialize, Default)]
+struct GStatus {
+    #[serde(default)]
+    code: i32,
+    #[serde(default)]
+    message: String,
+}
+
+/// `google.rpc.Code` の FAILED_PRECONDITION（etag が古いときに返る）。
+const RPC_FAILED_PRECONDITION: i32 = 9;
+
+impl BatchUpdateEntry {
+    /// 1 件の結果を判定する。status の code が無いか 0 なら成功で、Person があれば更新できた。
+    /// etag 不一致かどうかは、code が 0 以外のときだけ見る。
+    fn into_outcome(self) -> BatchUpdateOutcome {
+        match (self.person, self.status) {
+            (_, Some(st)) if st.code != 0 => {
+                if st.code == RPC_FAILED_PRECONDITION || st.message.contains("etag") {
+                    BatchUpdateOutcome::EtagConflict
+                } else {
+                    BatchUpdateOutcome::Failed(
+                        format!("code {}: {}", st.code, st.message)
+                            .chars()
+                            .take(300)
+                            .collect(),
+                    )
+                }
+            }
+            (Some(p), _) => BatchUpdateOutcome::Updated(Box::new(p)),
+            (None, _) => BatchUpdateOutcome::Failed("結果に Person がありません".into()),
+        }
+    }
 }
 
 /// 連絡先をまとめて更新する（`people:batchUpdateContacts`。1 回 [`BATCH_UPDATE_MAX`] 件まで）。
@@ -616,21 +652,7 @@ pub async fn batch_update_contacts(
     Ok(body
         .update_result
         .into_iter()
-        .map(|(rn, e)| {
-            let outcome = match (e.person, e.status) {
-                (Some(p), None) => BatchUpdateOutcome::Updated(Box::new(p)),
-                (_, Some(st)) => {
-                    let text = st.to_string();
-                    if text.contains("etag") || text.contains("FAILED_PRECONDITION") {
-                        BatchUpdateOutcome::EtagConflict
-                    } else {
-                        BatchUpdateOutcome::Failed(text.chars().take(300).collect())
-                    }
-                }
-                (None, None) => BatchUpdateOutcome::Failed("結果に Person がありません".into()),
-            };
-            (rn, outcome)
-        })
+        .map(|(rn, e)| (rn, e.into_outcome()))
         .collect())
 }
 
@@ -722,5 +744,55 @@ mod tests {
         }));
         assert!(matches!(r, Err(ApiError::NotFound)));
         assert_eq!(calls.get(), 1, "上限以外は送り直さない");
+    }
+
+    /// updateResult の JSON を、resourceName → 判定に読む。
+    fn outcomes(json: &str) -> HashMap<String, BatchUpdateOutcome> {
+        let body: BatchUpdateResponse = serde_json::from_str(json).unwrap();
+        body.update_result
+            .into_iter()
+            .map(|(rn, e)| (rn, e.into_outcome()))
+            .collect()
+    }
+
+    #[test]
+    fn batch_update_reads_an_empty_or_zero_status_as_success() {
+        let r = outcomes(
+            r#"{"updateResult": {
+                "people/a": {"person": {"resourceName": "people/a", "etag": "e1"}, "status": {}},
+                "people/b": {"person": {"resourceName": "people/b", "etag": "e2"}, "status": {"code": 0}},
+                "people/c": {"person": {"resourceName": "people/c", "etag": "e3"}}
+            }}"#,
+        );
+        for rn in ["people/a", "people/b", "people/c"] {
+            assert!(
+                matches!(&r[rn], BatchUpdateOutcome::Updated(p) if p.resource_name.as_deref() == Some(rn)),
+                "{rn}: {:?}",
+                r[rn]
+            );
+        }
+    }
+
+    #[test]
+    fn batch_update_reads_failed_precondition_as_etag_conflict_and_others_as_failed() {
+        let r = outcomes(
+            r#"{"updateResult": {
+                "people/a": {"status": {"code": 9, "message": "Request person.etag is different than the current person.etag."}},
+                "people/b": {"status": {"code": 3, "message": "Invalid phone number"}},
+                "people/c": {"person": {"resourceName": "people/c"}, "status": {"code": 13, "message": "Internal error"}},
+                "people/d": {"status": {}},
+                "people/e": {}
+            }}"#,
+        );
+        assert!(matches!(r["people/a"], BatchUpdateOutcome::EtagConflict));
+        assert!(
+            matches!(&r["people/b"], BatchUpdateOutcome::Failed(m) if m.contains("Invalid phone number"))
+        );
+        assert!(
+            matches!(&r["people/c"], BatchUpdateOutcome::Failed(m) if m.contains("code 13")),
+            "Person があっても code が 0 以外なら失敗"
+        );
+        assert!(matches!(r["people/d"], BatchUpdateOutcome::Failed(_)));
+        assert!(matches!(r["people/e"], BatchUpdateOutcome::Failed(_)));
     }
 }

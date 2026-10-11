@@ -957,6 +957,9 @@
     "cc": "Cc",
     "composeTo": "New message to {{email}}"
   },
+  "timeline": {
+    "label": "Timeline"
+  },
   "thread": {
     "you": "You",
     "untitled": "(untitled thread)",

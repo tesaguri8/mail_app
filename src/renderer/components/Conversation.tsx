@@ -50,9 +50,14 @@ import { AttachedImages, isImage } from './AttachedImages';
 import { PrintMail } from './PrintMail';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import type { CalendarPanelInitial } from './CalendarPanel';
+import { TimelineScrubber } from './timeline/TimelineScrubber';
+import { countByLocalDay, scrollTopForBubble, topVisibleIndex } from './timeline/dayCounts';
 
 /** 全文展開時、本文カードの先頭を表示域の上端から少しだけ下げて置くための余白（px）。 */
 const EXPAND_TOP_GAP = 8;
+
+/** 日付のつまみで飛んだとき、バブルの先頭を表示域の上端から下げて置く余白（px。最初のバブルの mt-3 と同じ）。 */
+const JUMP_TOP_GAP = 12;
 
 /** 返信系の操作（バブルのヘッダとフッターで同じ並び・同じ意味で使う）。 */
 const COMPOSE_ACTIONS = [
@@ -1135,6 +1140,73 @@ export function Conversation({
     }
   };
 
+  // ゴミ箱/迷惑メール内のメールは、そのフォルダを見ているとき以外は会話から隠す
+  // （削除・迷惑指定したメールが会話に残り続けないように）。
+  const visibleMessages = useMemo(() => {
+    const messages = view?.messages ?? [];
+    return folder === 'trash' || folder === 'spam'
+      ? messages
+      : messages.filter((m) => m.folder !== 'trash' && m.folder !== 'spam');
+  }, [view, folder]);
+
+  // 日付のつまみ（docs/CONVERSATION_TIMELINE.md）。日ごとの件数は会話の並び順のまま手元で数え、
+  // 「何通目」はバブルの並びの番号そのもの。会話が画面に収まる（スクロールできない）ときは出さない。
+  const days = useMemo(
+    () => countByLocalDay(visibleMessages.map((m) => m.date)),
+    [visibleMessages]
+  );
+  const [scrollable, setScrollable] = useState(false);
+  const [viewOffset, setViewOffset] = useState<number | null>(null);
+  // 各バブルの上端（スクロール域の中身の先頭からの px・並び順）。
+  const bubbleTops = useCallback((): number[] => {
+    const el = scrollRef.current;
+    if (!el) return [];
+    const base = el.getBoundingClientRect().top - el.scrollTop;
+    return Array.from(el.querySelectorAll<HTMLElement>('[id^="bubble-"]')).map(
+      (b) => b.getBoundingClientRect().top - base
+    );
+  }, []);
+  const measureFrame = useRef<number | null>(null);
+  const measureTimeline = useCallback(() => {
+    if (measureFrame.current !== null) return;
+    measureFrame.current = requestAnimationFrame(() => {
+      measureFrame.current = null;
+      const el = scrollRef.current;
+      if (!el) return;
+      setScrollable(el.scrollHeight > el.clientHeight + 1);
+      setViewOffset(topVisibleIndex(bubbleTops(), el.scrollTop + JUMP_TOP_GAP));
+    });
+  }, [bubbleTops]);
+  // 枠の大きさ・バブルの高さ（本文の到着・全文の開閉・画像の読み込み）が変わったら測り直す。
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(measureTimeline);
+    observer.observe(el);
+    Array.from(el.children).forEach((c) => observer.observe(c));
+    measureTimeline();
+    return () => observer.disconnect();
+  }, [visibleMessages, measureTimeline]);
+  useEffect(
+    () => () => {
+      if (measureFrame.current !== null) cancelAnimationFrame(measureFrame.current);
+    },
+    []
+  );
+  const jumpToBubble = useCallback(
+    (offset: number) => {
+      const el = scrollRef.current;
+      if (!el) return;
+      el.scrollTop = scrollTopForBubble(
+        bubbleTops(),
+        offset,
+        el.scrollHeight - el.clientHeight,
+        JUMP_TOP_GAP
+      );
+    },
+    [bubbleTops]
+  );
+
   if (loading && !view) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-white/40">
@@ -1150,13 +1222,7 @@ export function Conversation({
     );
   }
 
-  const { thread, messages } = view;
-  // ゴミ箱/迷惑メール内のメールは、そのフォルダを見ているとき以外は会話から隠す
-  // （削除・迷惑指定したメールが会話に残り続けないように）。
-  const visibleMessages =
-    folder === 'trash' || folder === 'spam'
-      ? messages
-      : messages.filter((m) => m.folder !== 'trash' && m.folder !== 'spam');
+  const { thread } = view;
   const displayTitle = thread.title?.trim() || thread.auto_title?.trim() || t('thread.untitled');
   // 「自分」の表示名（送信メッセージのバブルの見出し）。
   const you = t('thread.you');
@@ -1223,7 +1289,10 @@ export function Conversation({
       </div>
 
       {/* 時系列バブル（古い順・自分=右／相手=左）。検索中は一致移動バーを重ねる。 */}
-      <div className="relative min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
+        {scrollable && (
+          <TimelineScrubber days={days} viewOffset={viewOffset} onJump={jumpToBubble} />
+        )}
         {terms.length > 0 && match.total > 0 && (
           <div className="absolute right-4 top-2 z-20 flex items-center gap-1 rounded-full border border-white/10 bg-neutral-800/95 px-2 py-1 text-[11px] text-white/80 shadow-lg backdrop-blur">
             <span className="px-1 tabular-nums">
@@ -1252,7 +1321,8 @@ export function Conversation({
           data-conversation-scroll
           // 上パディングは付けない: 固定ラベルをスレッドヘッダ直下にピタッと貼り付け、ラベルより上に
           // 本文が漏れないようにする（先頭の余白は最初のバブルの mt で付ける）。
-          className="h-full space-y-3 overflow-y-auto px-4 pb-4 pt-0 [&>*:first-child]:mt-3"
+          className="h-full min-w-0 flex-1 space-y-3 overflow-y-auto px-4 pb-4 pt-0 [&>*:first-child]:mt-3"
+          onScroll={measureTimeline}
           onClick={(e) => {
             // 全文展開中に「バブル/カードの外＝余白」をクリックしたら畳んでバブルに戻す。
             // コンテンツ列（data-msg-content）の内側なら何もしない（展開・メール操作・閉じるボタンは従来どおり）。

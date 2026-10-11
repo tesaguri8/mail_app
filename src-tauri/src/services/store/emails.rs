@@ -81,7 +81,7 @@ fn folder_key(folder: &str, canonical_key: &str) -> String {
 /// これが無いと、手動マーク（is_junk=1・folder は元のまま）が受信箱の一覧クエリに
 /// 素通りして再読み込み/同期のたびに復活してしまう。
 /// `p` は列プレフィックス（"" / "e." / "t."）、`ph` はフォルダ値のプレースホルダ（"?1" 等）。
-fn folder_predicate(folder: &str, p: &str, ph: &str) -> String {
+pub(super) fn folder_predicate(folder: &str, p: &str, ph: &str) -> String {
     if folder == "spam" {
         format!("({p}folder = {ph} OR {p}is_junk = 1)")
     } else {

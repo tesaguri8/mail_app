@@ -75,6 +75,7 @@ pub fn run() {
             commands::mail_list,
             commands::thread_list,
             commands::thread_count,
+            commands::thread_day_counts,
             commands::mail_search,
             commands::mail_get,
             commands::thread_view,

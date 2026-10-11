@@ -32,6 +32,7 @@ mod storage;
 mod tags;
 #[cfg(test)]
 pub(crate) mod test_support;
+mod thread_days;
 mod threads;
 mod tombstones;
 

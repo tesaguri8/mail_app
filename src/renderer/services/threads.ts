@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { ThreadView } from '@bindings/ThreadView';
 import type { ThreadListItem } from '@bindings/ThreadListItem';
+import type { ThreadDayCount } from '@bindings/ThreadDayCount';
 
 // スレッド単位のメール一覧（代表＝フォルダ内最新＋「N通」件数）。docs/THREADING.md §5。
 // accountId が null なら全アカウント横断。offset でページング。
@@ -44,3 +45,8 @@ export const messageReassign = (emailId: number, targetThread: number) =>
 
 // アカウントの auto スレッド割当を作り直す（manual は保持）。
 export const threadRebuild = (accountId: number) => invoke<void>('thread_rebuild', { accountId });
+
+// フォルダ内のスレッドを、代表メールの日付（端末ローカル）ごとに数える（メール一覧の日付のつまみ用）。
+// 並びと絞り込みは threadList と同じで、累計がそのまま一覧の offset になる。docs/MAIL_LIST_TIMELINE.md。
+export const threadDayCounts = (accountId: number | null, folder: string) =>
+  invoke<ThreadDayCount[]>('thread_day_counts', { accountId: accountId ?? null, folder });

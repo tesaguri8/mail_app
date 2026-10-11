@@ -42,8 +42,7 @@ fn company_only_by_key(
         let mut stmt = conn.prepare(
             "SELECT c.id FROM contacts c \
              WHERE c.kind = 'person' AND c.deleted_at IS NULL \
-               AND COALESCE(trim(c.family_name), '') || COALESCE(trim(c.middle_name), '') || \
-                   COALESCE(trim(c.given_name), '') = '' \
+               AND COALESCE(trim(c.middle_name), '') || COALESCE(trim(c.given_name), '') = '' \
                AND EXISTS (SELECT 1 FROM contact_organizations co WHERE co.contact_id = c.id) \
              ORDER BY c.id",
         )?;

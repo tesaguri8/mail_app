@@ -1,6 +1,6 @@
 use super::*;
 use crate::models::{
-    ContactCustomField, ContactHandle, ContactOrganization, ContactValue, HandleKind,
+    ContactCustomField, ContactHandle, ContactKind, ContactOrganization, ContactValue, HandleKind,
 };
 
 fn contact(name: &str) -> ContactFields {
@@ -23,6 +23,32 @@ fn a_display_only_name_goes_into_the_family_name() {
     let b = person_body(&contact("山田太郎"), None);
     assert_eq!(b["names"][0]["familyName"], "山田太郎");
     assert!(b["names"][0].get("givenName").is_none());
+}
+
+/// 組織の連絡先は名前を空にし、会社（自分の会社の行）と代表の値だけで送る。以前の送信で
+/// 姓に入った会社名は、空の names で消える（docs/ORG_CONTACTS.md §3-1）。
+#[test]
+fn an_organization_is_sent_without_names() {
+    let mut c = contact("sngDESIGN名護");
+    c.kind = ContactKind::Organization;
+    c.organizations = vec![ContactOrganization {
+        name: Some("sngDESIGN名護".into()),
+        phonetic_name: Some("エスエヌジーデザインナゴ".into()),
+        ..Default::default()
+    }];
+    c.phones = vec![value(Some("代表"), "0980000000", false)];
+    let base = serde_json::json!({
+        "etag": "e1",
+        "names": [{"familyName": "sngDESIGN名護", "metadata": {"primary": true}}],
+    });
+    let b = person_body(&c, Some(&base));
+    assert_eq!(b["names"], serde_json::json!([]));
+    assert_eq!(b["organizations"][0]["name"], "sngDESIGN名護");
+    assert_eq!(b["phoneNumbers"][0]["value"], "0980000000");
+    // 取り込んだ snapshot は人のまま（種別は Rondine だけが持つ）でも、同じ中身なら送らない。
+    let mut snapshot = c.clone();
+    snapshot.kind = ContactKind::Person;
+    assert!(same_as_google(&c, &snapshot));
 }
 
 #[test]

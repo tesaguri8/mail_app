@@ -196,3 +196,17 @@ fn convert_merges_into_an_existing_org_with_the_same_name() {
     assert!(org.fields.phones.iter().any(|p| p.value == "+81311112222"));
     assert!(s.get_contact(existing).is_err());
 }
+
+/// 以前の送信で表示名を姓に入れていたため、Google から会社名が姓として戻ってきた連絡先も候補にする。
+#[test]
+fn a_company_name_echoed_back_as_the_family_name_is_still_company_only() {
+    let s = store();
+    import(
+        &s,
+        "BEGIN:VCARD\nVERSION:3.0\nFN:sngDESIGN名護\nN:sngDESIGN名護;;;;\nORG:sngDESIGN名護\nEND:VCARD\n\
+         BEGIN:VCARD\nVERSION:3.0\nFN:名護 太郎\nN:名護;太郎;;;\nORG:sngDESIGN名護\nEND:VCARD\n",
+    );
+    let cands = s.company_only_candidates().unwrap();
+    assert_eq!(cands.len(), 1);
+    assert_eq!(cands[0].contact.display_name, "sngDESIGN名護");
+}

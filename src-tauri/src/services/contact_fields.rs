@@ -55,20 +55,28 @@ pub fn display_name_of(f: &ContactFields) -> String {
 }
 
 /// 会社名だけの連絡先か（組織の連絡先へ切り替える候補。docs/ORG_CONTACTS.md §4-1）。
-/// 人で、姓・ミドル・名が空で、表示名が先頭の会社名と（正規化して）一致する。
+///
+/// 人で、ミドル・名が空で、表示名が先頭の会社名と（正規化して）一致する。姓は空か、会社名と
+/// 同じ（以前の送信で表示名を姓に入れていたため、Google から会社名が姓として戻ってくる）。
 pub fn is_company_only(f: &ContactFields) -> bool {
-    let blank_name = [&f.family_name, &f.middle_name, &f.given_name]
-        .into_iter()
-        .all(is_blank);
-    let company = f
+    let Some(company) = f
         .organizations
         .first()
         .and_then(|o| o.name.as_deref())
         .map(normalize_org)
-        .filter(|k| !k.is_empty());
+        .filter(|k| !k.is_empty())
+    else {
+        return false;
+    };
+    let family_ok = match f.family_name.as_deref().map(str::trim) {
+        None | Some("") => true,
+        Some(family) => normalize_org(family) == company,
+    };
     f.kind == ContactKind::Person
-        && blank_name
-        && company.is_some_and(|k| k == normalize_org(&f.display_name))
+        && is_blank(&f.middle_name)
+        && is_blank(&f.given_name)
+        && family_ok
+        && normalize_org(&f.display_name) == company
 }
 
 /// まとめるときの種別（どれかが組織なら組織）。

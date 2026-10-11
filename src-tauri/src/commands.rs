@@ -1,12 +1,12 @@
 use crate::models::{
     AccountInput, AccountProfile, AccountProvider, AccountSummary, AppInfo, AttachmentMeta, AttachmentSummary, AutoconfigResult,
-    AttendeeInput, CalendarInput, CalendarSummary, ContactExportReport, ContactInput, ContactListItem, ContactMatch,
+    AttendeeInput, CalendarInput, CalendarSummary, CompanyOnlyCandidate, ContactExportReport, ContactInput, ContactListItem, ContactMatch,
     ContactSummary, DataLocation, DbInfo, DistinctPair, DraftContent, DraftInput, DuplicateGroup, EventAttendee,
     EventInput, EventSummary, GoogleAccount, GoogleDisconnectResult, GoogleSyncResult,
     GoogleCredentialsStatus, GoogleService,
     GreenDomainEntry,
     HomeUnreadCounts, IcsImportReport, ImportReport, MailDetail,
-    MailSummary, MergeRemoteDeletion, OrgChangeImpact, OrgDuplicateGroup, OrgLinkSuggestion, OrgMatch, OrganizationDetail, OrganizationInput, OrganizationSummary, PostalAddress, VcardVersion,
+    MailSummary, MergeRemoteDeletion, OrgChangeImpact, OrgDuplicateGroup, OrgLinkSuggestion, OrgMatch, OrganizationDetail, OrganizationSummary, PostalAddress, VcardVersion,
     RebuildAction,
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSenderConflict, SpamSettings, SpamVerdict,
@@ -1732,22 +1732,6 @@ pub fn organization_detail(store: State<Store>, id: i64) -> Result<OrganizationD
     store.organization_detail(id).map_err(|e| e.to_string())
 }
 
-/// 組織を論理削除する。所属している連絡先があるときは削除しない（安全側）。
-#[tauri::command]
-pub fn organization_delete(store: State<Store>, id: i64) -> Result<(), String> {
-    if store.delete_organization(id).map_err(|e| e.to_string())? {
-        Ok(())
-    } else {
-        Err("所属している連絡先がある組織は削除できません".to_string())
-    }
-}
-
-/// 論理削除した組織を復元。
-#[tauri::command]
-pub fn organization_restore(store: State<Store>, id: i64) -> Result<(), String> {
-    store.restore_organization(id).map_err(|e| e.to_string())
-}
-
 /// ゴミ箱の保持日数を取得（既定 7 日）。
 #[tauri::command]
 pub fn trash_retention_get(store: State<Store>) -> Result<i64, String> {
@@ -1794,17 +1778,23 @@ pub fn mail_trash_purge(store: State<Store>) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// 組織カード（名前・よみ・メモ・代表電話/FAX/代表メール/URL・所在地）を作成/編集する。
-/// `input.id` 指定で更新、無ければ新規。
+/// 組織の連絡先へ切り替える候補（会社名だけの連絡先）。組織タブの「整理」用。docs/ORG_CONTACTS.md §4-1。
 #[tauri::command]
-pub fn organization_upsert(
+pub fn organization_company_only_candidates(
     store: State<Store>,
-    input: OrganizationInput,
-) -> Result<OrganizationSummary, String> {
-    if input.name.trim().is_empty() {
-        return Err("組織名を入力してください".to_string());
-    }
-    store.upsert_organization(&input).map_err(|e| e.to_string())
+) -> Result<Vec<CompanyOnlyCandidate>, String> {
+    store.company_only_candidates().map_err(|e| e.to_string())
+}
+
+/// 会社名だけの連絡先を、その場で組織の連絡先に切り替える（同じ会社名の人もつなぐ）。切り替えた数を返す。
+#[tauri::command]
+pub fn organization_convert_contacts(
+    store: State<Store>,
+    contact_ids: Vec<i64>,
+) -> Result<i32, String> {
+    store
+        .convert_to_organizations(&contact_ids)
+        .map_err(|e| e.to_string())
 }
 
 /// 組織名の重複候補（正規化名で束ねたグループ）を返す。組織の統一 UI 用。

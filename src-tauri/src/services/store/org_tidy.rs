@@ -6,7 +6,7 @@
 //! 正規化（`dedupe::normalize_org`）。
 
 use super::contact_rows::{query_summaries, SUMMARY_ORDER};
-use super::contact_write::{find_org_by_key, mark_dirty};
+use super::contact_write::{find_or_create_org, find_org_by_key, mark_dirty};
 use super::greendomain::{domain_of, is_unaffiliated_domain};
 use super::organizations::{load_org, sync_member_names};
 use super::Store;
@@ -28,11 +28,12 @@ struct OrgRow {
     name: Option<String>,
 }
 
-/// 削除されていない連絡先の会社の行をすべて読む。
+/// 削除されていない人の会社の行をすべて読む（組織の自分の会社の行は含めない）。
 fn org_rows(conn: &Connection) -> rusqlite::Result<Vec<OrgRow>> {
     let mut stmt = conn.prepare(
         "SELECT co.id, co.contact_id, co.org_id, co.name FROM contact_organizations co \
-         JOIN contacts c ON c.id = co.contact_id WHERE c.deleted_at IS NULL \
+         JOIN contacts c ON c.id = co.contact_id \
+         WHERE c.deleted_at IS NULL AND c.kind = 'person' \
          ORDER BY co.contact_id, co.position, co.id",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -51,10 +52,13 @@ fn key_of(name: Option<&str>) -> Option<String> {
     name.map(normalize_org).filter(|k| !k.is_empty())
 }
 
-/// 削除されていない組織カードの (id, 名前, 代表メール)。
+/// ゴミ箱にない組織の (id, 名前, 代表メール＝先頭のメール)。
 fn cards(conn: &Connection) -> rusqlite::Result<Vec<(i64, String, Option<String>)>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, email FROM organizations WHERE deleted_at IS NULL ORDER BY id",
+        "SELECT c.id, c.display_name, \
+                (SELECT value FROM contact_emails WHERE contact_id = c.id \
+                 ORDER BY position, id LIMIT 1) \
+         FROM contacts c WHERE c.kind = 'organization' AND c.deleted_at IS NULL ORDER BY c.id",
     )?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
     rows.collect()
@@ -293,13 +297,7 @@ impl Store {
         let plan = create_plan(&tx, name)?;
         let org_id = match plan.existing {
             Some(id) => id,
-            None => {
-                tx.execute(
-                    "INSERT INTO organizations (name) VALUES (?1)",
-                    params![plan.card_name],
-                )?;
-                tx.last_insert_rowid()
-            }
+            None => find_or_create_org(&tx, &plan.card_name)?.0,
         };
         for (row_id, _) in &plan.rows {
             tx.execute(

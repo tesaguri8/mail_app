@@ -1,6 +1,5 @@
 use super::*;
-use crate::models::OrganizationInput;
-use crate::services::store::test_support::{employee, person};
+use crate::services::store::test_support::{employee, organization, person};
 use crate::services::vcard;
 
 fn store() -> Store {
@@ -76,11 +75,11 @@ fn creating_a_card_from_a_name_links_everyone_with_that_name() {
 fn suggestions_find_people_by_company_name_and_email_domain() {
     let s = store();
     let card = s
-        .upsert_organization(&OrganizationInput {
-            name: "株式会社テスト".into(),
-            email: Some("info@test.co.jp".into()),
-            ..Default::default()
-        })
+        .upsert_contact(&organization(
+            "株式会社テスト",
+            None,
+            Some("info@test.co.jp"),
+        ))
         .unwrap();
     // 取り込みは正規化名が同じなら自動でつなぐので、名前の違う会社で入れる。
     import(
@@ -131,10 +130,7 @@ fn suggestions_find_people_by_company_name_and_email_domain() {
 fn linking_people_reuses_a_matching_company_or_adds_one() {
     let s = store();
     let card = s
-        .upsert_organization(&OrganizationInput {
-            name: "株式会社テスト".into(),
-            ..Default::default()
-        })
+        .upsert_contact(&organization("株式会社テスト", None, None))
         .unwrap();
     import(&s, &[("名前違い", "テスト事業部", "a@test.co.jp")]);
     let no_org = s

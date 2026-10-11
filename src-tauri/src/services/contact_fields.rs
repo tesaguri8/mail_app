@@ -8,7 +8,9 @@
 //! - [`fill_from_import`] — ファイル取り込みで既存の連絡先を更新する（入ってきた値で埋める）
 //! - [`union_merge`] — 重複整理で複数の連絡先を 1 件にまとめる（和集合）
 
-use crate::models::{ContactAddress, ContactFields, ContactOrganization, ContactValue, HandleKind};
+use crate::models::{
+    ContactAddress, ContactFields, ContactKind, ContactOrganization, ContactValue, HandleKind,
+};
 use crate::services::dedupe::{digits, fold, normalize_org};
 use std::collections::BTreeMap;
 
@@ -21,9 +23,61 @@ pub fn phonetic_name(f: &ContactFields) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" "))
 }
 
-/// 並び替え用の名前（よみ優先。無ければ表示名）。
+/// 並び替え用の名前（よみ優先。無ければ表示名）。組織は自分の会社の行のよみ。
 pub fn sort_name(f: &ContactFields) -> String {
-    phonetic_name(f).unwrap_or_else(|| f.display_name.trim().to_string())
+    let phonetic = match f.kind {
+        ContactKind::Person => phonetic_name(f),
+        ContactKind::Organization => self_org(f)
+            .and_then(|o| o.phonetic_name.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+    };
+    phonetic.unwrap_or_else(|| display_name_of(f))
+}
+
+/// 組織の自分の会社の行（先頭の会社）。人なら None。
+pub fn self_org(f: &ContactFields) -> Option<&ContactOrganization> {
+    match f.kind {
+        ContactKind::Person => None,
+        ContactKind::Organization => f.organizations.first(),
+    }
+}
+
+/// 保存する表示名。組織は自分の会社の行の名前（空なら渡された表示名）。人は渡された表示名。
+pub fn display_name_of(f: &ContactFields) -> String {
+    self_org(f)
+        .and_then(|o| o.name.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(f.display_name.trim())
+        .to_string()
+}
+
+/// 会社名だけの連絡先か（組織の連絡先へ切り替える候補。docs/ORG_CONTACTS.md §4-1）。
+/// 人で、姓・ミドル・名が空で、表示名が先頭の会社名と（正規化して）一致する。
+pub fn is_company_only(f: &ContactFields) -> bool {
+    let blank_name = [&f.family_name, &f.middle_name, &f.given_name]
+        .into_iter()
+        .all(is_blank);
+    let company = f
+        .organizations
+        .first()
+        .and_then(|o| o.name.as_deref())
+        .map(normalize_org)
+        .filter(|k| !k.is_empty());
+    f.kind == ContactKind::Person
+        && blank_name
+        && company.is_some_and(|k| k == normalize_org(&f.display_name))
+}
+
+/// まとめるときの種別（どれかが組織なら組織）。
+fn union_kind(a: ContactKind, b: ContactKind) -> ContactKind {
+    if a == ContactKind::Organization || b == ContactKind::Organization {
+        ContactKind::Organization
+    } else {
+        ContactKind::Person
+    }
 }
 
 /// 住所の文字の集まり（全角半角・大文字小文字をそろえた英数字と漢字かなの出現数）。区切り・
@@ -203,7 +257,7 @@ pub fn overlay_google(existing: &ContactFields, remote: &ContactFields) -> Conta
     let mut out = remote.clone();
     carry_local_marks(existing, &mut out);
     out.maiden_name = existing.maiden_name.clone();
-    out.show_as_company = existing.show_as_company;
+    out.kind = existing.kind;
     out.is_business = existing.is_business;
     out.allow_remote_images = existing.allow_remote_images;
     out.handles.retain(|h| h.kind == HandleKind::Im);
@@ -252,7 +306,7 @@ pub fn fill_from_import(existing: &ContactFields, incoming: &ContactFields) -> C
         maiden_name: pick(&incoming.maiden_name, &existing.maiden_name),
         birthday: pick(&incoming.birthday, &existing.birthday),
         note: pick(&incoming.note, &existing.note),
-        show_as_company: existing.show_as_company || incoming.show_as_company,
+        kind: union_kind(existing.kind, incoming.kind),
         is_favorite: existing.is_favorite,
         is_business: existing.is_business,
         allow_remote_images: existing.allow_remote_images,
@@ -294,7 +348,7 @@ pub fn union_merge(parts: &[&ContactFields]) -> ContactFields {
         fill_scalar(&mut out.maiden_name, &p.maiden_name);
         fill_scalar(&mut out.birthday, &p.birthday);
         fill_scalar(&mut out.note, &p.note);
-        out.show_as_company |= p.show_as_company;
+        out.kind = union_kind(out.kind, p.kind);
         out.is_favorite |= p.is_favorite;
         out.is_business |= p.is_business;
         out.allow_remote_images |= p.allow_remote_images;

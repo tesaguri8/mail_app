@@ -19,6 +19,7 @@ mod events;
 mod google_accounts;
 mod greendomain;
 mod migrations;
+mod org_contacts;
 mod org_tidy;
 mod organizations;
 mod quote_match;
@@ -99,6 +100,13 @@ impl Store {
             Ok(n) if n > 0 => log::info!("reset {n} rows with a missing body to 'absent'"),
             Ok(_) => {}
             Err(e) => log::warn!("body state repair skipped: {e}"),
+        }
+        // 0066 で組織カードから作った組織を、同じ名前の会社名だけの連絡先と一度だけまとめる
+        // （docs/ORG_CONTACTS.md §2-2）。失敗しても起動は続け、次回起動でもう一度試みる。
+        match org_contacts::merge_cards_with_company_only(&conn) {
+            Ok(n) if n > 0 => log::info!("merged {n} organizations into company-only contacts"),
+            Ok(_) => {}
+            Err(e) => log::warn!("organization merge skipped: {e}"),
         }
         // 「自分から送ったことがある相手」の索引を初回だけ構築する（docs/FILTERING.md §2）。
         // 失敗しても起動は続ける（フィルタが効かないだけで、次回起動で作り直しを試みる）。

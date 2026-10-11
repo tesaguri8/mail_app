@@ -1,17 +1,18 @@
 use super::*;
+use crate::models::ContactValue;
 use crate::models::{ContactInput, ContactOrganization};
-use crate::services::store::test_support::{employee, person};
+use crate::services::store::test_support::{employee, labeled, organization, person};
 
 fn store() -> Store {
     Store::open_in_memory_for_test()
 }
 
 fn card(s: &Store, name: &str) -> OrganizationSummary {
-    s.upsert_organization(&OrganizationInput {
-        name: name.into(),
-        ..Default::default()
-    })
-    .unwrap()
+    let id = s
+        .upsert_contact(&organization(name, None, None))
+        .unwrap()
+        .id;
+    s.get_organization(i64::from(id)).unwrap()
 }
 
 #[test]
@@ -69,7 +70,8 @@ fn list_organizations_matches_similar_names() {
 fn org_soft_delete_hides_and_revives_on_reuse() {
     let s = store();
     let oid = card(&s, "テスト社").id;
-    assert!(s.delete_organization(oid as i64).unwrap());
+    // 組織は連絡先のゴミ箱へ。
+    s.delete_contact(oid as i64).unwrap();
     assert!(s.list_organizations(None, false).unwrap().is_empty());
     assert_eq!(s.list_organizations(None, true).unwrap().len(), 1);
     // 同名で連絡先を作ると、削除済みのカードが復活して再利用される。
@@ -79,39 +81,34 @@ fn org_soft_delete_hides_and_revives_on_reuse() {
 }
 
 #[test]
-fn org_card_fields_round_trip_and_survive_merge() {
+fn org_values_survive_merge() {
     let s = store();
     let keep = s
-        .upsert_organization(&OrganizationInput {
-            name: "テスト社".into(),
-            phone: Some("+81311112222".into()),
-            ..Default::default()
-        })
+        .upsert_contact(&organization("テスト社", Some("+81311112222"), None))
         .unwrap();
-    let dropped = s
-        .upsert_organization(&OrganizationInput {
-            name: "(株)テスト".into(),
-            phone: Some("+81399999999".into()),
-            fax: Some("+81311113333".into()),
-            email: Some("info@example.com".into()),
-            address: OrgAddress {
-                region: Some("沖縄県".into()),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .unwrap();
+    let mut dropped = organization("(株)テスト", Some("+81399999999"), Some("info@example.com"));
+    dropped.fields.phones.push(labeled("FAX", "+81311113333"));
+    dropped.fields.addresses = vec![crate::models::ContactAddress {
+        region: Some("沖縄県".into()),
+        ..Default::default()
+    }];
+    let dropped = s.upsert_contact(&dropped).unwrap();
     let merged = s
         .merge_organizations(keep.id as i64, &[dropped.id as i64], "テスト社")
         .unwrap();
+    assert_eq!(merged.name, "テスト社");
     assert_eq!(merged.phone.as_deref(), Some("+81311112222"));
     assert_eq!(merged.fax.as_deref(), Some("+81311113333"));
     assert_eq!(merged.email.as_deref(), Some("info@example.com"));
     assert_eq!(merged.address.region.as_deref(), Some("沖縄県"));
+    // 消えた側の電話も残す側に入る（和集合）。
+    let all = s.get_contact(keep.id as i64).unwrap();
+    assert!(all.fields.phones.iter().any(|p| p.value == "+81399999999"));
+    assert!(s.get_organization(dropped.id as i64).is_err());
 }
 
 #[test]
-fn renaming_a_card_renames_its_members_and_queues_them() {
+fn renaming_an_org_renames_its_members_and_queues_them() {
     let s = store();
     let c = s.upsert_contact(&employee("田中", "テスト社")).unwrap();
     let oid = c.fields.organizations[0].org_id.unwrap();
@@ -119,27 +116,28 @@ fn renaming_a_card_renames_its_members_and_queues_them() {
         let conn = s.conn.lock().unwrap();
         conn.execute("UPDATE contacts SET dirty = 0", []).unwrap();
     }
-    // 代表電話だけ変えても、人は送り直さない。
-    s.upsert_organization(&OrganizationInput {
-        id: Some(oid),
-        name: "テスト社".into(),
-        phone: Some("+81311112222".into()),
-        ..Default::default()
-    })
-    .unwrap();
     let dirty = |s: &Store| -> i64 {
         let conn = s.conn.lock().unwrap();
-        conn.query_row("SELECT dirty FROM contacts", [], |r| r.get(0))
-            .unwrap()
+        conn.query_row(
+            "SELECT dirty FROM contacts WHERE id = ?1",
+            params![c.id],
+            |r| r.get(0),
+        )
+        .unwrap()
     };
+    // 代表電話だけ変えても、人は送り直さない。
+    let mut org = s.get_contact(i64::from(oid)).unwrap();
+    org.fields.phones = vec![labeled("代表", "+81311112222")];
+    let input = |f: &crate::models::ContactFields| ContactInput {
+        id: Some(oid),
+        fields: f.clone(),
+    };
+    s.upsert_contact(&input(&org.fields)).unwrap();
     assert_eq!(dirty(&s), 0);
     // 名前を変えると、つながっている人の会社名も変わり、送り直しの印が立つ。
-    s.upsert_organization(&OrganizationInput {
-        id: Some(oid),
-        name: "テスト株式会社".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    org.fields.organizations[0].name = Some("テスト株式会社".into());
+    let renamed = s.upsert_contact(&input(&org.fields)).unwrap();
+    assert_eq!(renamed.fields.display_name, "テスト株式会社");
     let after = s.get_contact(c.id as i64).unwrap();
     assert_eq!(
         after.primary_organization.as_deref(),
@@ -149,13 +147,41 @@ fn renaming_a_card_renames_its_members_and_queues_them() {
 }
 
 #[test]
-fn delete_organization_only_when_no_members() {
+fn deleting_an_org_keeps_members_linked_until_purged() {
     let s = store();
     let a = s.upsert_contact(&employee("田中", "テスト社")).unwrap();
     let oid = a.fields.organizations[0].org_id.unwrap() as i64;
-    assert!(!s.delete_organization(oid).unwrap());
-    s.delete_contact(a.id as i64).unwrap();
-    assert!(s.delete_organization(oid).unwrap());
+    // メンバーがいても消せる（ゴミ箱へ。要判断 F）。つながりは残る。
+    s.delete_contact(oid).unwrap();
+    let aa = s.get_contact(a.id as i64).unwrap();
+    assert_eq!(aa.fields.organizations[0].org_id, Some(oid as i32));
+    // 完全に消えると、会社名は文字として残る。
+    {
+        let conn = s.conn.lock().unwrap();
+        conn.execute("DELETE FROM contacts WHERE id = ?1", params![oid])
+            .unwrap();
+    }
+    let aa = s.get_contact(a.id as i64).unwrap();
+    assert_eq!(aa.fields.organizations[0].org_id, None);
+    assert_eq!(aa.fields.organizations[0].name.as_deref(), Some("テスト社"));
+}
+
+#[test]
+fn org_self_row_never_links_and_people_cannot_link_to_people() {
+    let s = store();
+    // 同じ名前の組織がもう 1 件あっても、組織の自分の会社の行はどこにもつながない。
+    let first = card(&s, "株式会社テスト");
+    let second = s
+        .upsert_contact(&organization("株式会社テスト", None, None))
+        .unwrap();
+    assert_eq!(second.fields.organizations[0].org_id, None);
+    assert_ne!(second.id, first.id);
+    // 人の id を org_id に入れても、人にはつながない（名前で組織を引く）。
+    let p = s.upsert_contact(&person("佐藤", &[])).unwrap();
+    let mut c = employee("鈴木", "株式会社テスト");
+    c.fields.organizations[0].org_id = Some(p.id);
+    let c = s.upsert_contact(&c).unwrap();
+    assert_eq!(c.fields.organizations[0].org_id, Some(first.id));
 }
 
 #[test]
@@ -193,7 +219,7 @@ fn org_duplicates_grouped_by_normalized_name_and_merge_repoints() {
 fn detail_lists_members_and_shared_values() {
     let s = store();
     let mut a = employee("田中", "テスト社");
-    a.fields.emails = vec![crate::models::ContactValue {
+    a.fields.emails = vec![ContactValue {
         label: Some("代表".into()),
         value: "info@test.co.jp".into(),
         is_shared: true,

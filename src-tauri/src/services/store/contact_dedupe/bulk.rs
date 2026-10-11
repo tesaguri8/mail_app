@@ -5,7 +5,7 @@
 //! 「別人」と記録した対はまとめない（`contact_distinct`）。
 
 use super::super::contact_distinct::load_distinct;
-use super::super::contact_rows::load_all_full;
+use super::super::contact_rows::load_all_people;
 use super::super::Store;
 use super::merge_in;
 use super::merge_remote::{add_up, load_links, summarize};
@@ -20,7 +20,7 @@ impl Store {
     /// DB の読み出しに失敗したとき。
     pub fn sure_merge_preview(&self) -> rusqlite::Result<SureMergePreview> {
         let conn = self.conn.lock().unwrap();
-        let contacts = load_all_full(&conn)?;
+        let contacts = load_all_people(&conn)?;
         let by_id: HashMap<i64, _> = contacts.iter().map(|c| (i64::from(c.id), c)).collect();
         let found = sure_groups(&contacts, &load_distinct(&conn)?);
         let mut remote = BTreeMap::new();
@@ -56,7 +56,7 @@ impl Store {
     pub fn merge_sure_duplicates(&self) -> rusqlite::Result<SureMergeResult> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        let found = sure_groups(&load_all_full(&tx)?, &load_distinct(&tx)?);
+        let found = sure_groups(&load_all_people(&tx)?, &load_distinct(&tx)?);
         let mut result = SureMergeResult::default();
         for g in &found {
             result.remote_deletions += merge_in(&tx, g.keep, &g.drops)? as i32;

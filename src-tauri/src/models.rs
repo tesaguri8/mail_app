@@ -572,22 +572,6 @@ pub struct OrganizationSummary {
     pub deleted_at: Option<String>,
 }
 
-/// 組織カードの作成・更新入力（フロントから受け取る）。`id` が None なら新規作成。
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/bindings/")]
-pub struct OrganizationInput {
-    pub id: Option<i32>,
-    pub name: String,
-    pub name_kana: Option<String>,
-    pub note: Option<String>,
-    pub phone: Option<String>,
-    pub fax: Option<String>,
-    pub email: Option<String>,
-    pub url: Option<String>,
-    #[serde(default)]
-    pub address: OrgAddress,
-}
-
 /// 組織の共有アドレス（会社の代表 info@ / 代表電話 / 代表FAX 等）。
 /// 「組織 ＋ 値 ＋ 共有件数（何名が共有指定しているか）」を組織詳細で表示する。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

@@ -1,9 +1,9 @@
 use super::*;
 use crate::models::{
-    ContactAddress, ContactCustomField, ContactDate, ContactHandle, ContactOrganization,
-    ContactRelation, ContactUrl, ContactValue, HandleKind, OrganizationInput,
+    ContactAddress, ContactCustomField, ContactDate, ContactHandle, ContactKind,
+    ContactOrganization, ContactRelation, ContactUrl, ContactValue, HandleKind,
 };
-use crate::services::store::test_support::{employee, person, value};
+use crate::services::store::test_support::{employee, organization, person, value};
 use crate::services::vcard;
 
 fn store() -> Store {
@@ -28,7 +28,7 @@ fn full_input() -> ContactInput {
             maiden_name: Some("佐藤".into()),
             birthday: Some("--03-09".into()),
             note: Some("メモ".into()),
-            show_as_company: true,
+            kind: ContactKind::Person,
             is_favorite: true,
             is_business: true,
             allow_remote_images: true,
@@ -108,13 +108,24 @@ fn every_field_round_trips_through_the_tables() {
     assert!(got.links.is_empty(), "どのサービスにもつながっていない");
 
     // 一覧は主値の写しを持ち、子テーブルは空で返す。
-    let listed = s.list_contacts(None, &[], false).unwrap();
+    // 会社欄に入れた会社は組織の連絡先になるので、人だけを見る。
+    let listed: Vec<_> = s
+        .list_contacts(None, &[], false)
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.fields.kind == ContactKind::Person)
+        .collect();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].primary_phone.as_deref(), Some("090-1111-2222"));
     assert!(listed[0].fields.emails.is_empty());
 
     // 連絡先タブの一覧は、一覧に出す分だけの軽い形で返す。
-    let items = s.list_contact_items(None, &[], false).unwrap();
+    let items: Vec<_> = s
+        .list_contact_items(None, &[], false)
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.kind == ContactKind::Person)
+        .collect();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].id, got.id);
     assert_eq!(items[0].display_name, got.fields.display_name);
@@ -233,10 +244,7 @@ fn shared_company_email_with_different_names_stays_separate() {
 fn file_import_links_existing_cards_but_never_creates_them() {
     let s = store();
     let card = s
-        .upsert_organization(&OrganizationInput {
-            name: "株式会社テスト".into(),
-            ..Default::default()
-        })
+        .upsert_contact(&organization("株式会社テスト", None, None))
         .unwrap();
     let p = vcard::parse(
         "BEGIN:VCARD\nVERSION:3.0\nFN:A\nORG:(株)テスト\nEND:VCARD\n\
@@ -345,11 +353,12 @@ fn search_matches_variant_kanji_typos_and_company() {
     assert_eq!(s.list_contacts(Some("渡邊"), &[], false).unwrap().len(), 1);
     let fuzzy = s.list_contacts(Some("斉藤"), &[], false).unwrap();
     assert!(fuzzy.iter().any(|c| c.fields.display_name == "斎藤花子"));
+    // 人（会社名で当たる）と、会社欄から作られた組織の 2 件。
     assert_eq!(
         s.list_contacts(Some("sngdesign"), &[], false)
             .unwrap()
             .len(),
-        1,
+        2,
         "主の会社名でも引ける"
     );
     assert!(s

@@ -1,6 +1,6 @@
 use super::*;
-use crate::models::{ContactInput, ContactOrganization, ContactValue, OrganizationInput};
-use crate::services::store::test_support::{person, value};
+use crate::models::{ContactInput, ContactOrganization, ContactValue};
+use crate::services::store::test_support::{organization, person, value};
 
 fn mem_store() -> Store {
     Store::open_in_memory_for_test()
@@ -334,10 +334,7 @@ fn pulling_refreshes_google_fields_and_keeps_local_marks() {
     let s = mem_store();
     let acct = account(&s);
     let card = s
-        .upsert_organization(&OrganizationInput {
-            name: "株式会社ヤマダ".into(),
-            ..Default::default()
-        })
+        .upsert_contact(&organization("株式会社ヤマダ", None, None))
         .unwrap();
     let id = linked_contact(
         &s,

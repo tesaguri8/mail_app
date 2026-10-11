@@ -27,6 +27,7 @@ import { CONTACTS_SYNCED_EVENT } from '../hooks/useAutoSync';
 import { LOCAL_CHANGE_EVENT } from '../utils/localChange';
 import { useVirtualRows } from '../hooks/useVirtualRows';
 import { useContactsStore } from '../stores/contacts';
+import { useContactCountStore } from '../stores/contactCount';
 import {
   CONTACT_SOURCE_FILTERS,
   ContactLinkMarks,
@@ -116,6 +117,19 @@ export function ContactsView({
   };
   // 数千件を全部描くと重いので、見えている行だけ描く。
   const rows = useVirtualRows<HTMLUListElement>(shownItems.length, ROW_HEIGHT);
+
+  // フッターの件数。一覧に出している分から出す（分母は手元の既定の一覧＝生きている人の総数）。
+  const setCount = useContactCountStore((s) => s.set);
+  const shownCount = listed === null ? null : shownItems.length;
+  const totalCount = cached?.length ?? null;
+  useEffect(() => {
+    setCount(
+      shownCount === null
+        ? null
+        : { shown: shownCount, total: totalCount ?? shownCount, trash: showDeleted }
+    );
+  }, [setCount, shownCount, totalCount, showDeleted]);
+  useEffect(() => () => setCount(null), [setCount]);
 
   useEffect(() => {
     if (!isTauri) return;

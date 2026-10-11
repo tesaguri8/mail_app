@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { Image, RefreshCw, Type } from 'lucide-react';
 import { BAR_MAX } from '../App';
 import { useActivities } from '../stores/activity';
+import { contactCountLabel, type ContactCount } from '../stores/contactCount';
 
 /**
  * 全ビュー共通のボトムバー（常設）。右側の 1 本のスライダーで、背景の濃さ（image）と
@@ -17,6 +18,7 @@ export function BottomBar({
   onModeChange,
   mailTotal,
   mailServerTotal,
+  contactCount,
 }: {
   /** 背景のかぶせ（暗さ）。0〜BAR_MAX。 */
   dim: number;
@@ -31,6 +33,8 @@ export function BottomBar({
   mailTotal?: number | null;
   /** 同じ集計のサーバ総数（IMAP EXISTS 合計）。分かれば「ローカル/サーバ」表示にする。 */
   mailServerTotal?: number | null;
+  /** 連絡先の一覧に出している件数（連絡先の一覧を出しているときだけ。他は null）。 */
+  contactCount?: ContactCount | null;
 }) {
   const { t } = useTranslation();
   // バックグラウンド作業（メール更新・添付ダウンロード等）。あればフッター左に代表 1 件を出す。
@@ -51,7 +55,7 @@ export function BottomBar({
 
   return (
     <div className="flex h-8 shrink-0 items-center gap-3 border-t border-white/10 px-4 text-xs text-white/55">
-      {/* 左: 作業中はその進捗、無ければ表示中アカウントのメール総数（メールモード時） */}
+      {/* 左: 作業中はその進捗、無ければ表示中アカウントのメール総数（メールモード時）か連絡先の件数 */}
       <div className="flex min-w-0 flex-1 items-center gap-2">
         {activity ? (
           <>
@@ -72,6 +76,13 @@ export function BottomBar({
               </>
             )}
           </>
+        ) : contactCount ? (
+          <span className="tabular-nums text-white/45">
+            {(() => {
+              const { key, values } = contactCountLabel(contactCount);
+              return t(key, values);
+            })()}
+          </span>
         ) : (
           mailTotal != null && (
             <span className="tabular-nums text-white/45">

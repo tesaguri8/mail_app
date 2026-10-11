@@ -957,6 +957,9 @@
     "cc": "Cc",
     "composeTo": "{{email}} へ新規メール"
   },
+  "timeline": {
+    "label": "日付のつまみ"
+  },
   "thread": {
     "you": "自分",
     "untitled": "（無題のスレッド）",

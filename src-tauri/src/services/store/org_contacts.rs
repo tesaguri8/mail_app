@@ -11,7 +11,7 @@
 use super::contact_dedupe::merge_in;
 use super::contact_rows::load_contact;
 use super::contact_write::{find_org_by_key, mark_dirty, write_contact, OrgLinking, WriteOptions};
-use super::organizations::sync_member_names;
+use super::organizations::{rename_org, sync_member_names};
 use super::Store;
 use crate::models::{CompanyOnlyCandidate, ContactKind, ContactListItem, ContactSummary};
 use crate::services::contact_fields::{is_blank, is_company_only};
@@ -88,7 +88,7 @@ fn pick_survivor(conn: &Connection, ids: &[i64]) -> rusqlite::Result<Option<i64>
 /// 会社名だけの連絡先とまとめる（`Store::open` から一度だけ）。
 ///
 /// 残すのは会社名だけの連絡先の側（Google のつながり・`uid`・別人の記録・メールとの関係を持つ）。
-/// 組織カードの代表の値とメモはそちらへ寄せ、人のつながりも付け替える。同じ名前の会社名だけの
+/// 組織カードの代表の値とメモはそちらへ寄せ、人のつながりも付け替える。名前は組織カードの名前にする。同じ名前の会社名だけの
 /// 連絡先が 2 件以上あれば、つながりの多い方（同点なら古い方）とまとめ、残りは整理の候補に残す。
 ///
 /// 戻り値はまとめた組織の数。
@@ -127,6 +127,9 @@ pub fn merge_cards_with_company_only(conn: &Connection) -> rusqlite::Result<usiz
         cands.retain(|c| i64::from(c.id) != keep);
         // 消える側（カードから作った組織）が組織なので、まとめた結果も組織になる。
         merge_in(&tx, keep, &[org_id])?;
+        // 名前は組織カードの名前（利用者が Rondine で付けた名前。カードにつながっていた人の
+        // 会社名はもうこの名前なので、その人たちを送り直さずに済む）。
+        rename_org(&tx, keep, &name)?;
         merged += 1;
     }
     tx.execute(

@@ -73,11 +73,17 @@ fn startup_merge_keeps_the_company_only_contact_and_takes_the_card_values() {
     assert!(kept.fields.phones.iter().any(|p| p.value == "+81311112222"));
     assert_eq!(kept.fields.note.as_deref(), Some("代表の窓口"));
     assert_eq!(kept.fields.organizations[0].org_id, None);
-    assert!(s.get_contact(card).is_err(), "カードから作った側は消える");
-    // 人のつながりは残る側へ付け替わる。
     assert_eq!(
-        s.get_contact(taro).unwrap().fields.organizations[0].org_id,
-        Some(only as i32)
+        kept.fields.display_name, "株式会社見本",
+        "名前は組織カードの名前"
+    );
+    assert!(s.get_contact(card).is_err(), "カードから作った側は消える");
+    // 人のつながりは残る側へ付け替わり、会社名はカードの名前のまま。
+    let t = s.get_contact(taro).unwrap();
+    assert_eq!(t.fields.organizations[0].org_id, Some(only as i32));
+    assert_eq!(
+        t.fields.organizations[0].name.as_deref(),
+        Some("株式会社見本")
     );
     // 2 回目は何もしない。
     assert_eq!(

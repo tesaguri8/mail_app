@@ -28,12 +28,12 @@ export function OrgTidyToggle({
   const { t } = useTranslation();
   const modes: OrgTidyMode[] = ['unlinked', 'suggest', 'companyOnly', 'dupes'];
   return (
-    <div className="flex min-w-0 items-center gap-0.5 rounded-full bg-white/5 p-0.5">
+    <div className="flex w-full min-w-0 items-center gap-0.5 rounded-full bg-white/5 p-0.5">
       {modes.map((m) => (
         <button
           key={m}
           onClick={() => onChange(m)}
-          className={`whitespace-nowrap rounded-full px-2 py-1 text-[11px] ${
+          className={`min-w-0 flex-1 truncate whitespace-nowrap rounded-full px-2 py-1 text-[11px] ${
             mode === m ? 'bg-white/25 text-white' : 'text-white/55 hover:bg-white/10'
           }`}
         >
@@ -67,7 +67,7 @@ export function TidyHeader({
   const { t } = useTranslation();
   return (
     <>
-      <div className="flex items-center gap-2 p-3">
+      <div className="flex items-center gap-2 px-3 pt-3">
         <button
           onClick={onExit}
           title={t('dupes.back')}
@@ -76,7 +76,6 @@ export function TidyHeader({
         >
           <ArrowLeft size={17} />
         </button>
-        <OrgTidyToggle mode={mode} onChange={onModeChange} />
         <span className="flex-1" />
         <button
           onClick={onReload}
@@ -87,6 +86,10 @@ export function TidyHeader({
         >
           <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
         </button>
+      </div>
+      {/* 整理の種類は 4 つあるので、戻る・取り直しとは別の段に置く（左の枠の幅に収める）。 */}
+      <div className="px-3 py-2">
+        <OrgTidyToggle mode={mode} onChange={onModeChange} />
       </div>
       <div className="mx-3 mb-2 flex items-center gap-2 rounded-md bg-white/10 px-2.5 py-1.5">
         <Search size={15} className="shrink-0 text-white/50" />

@@ -350,6 +350,7 @@ fn map_thread_message(r: &rusqlite::Row) -> rusqlite::Result<ThreadMessage> {
         folder: r.get(16)?,
         thread_assignment: r.get(17)?,
         body_state: r.get(21)?,
+        unseen_quotes: Vec::new(),
     })
 }
 
@@ -480,6 +481,15 @@ impl Store {
                 .and_then(crate::services::quotes::first_anchor)
             {
                 anchors.insert(a);
+            }
+        }
+        // ③ 手元に無いメールの引用（転送・Outlook の「元のメッセージ」で初めて届いた内容）を拾う。
+        // 保存済みの本文からその場で分け直すので、再解析の前のメールにも効く。
+        let known = super::quote_match::thread_bodies(&messages);
+        for m in messages.iter_mut() {
+            if let Some(body) = m.body_plain.as_deref() {
+                m.unseen_quotes =
+                    super::quote_match::unseen_quotes(conn, i64::from(m.id), body, &known)?;
             }
         }
         // 集計はメッセージから算出（保存値に依存しない）。
@@ -764,8 +774,10 @@ pub fn reprocess_all_conn(conn: &mut Connection, account_id: i64) -> rusqlite::R
         }
         tx.commit()?;
     }
-    // (2) スレッド割当・代表フラグを作り直す（1 トランザクション）。
+    // (2) 作り直した引用ブロックを手元のメールと照らし合わせ（docs/THREADING.md §2）、
+    //     スレッド割当・代表フラグを作り直す（1 トランザクション）。
     let tx = conn.transaction()?;
+    super::quote_match::match_quotes_of_account(&tx, account_id)?;
     rebuild_threads_conn(&tx, account_id)?;
     tx.commit()?;
     Ok(count)
@@ -1228,6 +1240,73 @@ mod tests {
             .unwrap();
         assert_eq!(child.clean_body.as_deref(), Some("承知しました。"));
         assert!(child.has_quotes);
+    }
+
+    /// 連なった「元のメッセージ」のうち、手元に無い 1 通だけを unseen_quotes に出す
+    /// （手元にある 1 通は、いままでどおり「引用を表示」に畳む）。名前・宛先は作り物。
+    #[test]
+    fn thread_view_lists_only_quotes_missing_from_the_mailbox() {
+        let store = test_store();
+        let fwd_id = {
+            let conn = store.conn.lock().unwrap();
+            // 手元にある 1 通（田中 → 鈴木 10/2 17:55）。別の会話にあってもよい。
+            let mut seen = mk(
+                "t@x",
+                "RE: 図面",
+                "tanaka@example.jp",
+                "inbox",
+                1,
+                None,
+                None,
+            );
+            seen.date = Some("2026-10-02T17:55:20+09:00".into());
+            seen.date_ts = Some(1_790_931_320);
+            insert_email(&conn, &seen).unwrap();
+            let body = "鈴木様\n\nその3です。\n\n\
+-----Original Message-----\n\
+From: 田中 一郎 <tanaka@example.jp>\n\
+Sent: Friday, October 2, 2026 5:55 PM\n\
+To: 鈴木 次郎 <suzuki@example.jp>\n\
+Subject: RE: 図面\n\
+\n\
+鈴木様\n修正点をまとめました。\n\
+\n\
+-----Original Message-----\n\
+From: 高橋 花子 <takahashi@example.com>\n\
+Sent: Friday, October 2, 2026 2:50 PM\n\
+To: 田中 一郎 <tanaka@example.jp>\n\
+Subject: 図面\n\
+\n\
+田中様\n図面を送ります。";
+            let mut fwd = mk(
+                "f@x",
+                "RE: 図面 その3",
+                "tanaka@example.jp",
+                "inbox",
+                3,
+                None,
+                None,
+            );
+            fwd.body_plain = Some(body.into());
+            fwd.clean_body = Some(crate::services::quotes::split_reply(body).clean);
+            match insert_email(&conn, &fwd).unwrap() {
+                crate::services::store::InsertOutcome::Inserted(id) => id,
+                _ => panic!("insert"),
+            }
+        };
+        store.rebuild_threads(1).unwrap();
+        let view = store.thread_view(fwd_id).unwrap().unwrap();
+        let m = view
+            .messages
+            .iter()
+            .find(|m| i64::from(m.id) == fwd_id)
+            .unwrap();
+        assert_eq!(m.unseen_quotes.len(), 1, "{:?}", m.unseen_quotes);
+        let q = &m.unseen_quotes[0];
+        assert_eq!(q.from, "高橋 花子 <takahashi@example.com>");
+        assert_eq!(q.at, "Friday, October 2, 2026 2:50 PM");
+        assert_eq!(q.subject.as_deref(), Some("図面"));
+        assert_eq!(q.body, "田中様\n図面を送ります。");
     }
 
     /// 会話ビューは下書きを常に隠し、ゴミ箱の行は Trash フォルダから開いたときだけ見せる。

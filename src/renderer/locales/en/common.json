@@ -961,6 +961,7 @@
     "label": "Timeline"
   },
   "thread": {
+    "unseenQuote": "Included in this email — not in your mailbox",
     "you": "You",
     "untitled": "(untitled thread)",
     "count": "{{count}}",

@@ -961,6 +961,7 @@
     "label": "日付のつまみ"
   },
   "thread": {
+    "unseenQuote": "このメールに含まれていた、未受信のメール",
     "you": "自分",
     "untitled": "（無題のスレッド）",
     "count": "{{count}}通",

@@ -24,3 +24,21 @@ export function orgMatchReasonLabel(
 export function othersLinked(linked: number): number {
   return Math.max(0, linked - 1);
 }
+
+/** 組織欄の状態の色（`null` は色なし）。 */
+export type OrgFieldStatus = 'similar' | 'unlinked' | null;
+
+/**
+ * 組織欄の状態。カードにつながっていない会社名（`unlinked`）のうち、似た組織の候補があれば
+ * 黄（`similar`）、無ければ赤（`unlinked`）。候補を取得中（`matchCount` が null）の間は色なし
+ * （赤から黄へちらつかないように）。会社名が空・カードにつながっているときも色なし。
+ */
+export function orgFieldStatus(unlinked: boolean, matchCount: number | null): OrgFieldStatus {
+  if (!unlinked || matchCount === null) return null;
+  return matchCount > 0 ? 'similar' : 'unlinked';
+}
+
+/** 似た組織の結果がどの会社名・どの人のものかを表すキー（古い結果で色を付けないため）。 */
+export function orgMatchKey(name: string, contactId: number | null): string {
+  return `${contactId ?? 'new'}|${name.trim()}`;
+}

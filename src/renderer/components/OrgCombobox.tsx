@@ -6,6 +6,8 @@ import { organizationList, organizationRestore } from '../services/organizations
 import { trashRetentionGet } from '../services/trash';
 import { trashDaysLeft } from '../utils/trash';
 import { OrgRegister, type OrgRegisterContext } from './OrgRegister';
+import { FieldStatusHint } from './FieldStatusHint';
+import { orgFieldStatus, orgMatchKey } from '../utils/orgMatch';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 const MAX_SUGGESTIONS = 8;
@@ -188,6 +190,15 @@ export function OrgAutocomplete({
   );
 }
 
+/** 組織欄の入力の見た目（状態ごと）。赤は重複の赤い枠、黄は似た連絡先の注意書きと同じ系統。 */
+const STATUS_INPUT: Record<'similar' | 'unlinked' | 'none', string> = {
+  none: 'w-full rounded bg-white/10 px-2.5 py-1.5 pr-8 text-sm outline-none focus:bg-white/15',
+  similar:
+    'w-full rounded bg-amber-300/10 px-2.5 py-1.5 pr-8 text-sm text-amber-50 outline-none ring-1 ring-amber-300/60 focus:bg-amber-300/15',
+  unlinked:
+    'w-full rounded bg-red-500/15 px-2.5 py-1.5 pr-8 text-sm text-red-100 outline-none ring-1 ring-red-400/70 focus:bg-red-500/20',
+};
+
 /**
  * 連絡先編集の「会社・組織」欄。組織DB検索のオートコンプリートで、既存を選べば org_id を
  * 確定（照合はID）、一覧に無い名前は新規登録扱い（保存時に組織を作成）。
@@ -216,9 +227,24 @@ export function OrgCombobox({
   const [results, setResults] = useState<OrganizationSummary[]>([]);
   // 「組織に登録」でつないだカード（取り消しても戻らないことを知らせる）。
   const [linked, setLinked] = useState<OrganizationSummary | null>(null);
+  // 届いた似た組織の件数と、どの会社名・どの人の結果か。欄の色の判定に使う。
+  const [matchResult, setMatchResult] = useState<{ key: string; count: number } | null>(null);
   const query = name.trim();
   const exact = results.find((o) => o.name.toLowerCase() === query.toLowerCase()) ?? null;
   const isExisting = orgId != null || exact != null;
+  // 保存済みでカードにつながっていない会社名（「組織に登録」を出すとき）だけ、状態の色を付ける。
+  const showRegister = query !== '' && !isExisting && saved && register !== undefined;
+  // いま出している会社名・人の結果だけを使う（届くまでは取得中＝色なし。前の会社名・前の人の
+  // 結果で一瞬色を付けない）。
+  const matchCount =
+    register && matchResult?.key === orgMatchKey(query, register.contactId)
+      ? matchResult.count
+      : null;
+  const status = orgFieldStatus(showRegister, matchCount);
+  const statusMessages =
+    status === 'similar'
+      ? [t('contact.orgStatusNoCard'), t('contact.orgStatusSimilar', { count: matchCount ?? 0 })]
+      : [t('contact.orgStatusNoCard')];
 
   return (
     <div>
@@ -226,16 +252,27 @@ export function OrgCombobox({
         <Building2 size={15} />
         {label ?? t('contact.organization')}
       </span>
-      <OrgAutocomplete
-        value={name}
-        placeholder={t('contact.orgPlaceholder')}
-        onResults={setResults}
-        onChange={(text) => {
-          const m = results.find((o) => o.name.toLowerCase() === text.trim().toLowerCase());
-          onChange(m ? m.id : null, text);
-        }}
-        onSelect={(o) => onChange(o.id, o.name)}
-      />
+      <div className="flex items-center gap-1.5">
+        <div className="min-w-0 flex-1">
+          <OrgAutocomplete
+            value={name}
+            placeholder={t('contact.orgPlaceholder')}
+            inputClassName={STATUS_INPUT[status ?? 'none']}
+            onResults={setResults}
+            onChange={(text) => {
+              const m = results.find((o) => o.name.toLowerCase() === text.trim().toLowerCase());
+              onChange(m ? m.id : null, text);
+            }}
+            onSelect={(o) => onChange(o.id, o.name)}
+          />
+        </div>
+        {status && (
+          <FieldStatusHint
+            tone={status === 'similar' ? 'amber' : 'red'}
+            messages={statusMessages}
+          />
+        )}
+      </div>
       {linked && linked.id === orgId ? (
         <span className="mt-1 flex items-center gap-1 text-[11px] text-emerald-300">
           <Check size={12} />
@@ -266,6 +303,7 @@ export function OrgCombobox({
                 onChange(org.id, org.name);
               }}
               onPick={(org) => onChange(org.id, org.name)}
+              onMatchCount={(key, count) => setMatchResult({ key, count })}
             />
           )
         ))

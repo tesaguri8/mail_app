@@ -390,6 +390,8 @@
     "orgNth": "Company {{n}}",
     "orgMakePrimary": "Make primary",
     "orgPhonetic": "Phonetic company name",
+    "orgStatusNoCard": "Not linked to an organization card",
+    "orgStatusSimilar": "{{count}} similar organization(s) found",
     "orgRegister": "Register as organization",
     "orgRegisterOthers": "{{count}} other contact(s) will be linked too",
     "orgRegisterFailed": "Could not register the organization",

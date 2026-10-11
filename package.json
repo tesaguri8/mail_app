@@ -46,6 +46,7 @@
     "vitest": "^4.0.0"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.14.14",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.3",
     "@tauri-apps/plugin-dialog": "^2",

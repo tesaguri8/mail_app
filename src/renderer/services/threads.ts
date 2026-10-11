@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { ThreadView } from '@bindings/ThreadView';
 import type { ThreadListItem } from '@bindings/ThreadListItem';
+import type { ThreadDayCount } from '@bindings/ThreadDayCount';
 
 // スレッド単位のメール一覧（代表＝フォルダ内最新＋「N通」件数）。docs/THREADING.md §5。
 // accountId が null なら全アカウント横断。offset でページング。
@@ -16,10 +17,6 @@ export const threadList = (
     limit,
     offset,
   });
-
-// フォルダ内のスレッド総数（一覧の「表示 X / 全 Y」表示用）。accountId が null なら全アカウント。
-export const threadCount = (accountId: number | null, folder: string) =>
-  invoke<number>('thread_count', { accountId: accountId ?? null, folder });
 
 // 指定メールが属する論理スレッドの会話（時系列・古い順）を取得する。
 // 未割当の旧データはバックエンドが遅延割当する（docs/THREADING.md §5）。
@@ -44,3 +41,8 @@ export const messageReassign = (emailId: number, targetThread: number) =>
 
 // アカウントの auto スレッド割当を作り直す（manual は保持）。
 export const threadRebuild = (accountId: number) => invoke<void>('thread_rebuild', { accountId });
+
+// フォルダ内のスレッドを、代表メールの日付（端末ローカル）ごとに数える（メール一覧の日付のつまみ用）。
+// 並びと絞り込みは threadList と同じで、累計がそのまま一覧の offset になる。docs/MAIL_LIST_TIMELINE.md。
+export const threadDayCounts = (accountId: number | null, folder: string) =>
+  invoke<ThreadDayCount[]>('thread_day_counts', { accountId: accountId ?? null, folder });

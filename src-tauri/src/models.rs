@@ -794,6 +794,16 @@ pub struct ThreadListItem {
     pub email_ids: Vec<i32>,
 }
 
+/// スレッド一覧の、日ごとのスレッド数（日付のつまみ用）。docs/MAIL_LIST_TIMELINE.md。
+/// 並びは一覧（`thread_list`）と同じ新しい順で、累計がそのまま一覧の OFFSET になる。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ThreadDayCount {
+    /// 代表メールの日付（端末ローカルの `YYYY-MM-DD`）。日時の無いスレッドは None（一覧の最後）。
+    pub date_key: Option<String>,
+    pub count: i32,
+}
+
 /// 添付ファイル（一覧/ダウンロード状態）。
 /// `is_downloaded` が false のときは本体未取得（メタのみ）。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

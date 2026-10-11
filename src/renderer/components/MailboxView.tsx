@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import {
   CalendarPlus,
@@ -60,7 +61,23 @@ import { MailBody } from './MailBody';
 import { ContactEditor, type EditorRequest } from './ContactEditor';
 import { CalendarPanel, type CalendarPanelInitial } from './CalendarPanel';
 import { Conversation, type ConversationHandlers } from './Conversation';
-import { threadList, threadCount } from '../services/threads';
+import { threadList, threadDayCounts } from '../services/threads';
+import {
+  PAGE_SIZE,
+  dropFromDays,
+  emptySlots,
+  fillSlots,
+  indexOfId,
+  loadedPrefix,
+  loadedRows,
+  pagesToLoad,
+  toDayCounts,
+  totalOf,
+  updateLoaded,
+  type Slots,
+} from './mailListWindow';
+import { TimelineScrubber } from './timeline/TimelineScrubber';
+import type { DayCount } from './timeline/dayCounts';
 import { Compose, type ComposeTarget } from './Compose';
 import { FolderIcons } from './FolderIcons';
 import { MAIL_FILTERS, matchesFilters, matchesNoneOfFilters } from './mailFilters';
@@ -93,12 +110,12 @@ const MIN_CONTACT_PANEL_WIDTH = 320;
 const MAX_CONTACT_PANEL_WIDTH = 560;
 const DEFAULT_CONTACT_PANEL_WIDTH = 400;
 
-/** スクロール位置インジケータ用の日付ラベル（例: 2026/7/2）。 */
-function formatScrollDate(d: string | null): string {
-  if (!d) return '';
-  const dt = new Date(d);
-  return isNaN(dt.getTime()) ? '' : `${dt.getFullYear()}/${dt.getMonth() + 1}/${dt.getDate()}`;
-}
+/** 一覧の行の高さの見積もり（px。名前・件名・本文 2 行＋行の間）。実際の高さは描いてから測る。 */
+const ROW_ESTIMATE = 92;
+/** 一覧の行の間（px。以前の space-y-1 と同じ）。 */
+const ROW_GAP = 4;
+/** スクロールが止まったとみなすまでの待ち（ms）。止まった場所の前後だけを読む。 */
+const RANGE_SETTLE_MS = 80;
 
 /** 検索結果（メッセージ単位）を、一覧（スレッド単位）と同じ行の形へ写像する（1 通=1 スレッド相当）。 */
 function searchRowToThread(m: MailSummary): ThreadListItem {
@@ -191,11 +208,16 @@ export function MailboxView({
   // 遷移直後に開くべきメッセージ（ホームの新着クリック）
   const pendingOpen = useRef<number | null>(initialMailId);
   // 一覧はスレッド単位（代表＋件数）。検索結果も同じ形へ写像して扱いを揃える。
-  const [mails, setMails] = useState<ThreadListItem[]>([]);
-  // 現在の読み込み件数を常に最新で保持（同期イベントの購読は再購読しないため、
-  // クロージャの古い mails を避けて ref で参照する）。
-  const mailsLenRef = useRef(0);
-  mailsLenRef.current = mails.length;
+  // フォルダ内の全スレッドを最初から枠（slots）として持ち、読み込んだ位置だけに行が入る
+  // （null は未読み込み。日付のつまみで飛んだ先だけを読む。docs/MAIL_LIST_TIMELINE.md）。
+  const [slots, setSlots] = useState<Slots>([]);
+  // 日ごとのスレッド数（一覧の並び順。累計＝一覧の offset）。日付のつまみの元。
+  const [days, setDays] = useState<DayCount[]>([]);
+  // 読み込んである行（並び順のまま）。選択・操作・会話の解決はここから引く。
+  const mails = useMemo(() => loadedRows(slots), [slots]);
+  // 最新の枠（同期イベントの購読は再購読しないため、クロージャの古い値を避けて ref で参照する）。
+  const slotsRef = useRef<Slots>(slots);
+  slotsRef.current = slots;
   const [opened, setOpened] = useState<MailDetail | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [progress, setProgress] = useState<SyncProgress | null>(null);
@@ -209,8 +231,8 @@ export function MailboxView({
     return Number.isFinite(saved) && saved >= MIN_SIDEBAR_WIDTH ? saved : DEFAULT_SIDEBAR_WIDTH;
   });
   const splitRef = useRef<HTMLDivElement>(null);
-  // スクロールする一覧本体（<ul>）。自動追い読み込みで高さ実測に使う。
-  const listRef = useRef<HTMLUListElement>(null);
+  // スクロールする一覧本体。仮想化のスクロール要素で、自動追い読み込みの高さ実測にも使う。
+  const listRef = useRef<HTMLDivElement>(null);
   // 矢印キー移動用の「最新値」ref（早期 return より前の effect から参照する）。
   const keyNavRef = useRef<{
     mails: ThreadListItem[];
@@ -565,93 +587,84 @@ export function MailboxView({
   }, []);
   const tagById = new Map(tags.map((tg) => [tg.id, tg]));
 
-  // 一覧の取得（無限スクロール）: 1 ページずつ読み込み、スクロールで続きを追加する。
-  // 切替時の取り違えを防ぐため、呼び出しトークン／ページキーで整合を取る。
-  const PAGE_SIZE = 100;
+  // 一覧の取得: 日ごとの件数（thread_day_counts）から全期間ぶんの枠を先に作り、見えている位置の
+  // 前後だけを OFFSET で読む（docs/MAIL_LIST_TIMELINE.md）。絞り込み中は画面側の絞り込みで件数が
+  // ずれるので、いままでどおり上から順に読み足す（loadMore・AUTO_FILL_CAP）。
+  // 切替時の取り違えを防ぐため、呼び出しトークンで整合を取る（古い読み込みの結果は捨てる）。
   // フィルタで可視行が少ないとき、ビューポートが埋まるまで自動で読み足す上限（一気読みの安全弁）。
   const AUTO_FILL_CAP = 1500;
   const loadTokenRef = useRef(0);
-  const pageKeyRef = useRef('');
-  const loadingMoreRef = useRef(false);
-  const [hasMore, setHasMore] = useState(false);
-  // フォルダ内のスレッド総数（一覧の「表示 X / 全 Y」表示用）。
-  const [threadTotal, setThreadTotal] = useState<number | null>(null);
-  // スクロール位置インジケータ（右端に、先頭付近のメールの年月を表示）。
-  const [scrollHint, setScrollHint] = useState<{ ratio: number; label: string } | null>(null);
-  const scrollHintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 読んでいる最中のページ番号（同じページを二重に頼まない）。
+  const inFlightRef = useRef<Set<number>>(new Set());
+  // いま見えている範囲（[start, end) 件目。同期後の読み直しで、その位置を読み直すのに使う）。
+  const visibleRangeRef = useRef<[number, number]>([0, PAGE_SIZE]);
+  // 画面側の絞り込み（トグル・期間・タグ）がかかっているか。かかっていれば、つまみを出さずに
+  // 上から順に読み足す（DB の件数と画面の行がずれるため）。検索モードも同じくつまみを出さない。
+  const filtering = filters.size > 0 || dateFilter != null || tagFilter.size > 0;
+  const timelineMode = !searchMode && !filtering;
+  const timelineModeRef = useRef(timelineMode);
+  timelineModeRef.current = timelineMode;
+  // 読み込んでいない続きがあるか（全件選択で DB から引き直すかの判断に使う）。
+  const hasMore = timelineMode ? mails.length < slots.length : loadedPrefix(slots) < slots.length;
 
-  // keepScroll: 同期後の再読込などで、すでに読み込んだページ数（＝スクロール位置）を
-  // 保つため、先頭ページに戻さず現在の読み込み件数ぶんをまとめて引き直す。既定は
-  // 先頭 1 ページ（フォルダ/アカウント切替時は先頭から表示したいため）。
-  const loadMails = (opts?: { keepScroll?: boolean }) => {
+  // [start, end) 件目を見せるのに足りないページだけを OFFSET で読み、枠へ入れる。
+  const requestRange = (start: number, end: number) => {
+    if (selected == null) return;
+    const token = loadTokenRef.current;
+    for (const page of pagesToLoad(slotsRef.current, start, end, inFlightRef.current)) {
+      inFlightRef.current.add(page);
+      threadList(queryAccount, folder, PAGE_SIZE, page * PAGE_SIZE)
+        .then((rows) => {
+          if (loadTokenRef.current !== token) return; // 切替後の結果は破棄
+          setSlots((prev) => fillSlots(prev, page * PAGE_SIZE, rows));
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (loadTokenRef.current === token) inFlightRef.current.delete(page);
+        });
+    }
+  };
+
+  // 一覧を読み直す。日ごとの件数で枠を作り直し、見せる範囲だけを読んでから差し替える（読み込み中の
+  // 空白を挟まない）。
+  // - reset: フォルダ/アカウント切替。先頭の 1 ページを読み、先頭に戻す
+  // - それ以外（操作・同期のあと）: つまみのときは見えている範囲を読み直し、位置はそのまま
+  // - 絞り込み中は、keepScroll なら読み込み済みの先頭部分を、無ければ先頭の 1 ページを読み直す（従来どおり）
+  const loadMails = (opts?: { keepScroll?: boolean; reset?: boolean }) => {
     const token = ++loadTokenRef.current;
-    pageKeyRef.current = `${selected}:${folder}`;
-    loadingMoreRef.current = false;
-    const count = opts?.keepScroll ? Math.max(PAGE_SIZE, mailsLenRef.current) : PAGE_SIZE;
-    // 総数（スレッド件数）も取得して「表示 X / 全 Y」に使う。
-    threadCount(queryAccount, folder)
-      .then((n) => {
-        if (loadTokenRef.current === token) setThreadTotal(n);
-      })
-      .catch(() => setThreadTotal(null));
-    return threadList(queryAccount, folder, count, 0)
-      .then((rows) => {
+    inFlightRef.current = new Set();
+    const reset = opts?.reset ?? false;
+    const [start, end] = reset
+      ? [0, PAGE_SIZE]
+      : timelineModeRef.current
+        ? visibleRangeRef.current
+        : [0, opts?.keepScroll ? Math.max(PAGE_SIZE, loadedPrefix(slotsRef.current)) : PAGE_SIZE];
+    return Promise.all([
+      threadDayCounts(queryAccount, folder),
+      threadList(queryAccount, folder, Math.max(1, end - start), start),
+    ])
+      .then(([counts, rows]) => {
         if (loadTokenRef.current !== token) return;
-        setMails(rows);
-        setHasMore(rows.length >= count);
+        setDays(toDayCounts(counts));
+        setSlots(fillSlots(emptySlots(totalOf(counts)), start, rows));
+        if (reset) listRef.current?.scrollTo({ top: 0 });
       })
       .catch(() => undefined);
   };
 
-  // 続きを読み込んで末尾に追加。検索モード中・読み込み中・末尾到達時は何もしない。
+  // 絞り込み中: 続きを読み込んで末尾に追加（先頭から途切れずに読んだ部分の次のページ）。
   const loadMore = () => {
-    if (selected == null || searchMode || loadingMoreRef.current || !hasMore) return;
-    const key = pageKeyRef.current;
-    loadingMoreRef.current = true;
-    threadList(queryAccount, folder, PAGE_SIZE, mails.length)
-      .then((rows) => {
-        if (pageKeyRef.current !== key) return; // 切替後の結果は破棄
-        setMails((prev) => [...prev, ...rows]);
-        setHasMore(rows.length >= PAGE_SIZE);
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        loadingMoreRef.current = false;
-      });
+    if (selected == null || searchMode) return;
+    const prefix = loadedPrefix(slotsRef.current);
+    if (prefix >= slotsRef.current.length) return;
+    requestRange(prefix, prefix + PAGE_SIZE);
   };
 
-  // 一覧のスクロール: 続きの自動読み込み＋位置インジケータ（一番上に見えているメールの日付）。
-  const onListScroll = (e: React.UIEvent<HTMLUListElement>) => {
+  // 一覧のスクロール: 絞り込み中は続きの自動読み込み（つまみのときは下の effect が止まった場所を読む）。
+  const onListScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    if (timelineMode) return;
     const el = e.currentTarget;
     if (el.scrollHeight - el.scrollTop - el.clientHeight < 400) loadMore();
-    const n = visibleMails.length;
-    const rows = el.children;
-    const count = Math.min(rows.length, n);
-    if (count === 0) return;
-    // 一番上に見えているメール行を実測（getBoundingClientRect）で二分探索。行高不定でも正確。
-    const ulTop = el.getBoundingClientRect().top;
-    let lo = 0;
-    let hi = count - 1;
-    let top = 0;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      // その行の下端がリスト上端より下 = まだ見えている → これ以降を探す。
-      if ((rows[mid] as HTMLElement).getBoundingClientRect().bottom > ulTop + 1) {
-        top = mid;
-        hi = mid - 1;
-      } else {
-        lo = mid + 1;
-      }
-    }
-    const label = formatScrollDate(visibleMails[top]?.date ?? null);
-    // 縦位置は通常のスクロールバーのつまみと同じ（スクロール量÷スクロール可能量）。
-    const max = el.scrollHeight - el.clientHeight;
-    const ratio = max > 0 ? Math.min(1, Math.max(0, el.scrollTop / max)) : 0;
-    if (label) {
-      setScrollHint({ ratio, label });
-      if (scrollHintTimer.current) clearTimeout(scrollHintTimer.current);
-      scrollHintTimer.current = setTimeout(() => setScrollHint(null), 1200);
-    }
   };
 
   // 自動追い読み込み: フィルタ絞り込みは前段でクライアント側適用のため、読み込み済みページ内の
@@ -660,12 +673,13 @@ export function MailboxView({
   // 続きが読める、という回避挙動になっていた）。ここではビューポートが埋まる＝スクロール可能に
   // なるまで、上限（AUTO_FILL_CAP 件）まで次ページを自動で読み足す。内容量・ウィンドウ/サイドバー
   // 幅の変化のたびに scrollHeight を実測して再判定する。上限超過後は通常のスクロールで続きを読む。
+  // つまみのとき（絞り込み無し）は枠が全期間ぶんあるので要らない。
   useEffect(() => {
     const el = listRef.current;
-    if (!el) return;
+    if (!el || timelineMode) return;
     const fill = () => {
-      if (searchMode || loadingMoreRef.current || !hasMore) return;
-      if (mails.length >= AUTO_FILL_CAP) return; // 一気読みの安全弁（以降は手動スクロール）
+      if (searchMode || !hasMore) return;
+      if (loadedPrefix(slotsRef.current) >= AUTO_FILL_CAP) return; // 一気読みの安全弁（以降は手動スクロール）
       if (el.clientHeight <= 0) return; // 未レイアウト時は判定しない
       if (el.scrollHeight <= el.clientHeight + 1) loadMore(); // まだスクロールできない＝続きを読む
     };
@@ -674,13 +688,25 @@ export function MailboxView({
     ro.observe(el);
     return () => ro.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mails, searchResults, hasMore, searchMode, filters, filterInvert, dateFilter, tagFilter, folder, selected]);
+  }, [
+    slots,
+    searchResults,
+    hasMore,
+    searchMode,
+    filters,
+    filterInvert,
+    dateFilter,
+    tagFilter,
+    folder,
+    selected,
+    timelineMode,
+  ]);
 
   useEffect(() => {
     setOpened(null);
     resetSelection();
     if (selected != null) {
-      loadMails().then(() => {
+      loadMails({ reset: true }).then(() => {
         const pid = pendingOpen.current;
         if (pid != null) {
           pendingOpen.current = null;
@@ -692,8 +718,13 @@ export function MailboxView({
   }, [selected, folder]);
 
   // 通常一覧・検索結果の両方へ同じ更新（既読/スター/削除/タグ）を反映する。
+  // 一覧から外れた行（削除・移動）は枠から抜いて詰め、日ごとの件数も減らす（DB 側でも消えるので、
+  // 後ろの offset もそのまま揃う）。
   const updateLists = (fn: (list: ThreadListItem[]) => ThreadListItem[]) => {
-    setMails(fn);
+    const { slots: next, removed } = updateLoaded(slotsRef.current, fn);
+    slotsRef.current = next;
+    setSlots(next);
+    if (removed.length > 0) setDays((prev) => dropFromDays(prev, removed));
     setSearchResults(fn);
   };
 
@@ -707,7 +738,7 @@ export function MailboxView({
     activeReadRef.current = null;
     const mark = (prev: ThreadListItem[]) =>
       prev.map((m) => (m.id === t.rowId ? { ...m, is_read: true, unread_count: 0 } : m));
-    setMails(mark);
+    setSlots((prev) => updateLoaded(prev, mark).slots);
     setSearchResults(mark);
     mailSetRead(t.ids, true).catch(() => undefined);
   }, []);
@@ -838,13 +869,6 @@ export function MailboxView({
       setQuery('');
     }
   };
-
-  // 開いたメッセージをリスト内でフォーカス（スクロール）
-  useEffect(() => {
-    if (opened?.id != null) {
-      document.getElementById(`mail-li-${opened.id}`)?.scrollIntoView({ block: 'nearest' });
-    }
-  }, [opened?.id]);
 
   const onSync = async () => {
     if (selected == null) return;
@@ -1256,10 +1280,6 @@ export function MailboxView({
     ];
   };
 
-  if (accounts.length === 0) {
-    return <div className="p-8 text-white/60">{t('mailbox.addInSettings')}</div>;
-  }
-
   // 一覧の絞り込み述語（トグル/期間/タグ）。表示用と「全一致選択」で同じ条件を使う。
   const passesFilters = (m: ThreadListItem) => {
     // トグル絞り込み。反転（invert）時は「選択した条件のどれにも当てはまらない」ものを通す
@@ -1271,7 +1291,91 @@ export function MailboxView({
     return togglePass && matchesDate(m.date, dateFilter) && matchesTags(m.tag_ids, tagFilter);
   };
   // 検索モードでは FTS 結果を、通常は読み込み済み一覧を対象に、絞り込みを重ねて表示する。
-  const visibleMails = (searchMode ? searchResults : mails).filter(passesFilters);
+  // 絞り込み中は先頭から途切れずに読んだ部分だけ（上から順に読み足す）。
+  const visibleMails = (
+    searchMode ? searchResults : timelineMode ? mails : mails.slice(0, loadedPrefix(slots))
+  ).filter(passesFilters);
+
+  // 一覧の仮想化。つまみのとき（絞り込み無し）は全期間ぶんの枠を並べ、未読み込みの位置は
+  // プレースホルダにする。行の高さは揃わない（本文 1〜2 行・タグ）ので、描いてから測る。
+  const rowCount = timelineMode ? slots.length : visibleMails.length;
+  const rowAt = (i: number): ThreadListItem | null =>
+    (timelineMode ? slots[i] : visibleMails[i]) ?? null;
+  const rowVirtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => listRef.current,
+    estimateSize: () => ROW_ESTIMATE,
+    getItemKey: (i) => rowAt(i)?.id ?? `placeholder-${i}`,
+    gap: ROW_GAP,
+    paddingStart: 8,
+    paddingEnd: 8,
+    overscan: 6,
+  });
+
+  // スクロールが止まった位置で、見えている行の前後（上下に 1 画面分ずつ）を読む。
+  // つまみで一気に飛んでも、通り過ぎた場所は読まず、止まった場所だけ読む（Photosky §2 と同じ）。
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || !timelineMode) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const report = () => {
+      const top = el.scrollTop;
+      const bottom = top + el.clientHeight;
+      const shown = rowVirtualizer
+        .getVirtualItems()
+        .filter((v) => v.end >= top && v.start <= bottom)
+        .map((v) => v.index);
+      if (shown.length === 0) return;
+      const first = Math.min(...shown);
+      const last = Math.max(...shown);
+      const span = last - first + 1;
+      const range: [number, number] = [Math.max(0, first - span), last + 1 + span];
+      visibleRangeRef.current = range;
+      requestRange(range[0], range[1]);
+    };
+    const onScroll = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(report, RANGE_SETTLE_MS);
+    };
+    report();
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      if (timer) clearTimeout(timer);
+      el.removeEventListener('scroll', onScroll);
+    };
+    // requestRange は毎回作り直されるが、中身は ref と selected/folder だけを見る。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowVirtualizer, timelineMode, slots]);
+
+  // 開いたメッセージをリスト内でフォーカス（スクロール。仮想化しているので、行の番号から寄せる）。
+  useEffect(() => {
+    if (opened?.id == null) return;
+    const i = timelineMode
+      ? indexOfId(slotsRef.current, opened.id)
+      : visibleMails.findIndex((m) => m.id === opened.id);
+    if (i >= 0) rowVirtualizer.scrollToIndex(i, { align: 'auto' });
+    // 開いたときだけ寄せる（一覧の更新のたびに引き戻さない）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opened?.id]);
+
+  // 日付のつまみ: offset 件目（＝枠の番号）の行を一番上へ。読み込んでいなければ、止まったところで読む。
+  const jumpToOffset = useCallback(
+    (offset: number) => rowVirtualizer.scrollToIndex(offset, { align: 'start' }),
+    [rowVirtualizer]
+  );
+  // いま一番上に見えている行が何件目か（つまみの印）。
+  const listScrollTop = rowVirtualizer.scrollOffset ?? 0;
+  const viewOffset =
+    rowVirtualizer.getVirtualItems().find((v) => v.end > listScrollTop)?.index ?? null;
+  // つまみを出すのは、絞り込み無し・日付の分かるスレッドがある・一覧がスクロールできるとき。
+  const showScrubber =
+    timelineMode &&
+    days.length > 0 &&
+    rowVirtualizer.getTotalSize() > (rowVirtualizer.scrollRect?.height ?? Infinity);
+
+  if (accounts.length === 0) {
+    return <div className="p-8 text-white/60">{t('mailbox.addInSettings')}</div>;
+  }
 
   // 選択モード中はチェックボックスを表示して選択を簡単にする。
   const allVisibleSelected =
@@ -1355,6 +1459,138 @@ export function MailboxView({
       await operationFailed(e);
     }
   };
+
+  // 一覧の 1 行（スレッド代表）。仮想化の枠（li）の中に描く。
+  const renderRow = (m: ThreadListItem) => (
+    <div
+      onClick={(e) => onRowClick(e, m.id)}
+      onContextMenu={(e) => onRowContextMenu(e, m.id)}
+      className={`group relative flex cursor-pointer select-none gap-2 rounded-md px-3 py-2 hover:bg-white/10 ${
+        selectedIds.has(m.id) ? 'bg-white/15' : ''
+      } ${opened?.id === m.id ? 'ring-2 ring-sky-400/70' : ''}`}
+    >
+      {/* ホバーで出る行アクション（スター／迷惑／削除）。行の展開に伝播させない。
+          右上（日時の上）に重ねる。星は付与済みなら常時アンバー。 */}
+      <div className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 rounded-md border border-white/10 bg-neutral-900/85 px-1 py-0.5 opacity-0 shadow-sm backdrop-blur transition-opacity group-hover:opacity-100">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            void rowToggleStar(m);
+          }}
+          title={t(m.is_starred ? 'ctx.unstar' : 'ctx.star')}
+          aria-label={t(m.is_starred ? 'ctx.unstar' : 'ctx.star')}
+          className="flex h-6 w-6 items-center justify-center rounded hover:bg-white/15"
+        >
+          <Star
+            size={14}
+            className={m.is_starred ? 'fill-amber-300 text-amber-300' : 'text-white/70'}
+          />
+        </button>
+        {folder === 'spam' ? (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              void rowSpam(m, false);
+            }}
+            title={t('ctx.notSpam')}
+            aria-label={t('ctx.notSpam')}
+            className="flex h-6 w-6 items-center justify-center rounded text-white/70 hover:bg-white/15 hover:text-emerald-300"
+          >
+            <ThumbsUp size={14} />
+          </button>
+        ) : folder !== 'sent' && folder !== 'drafts' && folder !== 'trash' ? (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              void rowSpam(m, true);
+            }}
+            title={t('ctx.markSpam')}
+            aria-label={t('ctx.markSpam')}
+            className="flex h-6 w-6 items-center justify-center rounded text-white/70 hover:bg-white/15 hover:text-rose-300"
+          >
+            <ThumbsDown size={14} />
+          </button>
+        ) : null}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            void deleteRows([m.id]);
+          }}
+          title={t(folder === 'trash' ? 'ctx.deletePermanent' : 'ctx.delete')}
+          aria-label={t(folder === 'trash' ? 'ctx.deletePermanent' : 'ctx.delete')}
+          className="flex h-6 w-6 items-center justify-center rounded text-white/70 hover:bg-white/15 hover:text-rose-300"
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
+      <input
+        type="checkbox"
+        checked={selectedIds.has(m.id)}
+        onChange={() => toggleSelect(m.id)}
+        onClick={(e) => e.stopPropagation()}
+        aria-label={t('mailbox.selectMailCheckbox')}
+        // チェックボックスは複数選択モード中（または選択済み）のみ表示。
+        // ホバー/フォーカスでは出さない。選択は Ctrl/Shift＋クリックか右クリックから開始。
+        className={`mt-1 h-3.5 w-3.5 shrink-0 accent-sky-400 ${
+          selecting || selectedIds.has(m.id) ? '' : 'hidden'
+        }`}
+      />
+      <div className="min-w-0 flex-1">
+        {(() => {
+          // 送信済/下書きは相手（To）、それ以外は差出人（From）を主に見せる。
+          // 表示名はヘッダ名（from_name/to_name）を優先し、無ければアドレスから導出。
+          const addr = parseAddress(outgoing ? m.to_addresses : m.from_address);
+          const headerName = (outgoing ? m.to_name : m.from_name)?.trim();
+          const name = headerName || addr.name || addr.email || (outgoing ? '—' : '(no sender)');
+          const showEmail = addr.email && addr.email !== name;
+          return (
+            <>
+              {/* 名前＜メール＞＋送信日時（1行） */}
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="truncate text-sm font-medium">
+                  {!m.is_read && <span className="mr-1 text-sky-300">●</span>}
+                  {outgoing && <span className="text-white/40">{t('mailbox.to')}: </span>}
+                  {name}
+                  {showEmail && (
+                    <span className="font-normal text-white/40"> &lt;{addr.email}&gt;</span>
+                  )}
+                </span>
+                <span className="flex shrink-0 items-center gap-1 text-[10px] text-white/40">
+                  {m.is_vip && (
+                    <Gem
+                      size={12}
+                      className="fill-sky-300/30 text-sky-300"
+                      aria-label={t('filter.vip')}
+                    />
+                  )}
+                  {m.is_green && (
+                    <LeafyGreen
+                      size={12}
+                      className="text-emerald-400"
+                      aria-label={t('green.badge')}
+                    />
+                  )}
+                  {m.is_starred && <Star size={12} className="fill-amber-300 text-amber-300" />}
+                  {formatDateTime(m.date)}
+                </span>
+              </div>
+              {/* 件名（スレッド複数通なら「N通」バッジを先頭に） */}
+              <div className="truncate text-sm text-white/80">
+                {m.message_count > 1 && (
+                  <span className="mr-1 inline-flex items-center rounded-full bg-sky-400/20 px-1.5 text-[10px] font-medium text-sky-200 align-[1px]">
+                    {t('thread.count', { count: m.message_count })}
+                  </span>
+                )}
+                {m.subject ?? '(no subject)'} {m.has_real_attachments && '📎'}
+              </div>
+              {/* 本文（詰めて2行折り返し） */}
+              <div className="line-clamp-2 text-xs leading-snug text-white/40">{m.preview}</div>
+            </>
+          );
+        })()}
+      </div>
+    </div>
+  );
 
   const listPane = (
     <div
@@ -1532,180 +1768,59 @@ export function MailboxView({
           </button>
         </div>
       )}
-      <div className="relative min-h-0 flex-1">
-        {/* スクロール位置インジケータ: 右端にその辺りのメールの年月を表示 */}
-        {scrollHint && (
-          <div
-            className="pointer-events-none absolute right-1.5 z-10 -translate-y-1/2 rounded-full bg-neutral-900/80 px-2 py-0.5 text-[10px] font-medium tabular-nums text-white/85 shadow backdrop-blur"
-            style={{ top: `calc(${scrollHint.ratio} * (100% - 20px) + 10px)` }}
-          >
-            {scrollHint.label}
-          </div>
+      <div className="relative flex min-h-0 flex-1">
+        {showScrubber && (
+          <TimelineScrubber days={days} viewOffset={viewOffset} onJump={jumpToOffset} />
         )}
-        <ul
+        <div
           ref={listRef}
-          className="h-full space-y-1 overflow-y-auto p-2"
+          className="h-full min-w-0 flex-1 overflow-y-auto"
           onScroll={onListScroll}
         >
-          {visibleMails.length === 0 ? (
-            <li className="px-2 py-3 text-sm text-white/50">
-              {searchMode
-                ? searching
-                  ? t('search.searching')
-                  : t('search.noResults')
-                : t('mailbox.empty')}
-            </li>
+          {rowCount === 0 ? (
+            <div className="p-2">
+              <div className="px-2 py-3 text-sm text-white/50">
+                {searchMode
+                  ? searching
+                    ? t('search.searching')
+                    : t('search.noResults')
+                  : t('mailbox.empty')}
+              </div>
+            </div>
           ) : (
-            visibleMails.map((m) => (
-              <li
-                key={m.id}
-                id={`mail-li-${m.id}`}
-                onClick={(e) => onRowClick(e, m.id)}
-                onContextMenu={(e) => onRowContextMenu(e, m.id)}
-                className={`group relative flex cursor-pointer select-none gap-2 rounded-md px-3 py-2 hover:bg-white/10 ${
-                  selectedIds.has(m.id) ? 'bg-white/15' : ''
-                } ${opened?.id === m.id ? 'ring-2 ring-sky-400/70' : ''}`}
-              >
-                {/* ホバーで出る行アクション（スター／迷惑／削除）。行の展開に伝播させない。
-                    右上（日時の上）に重ねる。星は付与済みなら常時アンバー。 */}
-                <div className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 rounded-md border border-white/10 bg-neutral-900/85 px-1 py-0.5 opacity-0 shadow-sm backdrop-blur transition-opacity group-hover:opacity-100">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void rowToggleStar(m);
-                    }}
-                    title={t(m.is_starred ? 'ctx.unstar' : 'ctx.star')}
-                    aria-label={t(m.is_starred ? 'ctx.unstar' : 'ctx.star')}
-                    className="flex h-6 w-6 items-center justify-center rounded hover:bg-white/15"
+            <ul className="relative w-full" style={{ height: rowVirtualizer.getTotalSize() }}>
+              {rowVirtualizer.getVirtualItems().map((v) => {
+                const m = rowAt(v.index);
+                return (
+                  <li
+                    key={v.key}
+                    data-index={v.index}
+                    ref={rowVirtualizer.measureElement}
+                    className="absolute left-2 right-2 top-0"
+                    style={{ transform: `translateY(${v.start}px)` }}
                   >
-                    <Star
-                      size={14}
-                      className={m.is_starred ? 'fill-amber-300 text-amber-300' : 'text-white/70'}
-                    />
-                  </button>
-                  {folder === 'spam' ? (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void rowSpam(m, false);
-                      }}
-                      title={t('ctx.notSpam')}
-                      aria-label={t('ctx.notSpam')}
-                      className="flex h-6 w-6 items-center justify-center rounded text-white/70 hover:bg-white/15 hover:text-emerald-300"
-                    >
-                      <ThumbsUp size={14} />
-                    </button>
-                  ) : folder !== 'sent' && folder !== 'drafts' && folder !== 'trash' ? (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void rowSpam(m, true);
-                      }}
-                      title={t('ctx.markSpam')}
-                      aria-label={t('ctx.markSpam')}
-                      className="flex h-6 w-6 items-center justify-center rounded text-white/70 hover:bg-white/15 hover:text-rose-300"
-                    >
-                      <ThumbsDown size={14} />
-                    </button>
-                  ) : null}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void deleteRows([m.id]);
-                    }}
-                    title={t(folder === 'trash' ? 'ctx.deletePermanent' : 'ctx.delete')}
-                    aria-label={t(folder === 'trash' ? 'ctx.deletePermanent' : 'ctx.delete')}
-                    className="flex h-6 w-6 items-center justify-center rounded text-white/70 hover:bg-white/15 hover:text-rose-300"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={selectedIds.has(m.id)}
-                  onChange={() => toggleSelect(m.id)}
-                  onClick={(e) => e.stopPropagation()}
-                  aria-label={t('mailbox.selectMailCheckbox')}
-                  // チェックボックスは複数選択モード中（または選択済み）のみ表示。
-                  // ホバー/フォーカスでは出さない。選択は Ctrl/Shift＋クリックか右クリックから開始。
-                  className={`mt-1 h-3.5 w-3.5 shrink-0 accent-sky-400 ${
-                    selecting || selectedIds.has(m.id) ? '' : 'hidden'
-                  }`}
-                />
-                <div className="min-w-0 flex-1">
-                  {(() => {
-                    // 送信済/下書きは相手（To）、それ以外は差出人（From）を主に見せる。
-                    // 表示名はヘッダ名（from_name/to_name）を優先し、無ければアドレスから導出。
-                    const addr = parseAddress(outgoing ? m.to_addresses : m.from_address);
-                    const headerName = (outgoing ? m.to_name : m.from_name)?.trim();
-                    const name =
-                      headerName || addr.name || addr.email || (outgoing ? '—' : '(no sender)');
-                    const showEmail = addr.email && addr.email !== name;
-                    return (
-                      <>
-                        {/* 名前＜メール＞＋送信日時（1行） */}
-                        <div className="flex items-baseline justify-between gap-2">
-                          <span className="truncate text-sm font-medium">
-                            {!m.is_read && <span className="mr-1 text-sky-300">●</span>}
-                            {outgoing && <span className="text-white/40">{t('mailbox.to')}: </span>}
-                            {name}
-                            {showEmail && (
-                              <span className="font-normal text-white/40">
-                                {' '}
-                                &lt;{addr.email}&gt;
-                              </span>
-                            )}
-                          </span>
-                          <span className="flex shrink-0 items-center gap-1 text-[10px] text-white/40">
-                            {m.is_vip && (
-                              <Gem
-                                size={12}
-                                className="fill-sky-300/30 text-sky-300"
-                                aria-label={t('filter.vip')}
-                              />
-                            )}
-                            {m.is_green && (
-                              <LeafyGreen
-                                size={12}
-                                className="text-emerald-400"
-                                aria-label={t('green.badge')}
-                              />
-                            )}
-                            {m.is_starred && (
-                              <Star size={12} className="fill-amber-300 text-amber-300" />
-                            )}
-                            {formatDateTime(m.date)}
-                          </span>
-                        </div>
-                        {/* 件名（スレッド複数通なら「N通」バッジを先頭に） */}
-                        <div className="truncate text-sm text-white/80">
-                          {m.message_count > 1 && (
-                            <span className="mr-1 inline-flex items-center rounded-full bg-sky-400/20 px-1.5 text-[10px] font-medium text-sky-200 align-[1px]">
-                              {t('thread.count', { count: m.message_count })}
-                            </span>
-                          )}
-                          {m.subject ?? '(no subject)'} {m.has_real_attachments && '📎'}
-                        </div>
-                        {/* 本文（詰めて2行折り返し） */}
-                        <div className="line-clamp-2 text-xs leading-snug text-white/40">
-                          {m.preview}
-                        </div>
-                      </>
-                    );
-                  })()}
-                </div>
-              </li>
-            ))
+                    {m ? (
+                      renderRow(m)
+                    ) : (
+                      // まだ読み込んでいない位置（止まったところで読む）。高さは見積もりのまま。
+                      <div
+                        className="rounded-md bg-white/[0.03]"
+                        style={{ height: ROW_ESTIMATE }}
+                        aria-hidden
+                      />
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
           )}
           {/* 続きあり: スクロールで追加読み込み。表示中/全スレッド数を出す（あとどれくらいか分かる）。 */}
-          {!searchMode && hasMore && visibleMails.length > 0 && (
-            <li className="px-2 py-3 text-center text-xs text-white/35">
-              {threadTotal != null
-                ? t('mailbox.loadedOf', { shown: mails.length, total: threadTotal })
-                : t('mailbox.loadingMore')}
-            </li>
+          {!searchMode && !timelineMode && hasMore && visibleMails.length > 0 && (
+            <div className="px-2 py-3 text-center text-xs text-white/35">
+              {t('mailbox.loadedOf', { shown: loadedPrefix(slots), total: slots.length })}
+            </div>
           )}
-        </ul>
+        </div>
       </div>
     </div>
   );

@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import type { DayCount } from './dayCounts';
 import {
+  buildDayLabels,
   buildTicks,
   fisheye,
   layoutSegments,
+  layoutSegmentsAt,
   lensMagnification,
   offsetAtY,
   parentBands,
   segmentIndexAtY,
+  snapToNearest,
   weekKeyOf,
   yOfOffset,
 } from './scrubberLayout';
@@ -126,5 +129,83 @@ describe('parentBands', () => {
 
   it('マウスが無ければ null', () => {
     expect(parentBands(segs, null, 100, 0)).toBeNull();
+  });
+});
+
+describe('layoutSegmentsAt', () => {
+  // 10 件。各件の始まりの割合（バブルの高さがまちまち）
+  const starts = [0, 0.05, 0.3, 0.32, 0.34, 0.36, 0.38, 0.4, 0.7, 0.9];
+
+  it('区間の上端はその日の最初の件の始まり、下端は次の区間の上端', () => {
+    const segs = layoutSegmentsAt(days, starts, 100);
+    expect(segs.map((s) => [s.start, s.y0, s.y1])).toEqual([
+      [0, 0, 30],
+      [2, 30, 32],
+      [3, 32, 70],
+      [8, 70, 100],
+    ]);
+  });
+
+  it('始まりが件数に足りなければ件数に比例する配置に戻す', () => {
+    expect(layoutSegmentsAt(days, [0, 0.5], 100)).toEqual(layoutSegments(days, 100));
+  });
+
+  it('逆転した始まりは前の区間より上へ戻さない', () => {
+    const segs = layoutSegmentsAt(days, [0, 0, 0.5, 0.4, 0, 0, 0, 0, 0.2, 0], 100);
+    expect(segs.map((s) => s.y0)).toEqual([0, 50, 50, 50]);
+  });
+
+  it('全体が 0 件か高さが無ければ空', () => {
+    expect(layoutSegmentsAt([], starts, 100)).toEqual([]);
+    expect(layoutSegmentsAt(days, starts, 0)).toEqual([]);
+  });
+});
+
+describe('buildDayLabels', () => {
+  const seg = (dateKey: string, y0: number) => ({ dateKey, count: 1, start: 0, y0, y1: y0 });
+
+  it('各日の始まりに札。最初と年が変わるところは年も出す', () => {
+    const labels = buildDayLabels(
+      [seg('2025-12-30', 0), seg('2026-01-05', 40), seg('2026-01-06', 80)],
+      14
+    );
+    expect(labels.map((l) => [l.dateKey, l.withYear])).toEqual([
+      ['2025-12-30', true],
+      ['2026-01-05', true],
+      ['2026-01-06', false],
+    ]);
+  });
+
+  it('詰まったら 年の変わり目 → 月の変わり目 → 上のほう の順に残す', () => {
+    const labels = buildDayLabels(
+      [
+        seg('2025-12-30', 0),
+        seg('2025-12-31', 20),
+        seg('2026-01-01', 25), // 年が変わる: 12/31 を押しのける
+        seg('2026-01-02', 50), // 2/1 に押しのけられる
+        seg('2026-01-03', 80),
+        seg('2026-01-04', 85), // 同じ順位なら上の 1/3 が残る
+        seg('2026-02-01', 60), // 月が変わる: 1/2 より優先
+      ],
+      14
+    );
+    expect(labels.map((l) => l.dateKey)).toEqual([
+      '2025-12-30',
+      '2026-01-01',
+      '2026-02-01',
+      '2026-01-03',
+    ]);
+  });
+});
+
+describe('snapToNearest', () => {
+  it('半径以内の最も近い位置へ吸い付ける', () => {
+    expect(snapToNearest([10, 30, 50], 26, 6)).toBe(30);
+    expect(snapToNearest([10, 30, 50], 12, 6)).toBe(10);
+  });
+
+  it('半径の外ならそのまま', () => {
+    expect(snapToNearest([10, 30, 50], 20, 6)).toBe(20);
+    expect(snapToNearest([], 20, 6)).toBe(20);
   });
 });

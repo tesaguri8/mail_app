@@ -728,6 +728,23 @@ pub struct ThreadMessage {
     /// 本文の取得状態（'present' | 'absent' | 'empty' | 'evicted'）。
     /// バブルが本文を取りに行くかの判断に使う（'empty' は取りに行かない。docs/SYNC.md §3.6）。
     pub body_state: String,
+    /// このメールに含まれていた、手元に無いメール（引用ブロックのうち照らし合わせて見つからないもの）。
+    /// 畳まずに 1 通ずつ小さなバブルで出す（docs/THREADING.md §5）。
+    pub unseen_quotes: Vec<UnseenQuote>,
+}
+
+/// 引用に含まれていた、手元に無いメール 1 通（会話ビューで畳まずに出す）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct UnseenQuote {
+    /// 差出人（見出しのまま。"名前 <addr>" 等）。
+    pub from: String,
+    /// 送信日時（見出しのまま）。
+    pub at: String,
+    /// 件名（見出しにあれば）。
+    pub subject: Option<String>,
+    /// 見出しを除いた本文。
+    pub body: String,
 }
 
 /// 会話ビュー（スレッド情報＋時系列のメッセージ）。

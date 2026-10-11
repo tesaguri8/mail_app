@@ -48,6 +48,7 @@ import { MailBody, makeRenderDate } from './MailBody';
 import { AutoLinkText, HtmlText, inlineCidRefs } from './HtmlText';
 import { AttachedImages, isImage } from './AttachedImages';
 import { PrintMail } from './PrintMail';
+import { UnseenQuotes } from './UnseenQuotes';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import type { CalendarPanelInitial } from './CalendarPanel';
 import { TimelineScrubber } from './timeline/TimelineScrubber';
@@ -792,6 +793,17 @@ function Bubble({
               </button>
             </div>
           </div>
+        )}
+
+        {/* このメールで初めて届いた、手元に無いメール（転送・「元のメッセージ」）。畳まずに出す。
+            引用の表示中・全文の表示中は、本文に同じ内容があるので出さない。 */}
+        {!expanded && !showQuotes && m.unseen_quotes.length > 0 && (
+          <UnseenQuotes
+            quotes={m.unseen_quotes}
+            out={out}
+            highlight={highlight}
+            renderDate={renderDate}
+          />
         )}
       </div>
 

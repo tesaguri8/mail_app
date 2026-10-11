@@ -292,6 +292,12 @@ const MIGRATIONS: &[Migration] = &[
         version: 64,
         sql: include_str!("migrations/0064_contact_uid_distinct.sql"),
     },
+    Migration {
+        // 65 は emails の日時だけの索引（引用ブロックを手元のメールと照らし合わせるため。
+        // docs/THREADING.md §2）。
+        version: 65,
+        sql: include_str!("migrations/0065_email_date_ts_index.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
@@ -423,7 +429,9 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE emails (id INTEGER PRIMARY KEY, folder TEXT, from_address TEXT, body_compacted INTEGER DEFAULT 0, has_attachments INTEGER DEFAULT 0,
                -- 本文列（0001 から存在）。0054(空本文の修復)が動くよう用意する。
-               body_plain TEXT, clean_body TEXT);
+               body_plain TEXT, clean_body TEXT,
+               -- 並び替え用の日時（0022 から存在）。0065(日時の索引)が動くよう用意する。
+               date_ts INTEGER);
              ALTER TABLE emails ADD COLUMN reply_to TEXT;
              CREATE TABLE folder_sync (
                account_id INTEGER NOT NULL, folder TEXT NOT NULL,

@@ -21,6 +21,7 @@ mod greendomain;
 mod migrations;
 mod org_tidy;
 mod organizations;
+mod quote_match;
 mod recipients;
 mod sent_addresses;
 mod server_accounts;

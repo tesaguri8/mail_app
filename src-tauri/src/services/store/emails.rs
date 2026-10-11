@@ -338,6 +338,8 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
     )?;
     insert_attachments(conn, id, &e.attachments)?;
     insert_quotes(conn, id, &e.quotes)?;
+    // 引用ブロックを手元のメールと照らし合わせる（見つからない分は会話ビューで畳まずに出す）。
+    super::quote_match::match_quotes_of_email(conn, id)?;
     // 迷惑差出人に登録済みのアドレスからの新着（受信箱）は、受信時に自動で迷惑へ隔離する
     // （「このアドレスを迷惑にしたら今後の同アドレスも迷惑へ」。docs/SPAM.md）。
     // ただし本人検証・住所録の本人一致があれば隔離しない（誤登録での取りこぼし防止）。
@@ -604,6 +606,7 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
     )?;
     if has_quotes == 0 && !e.quotes.is_empty() {
         insert_quotes(conn, id, &e.quotes)?;
+        super::quote_match::match_quotes_of_email(conn, id)?;
         touched = true;
     }
     // ヘッダを後付けできたら、auto 割当を「未処理」に戻して次のローカル加工で引き直させる

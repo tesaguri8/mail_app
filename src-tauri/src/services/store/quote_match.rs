@@ -321,6 +321,42 @@ mod tests {
         assert_eq!(found, Some(orig));
     }
 
+    /// 太字の Outlook 見出し（"*From:*" / "*Sent:*"）から取った差出人・日時でも照らし合わせられる。
+    #[test]
+    fn finds_by_bold_outlook_header() {
+        let store = store();
+        let conn = store.conn.lock().unwrap();
+        let orig = put(
+            &conn,
+            "a",
+            "i-sato@kensetsu.example.co.jp",
+            Some("佐藤一郎"),
+            "2026-10-06T11:28:37+09:00",
+            "inbox",
+        );
+        let fwd = put(
+            &conn,
+            "b",
+            "hanako@mokuzai.example.jp",
+            None,
+            "2026-10-07T19:36:00+09:00",
+            "inbox",
+        );
+        let body = "山田です。\n\n\
+*From:*佐藤一郎<i-sato@kensetsu.example.co.jp>\n\
+*Sent:* Tuesday, October 6, 2026 11:28 AM\n\
+*To:* 山田花子<hanako@mokuzai.example.jp>\n\
+\n\
+山田様\n図面を送ります。";
+        let split = quotes::split_reply(body);
+        assert_eq!(split.quotes.len(), 1);
+        let q = &split.quotes[0];
+        let found =
+            find_quoted_email(&conn, fwd, q.quoted_from.as_deref(), q.quoted_at.as_deref())
+                .unwrap();
+        assert_eq!(found, Some(orig));
+    }
+
     #[test]
     fn finds_by_name_when_outlook_drops_the_address_and_skips_drafts() {
         let store = store();

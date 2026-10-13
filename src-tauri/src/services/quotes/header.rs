@@ -21,17 +21,20 @@ enum Field {
 }
 
 /// "Key: value" の行を (項目, 値) に読む。知らない項目なら None。
+///
+/// HTML の太字を text/plain に落とした "*From:* 山田 <…>" も読む（項目名の前後の `*` と、
+/// 値の先頭に残る `*` を外す）。
 fn header_field(line: &str) -> Option<(Field, &str)> {
     let l = line.trim();
     let (key, value) = l.split_once([':', '：'])?;
-    let field = match key.trim().to_lowercase().as_str() {
+    let field = match key.trim().trim_matches('*').trim().to_lowercase().as_str() {
         "from" | "差出人" | "送信者" => Field::From,
         "sent" | "date" | "送信日時" | "日付" | "日時" => Field::Date,
         "subject" | "件名" => Field::Subject,
         "to" | "cc" | "bcc" | "宛先" | "reply-to" => Field::Other,
         _ => return None,
     };
-    Some((field, value.trim()))
+    Some((field, value.trim().trim_start_matches('*').trim_start()))
 }
 
 /// 「元のメッセージ」の区切り行か（"-----Original Message-----" / "-----元のメッセージ-----" /
@@ -49,9 +52,25 @@ pub fn is_separator(line: &str) -> bool {
         || l.starts_with("________________")
 }
 
+/// 見出しの最初の行（"From:" / "差出人:" / "送信者:"）なら、その値（差出人）を返す。
+pub fn from_value(line: &str) -> Option<&str> {
+    if line.trim_start().starts_with('>') {
+        return None;
+    }
+    match header_field(line) {
+        Some((Field::From, value)) => Some(value),
+        _ => None,
+    }
+}
+
 /// 見出しの最初の行（"From:" / "差出人:" / "送信者:"）か。
 pub fn is_from_line(line: &str) -> bool {
-    !line.trim_start().starts_with('>') && matches!(header_field(line), Some((Field::From, _)))
+    from_value(line).is_some()
+}
+
+/// 見出しの日時の行（"Sent:" / "Date:" / "送信日時:" / "日付:"）か。
+pub fn is_date_line(line: &str) -> bool {
+    !line.trim_start().starts_with('>') && matches!(header_field(line), Some((Field::Date, _)))
 }
 
 /// 見出しを読んだ結果。
@@ -200,6 +219,26 @@ mod tests {
         let h = parse_header(&block, true);
         assert_eq!(h.from, None);
         assert_eq!(h.body_start, 1);
+    }
+
+    /// HTML の太字が text/plain に残った "*From:*" / "*Sent:*" も見出しとして読む。
+    #[test]
+    fn reads_bold_marked_header() {
+        let block = [
+            "*From:*山田 花子<hanako@example.com>",
+            "*Sent:* Wednesday, October 7, 2026 7:36 PM",
+            "*To:* 佐藤 一郎",
+            "*Subject:* RE: 図面",
+            "",
+            "本文です。",
+        ];
+        assert!(is_from_line(block[0]));
+        assert!(is_date_line(block[1]));
+        let h = parse_header(&block, false);
+        assert_eq!(h.from.as_deref(), Some("山田 花子<hanako@example.com>"));
+        assert_eq!(h.at.as_deref(), Some("Wednesday, October 7, 2026 7:36 PM"));
+        assert_eq!(h.subject.as_deref(), Some("RE: 図面"));
+        assert_eq!(block[h.body_start], "本文です。");
     }
 
     #[test]

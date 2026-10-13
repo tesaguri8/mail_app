@@ -104,16 +104,9 @@ fn parse_attribution(line: &str) -> Option<(Option<String>, Option<String>)> {
         }
     }
 
-    // Outlook 系ヘッダブロック（"差出人:" / "From:" で始まる）。この行から引用開始とみなす。
-    if l.starts_with("差出人:")
-        || l.starts_with("差出人：")
-        || lower.starts_with("from:")
-        || l.starts_with("送信者:")
-    {
-        let from = l
-            .split_once([':', '：'])
-            .map(|(_, rest)| rest.trim().to_string());
-        return Some((from.and_then(|s| none_if_empty(&s)), None));
+    // Outlook 系ヘッダブロック（"差出人:" / "From:" / 太字の "*From:*" で始まる）。この行から引用開始とみなす。
+    if let Some(from) = header::from_value(l) {
+        return Some((none_if_empty(from), None));
     }
 
     None
@@ -293,10 +286,26 @@ pub fn split_reply(plain: &str) -> Split {
     Split { clean, quotes }
 }
 
-/// 引用の領域で、次の 1 通が始まる行か。`>` の付かない「元のメッセージ」の区切り、または
-/// 区切りの無い見出し（"From:" の後に "Sent:" 等が続く）。区切りの直後の "From:" は同じ 1 通。
+/// 引用の領域の途中にある属性行（"On … wrote:" / "〜さんは書きました:" 等）なら、その (from, at)。
+/// 区切り行と "From:" の見出しは別に扱うので含めない。`>` の付いた行（引用の中の引用）と、
+/// 日付もアドレスも無い行（本文の「…と彼は書きました:」）は属性行とみなさない。
+fn inner_attribution(line: &str) -> Option<(Option<String>, Option<String>)> {
+    let l = line.trim();
+    if l.starts_with('>')
+        || header::is_separator(l)
+        || header::is_from_line(l)
+        || !line_has_date_or_email(l)
+    {
+        return None;
+    }
+    parse_attribution(l)
+}
+
+/// 引用の領域で、次の 1 通が始まる行か。`>` の付かない「元のメッセージ」の区切り、属性行
+/// （"On … wrote:" 等）、または区切りの無い見出し（"From:" の後に "Sent:" 等が続く）。
+/// 区切りの直後の "From:" は同じ 1 通。
 fn starts_next_block(region: &[&str], j: usize) -> bool {
-    if header::is_separator(region[j]) {
+    if header::is_separator(region[j]) || inner_attribution(region[j]).is_some() {
         return true;
     }
     if !header::is_from_line(region[j]) {
@@ -307,19 +316,37 @@ fn starts_next_block(region: &[&str], j: usize) -> bool {
         return false;
     }
     // 見出しらしさの裏付け: 続く数行に日時の項目がある。
-    region[j + 1..].iter().take(4).any(|l| {
-        let l = l.trim_start().to_lowercase();
-        [
-            "sent:",
-            "date:",
-            "送信日時:",
-            "送信日時：",
-            "日付:",
-            "日付：",
-        ]
+    region[j + 1..]
         .iter()
-        .any(|k| l.starts_with(k))
-    })
+        .take(4)
+        .any(|l| header::is_date_line(l))
+}
+
+/// 行の先頭の共通の字下げを外して 1 つの文字列にする（字下げされた転送の中の 1 通を、
+/// 左に寄せて見せるため）。前後の空行は落とす。
+fn dedent(lines: &[&str]) -> String {
+    let indent = lines
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        // 外すのは半角の空白とタブだけ（全角の空白は本文の字下げとして残す）。
+        .map(|l| l.len() - l.trim_start_matches([' ', '\t']).len())
+        .min()
+        .unwrap_or(0);
+    lines
+        .iter()
+        // 空白だけの行は indent より短いことがあるので空にする。
+        .map(|l| {
+            if l.trim().is_empty() {
+                ""
+            } else {
+                l.get(indent..).unwrap_or(l)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_matches('\n')
+        .trim_end()
+        .to_string()
 }
 
 /// 引用の領域（引用開始〜末尾）を 1 通ずつのブロックに分ける。先頭のブロックは、本文を切った
@@ -340,8 +367,11 @@ fn quote_blocks(
         .map(|(k, &s)| {
             let e = starts.get(k + 1).copied().unwrap_or(region.len());
             let block = &region[s..e];
-            let h = header::parse_header(block, k == 0 && skip_attribution_line);
-            let (attr_from, attr_at) = first.take().unwrap_or((None, None));
+            // 途中のブロックが属性行で始まるなら、差出人・時刻はその行から取り、行は見出しとして飛ばす。
+            let inner = (k > 0).then(|| inner_attribution(block[0])).flatten();
+            let skip_first = (k == 0 && skip_attribution_line) || inner.is_some();
+            let h = header::parse_header(block, skip_first);
+            let (attr_from, attr_at) = first.take().or(inner).unwrap_or((None, None));
             // フィンガープリントは引用本文（`>` と空白を正規化）から作る。
             let quoted_text: String = block
                 .iter()
@@ -354,10 +384,7 @@ fn quote_blocks(
                 quoted_from: h.from.or(attr_from),
                 quoted_at: h.at.or(attr_at),
                 subject: h.subject,
-                body: block[h.body_start.min(block.len())..]
-                    .join("\n")
-                    .trim()
-                    .to_string(),
+                body: dedent(&block[h.body_start.min(block.len())..]),
                 fingerprint: fingerprint(&quoted_text),
             }
         })
@@ -416,10 +443,7 @@ pub fn looks_like_attribution(line: &str) -> bool {
         || lower.contains("forwarded message")
         || l.contains("元のメッセージ")
         || l.contains("転送メッセージ")
-        || l.starts_with("差出人:")
-        || l.starts_with("差出人：")
-        || lower.starts_with("from:")
-        || l.starts_with("送信者:")
+        || header::is_from_line(l)
 }
 
 /// clean_body を、同スレッドの過去メール由来のアンカー集合と一致する行以降で追加的に切り詰める。
@@ -743,6 +767,131 @@ To: <tanaka@example.jp>\n\
         let s = split_reply(body);
         assert_eq!(s.quotes.len(), 1);
         assert!(s.quotes[0].body.starts_with("> hi"));
+    }
+
+    /// 転送と返信が重なった本文（実例の区切りの書き方のまま。個人名とアドレスは作り物）。
+    /// Thunderbird の転送・太字の Outlook 見出し・"On … wrote:"・字下げした Gmail 転送と
+    /// Outlook の「元のメッセージ」が、1 本の引用の中に続いている。
+    fn stacked() -> String {
+        [
+            "皆様",
+            "",
+            "下記、転送します。",
+            "",
+            "田中",
+            "",
+            "-------- Forwarded Message --------",
+            "Subject: \tRE: 図面の件",
+            "Date: \tFri, 9 Oct 2026 15:29:01 +0900",
+            "From: \t木材商事 山田花子 <hanako@mokuzai.example.jp>",
+            "To: \t田中 <tanaka@example.jp>",
+            "",
+            "田中様",
+            "10/9 の本文です。",
+            "",
+            "*From:*木材商事　　山田花子<hanako@mokuzai.example.jp>",
+            "*Sent:* Wednesday, October 7, 2026 7:36 PM",
+            "*To:* 佐藤一郎<i-sato@kensetsu.example.co.jp>",
+            "*Subject:* RE: 図面の件",
+            "",
+            "佐藤様",
+            "10/7 の本文です。",
+            "",
+            "*From:*佐藤一郎<i-sato@kensetsu.example.co.jp>",
+            "*Sent:* Tuesday, October 6, 2026 11:28 AM",
+            "*To:* 木材商事　　山田花子<hanako@mokuzai.example.jp>",
+            "",
+            "山田様",
+            "10/6 の本文です。",
+            "",
+            "On 2026/10/05 6:28, 鈴木次郎wrote:",
+            "        佐藤様",
+            "        10/5 の本文です。",
+            "",
+            "        ---------- Forwarded message ---------",
+            "        From: <taro@maeda.example> <mailto:taro@maeda.example>",
+            "        Date: 2026年10月3日(土) 12:37",
+            "        Subject: 図面",
+            "        To: <jiro@example.jp>",
+            "",
+            "        10/3 の本文です。",
+            "          字下げの続き。",
+            "",
+            "        -----Original Message-----",
+            "        From: taro@maeda.example <taro@maeda.example> <mailto:taro@maeda.example>",
+            "        Sent: Friday, October 2, 2026 5:55 PM",
+            "        To: 高橋 健<12345TAKA@city.example.lg.jp>",
+            "",
+            "        10/2 夕方の本文です。",
+            "",
+            "        -----Original Message-----",
+            "        From: 高橋 健<12345TAKA@city.example.lg.jp>",
+            "        Sent: Friday, October 2, 2026 2:50 PM",
+            "",
+            "        10/2 昼の本文です。",
+        ]
+        .join("\n")
+    }
+
+    /// 太字の見出し（"*From:*"）・途中の "On … wrote:"・字下げした区切りのどれでも 1 通ずつに分ける。
+    #[test]
+    fn splits_stacked_forwards_bold_headers_and_inner_wrote() {
+        let s = split_reply(&stacked());
+        assert_eq!(s.clean, "皆様\n\n下記、転送します。\n\n田中");
+        let got: Vec<(Option<&str>, Option<&str>)> = s
+            .quotes
+            .iter()
+            .map(|q| (q.quoted_from.as_deref(), q.quoted_at.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    Some("木材商事 山田花子 <hanako@mokuzai.example.jp>"),
+                    Some("Fri, 9 Oct 2026 15:29:01 +0900")
+                ),
+                (
+                    Some("木材商事　　山田花子<hanako@mokuzai.example.jp>"),
+                    Some("Wednesday, October 7, 2026 7:36 PM")
+                ),
+                (
+                    Some("佐藤一郎<i-sato@kensetsu.example.co.jp>"),
+                    Some("Tuesday, October 6, 2026 11:28 AM")
+                ),
+                (Some("鈴木次郎"), Some("2026/10/05 6:28")),
+                (
+                    Some("<taro@maeda.example> <mailto:taro@maeda.example>"),
+                    Some("2026年10月3日(土) 12:37")
+                ),
+                (
+                    Some("taro@maeda.example <taro@maeda.example> <mailto:taro@maeda.example>"),
+                    Some("Friday, October 2, 2026 5:55 PM")
+                ),
+                (
+                    Some("高橋 健<12345TAKA@city.example.lg.jp>"),
+                    Some("Friday, October 2, 2026 2:50 PM")
+                ),
+            ]
+        );
+        let bodies: Vec<&str> = s.quotes.iter().map(|q| q.body.as_str()).collect();
+        assert_eq!(bodies[0], "田中様\n10/9 の本文です。");
+        assert_eq!(bodies[1], "佐藤様\n10/7 の本文です。");
+        assert_eq!(bodies[3], "佐藤様\n10/5 の本文です。");
+        // 字下げした転送の中の 1 通は左に寄せる（中の相対的な字下げは残す）。
+        assert_eq!(bodies[4], "10/3 の本文です。\n  字下げの続き。");
+        assert_eq!(bodies[6], "10/2 昼の本文です。");
+        let orders: Vec<i64> = s.quotes.iter().map(|q| q.order).collect();
+        assert_eq!(orders, (0..7).collect::<Vec<_>>());
+    }
+
+    /// 引用の途中でも、日付もアドレスも無い「…wrote:」「…書きました:」の文では分けない。
+    #[test]
+    fn inner_sentence_ending_with_wrote_is_not_a_boundary() {
+        let body = "OK\n\n-----Original Message-----\nFrom: Taro <taro@example.com>\nSent: Friday, October 2, 2026 5:55 PM\n\nOn Monday, I wrote:\n議事録をまとめて共有すると彼は書きました:\nよろしく";
+        let s = split_reply(body);
+        assert_eq!(s.quotes.len(), 1);
+        assert!(s.quotes[0].body.contains("On Monday, I wrote:"));
+        assert!(s.quotes[0].body.contains("彼は書きました:"));
     }
 
     #[test]

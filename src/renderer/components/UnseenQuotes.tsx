@@ -2,7 +2,6 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { MailPlus } from 'lucide-react';
 import type { UnseenQuote } from '@bindings/UnseenQuote';
-import { parseAddress } from '../utils/address';
 import { AutoLinkText } from './HtmlText';
 
 /**
@@ -26,7 +25,6 @@ export function UnseenQuotes({
   return (
     <div className={`mt-1.5 flex flex-col gap-1.5 ${out ? 'items-end' : 'items-start'}`}>
       {quotes.map((q, i) => {
-        const sender = parseAddress(q.from);
         return (
           <div
             key={i}
@@ -38,7 +36,7 @@ export function UnseenQuotes({
                 {t('thread.unseenQuote')}
               </span>
               <span className="text-white/60" title={q.from}>
-                {sender.name || sender.email}
+                {q.sender}
               </span>
               <span className="tabular-nums text-white/45">{q.at}</span>
               {q.subject && <span className="min-w-0 truncate text-white/45">{q.subject}</span>}

@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { safeFilename, uniqueNames } from './attachmentSave';
+import type { TFunction } from 'i18next';
+import {
+  ERR_IMAP_TIMEOUT,
+  attachmentErrorReason,
+  safeFilename,
+  saveAllMessage,
+  uniqueNames,
+} from './attachmentSave';
 
 describe('uniqueNames（まとめ保存のファイル名衝突回避）', () => {
   it('重複が無ければそのまま', () => {
@@ -72,5 +79,36 @@ describe('safeFilename（保存先パスに使えない文字の置換）', () =
 
   it('全部使えない文字でも空にはしない', () => {
     expect(safeFilename('   ')).toBe('attachment');
+  });
+});
+
+describe('attachmentErrorReason / saveAllMessage（失敗を利用者に伝える）', () => {
+  const t = ((key: string, opts?: Record<string, unknown>) =>
+    opts ? `${key} ${JSON.stringify(opts)}` : key) as unknown as TFunction;
+
+  it('時間切れの符号は、分かる文言に置き換える', () => {
+    expect(attachmentErrorReason(ERR_IMAP_TIMEOUT, t)).toBe('mailbox.attachmentTimeout');
+  });
+
+  it('それ以外の失敗は、理由をそのまま出す', () => {
+    expect(attachmentErrorReason('保存に失敗しました: 権限がありません', t)).toBe(
+      '保存に失敗しました: 権限がありません'
+    );
+    expect(attachmentErrorReason(new Error('x'), t)).toBe('x');
+  });
+
+  it('全部保存できたら成功として件数を出す', () => {
+    expect(saveAllMessage({ saved: 3, failed: 0 }, t)).toEqual({
+      text: 'mailbox.attachmentSavedN {"count":3}',
+      kind: 'ok',
+    });
+  });
+
+  it('1 件でも失敗したら失敗として、件数と最初の理由を出す', () => {
+    const m = saveAllMessage({ saved: 1, failed: 2, error: ERR_IMAP_TIMEOUT }, t);
+    expect(m.kind).toBe('error');
+    expect(m.text).toBe(
+      'mailbox.attachmentSavedPartial {"saved":1,"failed":2,"reason":"mailbox.attachmentTimeout"}'
+    );
   });
 });

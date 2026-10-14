@@ -8,7 +8,6 @@ use crate::services::store::{
 use chrono::{Duration, Utc};
 use mail_parser::{MessageParser, MimeHeaders};
 use rusqlite::{params, Connection, OptionalExtension};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -99,131 +98,9 @@ fn since_date(days: i64) -> String {
         .to_string()
 }
 
-pub type ImapSession = imap::Session<native_tls::TlsStream<std::net::TcpStream>>;
-
-/// IMAP 接続の時間の上限。サーバーが黙ったときに `spawn_blocking` の中で永久に待たないよう、
-/// TCP の接続と、その後の読み書きのそれぞれに上限を付ける。
-#[derive(Debug, Clone, Copy)]
-pub struct ImapTimeouts {
-    /// TCP の接続の上限。
-    pub connect: std::time::Duration,
-    /// 読み書き 1 回ごとの上限（TLS のハンドシェイク・挨拶・ログイン・取得のすべて）。
-    pub io: std::time::Duration,
-}
-
-impl ImapTimeouts {
-    /// 既定の上限（接続 20 秒・読み書き 60 秒）。
-    pub const DEFAULT: Self = Self {
-        connect: std::time::Duration::from_secs(20),
-        io: std::time::Duration::from_secs(60),
-    };
-}
-
-/// IMAP の接続・操作の失敗。時間切れだけは利用者に分かる文言を出すため、別に分ける。
-#[derive(Debug, thiserror::Error)]
-pub enum ImapError {
-    /// サーバーが上限の時間内に応答しなかった。
-    #[error("サーバーが応答しませんでした")]
-    Timeout,
-    /// ホスト名を解決できなかった。
-    #[error("名前解決に失敗: {0}")]
-    Resolve(String),
-    /// TCP で接続できなかった。
-    #[error("接続できませんでした: {0}")]
-    Connect(std::io::Error),
-    /// TLS のハンドシェイクに失敗した。
-    #[error("TLS ハンドシェイクに失敗: {0}")]
-    Tls(String),
-    /// IMAP のやり取りに失敗した（サーバーの NO/BAD・切断など）。
-    #[error("{0}")]
-    Imap(imap::Error),
-    /// 応答の中身が想定と違った（メッセージ・パートが無い等）。
-    #[error("{0}")]
-    Other(String),
-}
-
-/// 読み書きの時間切れか（Unix は WouldBlock、Windows は TimedOut で返る）。
-fn is_timeout(e: &std::io::Error) -> bool {
-    matches!(
-        e.kind(),
-        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-    )
-}
-
-impl From<imap::Error> for ImapError {
-    fn from(e: imap::Error) -> Self {
-        match e {
-            imap::Error::Io(io) if is_timeout(&io) => Self::Timeout,
-            other => Self::Imap(other),
-        }
-    }
-}
-
-impl From<native_tls::HandshakeError<TcpStream>> for ImapError {
-    fn from(e: native_tls::HandshakeError<TcpStream>) -> Self {
-        match e {
-            // 読み込みの上限に達すると、ハンドシェイクが途中のまま WouldBlock で戻る。
-            native_tls::HandshakeError::WouldBlock(_) => Self::Timeout,
-            native_tls::HandshakeError::Failure(f) => {
-                let timed_out =
-                    std::iter::successors(std::error::Error::source(&f), |s| s.source())
-                        .any(|s| s.downcast_ref::<std::io::Error>().is_some_and(is_timeout));
-                if timed_out {
-                    Self::Timeout
-                } else {
-                    Self::Tls(f.to_string())
-                }
-            }
-        }
-    }
-}
-
-/// 上限付きで IMAP に接続＋ログインし、Session を返す（[`ImapTimeouts`] で上限を差し替えられる）。
-///
-/// # Errors
-/// 名前解決・接続・TLS・挨拶・ログインのいずれかに失敗したとき。上限を過ぎたら [`ImapError::Timeout`]。
-pub fn connect_login_with(
-    host: &str,
-    port: u16,
-    user: &str,
-    password: &str,
-    timeouts: ImapTimeouts,
-) -> Result<ImapSession, ImapError> {
-    let tls = native_tls::TlsConnector::builder()
-        .build()
-        .map_err(|e| ImapError::Tls(e.to_string()))?;
-    let addr = format!("{host}:{port}")
-        .to_socket_addrs()
-        .map_err(|e| ImapError::Resolve(e.to_string()))?
-        .next()
-        .ok_or_else(|| ImapError::Resolve("アドレスを解決できませんでした".to_string()))?;
-    let tcp = TcpStream::connect_timeout(&addr, timeouts.connect).map_err(|e| {
-        if is_timeout(&e) {
-            ImapError::Timeout
-        } else {
-            ImapError::Connect(e)
-        }
-    })?;
-    tcp.set_read_timeout(Some(timeouts.io))
-        .map_err(ImapError::Connect)?;
-    tcp.set_write_timeout(Some(timeouts.io))
-        .map_err(ImapError::Connect)?;
-    let ssl = tls.connect(host, tcp)?;
-    let mut client = imap::Client::new(ssl);
-    client.read_greeting()?;
-    client.login(user, password).map_err(|(e, _)| e.into())
-}
-
-/// 既定の上限で IMAP に接続＋ログインし、Session を返す（接続の使い回し／プール用）。
-/// imap::connect と違い TCP connect/read/write にタイムアウトを設定し、死んだ接続で固まらないようにする。
-pub fn connect_login(
-    host: &str,
-    port: u16,
-    user: &str,
-    password: &str,
-) -> Result<ImapSession, String> {
-    connect_login_with(host, port, user, password, ImapTimeouts::DEFAULT).map_err(|e| e.to_string())
-}
+pub use super::imap_conn::{
+    connect_login, connect_login_with, ImapError, ImapSession, ImapTimeouts,
+};
 
 /// スロットのセッションが生きていれば再利用、なければ/死んでいれば張り直す（接続の使い回し）。
 fn ensure_live_session(
@@ -341,11 +218,37 @@ pub fn test_login(host: &str, port: u16, user: &str, password: &str) -> Result<(
     Ok(())
 }
 
+/// フォルダごとの処理を順に流す。失敗したフォルダがあれば、その接続は捨てて張り直してから
+/// 次へ進む（時間切れや切断のあとも同じ接続を使うと、読み残した応答を次の命令の応答と
+/// 読み違え、「Unable to parse status response」が後のフォルダへ連鎖するため）。
+/// 張り直せなければそこで止めてエラーを返す。中断が立ったら残りは流さない。
+fn for_each_folder<S, T>(
+    session: &mut S,
+    items: &[T],
+    cancelled: &dyn Fn() -> bool,
+    reconnect: &dyn Fn() -> Result<S, String>,
+    mut step: impl FnMut(&mut S, &T) -> Result<(), String>,
+    on_error: impl Fn(&T, &str),
+) -> Result<(), String> {
+    for item in items {
+        if cancelled() {
+            break;
+        }
+        if let Err(e) = step(session, item) {
+            on_error(item, &e);
+            *session = reconnect()?;
+        }
+    }
+    Ok(())
+}
+
 /// 既存セッション上で 受信箱＋標準フォルダ（送信済/下書き/ゴミ箱/迷惑）を同期する。
-/// 接続の張り直し・ログアウトはしない（呼び出し側＝プールが管理する）。
+/// ログアウトはしない（呼び出し側＝プールが管理する）。フォルダが失敗したときは
+/// `reconnect` で張り直した接続に差し替えて続ける（[`for_each_folder`]）。
 #[allow(clippy::too_many_arguments)]
 fn run_sync(
     session: &mut ImapSession,
+    reconnect: &dyn Fn() -> Result<ImapSession, String>,
     conn: &Connection,
     account_id: i64,
     window: &str,
@@ -374,35 +277,42 @@ fn run_sync(
     if let Some((mbox, _)) = folders.iter().find(|(_, tag)| *tag == "drafts") {
         if let Err(e) = retry_pending_draft_deletes(session, conn, account_id, mbox) {
             log::warn!("破棄済み下書きのサーバー削除に失敗（次回同期で再試行）: {e}");
+            *session = reconnect()?;
         }
     }
     // 役目を終えた墓標を掃除する（失敗しても同期は続ける）。
     let _ = purge_old_tombstones(conn);
 
     // Pass 1: 新着（増分/初回）を全フォルダ分。新しいものを最優先で取り込む（docs/SYNC.md §3.6）。
-    for (mbox, tag) in &folders {
-        if is_cancelled(cancel) {
-            return Ok(());
-        }
-        if let Err(e) = sync_folder(
-            session, conn, account_id, mbox, tag, window, result, progress, listed, cancel,
-        ) {
-            log::warn!("フォルダ '{mbox}' ({tag}) の同期に失敗: {e}");
-        }
+    let cancelled = || is_cancelled(cancel);
+    for_each_folder(
+        session,
+        &folders,
+        &cancelled,
+        reconnect,
+        |s, (mbox, tag)| {
+            sync_folder(
+                s, conn, account_id, mbox, tag, window, result, progress, listed, cancel,
+            )
+        },
+        |(mbox, tag), e| log::warn!("フォルダ '{mbox}' ({tag}) の同期に失敗: {e}"),
+    )?;
+    if cancelled() {
+        return Ok(());
     }
 
     // Pass 2: 古い側のメタデータ索引を少しずつ（低優先・再開可能・本文なし）。docs/SYNC.md §3.6。
     // 新着（Pass 1）を全フォルダ終えてから走らせるので「新しいもの優先」を保つ。
-    for (mbox, tag) in &folders {
-        if is_cancelled(cancel) {
-            break;
-        }
-        if let Err(e) =
-            backfill_folder_metadata(session, conn, account_id, mbox, tag, result, progress, cancel)
-        {
-            log::warn!("フォルダ '{mbox}' ({tag}) のメタ索引に失敗: {e}");
-        }
-    }
+    for_each_folder(
+        session,
+        &folders,
+        &cancelled,
+        reconnect,
+        |s, (mbox, tag)| {
+            backfill_folder_metadata(s, conn, account_id, mbox, tag, result, progress, cancel)
+        },
+        |(mbox, tag), e| log::warn!("フォルダ '{mbox}' ({tag}) のメタ索引に失敗: {e}"),
+    )?;
 
     // Pass 3: 保証期間（body_window）内で本文が未取得のメールを少しずつ全文取得する
     // （低優先・再開可能・容量上限尊重・PEEK で既読にしない）。設定「テキスト全文を確実に
@@ -414,25 +324,26 @@ fn run_sync(
             |r| r.get(0),
         )
         .unwrap_or_else(|_| "off".to_string());
-    for (mbox, tag) in &folders {
-        if is_cancelled(cancel) {
-            break;
-        }
-        if let Err(e) = backfill_folder_bodies(
-            session,
-            conn,
-            account_id,
-            mbox,
-            tag,
-            &body_window,
-            result,
-            progress,
-            cancel,
-        ) {
-            log::warn!("フォルダ '{mbox}' ({tag}) の本文バックフィルに失敗: {e}");
-        }
-    }
-    Ok(())
+    for_each_folder(
+        session,
+        &folders,
+        &cancelled,
+        reconnect,
+        |s, (mbox, tag)| {
+            backfill_folder_bodies(
+                s,
+                conn,
+                account_id,
+                mbox,
+                tag,
+                &body_window,
+                result,
+                progress,
+                cancel,
+            )
+        },
+        |(mbox, tag), e| log::warn!("フォルダ '{mbox}' ({tag}) の本文バックフィルに失敗: {e}"),
+    )
 }
 
 /// IMAP に接続し、受信箱＋標準フォルダを同期する。接続は `slot` で使い回す（プール）。
@@ -476,8 +387,10 @@ pub fn sync_account(
         stored: 0,
         backfilled: 0,
     };
+    let reconnect = || connect_login(host, port, user, password);
     match run_sync(
         session,
+        &reconnect,
         &conn,
         account_id,
         &window,
@@ -1844,15 +1757,9 @@ pub fn purge_emails_remote(
     Ok(())
 }
 
-/// 取得した添付の本体（バイト列・ファイル名・MIME型）。
-pub struct FetchedAttachment {
-    pub bytes: Vec<u8>,
-    pub filename: String,
-    pub content_type: Option<String>,
-}
 
 /// IMAP section 文字列（"1" / "2" / "1.1"）を数値パスに変換する。
-fn parse_section_path(section: &str) -> Option<Vec<u32>> {
+pub(crate) fn parse_section_path(section: &str) -> Option<Vec<u32>> {
     let parts: Vec<u32> = section
         .split('.')
         .map(|s| s.parse::<u32>())
@@ -1867,7 +1774,7 @@ fn parse_section_path(section: &str) -> Option<Vec<u32>> {
 
 /// `[section.MIME]`（そのパートのヘッダ）と `[section]`（そのパートの本体）を結合し、
 /// mail_parser が charset/転送エンコードを解いて読める 1 つの MIME エンティティにする。
-fn combine_mime_part(mime: &[u8], body: &[u8]) -> Vec<u8> {
+pub(crate) fn combine_mime_part(mime: &[u8], body: &[u8]) -> Vec<u8> {
     // MIME ヘッダ末尾の改行を一旦落として、必ず空行 1 つで本体と区切る。
     let mut end = mime.len();
     while end > 0 && (mime[end - 1] == b'\r' || mime[end - 1] == b'\n') {
@@ -1880,116 +1787,9 @@ fn combine_mime_part(mime: &[u8], body: &[u8]) -> Vec<u8> {
     out
 }
 
-/// 添付を取り出すメッセージの在りか（アカウントの接続先とフォルダ・UID）。
-#[derive(Debug, Clone, Copy)]
-pub struct AttachmentSource<'a> {
-    pub host: &'a str,
-    pub port: u16,
-    pub user: &'a str,
-    pub password: &'a str,
-    /// メールのフォルダ（ローカルタグ: inbox/sent/…）。
-    pub folder: &'a str,
-    pub uid: u32,
-}
-
-/// 指定 UID のメッセージから添付本体を取り出す（オンデマンド）。
-/// メールのあるフォルダ（`src.folder`）を選んでから取得する。
-/// `section` があれば `BODY.PEEK[section]` で該当パートだけ取得（本体を丸ごと落とさず軽い）。
-/// 無ければ従来どおり `BODY[]` を取得し `part_index` 番目の実添付を取り出す（後方互換）。
-///
-/// # Errors
-/// 接続・選択・取得・解析に失敗したとき。上限（`timeouts`）を過ぎたら [`ImapError::Timeout`]。
-pub fn fetch_attachment(
-    src: AttachmentSource<'_>,
-    part_index: usize,
-    section: Option<&str>,
-    timeouts: ImapTimeouts,
-) -> Result<FetchedAttachment, ImapError> {
-    let mut session = connect_login_with(src.host, src.port, src.user, src.password, timeouts)?;
-    let mailbox = imap_mailbox_for_tag(&mut session, src.folder).map_err(ImapError::Other)?;
-    session.select(&mailbox)?;
-    let result = match section.and_then(parse_section_path) {
-        Some(path) => fetch_part(&mut session, src.uid, &path, part_index),
-        None => fetch_part_from_whole(&mut session, src.uid, part_index),
-    };
-    let _ = session.logout();
-    result
-}
-
-/// 該当パートの MIME ヘッダ＋本体だけを取得して取り出す（軽量経路）。
-fn fetch_part(
-    session: &mut ImapSession,
-    uid: u32,
-    path: &[u32],
-    part_index: usize,
-) -> Result<FetchedAttachment, ImapError> {
-    use imap_proto::types::{MessageSection, SectionPath};
-    let sec = path
-        .iter()
-        .map(|n| n.to_string())
-        .collect::<Vec<_>>()
-        .join(".");
-    let query = format!("(BODY.PEEK[{sec}.MIME] BODY.PEEK[{sec}])");
-    let msgs = session.uid_fetch(uid.to_string(), query)?;
-    let m = msgs
-        .iter()
-        .next()
-        .ok_or_else(|| ImapError::Other("メッセージが見つかりませんでした".to_string()))?;
-    let mime = m
-        .section(&SectionPath::Part(
-            path.to_vec(),
-            Some(MessageSection::Mime),
-        ))
-        .unwrap_or(&[]);
-    let body = m
-        .section(&SectionPath::Part(path.to_vec(), None))
-        .ok_or_else(|| ImapError::Other("添付パートを取得できませんでした".to_string()))?;
-    let combined = combine_mime_part(mime, body);
-    let msg = MessageParser::default()
-        .parse(&combined)
-        .ok_or_else(|| ImapError::Other("添付パートを解析できませんでした".to_string()))?;
-    let part = msg
-        .parts
-        .first()
-        .ok_or_else(|| ImapError::Other("添付パートが空でした".to_string()))?;
-    Ok(FetchedAttachment {
-        bytes: part.contents().to_vec(),
-        filename: parser::part_filename(part, part_index),
-        content_type: parser::part_content_type(part),
-    })
-}
-
-/// section が無い既存行: メッセージ全体を取得して `part_index` 番目の実添付を取り出す。
-fn fetch_part_from_whole(
-    session: &mut ImapSession,
-    uid: u32,
-    part_index: usize,
-) -> Result<FetchedAttachment, ImapError> {
-    let msgs = session.uid_fetch(uid.to_string(), "(BODY[])")?;
-    let raw = msgs
-        .iter()
-        .next()
-        .and_then(|m| m.body())
-        .ok_or_else(|| ImapError::Other("メッセージが見つかりませんでした".to_string()))?;
-    let msg = MessageParser::default()
-        .parse(raw)
-        .ok_or_else(|| ImapError::Other("メッセージを解析できませんでした".to_string()))?;
-    // 保存時と同じ「実添付パート一覧」から part_index 番目を取り出す（ネストした添付にも届く）。
-    let parts = parser::real_attachment_parts(&msg);
-    let part = parts
-        .get(part_index)
-        .copied()
-        .ok_or_else(|| ImapError::Other("添付が見つかりませんでした".to_string()))?;
-    Ok(FetchedAttachment {
-        bytes: part.contents().to_vec(),
-        filename: parser::part_filename(part, part_index),
-        content_type: parser::part_content_type(part),
-    })
-}
-
 /// フォルダのローカルタグ（inbox/sent/…）から実際の IMAP メールボックス名を解決する。
 /// inbox は "INBOX"。それ以外は LIST して特殊用途/名前で照合（sync と同じ検出）。
-fn imap_mailbox_for_tag(session: &mut ImapSession, tag: &str) -> Result<String, String> {
+pub(crate) fn imap_mailbox_for_tag(session: &mut ImapSession, tag: &str) -> Result<String, String> {
     if tag == "inbox" {
         return Ok("INBOX".to_string());
     }
@@ -2049,62 +1849,62 @@ pub fn fetch_message(
 mod tests {
     use super::*;
 
-    /// 受け付けるだけで何も返さないサーバーに向けると、上限で必ず時間切れとして戻る。
+    /// 試験用の接続（何本目に張った接続か）。
+    struct FakeSession(u32);
+
+    /// 失敗したフォルダのあとは、張り直した接続で次のフォルダを流す（同じ接続を使い続けない）。
     #[test]
-    fn a_silent_server_times_out_instead_of_hanging() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        // 受け付けた接続を、クライアントが戻るまで握ったまま黙る
-        // （閉じると「切断」になり、時間切れの経路を通らない）。
-        let (done, wait) = std::sync::mpsc::channel::<()>();
-        let server = std::thread::spawn(move || {
-            let (conn, _) = listener.accept().unwrap();
-            let _ = wait.recv_timeout(std::time::Duration::from_secs(10));
-            drop(conn);
-        });
-        let timeouts = ImapTimeouts {
-            connect: std::time::Duration::from_secs(2),
-            io: std::time::Duration::from_millis(300),
+    fn a_failed_folder_gets_a_fresh_session_for_the_next_one() {
+        let opened = std::cell::Cell::new(1);
+        let reconnect = || {
+            opened.set(opened.get() + 1);
+            Ok(FakeSession(opened.get()))
         };
-        let started = std::time::Instant::now();
-        let r = connect_login_with("127.0.0.1", port, "u@example.invalid", "x", timeouts);
-        let took = started.elapsed();
-        done.send(()).unwrap();
-        server.join().unwrap();
-        assert!(matches!(r, Err(ImapError::Timeout)), "{:?}", r.err());
-        assert!(took < std::time::Duration::from_secs(2), "{took:?}");
-    }
-
-    /// 挨拶・ログイン・取得の途中の時間切れ（読み込みの上限）も時間切れとして扱う。
-    #[test]
-    fn an_io_timeout_inside_imap_is_a_timeout() {
-        for kind in [std::io::ErrorKind::WouldBlock, std::io::ErrorKind::TimedOut] {
-            let e = ImapError::from(imap::Error::Io(std::io::Error::from(kind)));
-            assert!(matches!(e, ImapError::Timeout), "{kind:?}");
-        }
-        let e = ImapError::from(imap::Error::ConnectionLost);
-        assert!(!matches!(e, ImapError::Timeout));
-    }
-
-    /// 接続をすぐ閉じるサーバーは時間切れではない（別の失敗として返す）。
-    #[test]
-    fn a_closed_connection_is_not_a_timeout() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = std::thread::spawn(move || drop(listener.accept().unwrap()));
-        let r = connect_login_with(
-            "127.0.0.1",
-            port,
-            "u@example.invalid",
-            "x",
-            ImapTimeouts {
-                connect: std::time::Duration::from_secs(2),
-                io: std::time::Duration::from_secs(2),
+        let mut session = FakeSession(1);
+        let mut seen = Vec::new();
+        let folders = ["INBOX", "INBOX.Sent", "INBOX.Drafts"];
+        for_each_folder(
+            &mut session,
+            &folders,
+            &|| false,
+            &reconnect,
+            |s, name| {
+                seen.push((*name, s.0));
+                if *name == "INBOX" {
+                    Err("os error 10060".to_string())
+                } else {
+                    Ok(())
+                }
             },
+            |_, _| {},
+        )
+        .unwrap();
+        // INBOX は 1 本目、時間切れのあと Sent 以降は 2 本目で流れる。
+        assert_eq!(
+            seen,
+            vec![("INBOX", 1), ("INBOX.Sent", 2), ("INBOX.Drafts", 2)]
+        );
+        assert_eq!(session.0, 2);
+    }
+
+    /// 張り直せなければ、そこで止めてエラーを返す（壊れた接続で残りを流さない）。
+    #[test]
+    fn a_failed_reconnect_stops_the_folders() {
+        let mut session = FakeSession(1);
+        let mut seen = Vec::new();
+        let r = for_each_folder(
+            &mut session,
+            &["INBOX", "INBOX.Sent"],
+            &|| false,
+            &|| Err("接続できませんでした".to_string()),
+            |_, name| {
+                seen.push(*name);
+                Err("os error 10060".to_string())
+            },
+            |_, _| {},
         );
         assert!(r.is_err());
-        assert!(!matches!(r, Err(ImapError::Timeout)));
-        server.join().unwrap();
+        assert_eq!(seen, vec!["INBOX"]);
     }
 
     #[test]

@@ -13,7 +13,9 @@ use crate::models::{
     StorageInfo, SureMergePreview, SureMergeResult, SyncListed, SyncProgress,
     SyncResult, TagSummary, ThreadDayCount, ThreadListItem, ThreadView, UnlinkedOrgName,
 };
+use crate::services::attachment_fetch;
 use crate::services::autoconfig;
+use crate::services::checksum::simple_checksum;
 use crate::services::contact_export;
 use crate::services::datadir;
 use crate::services::dataver;
@@ -3056,85 +3058,21 @@ fn log_attachment_error(attachment_id: i64, stage: &str, e: &str) {
 }
 
 /// 添付本体をディスクに用意して保存先パスを返す（既に取得済みならそれを再利用）。
-/// emails.uid + attachments.part_index で IMAP から該当パートだけを再取得する。
+/// 取得の段取り（分割取得・締め切り・進み具合・合流）は services::attachment_fetch に置く。
+/// 時間切れは画面で「サーバーが応答しませんでした」と出すため、決まった符号で返す。
 async fn ensure_attachment_file(
     app: &AppHandle,
-    store: &Store,
     attachment_id: i64,
 ) -> Result<std::path::PathBuf, String> {
-    let info = store
-        .attachment_fetch_info(attachment_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "添付が見つかりません".to_string())?;
-
-    // 取得済みでファイルが残っていればそのまま使う（LRU の最終アクセスを更新）。
-    if let Some(path) = info.file_path.as_ref() {
-        let p = std::path::PathBuf::from(path);
-        if p.exists() {
-            let _ = store.touch_attachment(attachment_id);
-            return Ok(p);
-        }
-    }
-
-    let uid = info.email_uid.ok_or_else(|| {
-        "再取得に必要な情報がありません。アカウントを再同期してください。".to_string()
-    })?;
-    let part_index = info.part_index;
-    let filename = info.filename;
-    let section = info.section;
-    let folder = info.folder;
-
-    let (email, login, host, port) = store
-        .get_account_imap(info.account_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "アカウントが見つかりません".to_string())?;
-    let service = app.config().identifier.clone();
-    let password = keyring::Entry::new(&service, &email)
-        .and_then(|e| e.get_password())
-        .map_err(|e| format!("資格情報を取得できません: {e}"))?;
-
-    let fetched = tauri::async_runtime::spawn_blocking(move || {
-        imap_sync::fetch_attachment(
-            imap_sync::AttachmentSource {
-                host: &host,
-                port,
-                user: &login,
-                password: &password,
-                folder: &folder,
-                uid: uid as u32,
-            },
-            part_index as usize,
-            section.as_deref(),
-            imap_sync::ImapTimeouts::DEFAULT,
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| match e {
-        // 時間切れは画面で「サーバーが応答しませんでした」と出すため、決まった符号で返す。
-        imap_sync::ImapError::Timeout => ERR_IMAP_TIMEOUT.to_string(),
-        other => other.to_string(),
-    })?;
-
-    // 保存先: <mail.db と同じフォルダ>/attachments/<attachment_id>/<filename>。
-    // DB パス（開発ビルドはワークツリー別）から導出し、DB と添付キャッシュを常に同じ場所に置く。
-    let dir = store
-        .data_dir()
-        .join("attachments")
-        .join(attachment_id.to_string());
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-
-    let safe = sanitize_filename(&filename);
-    let path = dir.join(&safe);
-    std::fs::write(&path, &fetched.bytes).map_err(|e| e.to_string())?;
-
-    let checksum = simple_checksum(&fetched.bytes);
-    let path_str = path.to_string_lossy().to_string();
-    store
-        .set_attachment_downloaded(attachment_id, &path_str, Some(&checksum))
-        .map_err(|e| e.to_string())?;
-
-    Ok(path)
+    attachment_fetch::ensure_file(app, attachment_id)
+        .await
+        .map_err(|e| {
+            if e.is_timeout() {
+                ERR_IMAP_TIMEOUT.to_string()
+            } else {
+                e.to_string()
+            }
+        })
 }
 
 /// 添付ファイルをオンデマンドで取得して保存する（既に取得済みならそれを返す）。
@@ -3145,7 +3083,7 @@ pub async fn attachment_download(
     store: State<'_, Store>,
     attachment_id: i64,
 ) -> Result<AttachmentSummary, String> {
-    ensure_attachment_file(&app, &store, attachment_id).await?;
+    ensure_attachment_file(&app, attachment_id).await?;
     // ダウンロード後に保持ポリシーを適用（best-effort）。
     if let Ok(Some(info)) = store.attachment_fetch_info(attachment_id) {
         let _ = store.apply_retention(info.account_id);
@@ -3175,7 +3113,7 @@ pub async fn attachment_view(
         return Err("画像ではありません".to_string());
     }
 
-    let path = ensure_attachment_file(&app, &store, attachment_id).await?;
+    let path = ensure_attachment_file(&app, attachment_id).await?;
     // 表示用 JPEG（レンディション）は添付フォルダに残して使い回す。原本のデコード→縮小→
     // JPEG 化は重く、メールを開き直すたびに繰り返すと毎回待たされるため（写真 1 枚で数百ms）。
     // 添付と同名になり得る場合だけは原本を壊さないようキャッシュしない。
@@ -3228,9 +3166,7 @@ pub async fn attachment_open(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "添付が見つかりません".to_string())?;
 
-    let original = ensure_attachment_file(&app, &store, attachment_id)
-        .await
-        .inspect_err(|e| log_attachment_error(attachment_id, "取得", e))?;
+    let original = ensure_attachment_file(&app, attachment_id).await?;
 
     // HEIC はそのままだと Windows で開けない場合があるので JPEG 版を作って開く。
     let to_open = if media::is_heic(att.content_type.as_deref(), &att.filename) {
@@ -3265,7 +3201,7 @@ pub async fn attachment_local_path(
         .get_attachment(attachment_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "添付が見つかりません".to_string())?;
-    let path = ensure_attachment_file(&app, &store, attachment_id).await?;
+    let path = ensure_attachment_file(&app, attachment_id).await?;
     let size = std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
     Ok(AttachmentMeta {
         path: path.to_string_lossy().to_string(),
@@ -3292,13 +3228,10 @@ pub fn open_local_path(app: AppHandle, path: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn attachment_export(
     app: AppHandle,
-    store: State<'_, Store>,
     attachment_id: i64,
     dest: String,
 ) -> Result<(), String> {
-    let src = ensure_attachment_file(&app, &store, attachment_id)
-        .await
-        .inspect_err(|e| log_attachment_error(attachment_id, "取得", e))?;
+    let src = ensure_attachment_file(&app, attachment_id).await?;
     std::fs::copy(&src, &dest)
         .map_err(|e| format!("保存に失敗しました: {e}"))
         .inspect_err(|e| log_attachment_error(attachment_id, "書き出し", e))?;
@@ -3546,33 +3479,6 @@ fn dir_size(p: &std::path::Path) -> u64 {
         }
     }
     total
-}
-
-fn sanitize_filename(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|c| {
-            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() {
-                '_'
-            } else {
-                c
-            }
-        })
-        .collect();
-    let trimmed = cleaned.trim().trim_matches('.').trim();
-    if trimmed.is_empty() {
-        "attachment".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-/// 非暗号の簡易チェックサム（キャッシュ整合の目安。改ざん検知用ではない）。
-fn simple_checksum(bytes: &[u8]) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    bytes.hash(&mut h);
-    format!("{:016x}", h.finish())
 }
 
 /// 実際に IMAP ログインを試す（ユーザー名/パスワードの検証）。

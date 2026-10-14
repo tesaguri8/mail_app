@@ -122,6 +122,8 @@ pub struct AttachmentFetchInfo {
     pub section: Option<String>,
     /// 親メールのフォルダ（ローカルタグ: inbox/sent/…）。取得時にこのフォルダを選ぶ。
     pub folder: String,
+    /// 添付の大きさ（BODYSTRUCTURE の値＝転送エンコード後のバイト数。進み具合の分母）。
+    pub size: i64,
 }
 
 /// 添付メタ（本体は file_path NULL = 未取得）を一括挿入する。
@@ -1663,7 +1665,7 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
             "SELECT e.account_id, e.uid, a.part_index, a.filename, a.file_path, a.section,
-                    COALESCE(e.folder, 'inbox')
+                    COALESCE(e.folder, 'inbox'), COALESCE(a.size, 0)
              FROM attachments a JOIN emails e ON e.id = a.email_id
              WHERE a.id = ?1",
             params![attachment_id],
@@ -1676,6 +1678,7 @@ impl Store {
                     file_path: r.get(4)?,
                     section: r.get(5)?,
                     folder: r.get(6)?,
+                    size: r.get(7)?,
                 })
             },
         )
@@ -2013,6 +2016,7 @@ mod tests {
             .unwrap();
         assert_eq!(info.folder, "sent");
         assert_eq!(info.section.as_deref(), Some("2"));
+        assert_eq!(info.size, 816_000);
     }
 
     /// 下書きの添付は保存・再取得でそのまま往復し、更新のたびに入れ替わる。

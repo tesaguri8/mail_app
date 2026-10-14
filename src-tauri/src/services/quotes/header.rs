@@ -167,6 +167,17 @@ pub fn split_sender(from: &str) -> (Option<String>, Option<String>) {
     (addr, name)
 }
 
+/// 引用の差出人を画面に出す形にする（名前があれば名前、無ければアドレス、どちらも取れなければ見出しのまま）。
+/// "<addr> <mailto:addr>" / "addr <addr> <mailto:addr>" のように、名前の欄にアドレスが入った書き方でも
+/// アドレスだけを出す。
+pub fn sender_label(from: &str) -> String {
+    match split_sender(from) {
+        (_, Some(name)) => name,
+        (Some(addr), None) => addr,
+        (None, None) => from.trim().to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +270,25 @@ mod tests {
             (Some("hanako@example.com".into()), None)
         );
         assert_eq!(split_sender("山田 花子"), (None, Some("山田 花子".into())));
+    }
+
+    /// 実物の引用にあった差出人の書き方（名前とアドレスは作り物）。
+    #[test]
+    fn labels_sender_by_name_or_address() {
+        assert_eq!(
+            sender_label("<taro@maeda.example> <mailto:taro@maeda.example>"),
+            "taro@maeda.example"
+        );
+        assert_eq!(
+            sender_label("taro@maeda.example <taro@maeda.example> <mailto:taro@maeda.example>"),
+            "taro@maeda.example"
+        );
+        assert_eq!(sender_label("高橋 健<12345TAKA@city.example.lg.jp>"), "高橋 健");
+        assert_eq!(
+            sender_label("木材商事　　山田花子<hanako@mokuzai.example.jp>"),
+            "木材商事　　山田花子"
+        );
+        assert_eq!(sender_label("鈴木次郎"), "鈴木次郎");
+        assert_eq!(sender_label("Hanako@Example.com"), "hanako@example.com");
     }
 }

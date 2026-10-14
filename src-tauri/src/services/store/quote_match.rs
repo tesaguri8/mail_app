@@ -227,6 +227,7 @@ pub fn unseen_quotes(
             continue;
         }
         out.push(UnseenQuote {
+            sender: quotes::header::sender_label(&from),
             from,
             at,
             subject: q.subject,

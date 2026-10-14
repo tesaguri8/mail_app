@@ -12,6 +12,7 @@ import {
   Image as ImageIcon,
   ImageOff,
   LeafyGreen,
+  Loader2,
   Paperclip,
   Pencil,
   Plus,
@@ -43,7 +44,13 @@ import { ContextMenu } from './ContextMenu';
 import type { CalendarPanelInitial } from './CalendarPanel';
 import { parseDateTime, type ParsedDate } from '../utils/dateparse';
 import { formatDateTime } from '../utils/datetime';
-import { saveAllAttachments, saveAttachment } from '../utils/attachmentSave';
+import {
+  attachmentErrorReason,
+  saveAllAttachments,
+  saveAllMessage,
+  saveAttachment,
+} from '../utils/attachmentSave';
+import { useToast } from './SyncProvider';
 import { withActivity } from '../stores/activity';
 import { hasReadableBody, htmlHasContent } from '../utils/mailBody';
 
@@ -343,6 +350,7 @@ export function MailBody({
   onCollapse?: () => void;
 }) {
   const { t } = useTranslation();
+  const toast = useToast();
   const [showQuotes, setShowQuotes] = useState(false);
   const [note, setNote] = useState('');
   // 全文再取得（要約保存の解除）の結果でこのメールだけ本文を差し替える。
@@ -364,6 +372,8 @@ export function MailBody({
     !!d.reply_to?.trim() && replyToAddr !== (d.from_address ?? '').trim().toLowerCase();
   const [attachments, setAttachments] = useState<AttachmentSummary[]>([]);
   const [busyId, setBusyId] = useState<number | null>(null);
+  // 取得中の操作（行のどのボタンにスピナーを出すか）。取得はサーバー次第で数十秒かかることがある。
+  const [busyOp, setBusyOp] = useState<'open' | 'save' | null>(null);
   // 本文埋め込み画像（content_id → data URL）
   const [inlineImages, setInlineImages] = useState<Record<string, string>>({});
   // 許可して取得したリモート画像（正規化 URL → サニタイズ済み data URL）。既定は空＝ブロック。
@@ -602,6 +612,7 @@ export function MailBody({
   // 「開く」: 未取得なら取得してから OS の関連アプリで開く（HEIC は変換して開く）。
   const handleOpen = async (a: AttachmentSummary) => {
     setBusyId(a.id);
+    setBusyOp('open');
     setNote('');
     try {
       // 取得に時間がかかることがあるのでフッターに進捗（不確定）を出す。
@@ -610,9 +621,11 @@ export function MailBody({
         list.map((x) => (x.id === a.id ? { ...x, is_downloaded: true } : x)),
       );
     } catch (e) {
-      setNote(String(e));
+      // 失敗はヘッダの小さな注記では気づけないので、トーストで知らせる。
+      toast(t('mailbox.attachmentOpenFailed', { reason: attachmentErrorReason(e, t) }), 'error');
     } finally {
       setBusyId(null);
+      setBusyOp(null);
     }
   };
 
@@ -621,6 +634,7 @@ export function MailBody({
   const handleSave = async (a: AttachmentSummary) => {
     setNote('');
     setBusyId(a.id);
+    setBusyOp('save');
     try {
       const saved = await saveAttachment(a.id, a.filename, t('activity.downloadingAttachment'));
       if (saved) {
@@ -628,12 +642,13 @@ export function MailBody({
         setAttachments((list) =>
           list.map((x) => (x.id === a.id ? { ...x, is_downloaded: true } : x)),
         );
-        setNote(t('mailbox.attachmentSaved'));
+        toast(t('mailbox.attachmentSaved'));
       }
     } catch (e) {
-      setNote(String(e));
+      toast(t('mailbox.attachmentSaveFailed', { reason: attachmentErrorReason(e, t) }), 'error');
     } finally {
       setBusyId(null);
+      setBusyOp(null);
     }
   };
 
@@ -674,11 +689,12 @@ export function MailBody({
     setNote('');
     setSavingAll(true);
     const targets = fileAttachments.filter((a) => selected.has(a.id));
-    const ok = await saveAllAttachments(targets, t('activity.downloadingAttachment'));
+    const result = await saveAllAttachments(targets, t('activity.downloadingAttachment'));
     setSavingAll(false);
     // null はフォルダ選択のキャンセル。何も知らせずに閉じる。
-    if (ok === null) return;
-    setNote(t('mailbox.attachmentSavedN', { count: ok }));
+    if (result === null) return;
+    const msg = saveAllMessage(result, t);
+    toast(msg.text, msg.kind);
   };
 
   // 全文をサーバーから再取得して要約保存を解除する（このメールだけ本文キャッシュを復元）。
@@ -919,7 +935,7 @@ export function MailBody({
             )}
             {note && (
               // 長い理由（フリーメールは認定不可 等）でも操作列を崩さないよう省略し、全文は title で。
-              <span className="ml-1 max-w-[16rem] truncate text-[10px] text-white/45" title={note}>
+              <span className="ml-1 max-w-[16rem] truncate text-xs text-white/65" title={note}>
                 {note}
               </span>
             )}
@@ -1148,7 +1164,7 @@ export function MailBody({
                 disabled={savingAll}
                 className="flex shrink-0 items-center gap-1 rounded-md bg-white/10 px-2 py-1 text-white/80 hover:bg-white/20 disabled:opacity-50"
               >
-                <Download size={12} />
+                {savingAll ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
                 {t('mailbox.attachmentSaveSelected', { count: selected.size })}
               </button>
             )}
@@ -1201,7 +1217,11 @@ export function MailBody({
                         aria-label={t('mailbox.attachmentOpen')}
                         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/10 text-white/80 hover:bg-white/20 disabled:opacity-50"
                       >
-                        <BookOpen size={13} />
+                        {busyId === a.id && busyOp === 'open' ? (
+                          <Loader2 size={13} className="animate-spin" />
+                        ) : (
+                          <BookOpen size={13} />
+                        )}
                       </button>
                       {/* ダウンロード（保存）は未取得のときだけ。取得済み＝手元にあるので「開く」で十分。 */}
                       {!a.is_downloaded && (
@@ -1212,7 +1232,11 @@ export function MailBody({
                           aria-label={t('mailbox.attachmentDownload')}
                           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/10 text-white/80 hover:bg-white/20 disabled:opacity-50"
                         >
-                          <Download size={13} />
+                          {busyId === a.id && busyOp === 'save' ? (
+                            <Loader2 size={13} className="animate-spin" />
+                          ) : (
+                            <Download size={13} />
+                          )}
                         </button>
                       )}
                     </div>

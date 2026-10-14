@@ -101,7 +101,120 @@ fn since_date(days: i64) -> String {
 
 pub type ImapSession = imap::Session<native_tls::TlsStream<std::net::TcpStream>>;
 
-/// タイムアウト付きで IMAP に接続＋ログインし、Session を返す（接続の使い回し／プール用）。
+/// IMAP 接続の時間の上限。サーバーが黙ったときに `spawn_blocking` の中で永久に待たないよう、
+/// TCP の接続と、その後の読み書きのそれぞれに上限を付ける。
+#[derive(Debug, Clone, Copy)]
+pub struct ImapTimeouts {
+    /// TCP の接続の上限。
+    pub connect: std::time::Duration,
+    /// 読み書き 1 回ごとの上限（TLS のハンドシェイク・挨拶・ログイン・取得のすべて）。
+    pub io: std::time::Duration,
+}
+
+impl ImapTimeouts {
+    /// 既定の上限（接続 20 秒・読み書き 60 秒）。
+    pub const DEFAULT: Self = Self {
+        connect: std::time::Duration::from_secs(20),
+        io: std::time::Duration::from_secs(60),
+    };
+}
+
+/// IMAP の接続・操作の失敗。時間切れだけは利用者に分かる文言を出すため、別に分ける。
+#[derive(Debug, thiserror::Error)]
+pub enum ImapError {
+    /// サーバーが上限の時間内に応答しなかった。
+    #[error("サーバーが応答しませんでした")]
+    Timeout,
+    /// ホスト名を解決できなかった。
+    #[error("名前解決に失敗: {0}")]
+    Resolve(String),
+    /// TCP で接続できなかった。
+    #[error("接続できませんでした: {0}")]
+    Connect(std::io::Error),
+    /// TLS のハンドシェイクに失敗した。
+    #[error("TLS ハンドシェイクに失敗: {0}")]
+    Tls(String),
+    /// IMAP のやり取りに失敗した（サーバーの NO/BAD・切断など）。
+    #[error("{0}")]
+    Imap(imap::Error),
+    /// 応答の中身が想定と違った（メッセージ・パートが無い等）。
+    #[error("{0}")]
+    Other(String),
+}
+
+/// 読み書きの時間切れか（Unix は WouldBlock、Windows は TimedOut で返る）。
+fn is_timeout(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    )
+}
+
+impl From<imap::Error> for ImapError {
+    fn from(e: imap::Error) -> Self {
+        match e {
+            imap::Error::Io(io) if is_timeout(&io) => Self::Timeout,
+            other => Self::Imap(other),
+        }
+    }
+}
+
+impl From<native_tls::HandshakeError<TcpStream>> for ImapError {
+    fn from(e: native_tls::HandshakeError<TcpStream>) -> Self {
+        match e {
+            // 読み込みの上限に達すると、ハンドシェイクが途中のまま WouldBlock で戻る。
+            native_tls::HandshakeError::WouldBlock(_) => Self::Timeout,
+            native_tls::HandshakeError::Failure(f) => {
+                let timed_out =
+                    std::iter::successors(std::error::Error::source(&f), |s| s.source())
+                        .any(|s| s.downcast_ref::<std::io::Error>().is_some_and(is_timeout));
+                if timed_out {
+                    Self::Timeout
+                } else {
+                    Self::Tls(f.to_string())
+                }
+            }
+        }
+    }
+}
+
+/// 上限付きで IMAP に接続＋ログインし、Session を返す（[`ImapTimeouts`] で上限を差し替えられる）。
+///
+/// # Errors
+/// 名前解決・接続・TLS・挨拶・ログインのいずれかに失敗したとき。上限を過ぎたら [`ImapError::Timeout`]。
+pub fn connect_login_with(
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    timeouts: ImapTimeouts,
+) -> Result<ImapSession, ImapError> {
+    let tls = native_tls::TlsConnector::builder()
+        .build()
+        .map_err(|e| ImapError::Tls(e.to_string()))?;
+    let addr = format!("{host}:{port}")
+        .to_socket_addrs()
+        .map_err(|e| ImapError::Resolve(e.to_string()))?
+        .next()
+        .ok_or_else(|| ImapError::Resolve("アドレスを解決できませんでした".to_string()))?;
+    let tcp = TcpStream::connect_timeout(&addr, timeouts.connect).map_err(|e| {
+        if is_timeout(&e) {
+            ImapError::Timeout
+        } else {
+            ImapError::Connect(e)
+        }
+    })?;
+    tcp.set_read_timeout(Some(timeouts.io))
+        .map_err(ImapError::Connect)?;
+    tcp.set_write_timeout(Some(timeouts.io))
+        .map_err(ImapError::Connect)?;
+    let ssl = tls.connect(host, tcp)?;
+    let mut client = imap::Client::new(ssl);
+    client.read_greeting()?;
+    client.login(user, password).map_err(|(e, _)| e.into())
+}
+
+/// 既定の上限で IMAP に接続＋ログインし、Session を返す（接続の使い回し／プール用）。
 /// imap::connect と違い TCP connect/read/write にタイムアウトを設定し、死んだ接続で固まらないようにする。
 pub fn connect_login(
     host: &str,
@@ -109,24 +222,7 @@ pub fn connect_login(
     user: &str,
     password: &str,
 ) -> Result<ImapSession, String> {
-    let tls = native_tls::TlsConnector::builder()
-        .build()
-        .map_err(|e| e.to_string())?;
-    let addr = format!("{host}:{port}")
-        .to_socket_addrs()
-        .map_err(|e| format!("名前解決に失敗: {e}"))?
-        .next()
-        .ok_or_else(|| "アドレスを解決できませんでした".to_string())?;
-    let tcp = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(20))
-        .map_err(|e| format!("接続できませんでした: {e}"))?;
-    let _ = tcp.set_read_timeout(Some(std::time::Duration::from_secs(60)));
-    let _ = tcp.set_write_timeout(Some(std::time::Duration::from_secs(60)));
-    let ssl = tls
-        .connect(host, tcp)
-        .map_err(|e| format!("TLS ハンドシェイクに失敗: {e}"))?;
-    let mut client = imap::Client::new(ssl);
-    client.read_greeting().map_err(|e| e.to_string())?;
-    client.login(user, password).map_err(|(e, _)| e.to_string())
+    connect_login_with(host, port, user, password, ImapTimeouts::DEFAULT).map_err(|e| e.to_string())
 }
 
 /// スロットのセッションが生きていれば再利用、なければ/死んでいれば張り直す（接続の使い回し）。
@@ -1486,13 +1582,7 @@ pub fn append_to_sent(
     raw: &[u8],
 ) -> Result<(), String> {
     use imap::types::Flag;
-    let tls = native_tls::TlsConnector::builder()
-        .build()
-        .map_err(|e| e.to_string())?;
-    let client = imap::connect((host, port), host, &tls).map_err(|e| e.to_string())?;
-    let mut session = client
-        .login(user, password)
-        .map_err(|(e, _)| e.to_string())?;
+    let mut session = connect_login(host, port, user, password)?;
 
     let names = session
         .list(Some(""), Some("*"))
@@ -1570,13 +1660,7 @@ pub fn upsert_draft(
     message_id_inner: &str,
 ) -> Result<(), String> {
     use imap::types::Flag;
-    let tls = native_tls::TlsConnector::builder()
-        .build()
-        .map_err(|e| e.to_string())?;
-    let client = imap::connect((host, port), host, &tls).map_err(|e| e.to_string())?;
-    let mut session = client
-        .login(user, password)
-        .map_err(|(e, _)| e.to_string())?;
+    let mut session = connect_login(host, port, user, password)?;
 
     let drafts = find_drafts_mailbox(&mut session)?;
     // 旧版を消してから新版を APPEND（IMAP は上書き不可のため）。
@@ -1597,13 +1681,7 @@ pub fn delete_draft_remote(
     password: &str,
     message_id_inner: &str,
 ) -> Result<(), String> {
-    let tls = native_tls::TlsConnector::builder()
-        .build()
-        .map_err(|e| e.to_string())?;
-    let client = imap::connect((host, port), host, &tls).map_err(|e| e.to_string())?;
-    let mut session = client
-        .login(user, password)
-        .map_err(|(e, _)| e.to_string())?;
+    let mut session = connect_login(host, port, user, password)?;
     let drafts = find_drafts_mailbox(&mut session)?;
     session.select(&drafts).map_err(|e| e.to_string())?;
     let r = expunge_draft_by_message_id(&mut session, message_id_inner);
@@ -1802,98 +1880,110 @@ fn combine_mime_part(mime: &[u8], body: &[u8]) -> Vec<u8> {
     out
 }
 
+/// 添付を取り出すメッセージの在りか（アカウントの接続先とフォルダ・UID）。
+#[derive(Debug, Clone, Copy)]
+pub struct AttachmentSource<'a> {
+    pub host: &'a str,
+    pub port: u16,
+    pub user: &'a str,
+    pub password: &'a str,
+    /// メールのフォルダ（ローカルタグ: inbox/sent/…）。
+    pub folder: &'a str,
+    pub uid: u32,
+}
+
 /// 指定 UID のメッセージから添付本体を取り出す（オンデマンド）。
+/// メールのあるフォルダ（`src.folder`）を選んでから取得する。
 /// `section` があれば `BODY.PEEK[section]` で該当パートだけ取得（本体を丸ごと落とさず軽い）。
 /// 無ければ従来どおり `BODY[]` を取得し `part_index` 番目の実添付を取り出す（後方互換）。
+///
+/// # Errors
+/// 接続・選択・取得・解析に失敗したとき。上限（`timeouts`）を過ぎたら [`ImapError::Timeout`]。
 pub fn fetch_attachment(
-    host: &str,
-    port: u16,
-    user: &str,
-    password: &str,
-    uid: u32,
+    src: AttachmentSource<'_>,
     part_index: usize,
     section: Option<&str>,
-) -> Result<FetchedAttachment, String> {
+    timeouts: ImapTimeouts,
+) -> Result<FetchedAttachment, ImapError> {
+    let mut session = connect_login_with(src.host, src.port, src.user, src.password, timeouts)?;
+    let mailbox = imap_mailbox_for_tag(&mut session, src.folder).map_err(ImapError::Other)?;
+    session.select(&mailbox)?;
+    let result = match section.and_then(parse_section_path) {
+        Some(path) => fetch_part(&mut session, src.uid, &path, part_index),
+        None => fetch_part_from_whole(&mut session, src.uid, part_index),
+    };
+    let _ = session.logout();
+    result
+}
+
+/// 該当パートの MIME ヘッダ＋本体だけを取得して取り出す（軽量経路）。
+fn fetch_part(
+    session: &mut ImapSession,
+    uid: u32,
+    path: &[u32],
+    part_index: usize,
+) -> Result<FetchedAttachment, ImapError> {
     use imap_proto::types::{MessageSection, SectionPath};
+    let sec = path
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(".");
+    let query = format!("(BODY.PEEK[{sec}.MIME] BODY.PEEK[{sec}])");
+    let msgs = session.uid_fetch(uid.to_string(), query)?;
+    let m = msgs
+        .iter()
+        .next()
+        .ok_or_else(|| ImapError::Other("メッセージが見つかりませんでした".to_string()))?;
+    let mime = m
+        .section(&SectionPath::Part(
+            path.to_vec(),
+            Some(MessageSection::Mime),
+        ))
+        .unwrap_or(&[]);
+    let body = m
+        .section(&SectionPath::Part(path.to_vec(), None))
+        .ok_or_else(|| ImapError::Other("添付パートを取得できませんでした".to_string()))?;
+    let combined = combine_mime_part(mime, body);
+    let msg = MessageParser::default()
+        .parse(&combined)
+        .ok_or_else(|| ImapError::Other("添付パートを解析できませんでした".to_string()))?;
+    let part = msg
+        .parts
+        .first()
+        .ok_or_else(|| ImapError::Other("添付パートが空でした".to_string()))?;
+    Ok(FetchedAttachment {
+        bytes: part.contents().to_vec(),
+        filename: parser::part_filename(part, part_index),
+        content_type: parser::part_content_type(part),
+    })
+}
 
-    let tls = native_tls::TlsConnector::builder()
-        .build()
-        .map_err(|e| e.to_string())?;
-    let client = imap::connect((host, port), host, &tls).map_err(|e| e.to_string())?;
-    let mut session = client
-        .login(user, password)
-        .map_err(|(e, _)| e.to_string())?;
-    session.select("INBOX").map_err(|e| e.to_string())?;
-
-    // section があれば該当パートの MIME ヘッダ＋本体だけ取得（軽量経路）。
-    if let Some(path) = section.and_then(parse_section_path) {
-        let sec = path
-            .iter()
-            .map(|n| n.to_string())
-            .collect::<Vec<_>>()
-            .join(".");
-        let query = format!("(BODY.PEEK[{sec}.MIME] BODY.PEEK[{sec}])");
-        let msgs = session
-            .uid_fetch(uid.to_string(), query)
-            .map_err(|e| e.to_string())?;
-        let m = msgs
-            .iter()
-            .next()
-            .ok_or_else(|| "メッセージが見つかりませんでした".to_string())?;
-        let mime = m
-            .section(&SectionPath::Part(path.clone(), Some(MessageSection::Mime)))
-            .unwrap_or(&[]);
-        let body = m
-            .section(&SectionPath::Part(path.clone(), None))
-            .ok_or_else(|| "添付パートを取得できませんでした".to_string())?;
-        let combined = combine_mime_part(mime, body);
-        let msg = MessageParser::default()
-            .parse(&combined)
-            .ok_or_else(|| "添付パートを解析できませんでした".to_string())?;
-        let part = msg
-            .parts
-            .first()
-            .ok_or_else(|| "添付パートが空でした".to_string())?;
-        let bytes = part.contents().to_vec();
-        let filename = parser::part_filename(part, part_index);
-        let content_type = parser::part_content_type(part);
-        let _ = session.logout();
-        return Ok(FetchedAttachment {
-            bytes,
-            filename,
-            content_type,
-        });
-    }
-
-    // フォールバック: section が無い既存行はメッセージ全体を取得して part_index で取り出す。
-    let msgs = session
-        .uid_fetch(uid.to_string(), "(BODY[])")
-        .map_err(|e| e.to_string())?;
+/// section が無い既存行: メッセージ全体を取得して `part_index` 番目の実添付を取り出す。
+fn fetch_part_from_whole(
+    session: &mut ImapSession,
+    uid: u32,
+    part_index: usize,
+) -> Result<FetchedAttachment, ImapError> {
+    let msgs = session.uid_fetch(uid.to_string(), "(BODY[])")?;
     let raw = msgs
         .iter()
         .next()
         .and_then(|m| m.body())
-        .ok_or_else(|| "メッセージが見つかりませんでした".to_string())?;
-
+        .ok_or_else(|| ImapError::Other("メッセージが見つかりませんでした".to_string()))?;
     let msg = MessageParser::default()
         .parse(raw)
-        .ok_or_else(|| "メッセージを解析できませんでした".to_string())?;
+        .ok_or_else(|| ImapError::Other("メッセージを解析できませんでした".to_string()))?;
     // 保存時と同じ「実添付パート一覧」から part_index 番目を取り出す（ネストした添付にも届く）。
     let parts = parser::real_attachment_parts(&msg);
     let part = parts
         .get(part_index)
         .copied()
-        .ok_or_else(|| "添付が見つかりませんでした".to_string())?;
-
-    let bytes = part.contents().to_vec();
-    let filename = parser::part_filename(part, part_index);
-    let content_type = parser::part_content_type(part);
-
-    let _ = session.logout();
+        .ok_or_else(|| ImapError::Other("添付が見つかりませんでした".to_string()))?;
     Ok(FetchedAttachment {
-        bytes,
-        filename,
-        content_type,
+        bytes: part.contents().to_vec(),
+        filename: parser::part_filename(part, part_index),
+        content_type: parser::part_content_type(part),
     })
 }
 
@@ -1928,14 +2018,7 @@ pub fn fetch_message(
     // 段階ごとの所要時間をログに残す。開いたメールの本文がなかなか出ないとき、
     // 接続・ログイン・選択・取得のどこで待っているかを実機のログで見分けるため（2026-10-07）。
     let started = std::time::Instant::now();
-    let tls = native_tls::TlsConnector::builder()
-        .build()
-        .map_err(|e| e.to_string())?;
-    let client = imap::connect((host, port), host, &tls).map_err(|e| e.to_string())?;
-    let connected = started.elapsed();
-    let mut session = client
-        .login(user, password)
-        .map_err(|(e, _)| e.to_string())?;
+    let mut session = connect_login(host, port, user, password)?;
     let logged_in = started.elapsed();
     let mailbox = imap_mailbox_for_tag(&mut session, folder)?;
     session.select(&mailbox).map_err(|e| e.to_string())?;
@@ -1950,9 +2033,8 @@ pub fn fetch_message(
         .and_then(|m| m.body())
         .ok_or_else(|| "メッセージが見つかりませんでした".to_string())?;
     log::info!(
-        "fetch_message uid={uid} {folder}: 接続 {}ms / ログイン {}ms / 選択 {}ms / 取得 {}ms（{} バイト）",
-        connected.as_millis(),
-        (logged_in - connected).as_millis(),
+        "fetch_message uid={uid} {folder}: 接続とログイン {}ms / 選択 {}ms / 取得 {}ms（{} バイト）",
+        logged_in.as_millis(),
         (selected - logged_in).as_millis(),
         (started.elapsed() - selected).as_millis(),
         raw.len()
@@ -1966,6 +2048,64 @@ pub fn fetch_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 受け付けるだけで何も返さないサーバーに向けると、上限で必ず時間切れとして戻る。
+    #[test]
+    fn a_silent_server_times_out_instead_of_hanging() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // 受け付けた接続を、クライアントが戻るまで握ったまま黙る
+        // （閉じると「切断」になり、時間切れの経路を通らない）。
+        let (done, wait) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let (conn, _) = listener.accept().unwrap();
+            let _ = wait.recv_timeout(std::time::Duration::from_secs(10));
+            drop(conn);
+        });
+        let timeouts = ImapTimeouts {
+            connect: std::time::Duration::from_secs(2),
+            io: std::time::Duration::from_millis(300),
+        };
+        let started = std::time::Instant::now();
+        let r = connect_login_with("127.0.0.1", port, "u@example.invalid", "x", timeouts);
+        let took = started.elapsed();
+        done.send(()).unwrap();
+        server.join().unwrap();
+        assert!(matches!(r, Err(ImapError::Timeout)), "{:?}", r.err());
+        assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+    }
+
+    /// 挨拶・ログイン・取得の途中の時間切れ（読み込みの上限）も時間切れとして扱う。
+    #[test]
+    fn an_io_timeout_inside_imap_is_a_timeout() {
+        for kind in [std::io::ErrorKind::WouldBlock, std::io::ErrorKind::TimedOut] {
+            let e = ImapError::from(imap::Error::Io(std::io::Error::from(kind)));
+            assert!(matches!(e, ImapError::Timeout), "{kind:?}");
+        }
+        let e = ImapError::from(imap::Error::ConnectionLost);
+        assert!(!matches!(e, ImapError::Timeout));
+    }
+
+    /// 接続をすぐ閉じるサーバーは時間切れではない（別の失敗として返す）。
+    #[test]
+    fn a_closed_connection_is_not_a_timeout() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || drop(listener.accept().unwrap()));
+        let r = connect_login_with(
+            "127.0.0.1",
+            port,
+            "u@example.invalid",
+            "x",
+            ImapTimeouts {
+                connect: std::time::Duration::from_secs(2),
+                io: std::time::Duration::from_secs(2),
+            },
+        );
+        assert!(r.is_err());
+        assert!(!matches!(r, Err(ImapError::Timeout)));
+        server.join().unwrap();
+    }
 
     #[test]
     fn gmail_hosts_auto_save_sent() {

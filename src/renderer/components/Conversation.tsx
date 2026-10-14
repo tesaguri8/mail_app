@@ -41,7 +41,13 @@ import { parseAddress } from '../utils/address';
 import { copyText } from '../utils/clipboard';
 import { getBubbleHtml, getInlineImages, PREFS_EVENT } from '../config/prefs';
 import { formatDateTime } from '../utils/datetime';
-import { saveAllAttachments, saveAttachment } from '../utils/attachmentSave';
+import {
+  attachmentErrorReason,
+  saveAllAttachments,
+  saveAllMessage,
+  saveAttachment,
+} from '../utils/attachmentSave';
+import { useToast } from './SyncProvider';
 import { hasReadableBody, htmlHasContent } from '../utils/mailBody';
 import { withActivity } from '../stores/activity';
 import { MailBody, makeRenderDate } from './MailBody';
@@ -154,6 +160,30 @@ function Bubble({
   fetchingBody?: boolean;
 }) {
   const { t } = useTranslation();
+  const toast = useToast();
+  // 添付の保存・起動。結果（とくに失敗）はトーストで知らせる（黙って何も起きないようにしない）。
+  const saveOne = async (id: number, filename: string) => {
+    try {
+      if (await saveAttachment(id, filename, t('activity.downloadingAttachment'))) {
+        toast(t('mailbox.attachmentSaved'));
+      }
+    } catch (e) {
+      toast(t('mailbox.attachmentSaveFailed', { reason: attachmentErrorReason(e, t) }), 'error');
+    }
+  };
+  const openOne = async (id: number) => {
+    try {
+      await withActivity(t('activity.openingAttachment'), () => attachmentOpen(id));
+    } catch (e) {
+      toast(t('mailbox.attachmentOpenFailed', { reason: attachmentErrorReason(e, t) }), 'error');
+    }
+  };
+  const saveAll = async (items: { id: number; filename: string }[]) => {
+    const result = await saveAllAttachments(items, t('activity.downloadingAttachment'));
+    if (result === null) return; // フォルダ選択のキャンセル
+    const msg = saveAllMessage(result, t);
+    toast(msg.text, msg.kind);
+  };
   const out = m.direction === 'out';
   // 見出し（ラベル）の上端固定用。会話スクロール枠の上端に貼り付いている間だけ true にして、
   // その時だけラベル背景を不透明にする（普段はチャットを汚さない）。固定検出はラベル直前に置いた
@@ -267,13 +297,14 @@ function Bubble({
       if (list.length === 0) return;
       if (list.length === 1) {
         const a = list[0];
-        if (mode === 'save') await saveAttachment(a.id, a.filename, t('activity.downloadingAttachment'));
-        else await withActivity(t('activity.openingAttachment'), () => attachmentOpen(a.id));
+        if (mode === 'save') await saveOne(a.id, a.filename);
+        else await openOne(a.id);
         return;
       }
       setAttMenu({ x: clientX, y: clientY, mode });
-    } catch {
-      /* noop（開けないときは無反応。全文を展開すれば MailBody で詳細に扱える） */
+    } catch (e) {
+      // 添付の一覧を読めなかったとき（保存・起動の失敗は saveOne / openOne が知らせる）。
+      toast(t('mailbox.attachmentOpenFailed', { reason: attachmentErrorReason(e, t) }), 'error');
     } finally {
       setAttBusy(false);
     }
@@ -847,21 +878,13 @@ function Bubble({
               key: 'save',
               label: t('mailbox.attachmentDownload'),
               Icon: Download,
-              onClick: () =>
-                void saveAttachment(
-                  imgMenu.att.id,
-                  imgMenu.att.filename,
-                  t('activity.downloadingAttachment'),
-                ),
+              onClick: () => void saveOne(imgMenu.att.id, imgMenu.att.filename),
             },
             {
               key: 'open',
               label: t('mailbox.openAttachment'),
               Icon: Paperclip,
-              onClick: () =>
-                void withActivity(t('activity.openingAttachment'), () =>
-                  attachmentOpen(imgMenu.att.id),
-                ),
+              onClick: () => void openOne(imgMenu.att.id),
             },
           ]}
           onClose={() => setImgMenu(null)}
@@ -882,8 +905,7 @@ function Bubble({
                     key: 'att-save-all',
                     label: t('mailbox.attachmentSaveAll', { count: atts.length }),
                     Icon: Download,
-                    onClick: () =>
-                      void saveAllAttachments(atts, t('activity.downloadingAttachment')),
+                    onClick: () => void saveAll(atts),
                   },
                 ]
               : []),
@@ -892,9 +914,7 @@ function Bubble({
               label: a.filename,
               Icon: attMenu.mode === 'save' ? Download : Paperclip,
               onClick: () =>
-                attMenu.mode === 'save'
-                  ? void saveAttachment(a.id, a.filename, t('activity.downloadingAttachment'))
-                  : void withActivity(t('activity.openingAttachment'), () => attachmentOpen(a.id)),
+                attMenu.mode === 'save' ? void saveOne(a.id, a.filename) : void openOne(a.id),
             })),
           ]}
           onClose={() => setAttMenu(null)}

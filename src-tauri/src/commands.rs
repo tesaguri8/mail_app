@@ -3047,6 +3047,14 @@ pub fn mail_attachments(
     store.list_attachments(email_id).map_err(|e| e.to_string())
 }
 
+/// IMAP が上限の時間内に応答しなかったときに返す符号（画面側の `ERR_IMAP_TIMEOUT` と同じ綴り）。
+const ERR_IMAP_TIMEOUT: &str = "imap.timeout";
+
+/// 添付の操作の失敗をログに残す（添付の id・段階・エラー）。画面にも出すが、後から追えるように。
+fn log_attachment_error(attachment_id: i64, stage: &str, e: &str) {
+    log::warn!("添付 {attachment_id} の{stage}に失敗: {e}");
+}
+
 /// 添付本体をディスクに用意して保存先パスを返す（既に取得済みならそれを再利用）。
 /// emails.uid + attachments.part_index で IMAP から該当パートだけを再取得する。
 async fn ensure_attachment_file(
@@ -3074,6 +3082,7 @@ async fn ensure_attachment_file(
     let part_index = info.part_index;
     let filename = info.filename;
     let section = info.section;
+    let folder = info.folder;
 
     let (email, login, host, port) = store
         .get_account_imap(info.account_id)
@@ -3086,17 +3095,26 @@ async fn ensure_attachment_file(
 
     let fetched = tauri::async_runtime::spawn_blocking(move || {
         imap_sync::fetch_attachment(
-            &host,
-            port,
-            &login,
-            &password,
-            uid as u32,
+            imap_sync::AttachmentSource {
+                host: &host,
+                port,
+                user: &login,
+                password: &password,
+                folder: &folder,
+                uid: uid as u32,
+            },
             part_index as usize,
             section.as_deref(),
+            imap_sync::ImapTimeouts::DEFAULT,
         )
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| e.to_string())?
+    .map_err(|e| match e {
+        // 時間切れは画面で「サーバーが応答しませんでした」と出すため、決まった符号で返す。
+        imap_sync::ImapError::Timeout => ERR_IMAP_TIMEOUT.to_string(),
+        other => other.to_string(),
+    })?;
 
     // 保存先: <mail.db と同じフォルダ>/attachments/<attachment_id>/<filename>。
     // DB パス（開発ビルドはワークツリー別）から導出し、DB と添付キャッシュを常に同じ場所に置く。
@@ -3210,7 +3228,9 @@ pub async fn attachment_open(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "添付が見つかりません".to_string())?;
 
-    let original = ensure_attachment_file(&app, &store, attachment_id).await?;
+    let original = ensure_attachment_file(&app, &store, attachment_id)
+        .await
+        .inspect_err(|e| log_attachment_error(attachment_id, "取得", e))?;
 
     // HEIC はそのままだと Windows で開けない場合があるので JPEG 版を作って開く。
     let to_open = if media::is_heic(att.content_type.as_deref(), &att.filename) {
@@ -3230,6 +3250,7 @@ pub async fn attachment_open(
     app.opener()
         .open_path(to_open.to_string_lossy().to_string(), None::<&str>)
         .map_err(|e| e.to_string())
+        .inspect_err(|e| log_attachment_error(attachment_id, "起動", e))
 }
 
 /// 受信済みメールの添付をローカルファイルとして用意し、そのパスを返す（未取得なら先に取得）。
@@ -3275,8 +3296,12 @@ pub async fn attachment_export(
     attachment_id: i64,
     dest: String,
 ) -> Result<(), String> {
-    let src = ensure_attachment_file(&app, &store, attachment_id).await?;
-    std::fs::copy(&src, &dest).map_err(|e| format!("保存に失敗しました: {e}"))?;
+    let src = ensure_attachment_file(&app, &store, attachment_id)
+        .await
+        .inspect_err(|e| log_attachment_error(attachment_id, "取得", e))?;
+    std::fs::copy(&src, &dest)
+        .map_err(|e| format!("保存に失敗しました: {e}"))
+        .inspect_err(|e| log_attachment_error(attachment_id, "書き出し", e))?;
     Ok(())
 }
 

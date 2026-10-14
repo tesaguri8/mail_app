@@ -1,7 +1,50 @@
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { downloadDir, join } from '@tauri-apps/api/path';
+import type { TFunction } from 'i18next';
 import { attachmentExport } from '../services/mail';
 import { withActivity } from '../stores/activity';
+
+/** IMAP が上限の時間内に応答しなかったときに Rust 側が返す符号（commands.rs の ERR_IMAP_TIMEOUT）。 */
+export const ERR_IMAP_TIMEOUT = 'imap.timeout';
+
+/**
+ * 添付の取得・保存・起動の失敗を、利用者に見せる理由の文に直す。
+ * 時間切れは決まった符号で返ってくるので、分かる文言に置き換える。
+ */
+export function attachmentErrorReason(e: unknown, t: TFunction): string {
+  const raw = e instanceof Error ? e.message : String(e);
+  return raw === ERR_IMAP_TIMEOUT ? t('mailbox.attachmentTimeout') : raw;
+}
+
+/** まとめて保存した結果。 */
+export interface SaveAllResult {
+  /** 保存できた件数。 */
+  saved: number;
+  /** 保存できなかった件数。 */
+  failed: number;
+  /** 最初の失敗（failed が 0 なら undefined）。 */
+  error?: unknown;
+}
+
+/**
+ * まとめて保存した結果を、トーストに出す文と種類に直す（全部保存できたら成功、1 件でも失敗したら失敗）。
+ */
+export function saveAllMessage(
+  r: SaveAllResult,
+  t: TFunction
+): { text: string; kind: 'ok' | 'error' } {
+  if (r.failed === 0) {
+    return { text: t('mailbox.attachmentSavedN', { count: r.saved }), kind: 'ok' };
+  }
+  return {
+    text: t('mailbox.attachmentSavedPartial', {
+      saved: r.saved,
+      failed: r.failed,
+      reason: attachmentErrorReason(r.error, t),
+    }),
+    kind: 'error',
+  };
+}
 
 /**
  * 保存先のパスに使えない文字を `_` に置き換える（Rust 側の添付キャッシュと同じ方針）。
@@ -68,13 +111,14 @@ export function uniqueNames(filenames: string[]): string[] {
  * 会話バブルのメニューと全文表示（MailBody）で共通利用する。
  *
  * 個別の失敗はスキップして残りを続ける（1 件壊れていても他が保存できるように）。
+ * 失敗の件数と最初の失敗は結果に入れて返す（黙って捨てない）。
  *
- * @returns 保存できた件数。フォルダ選択をキャンセルしたら null。
+ * @returns 保存できた件数・失敗の件数。フォルダ選択をキャンセルしたら null。
  */
 export async function saveAllAttachments(
   items: { id: number; filename: string }[],
   activityLabel: string
-): Promise<number | null> {
+): Promise<SaveAllResult | null> {
   let defaultPath: string | undefined;
   try {
     defaultPath = await downloadDir();
@@ -86,16 +130,18 @@ export async function saveAllAttachments(
   if (!dir) return null;
 
   const names = uniqueNames(items.map((a) => safeFilename(a.filename)));
-  let ok = 0;
+  const result: SaveAllResult = { saved: 0, failed: 0 };
   await withActivity(activityLabel, async () => {
     for (const [i, a] of items.entries()) {
       try {
         await attachmentExport(a.id, await join(dir, names[i]));
-        ok += 1;
-      } catch {
-        /* 個別の失敗はスキップ */
+        result.saved += 1;
+      } catch (e) {
+        // 個別の失敗は数えて残りを続ける。
+        result.failed += 1;
+        result.error ??= e;
       }
     }
   });
-  return ok;
+  return result;
 }

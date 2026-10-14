@@ -120,6 +120,8 @@ pub struct AttachmentFetchInfo {
     pub file_path: Option<String>,
     /// IMAP section（あれば BODY[section] で該当パートだけ取得。無ければ part_index で従来取得）。
     pub section: Option<String>,
+    /// 親メールのフォルダ（ローカルタグ: inbox/sent/…）。取得時にこのフォルダを選ぶ。
+    pub folder: String,
 }
 
 /// 添付メタ（本体は file_path NULL = 未取得）を一括挿入する。
@@ -1660,7 +1662,8 @@ impl Store {
     ) -> rusqlite::Result<Option<AttachmentFetchInfo>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT e.account_id, e.uid, a.part_index, a.filename, a.file_path, a.section
+            "SELECT e.account_id, e.uid, a.part_index, a.filename, a.file_path, a.section,
+                    COALESCE(e.folder, 'inbox')
              FROM attachments a JOIN emails e ON e.id = a.email_id
              WHERE a.id = ?1",
             params![attachment_id],
@@ -1672,6 +1675,7 @@ impl Store {
                     filename: r.get(3)?,
                     file_path: r.get(4)?,
                     section: r.get(5)?,
+                    folder: r.get(6)?,
                 })
             },
         )
@@ -1965,6 +1969,50 @@ mod tests {
             attachments: vec![],
         };
         insert_email(&conn, &e).unwrap();
+    }
+
+    /// 添付の取得情報には親メールのフォルダが入る（受信箱以外のメールの添付も、そのフォルダから取る）。
+    #[test]
+    fn attachment_fetch_info_carries_the_folder() {
+        let store = test_store();
+        seed(
+            &store,
+            "控え",
+            "me@example.invalid",
+            "本文",
+            "sent",
+            "sent@x",
+        );
+        let email_id: i64 = {
+            let conn = store.conn.lock().unwrap();
+            let id = conn
+                .query_row("SELECT id FROM emails WHERE subject = '控え'", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            insert_attachments(
+                &conn,
+                id,
+                &[NewAttachment {
+                    part_index: 0,
+                    filename: "見積.pdf".to_string(),
+                    content_type: Some("application/pdf".to_string()),
+                    size: 816_000,
+                    kind: "attachment",
+                    content_id: None,
+                    section: Some("2".to_string()),
+                }],
+            )
+            .unwrap();
+            id
+        };
+        let att = store.list_attachments(email_id).unwrap();
+        let info = store
+            .attachment_fetch_info(i64::from(att[0].id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(info.folder, "sent");
+        assert_eq!(info.section.as_deref(), Some("2"));
     }
 
     /// 下書きの添付は保存・再取得でそのまま往復し、更新のたびに入れ替わる。

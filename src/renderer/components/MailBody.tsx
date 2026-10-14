@@ -30,7 +30,7 @@ import type { MailDetail } from '@bindings/MailDetail';
 import type { AttachmentSummary } from '@bindings/AttachmentSummary';
 import type { TagSummary } from '@bindings/TagSummary';
 import { DEFAULT_TAG_COLOR } from '../utils/tagColors';
-import { attachmentOpen, mailAttachments, mailRefetch } from '../services/mail';
+import { mailAttachments, mailRefetch } from '../services/mail';
 import type { ContactSummary } from '@bindings/ContactSummary';
 import { getInlineImages, getRemoteImageMode, PREFS_EVENT } from '../config/prefs';
 import { greenDomainAdd, greenDomainWarn } from '../services/green';
@@ -46,12 +46,14 @@ import { parseDateTime, type ParsedDate } from '../utils/dateparse';
 import { formatDateTime } from '../utils/datetime';
 import {
   attachmentErrorReason,
+  openAttachment,
   saveAllAttachments,
   saveAllMessage,
   saveAttachment,
 } from '../utils/attachmentSave';
+import { useEmailDownloads } from '../stores/attachmentDownloads';
+import { AttachmentDownloadSlot } from './AttachmentDownloadLine';
 import { useToast } from './SyncProvider';
-import { withActivity } from '../stores/activity';
 import { hasReadableBody, htmlHasContent } from '../utils/mailBody';
 
 /** 「表示名 <メール>」に整形。表示名が無ければアドレスのみ。 */
@@ -372,8 +374,16 @@ export function MailBody({
     !!d.reply_to?.trim() && replyToAddr !== (d.from_address ?? '').trim().toLowerCase();
   const [attachments, setAttachments] = useState<AttachmentSummary[]>([]);
   const [busyId, setBusyId] = useState<number | null>(null);
-  // 取得中の操作（行のどのボタンにスピナーを出すか）。取得はサーバー次第で数十秒かかることがある。
-  const [busyOp, setBusyOp] = useState<'open' | 'save' | null>(null);
+  // 取得中の添付（状態は画面の外で持つので、閉じて開き直しても続きが出る）。
+  // 進み具合は行ごとの AttachmentDownloadSlot が購読し、ここは始まり・終わりでだけ描き直す。
+  const emailDownloads = useEmailDownloads(detail.id);
+  const inFlightIds = new Set(emailDownloads.filter((d) => d.inFlight).map((d) => d.id));
+  const attRef = (a: AttachmentSummary) => ({
+    id: a.id,
+    filename: a.filename,
+    size: a.size,
+    emailId: detail.id,
+  });
   // 本文埋め込み画像（content_id → data URL）
   const [inlineImages, setInlineImages] = useState<Record<string, string>>({});
   // 許可して取得したリモート画像（正規化 URL → サニタイズ済み data URL）。既定は空＝ブロック。
@@ -612,11 +622,10 @@ export function MailBody({
   // 「開く」: 未取得なら取得してから OS の関連アプリで開く（HEIC は変換して開く）。
   const handleOpen = async (a: AttachmentSummary) => {
     setBusyId(a.id);
-    setBusyOp('open');
     setNote('');
     try {
-      // 取得に時間がかかることがあるのでフッターに進捗（不確定）を出す。
-      await withActivity(t('activity.openingAttachment'), () => attachmentOpen(a.id));
+      // 取得に時間がかかることがあるので、行に進み具合を、フッターにも作業を出す。
+      await openAttachment(attRef(a), t('activity.openingAttachment'));
       setAttachments((list) =>
         list.map((x) => (x.id === a.id ? { ...x, is_downloaded: true } : x)),
       );
@@ -625,7 +634,6 @@ export function MailBody({
       toast(t('mailbox.attachmentOpenFailed', { reason: attachmentErrorReason(e, t) }), 'error');
     } finally {
       setBusyId(null);
-      setBusyOp(null);
     }
   };
 
@@ -634,9 +642,8 @@ export function MailBody({
   const handleSave = async (a: AttachmentSummary) => {
     setNote('');
     setBusyId(a.id);
-    setBusyOp('save');
     try {
-      const saved = await saveAttachment(a.id, a.filename, t('activity.downloadingAttachment'));
+      const saved = await saveAttachment(attRef(a), t('activity.downloadingAttachment'));
       if (saved) {
         // 保存時にローカルへも取得済みになる（開く/DLアイコンの表示を揃える）。
         setAttachments((list) =>
@@ -648,7 +655,6 @@ export function MailBody({
       toast(t('mailbox.attachmentSaveFailed', { reason: attachmentErrorReason(e, t) }), 'error');
     } finally {
       setBusyId(null);
-      setBusyOp(null);
     }
   };
 
@@ -688,7 +694,7 @@ export function MailBody({
   const handleSaveSelected = async () => {
     setNote('');
     setSavingAll(true);
-    const targets = fileAttachments.filter((a) => selected.has(a.id));
+    const targets = fileAttachments.filter((a) => selected.has(a.id)).map(attRef);
     const result = await saveAllAttachments(targets, t('activity.downloadingAttachment'));
     setSavingAll(false);
     // null はフォルダ選択のキャンセル。何も知らせずに閉じる。
@@ -1183,6 +1189,7 @@ export function MailBody({
               {fileAttachments.map((a) => {
                 const image = isImage(a);
                 const preview = previews[a.id];
+                const busy = busyId === a.id || inFlightIds.has(a.id);
                 return (
                   <li key={a.id} className="rounded-md bg-white/5 px-3 py-2">
                     <div className="flex items-center gap-3">
@@ -1212,34 +1219,28 @@ export function MailBody({
                       )}
                       <button
                         onClick={() => handleOpen(a)}
-                        disabled={busyId === a.id}
+                        disabled={busy}
                         title={t('mailbox.attachmentOpen')}
                         aria-label={t('mailbox.attachmentOpen')}
                         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/10 text-white/80 hover:bg-white/20 disabled:opacity-50"
                       >
-                        {busyId === a.id && busyOp === 'open' ? (
-                          <Loader2 size={13} className="animate-spin" />
-                        ) : (
-                          <BookOpen size={13} />
-                        )}
+                        <BookOpen size={13} />
                       </button>
                       {/* ダウンロード（保存）は未取得のときだけ。取得済み＝手元にあるので「開く」で十分。 */}
                       {!a.is_downloaded && (
                         <button
                           onClick={() => handleSave(a)}
-                          disabled={busyId === a.id}
+                          disabled={busy}
                           title={t('mailbox.attachmentDownload')}
                           aria-label={t('mailbox.attachmentDownload')}
                           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/10 text-white/80 hover:bg-white/20 disabled:opacity-50"
                         >
-                          {busyId === a.id && busyOp === 'save' ? (
-                            <Loader2 size={13} className="animate-spin" />
-                          ) : (
-                            <Download size={13} />
-                          )}
+                          <Download size={13} />
                         </button>
                       )}
                     </div>
+                    {/* 取得中は進み具合、失敗したら理由をこの行に出す。 */}
+                    <AttachmentDownloadSlot id={a.id} />
                     {preview && (
                       <img
                         src={preview}

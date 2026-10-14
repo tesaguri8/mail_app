@@ -1,8 +1,9 @@
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { downloadDir, join } from '@tauri-apps/api/path';
 import type { TFunction } from 'i18next';
-import { attachmentExport } from '../services/mail';
+import { attachmentExport, attachmentOpen } from '../services/mail';
 import { withActivity } from '../stores/activity';
+import { trackAttachment, type AttachmentRef } from '../stores/attachmentDownloads';
 
 /** IMAP が上限の時間内に応答しなかったときに Rust 側が返す符号（commands.rs の ERR_IMAP_TIMEOUT）。 */
 export const ERR_IMAP_TIMEOUT = 'imap.timeout';
@@ -62,17 +63,13 @@ export function safeFilename(name: string): string {
 
 /**
  * 添付 1 件を「名前を付けて保存」ダイアログでユーザー指定の場所へ保存する（ダウンロード）。
- * 既定はダウンロードフォルダ。保存中はフッターに進捗（不確定スピナー）を出す。
+ * 既定はダウンロードフォルダ。取得中は添付の行に進み具合を、フッターにも作業を出す。
  * 会話バブルと全文表示（MailBody）で共通利用する。
  *
  * @returns 実際に保存したら true、ダイアログをキャンセルしたら false。
  */
-export async function saveAttachment(
-  id: number,
-  filename: string,
-  activityLabel: string
-): Promise<boolean> {
-  const safe = safeFilename(filename);
+export async function saveAttachment(a: AttachmentRef, activityLabel: string): Promise<boolean> {
+  const safe = safeFilename(a.filename);
   let defaultPath = safe;
   try {
     defaultPath = await join(await downloadDir(), safe);
@@ -81,8 +78,13 @@ export async function saveAttachment(
   }
   const dest = await save({ defaultPath }).catch(() => null);
   if (!dest) return false;
-  await withActivity(activityLabel, () => attachmentExport(id, dest));
+  await trackAttachment(a, () => withActivity(activityLabel, () => attachmentExport(a.id, dest)));
   return true;
+}
+
+/** 添付を OS の関連アプリで開く（未取得なら取得してから）。取得中は行とフッターに出す。 */
+export async function openAttachment(a: AttachmentRef, activityLabel: string): Promise<void> {
+  await trackAttachment(a, () => withActivity(activityLabel, () => attachmentOpen(a.id)));
 }
 
 /**
@@ -116,7 +118,7 @@ export function uniqueNames(filenames: string[]): string[] {
  * @returns 保存できた件数・失敗の件数。フォルダ選択をキャンセルしたら null。
  */
 export async function saveAllAttachments(
-  items: { id: number; filename: string }[],
+  items: AttachmentRef[],
   activityLabel: string
 ): Promise<SaveAllResult | null> {
   let defaultPath: string | undefined;
@@ -134,7 +136,8 @@ export async function saveAllAttachments(
   await withActivity(activityLabel, async () => {
     for (const [i, a] of items.entries()) {
       try {
-        await attachmentExport(a.id, await join(dir, names[i]));
+        const dest = await join(dir, names[i]);
+        await trackAttachment(a, () => attachmentExport(a.id, dest));
         result.saved += 1;
       } catch (e) {
         // 個別の失敗は数えて残りを続ける。

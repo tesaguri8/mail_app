@@ -946,6 +946,15 @@
     "attachmentSaveFailed": "Could not save the attachment: {{reason}}",
     "attachmentOpenFailed": "Could not open the attachment: {{reason}}",
     "attachmentSavedPartial": "Saved {{saved}} files. {{failed}} could not be saved: {{reason}}",
+    "attachmentStage": {
+      "preparing": "Preparing…",
+      "connecting": "Connecting to the server…",
+      "fetching": "Downloading…",
+      "saving": "Saving…"
+    },
+    "attachmentNotYet": "Available when finished",
+    "attachmentFailedLine": "Could not download: {{reason}}",
+    "attachmentResumeHint": "Try again to continue where it stopped.",
     "attachmentSelectAll": "Select / clear all",
     "attachmentSaveSelected": "Save selected ({{count}})",
     "attachmentSaveAll": "Save all ({{count}})",

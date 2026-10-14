@@ -216,9 +216,9 @@ pub fn unseen_quotes(
         let (Some(from), Some(at)) = (q.quoted_from, q.quoted_at) else {
             continue;
         };
-        if q.body.is_empty() || parse_quoted_time(&at).is_none() {
+        let Some(time) = parse_quoted_time(&at).filter(|_| !q.body.is_empty()) else {
             continue;
-        }
+        };
         let norm = normalize_body(&q.body);
         if known.iter().any(|k| norm.contains(k.as_str())) {
             continue;
@@ -228,6 +228,7 @@ pub fn unseen_quotes(
         }
         out.push(UnseenQuote {
             sender: quotes::header::sender_label(&from),
+            date: time.to_iso(),
             from,
             at,
             subject: q.subject,

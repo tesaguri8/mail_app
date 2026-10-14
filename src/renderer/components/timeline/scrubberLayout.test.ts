@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { DayCount } from './dayCounts';
+import { topVisibleIndex, type DayCount } from './dayCounts';
 import {
   buildDayLabels,
   buildTicks,
@@ -207,5 +207,75 @@ describe('snapToNearest', () => {
   it('半径の外ならそのまま', () => {
     expect(snapToNearest([10, 30, 50], 20, 6)).toBe(20);
     expect(snapToNearest([], 20, 6)).toBe(20);
+  });
+});
+
+// 会話のつまみには、バブルの下の未受信の引用の枠も載る。枠は転送の中の新しい順に並ぶので、
+// 日付が逆に進む区間ができる（例: 10/12 のバブル → 10/9・10/7・…・10/2 の枠 → 10/13 のバブル）。
+describe('日付が逆に進む並び（転送の中の引用）', () => {
+  const reversed: DayCount[] = [
+    { dateKey: '2026-10-12', count: 1 },
+    { dateKey: '2026-10-09', count: 1 },
+    { dateKey: '2026-10-07', count: 1 },
+    { dateKey: '2026-10-02', count: 2 },
+    { dateKey: '2026-10-13', count: 1 },
+  ];
+  const starts = [0, 0.1, 0.3, 0.5, 0.6, 0.8];
+
+  it('区間は位置どおりに並び、日付の順には並べ替えない', () => {
+    const segs = layoutSegmentsAt(reversed, starts, 100);
+    expect(segs.map((s) => [s.dateKey, s.start, s.y0, s.y1])).toEqual([
+      ['2026-10-12', 0, 0, 10],
+      ['2026-10-09', 1, 10, 30],
+      ['2026-10-07', 2, 30, 50],
+      ['2026-10-02', 3, 50, 80],
+      ['2026-10-13', 5, 80, 100],
+    ]);
+  });
+
+  it('札は各日に 1 つ・その日の最初の件の番号つき。年が戻るところにも年を付ける', () => {
+    const segs = layoutSegmentsAt(reversed, starts, 100);
+    expect(buildDayLabels(segs, 5).map((l) => [l.dateKey, l.start, l.withYear])).toEqual([
+      ['2026-10-12', 0, true],
+      ['2026-10-09', 1, false],
+      ['2026-10-07', 2, false],
+      ['2026-10-02', 3, false],
+      ['2026-10-13', 5, false],
+    ]);
+    const acrossYear = layoutSegmentsAt(
+      [
+        { dateKey: '2026-01-05', count: 1 },
+        { dateKey: '2025-12-26', count: 1 },
+        { dateKey: '2026-01-06', count: 1 },
+      ],
+      [0, 0.4, 0.8],
+      100
+    );
+    expect(buildDayLabels(acrossYear, 5).map((l) => [l.dateKey, l.withYear])).toEqual([
+      ['2026-01-05', true],
+      ['2025-12-26', true],
+      ['2026-01-06', true],
+    ]);
+  });
+
+  it('月の帯は、マウスの区間から同じ月が続くところまで（離れた同じ月はつなげない）', () => {
+    const segs = layoutSegmentsAt(
+      [
+        { dateKey: '2026-10-12', count: 1 },
+        { dateKey: '2026-09-30', count: 1 },
+        { dateKey: '2026-10-13', count: 1 },
+      ],
+      [0, 0.4, 0.8],
+      100
+    );
+    expect(parentBands(segs, 90, 100, 0)).toEqual({
+      year: { y0: 0, y1: 100 },
+      month: { y0: 80, y1: 100 },
+    });
+  });
+
+  it('押した位置の件は、位置の並び（昇順）で引ける', () => {
+    expect(topVisibleIndex(starts, 0.55)).toBe(3);
+    expect(topVisibleIndex(starts, 0.85)).toBe(5);
   });
 });

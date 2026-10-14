@@ -3,7 +3,7 @@
 //! 書式はクライアントと言語ごとにばらばらなので、決まった書式を当てるのではなく、
 //! 字句（年・月・日・時刻・午前午後・時差）を拾って組み立てる。読めなければ None。
 
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{FixedOffset, NaiveDate, NaiveDateTime, TimeZone};
 
 /// 引用の見出しから読んだ日時。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,6 +12,21 @@ pub struct QuotedTime {
     pub local: NaiveDateTime,
     /// 時差（秒。"+0900" なら 32400）。書かれていなければ None（Outlook の "Sent:" は書かない）。
     pub offset_secs: Option<i32>,
+}
+
+impl QuotedTime {
+    /// 画面に渡す ISO 8601 の文字列にする。時差が書かれていれば "2026-10-09T15:29:01+09:00"、
+    /// 無ければ時差を付けない "2026-10-07T19:36:00"（受け取った側が端末の時刻として読む）。
+    ///
+    /// 時差の無い日時（Outlook の "Sent:" 等）は、照合（`store::quote_match`）と同じく
+    /// 「書かれていたままの時刻」として扱う。見出しに書かれた日付と、画面の日付がそろう。
+    pub fn to_iso(&self) -> String {
+        self.offset_secs
+            .and_then(FixedOffset::east_opt)
+            .and_then(|tz| tz.from_local_datetime(&self.local).single())
+            .map(|t| t.to_rfc3339())
+            .unwrap_or_else(|| self.local.format("%Y-%m-%dT%H:%M:%S").to_string())
+    }
 }
 
 /// 英語の月名（先頭 3 文字で引く）。
@@ -157,6 +172,14 @@ mod tests {
             .unwrap()
             .and_hms_opt(h, mi, 0)
             .unwrap()
+    }
+
+    #[test]
+    fn iso_keeps_the_offset_only_when_written() {
+        let with = parse_quoted_time("Fri, 9 Oct 2026 15:29:01 +0900").unwrap();
+        assert_eq!(with.to_iso(), "2026-10-09T15:29:01+09:00");
+        let without = parse_quoted_time("Wednesday, October 7, 2026 7:36 PM").unwrap();
+        assert_eq!(without.to_iso(), "2026-10-07T19:36:00");
     }
 
     #[test]

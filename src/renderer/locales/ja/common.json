@@ -991,6 +991,7 @@
   },
   "thread": {
     "unseenQuote": "このメールに含まれていた、未受信のメール",
+    "unseenQuotesHeading": "引用されていたメール {{count}} 通（未受信）",
     "you": "自分",
     "untitled": "（無題のスレッド）",
     "count": "{{count}}通",

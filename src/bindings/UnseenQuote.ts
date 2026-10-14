@@ -17,6 +17,11 @@ sender: string,
  */
 at: string, 
 /**
+ * 送信日時を読んだもの（ISO 8601。時差が書かれていなければ時差なし＝書かれたままの時刻。
+ * `QuotedTime::to_iso`）。日付のつまみの目盛りに使う。日時の読めない引用は枠にしないので必ずある。
+ */
+date: string, 
+/**
  * 件名（見出しにあれば）。
  */
 subject: string | null, 

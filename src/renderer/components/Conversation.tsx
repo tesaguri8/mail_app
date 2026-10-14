@@ -52,7 +52,8 @@ import { UnseenQuotes } from './UnseenQuotes';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import type { CalendarPanelInitial } from './CalendarPanel';
 import { TimelineScrubber } from './timeline/TimelineScrubber';
-import { countByLocalDay, scrollTopForFraction, startFractions } from './timeline/dayCounts';
+import { scrollTopForFraction, startFractions, type DayCount } from './timeline/dayCounts';
+import { readMarks, summarizeMarks, TIMELINE_DATE_ATTR } from './timeline/marks';
 
 /** 全文展開時、本文カードの先頭を表示域の上端から少しだけ下げて置くための余白（px）。 */
 const EXPAND_TOP_GAP = 8;
@@ -1161,25 +1162,15 @@ export function Conversation({
       : messages.filter((m) => m.folder !== 'trash' && m.folder !== 'spam');
   }, [view, folder]);
 
-  // 日付のつまみ（docs/CONVERSATION_TIMELINE.md）。日ごとの件数は会話の並び順のまま手元で数え、
-  // 目盛りは各バブルが実際に始まる位置（スクロールできる全体の高さに対する割合）に置く。
+  // 日付のつまみ（docs/CONVERSATION_TIMELINE.md）。バブルと、その下の未受信の引用の枠を 1 件ずつ
+  // 載せる。描かれている目印（timeline/marks.ts）を並び順に測り、日ごとの件数と目盛り（各件が実際に
+  // 始まる位置。スクロールできる全体の高さに対する割合）を同じ並び・同じ件数で作る。
   // 会話が画面に収まる（スクロールできない）ときは出さない。
-  const days = useMemo(
-    () => countByLocalDay(visibleMessages.map((m) => m.date)),
-    [visibleMessages]
-  );
   const [scrollable, setScrollable] = useState(false);
+  const [days, setDays] = useState<DayCount[]>([]);
   const [starts, setStarts] = useState<number[]>([]);
+  const [quoteMarks, setQuoteMarks] = useState<boolean[]>([]);
   const [viewRange, setViewRange] = useState<{ top: number; bottom: number } | null>(null);
-  // 各バブルの上端（スクロール域の中身の先頭からの px・並び順）。
-  const bubbleTops = useCallback((): number[] => {
-    const el = scrollRef.current;
-    if (!el) return [];
-    const base = el.getBoundingClientRect().top - el.scrollTop;
-    return Array.from(el.querySelectorAll<HTMLElement>('[id^="bubble-"]')).map(
-      (b) => b.getBoundingClientRect().top - base
-    );
-  }, []);
   const measureFrame = useRef<number | null>(null);
   const measureTimeline = useCallback(() => {
     if (measureFrame.current !== null) return;
@@ -1189,12 +1180,24 @@ export function Conversation({
       if (!el) return;
       const { scrollHeight, scrollTop, clientHeight } = el;
       setScrollable(scrollHeight > clientHeight + 1);
-      const next = startFractions(bubbleTops(), scrollHeight);
-      // 位置が変わらなければ同じ配列のまま（スクロールのたびに目盛りを組み直さない）
+      const marks = summarizeMarks(readMarks(el));
+      const next = startFractions(marks.tops, scrollHeight);
+      // 変わらなければ同じ配列のまま（スクロールのたびに目盛りを組み直さない）
       setStarts((prev) =>
         prev.length === next.length && prev.every((f, i) => Math.abs(f - next[i]) < 1e-4)
           ? prev
           : next
+      );
+      setDays((prev) =>
+        prev.length === marks.days.length &&
+        prev.every((d, i) => d.dateKey === marks.days[i].dateKey && d.count === marks.days[i].count)
+          ? prev
+          : marks.days
+      );
+      setQuoteMarks((prev) =>
+        prev.length === marks.quotes.length && prev.every((q, i) => q === marks.quotes[i])
+          ? prev
+          : marks.quotes
       );
       setViewRange(
         scrollHeight > 0
@@ -1202,7 +1205,7 @@ export function Conversation({
           : null
       );
     });
-  }, [bubbleTops]);
+  }, []);
   // 枠の大きさ・バブルの高さ（本文の到着・全文の開閉・画像の読み込み）が変わったら測り直す。
   useEffect(() => {
     const el = scrollRef.current;
@@ -1318,6 +1321,7 @@ export function Conversation({
           <TimelineScrubber
             days={days}
             starts={starts}
+            accents={quoteMarks}
             viewRange={viewRange}
             onJump={jumpToFraction}
           />
@@ -1364,7 +1368,7 @@ export function Conversation({
           }}
         >
           {visibleMessages.map((m) => (
-            <div key={m.id} id={`bubble-${m.id}`}>
+            <div key={m.id} id={`bubble-${m.id}`} {...{ [TIMELINE_DATE_ATTR]: m.date ?? '' }}>
               <Bubble
                 m={m}
                 you={you}

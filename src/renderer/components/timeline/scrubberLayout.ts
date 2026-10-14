@@ -263,7 +263,8 @@ export interface Band {
 
 /**
  * マウス位置の日を含む**年**と**月**の範囲（魚眼を当てた表示の位置）。帯を敷いて、いまどの年・月の
- * 中かを見せる。区間は並び順で同じ年・月が連続するので、最初と最後の区間の端をとる。
+ * 中かを見せる。マウスの区間から上下へ、同じ年・月の区間が続くところまでをとる（会話では
+ * 転送の中の引用が新しい順に並ぶので、同じ月が並びの中で離れて二度現れることがある）。
  * マウスが無ければ null
  */
 export function parentBands(
@@ -274,13 +275,16 @@ export function parentBands(
   options: TickOptions = DEFAULT_TICK_OPTIONS
 ): { year: Band; month: Band } | null {
   if (pointerY === null || segments.length === 0) return null;
-  const hovered = segments[segmentIndexAtY(segments, pointerY)];
+  const at = segmentIndexAtY(segments, pointerY);
+  const hovered = segments[at];
   const place = (y: number) => fisheye(y, pointerY, options.lensRadius, magnification, height);
   const bandOf = (prefix: string): Band => {
-    const inside = segments.filter((s) => s.dateKey.startsWith(prefix));
-    const y0 = Math.min(...inside.map((s) => s.y0));
-    const y1 = Math.max(...inside.map((s) => s.y1));
-    return { y0: place(y0), y1: place(y1) };
+    const inside = (i: number) => segments[i]?.dateKey.startsWith(prefix) ?? false;
+    let first = at;
+    while (inside(first - 1)) first -= 1;
+    let last = at;
+    while (inside(last + 1)) last += 1;
+    return { y0: place(segments[first].y0), y1: place(segments[last].y1) };
   };
   return {
     year: bandOf(hovered.dateKey.slice(0, 4)),
@@ -294,10 +298,13 @@ export interface DayLabel {
   dateKey: string;
   /** 年も出すか（最初の札と、年が変わるところ） */
   withYear: boolean;
+  /** その日の最初の件が何件目か（札の色分けに使う） */
+  start: number;
 }
 
 /**
- * 各日の始まりに出す月日の札を選ぶ。最初の区間と年が変わる区間は年も出す。
+ * 各日の始まりに出す月日の札を選ぶ。最初の区間と年が変わる区間は年も出す（前の区間と年が
+ * 違えば出すので、日付が逆に進む並び＝転送の中の引用でも、年が戻るところに年が付く）。
  * 札どうしが minGap より近いときは、年の変わり目 → 月の変わり目 → それ以外 の順に残し、
  * 同じ順位なら上のほうを残す（点＝目盛りは呼び出し側で全件ぶん出す）。
  */
@@ -307,7 +314,7 @@ export function buildDayLabels(segments: readonly Segment[], minGap: number): Da
     const yearChanged = !prev || prev.dateKey.slice(0, 4) !== seg.dateKey.slice(0, 4);
     const monthChanged = !prev || prev.dateKey.slice(0, 7) !== seg.dateKey.slice(0, 7);
     return {
-      label: { y: seg.y0, dateKey: seg.dateKey, withYear: yearChanged },
+      label: { y: seg.y0, dateKey: seg.dateKey, withYear: yearChanged, start: seg.start },
       rank: yearChanged ? 0 : monthChanged ? 1 : 2,
     };
   });

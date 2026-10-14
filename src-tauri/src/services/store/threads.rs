@@ -1305,6 +1305,7 @@ Subject: 図面\n\
         let q = &m.unseen_quotes[0];
         assert_eq!(q.from, "高橋 花子 <takahashi@example.com>");
         assert_eq!(q.sender, "高橋 花子");
+        assert_eq!(q.date, "2026-10-02T14:50:00");
         assert_eq!(q.at, "Friday, October 2, 2026 2:50 PM");
         assert_eq!(q.subject.as_deref(), Some("図面"));
         assert_eq!(q.body, "田中様\n図面を送ります。");

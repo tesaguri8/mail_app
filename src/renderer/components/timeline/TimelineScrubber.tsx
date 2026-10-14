@@ -33,6 +33,11 @@ interface TimelineScrubberProps {
    * 目盛りを細かくする（一覧用）
    */
   starts?: readonly number[];
+  /**
+   * i 件目を控えめに出すか（`starts` と同じ並び。会話では未受信の引用の枠から来た件）。true の件の点を
+   * 短く薄く、その件で始まる日の札を薄くする（枠は手元に届いたメールではないので、主役のバブルより下げる）
+   */
+  accents?: readonly boolean[];
   /** いま一覧の一番上に出ているのが何件目か（印を出す位置）。分からなければ null */
   viewOffset?: number | null;
   /** いま見えている範囲（全体に対する割合 0〜1）。渡すと viewOffset の印の代わりに範囲を出す */
@@ -83,6 +88,7 @@ const TICK_BAR: Record<TickLevel, string> = {
 export function TimelineScrubber({
   days,
   starts,
+  accents,
   viewOffset = null,
   viewRange = null,
   onJump,
@@ -287,7 +293,9 @@ export function TimelineScrubber({
         {dots.map((y, i) => (
           <div
             key={`dot-${i}`}
-            className="pointer-events-none absolute right-2 h-px w-1.5 bg-white/45"
+            className={`pointer-events-none absolute right-2 h-px ${
+              accents?.[i] ? 'w-1 bg-white/25' : 'w-1.5 bg-white/45'
+            }`}
             style={{ top: y }}
           />
         ))}
@@ -297,7 +305,13 @@ export function TimelineScrubber({
           <div
             key={`label-${label.dateKey}-${i}`}
             className={`pointer-events-none absolute ${LABEL_RIGHT} -translate-y-1/2 whitespace-nowrap text-[10px] leading-none tabular-nums ${
-              label.withYear ? 'font-bold text-white/85' : 'text-white/60'
+              accents?.[label.start]
+                ? label.withYear
+                  ? 'font-bold text-white/55'
+                  : 'text-white/35'
+                : label.withYear
+                  ? 'font-bold text-white/85'
+                  : 'text-white/60'
             }`}
             style={{ top: label.y }}
           >

@@ -946,6 +946,15 @@
     "attachmentSaveFailed": "添付を保存できませんでした: {{reason}}",
     "attachmentOpenFailed": "添付を開けませんでした: {{reason}}",
     "attachmentSavedPartial": "{{saved}} 件を保存しました。{{failed}} 件は保存できませんでした: {{reason}}",
+    "attachmentStage": {
+      "preparing": "準備中…",
+      "connecting": "サーバーに接続中…",
+      "fetching": "ダウンロード中…",
+      "saving": "保存中…"
+    },
+    "attachmentNotYet": "終わるまで開けません",
+    "attachmentFailedLine": "取得できませんでした: {{reason}}",
+    "attachmentResumeHint": "もう一度押すと、続きから取ります。",
     "attachmentSelectAll": "すべて選択／解除",
     "attachmentSaveSelected": "選択を保存 ({{count}})",
     "attachmentSaveAll": "すべて保存 ({{count}})",

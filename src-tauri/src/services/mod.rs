@@ -1,8 +1,10 @@
 pub mod addr;
+pub mod attachment_fetch;
 pub mod attachname;
 pub mod autoconfig;
 pub mod bodyfetch;
 pub mod bodystructure;
+pub mod checksum;
 pub mod compress;
 pub mod contact_fields;
 pub mod contact_labels;
@@ -16,6 +18,7 @@ pub mod distinct;
 pub mod gcsv;
 pub mod google;
 pub mod ics;
+pub mod imap_conn;
 pub mod imap_sync;
 pub mod media;
 pub mod name_norm;

@@ -44,6 +44,8 @@ pub fn run() {
             app.manage(commands::SyncControl::default());
             // アカウントごとの IMAP 接続プール（接続＋ログインを使い回す）。
             app.manage(commands::ImapPool::default());
+            // 添付ごとの取得の順番待ち（同じ添付を二重に取らない）。
+            app.manage(crate::services::attachment_fetch::AttachmentFetches::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

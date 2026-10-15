@@ -992,6 +992,33 @@ pub struct DraftContent {
     pub attachments: Vec<DraftAttachment>,
 }
 
+/// 添付の取得の段（画面の表示に使う）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub enum AttachmentStage {
+    /// 取得の準備（取得情報・資格情報を読んでいる／同じ添付の取得を待っている）。
+    Preparing,
+    /// サーバーへ接続・ログインしている。
+    Connecting,
+    /// 添付の本体を受け取っている。
+    Fetching,
+    /// 受け取った本体を組み立てて、ファイルに書いている。
+    Saving,
+}
+
+/// 添付の取得の進み具合（Tauri イベント "attachment:progress" のペイロード）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct AttachmentProgress {
+    pub attachment_id: i32,
+    pub stage: AttachmentStage,
+    /// 受け取ったバイト数（転送エンコード後。途中から再開したときは前回までの分も含む）。
+    pub received: f64,
+    /// 全体のバイト数（BODYSTRUCTURE の値。分からなければ 0）。
+    pub total: f64,
+}
+
 /// 同期の進捗（Tauri イベント "sync:progress" のペイロード）。
 /// フォルダごとに current/total を通知する（total は取得予定件数の目安）。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

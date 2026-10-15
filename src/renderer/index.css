@@ -78,3 +78,24 @@ mark.search-hl-active {
   color: #1a1a1a;
   box-shadow: 0 0 0 2px rgba(251, 146, 60, 0.5);
 }
+
+/* 添付の取得中の「動いている帯」（全体の大きさが分からないとき / AttachmentDownloadLine）。 */
+@keyframes att-band {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+.att-band {
+  animation: att-band 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .att-band {
+    animation: none;
+    transform: none;
+    width: 100%;
+    opacity: 0.4;
+  }
+}

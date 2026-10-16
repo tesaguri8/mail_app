@@ -708,17 +708,24 @@ export function MailboxView({
   }, [selected, folder]);
 
   // 他の画面からの「このアカウント（このメール）を開く」。メールを開く依頼では書きかけの作成は
-  // 畳む（書いた分は閉じる前に下書きへ保存される）。アカウントが変わるなら、一覧を読み終えて
-  // から開く（上の effect）。同じアカウントなら、いまのフォルダ・検索のまま会話を開く。
+  // 畳み（書いた分は閉じる前に下書きへ保存される）、一覧もそのメールが載る受信箱へ戻す（ホームの
+  // 新着は受信箱から出している）。アカウントかフォルダが変わるなら、一覧を読み終えてから開く
+  // （上の effect）。
   useEffect(() => {
     if (openRequest == null || handledOpenSeq.current === openRequest.seq) return;
     handledOpenSeq.current = openRequest.seq;
-    if (openRequest.mailId != null) setCompose(null);
-    if (selected !== openRequest.accountId) {
-      pendingOpen.current = openRequest.mailId;
-      setSelected(openRequest.accountId);
-    } else if (openRequest.mailId != null) {
-      void openMail(openRequest.mailId);
+    const { accountId, mailId } = openRequest;
+    if (mailId != null) {
+      setCompose(null);
+      setQuery('');
+    }
+    const switching = selected !== accountId || (mailId != null && folder !== 'inbox');
+    if (switching) {
+      pendingOpen.current = mailId;
+      setSelected(accountId);
+      if (mailId != null) setFolder('inbox');
+    } else if (mailId != null) {
+      void openMail(mailId);
     }
     // 依頼が来たときだけ効かせる（selected/openMail はその時点の値で足りる）。
     // eslint-disable-next-line react-hooks/exhaustive-deps

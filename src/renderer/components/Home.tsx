@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import { AccountsOverview } from './AccountsOverview';
 import { HomeSchedule } from './HomeSchedule';
+import { useTabActive } from '../hooks/useTabActive';
 
 /** 時間帯に応じたあいさつキー（将来は各国の今日のメッセージ等に拡張）。 */
 function greetingKey(hour: number): string {
@@ -12,12 +13,16 @@ function greetingKey(hour: number): string {
   return 'greeting.night';
 }
 
+/** 30 秒ごとの現在時刻。ホームのタブが隠れている間は止め、戻ったらすぐ合わせる。 */
 function useClock() {
   const [now, setNow] = useState(() => new Date());
+  const active = useTabActive();
   useEffect(() => {
+    if (!active) return;
+    setNow(new Date());
     const id = setInterval(() => setNow(new Date()), 1000 * 30);
     return () => clearInterval(id);
-  }, []);
+  }, [active]);
   return now;
 }
 
@@ -30,7 +35,7 @@ export function Home({
   onOpenCalendar,
 }: {
   accounts: AccountSummary[];
-  onOpenMail: (accountId: number) => void;
+  onOpenMail: (accountId: number, mailId?: number) => void;
   onOpenCalendar?: () => void;
 }) {
   const { t, i18n } = useTranslation();

@@ -50,6 +50,7 @@ import { htmlToText } from '../utils/htmlToText';
 import { isHoliday, holidayName } from '../utils/holidays';
 import { getDefaultCalendarId, setDefaultCalendarId } from '../config/prefs';
 import { CALENDAR_SYNCED_EVENT } from '../hooks/useAutoSync';
+import { useOnTabActivated, useTabActive, useTabActiveRef } from '../hooks/useTabActive';
 import { Dropdown } from './Dropdown';
 import { SuggestInput } from './SuggestInput';
 import { AutoLinkText } from './HtmlText';
@@ -332,9 +333,12 @@ export function CalendarView() {
   useEffect(() => {
     localStorage.setItem('rondine.cal.holidays', showHolidays ? '1' : '0');
   }, [showHolidays]);
+  // このタブが表示中か（隠れている間は全体のキー操作を受けない。KeepAlivePanel）。
+  const tabActive = useTabActiveRef();
   // Ctrl+S（Mac は Cmd+S）でサイドバー表示を切替（メールモードと同じ）。ブラウザの保存は抑止。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (!tabActive.current) return;
       if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 's' || e.key === 'S')) {
         e.preventDefault();
         setSidebarOpen((v) => !v);
@@ -342,7 +346,7 @@ export function CalendarView() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [tabActive]);
   const todayStr = ymd(new Date());
 
   const period = useMemo(() => computePeriod(mode, anchor, i18n.language), [mode, anchor, i18n.language]);
@@ -364,6 +368,11 @@ export function CalendarView() {
     calendarList().then(setCalendars).catch(() => setCalendars([]));
   }, []);
   useEffect(loadCalendars, [loadCalendars]);
+  // 他のタブから戻ったら読み直す（隠れている間にメールの招待から予定が増えている等）。
+  useOnTabActivated(() => {
+    loadCalendars();
+    reload();
+  });
 
   // 検索（入力を軽くデバウンス。空なら結果をクリアして通常表示へ戻す）。
   useEffect(() => {
@@ -858,12 +867,16 @@ function TimeGrid({
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 7 * ROW_H;
   }, []);
-  // 現在時刻ラインを1分ごとに更新（今日を含むときだけ意味を持つ）。
+  // 現在時刻ラインを1分ごとに更新（今日を含むときだけ意味を持つ）。タブが隠れている間は
+  // 止め、戻ったらすぐ描き直す。
   const [, setTick] = useState(0);
+  const active = useTabActive();
   useEffect(() => {
+    if (!active) return;
+    setTick((n) => n + 1);
     const id = setInterval(() => setTick((n) => n + 1), 60_000);
     return () => clearInterval(id);
-  }, []);
+  }, [active]);
 
   const hours = Array.from({ length: 24 }, (_, h) => h);
   const dowFmt = new Intl.DateTimeFormat(locale, { weekday: 'short' });
@@ -1791,11 +1804,13 @@ export function EventEditor({
   const [busy, setBusy] = useState(false);
   const eventId = event?.id ?? null;
 
+  // Esc で閉じる（カレンダーのタブが隠れている間は受けない）。
+  const tabActive = useTabActiveRef();
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && tabActive.current && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, tabActive]);
 
   // 既存予定のゲストを読み込む。
   useEffect(() => {

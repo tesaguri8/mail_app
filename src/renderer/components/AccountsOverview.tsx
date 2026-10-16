@@ -6,6 +6,7 @@ import type { HomeUnreadCounts } from '@bindings/HomeUnreadCounts';
 import { mailList, homeUnreadCounts } from '../services/mail';
 import { getHomeCountFilter, getHomeCountShow, PREFS_EVENT } from '../config/prefs';
 import { MAIL_FILTERS, matchesFilters } from './mailFilters';
+import { useOnTabActivated } from '../hooks/useTabActive';
 
 /**
  * ホーム右カラム：アカウント別の新着（未読）数を“ゴースト”表示（背景なし・文字のみ）。
@@ -58,6 +59,17 @@ export function AccountsOverview({
       alive = false;
     };
   }, [accounts]);
+
+  // 他のタブから戻ったら、開いているアカウントの新着を読み直す（メールで既読にした・届いた等）。
+  // 閉じているアカウントの写しは捨て、次に開いたときに読む。
+  useOnTabActivated(() => {
+    const id = expanded;
+    setPreviews((p) => (id != null && p[id] ? { [id]: p[id] } : {}));
+    if (id == null) return;
+    mailList(id, 'inbox', 100)
+      .then((m) => setPreviews({ [id]: m }))
+      .catch(() => undefined);
+  });
 
   const toggle = (id: number) => {
     if (expanded === id) {

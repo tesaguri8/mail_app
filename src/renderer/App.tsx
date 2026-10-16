@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { TitleBar, type AppView } from './components/TitleBar';
 import { BottomBar } from './components/BottomBar';
 import { Home } from './components/Home';
-import { MailboxView } from './components/MailboxView';
-import type { ComposeTarget } from './components/Compose';
+import { MailboxView, type MailOpenRequest } from './components/MailboxView';
+import { KeepAlivePanel } from './components/KeepAlivePanel';
 import { AddressBook } from './components/AddressBook';
 import { CalendarView } from './components/CalendarView';
 import { Settings } from './components/Settings';
@@ -35,16 +35,11 @@ function inkColor(ink: number): string {
 export default function App() {
   const [view, setView] = useState<AppView>('home');
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
-  const [mailAccountId, setMailAccountId] = useState<number | null>(null);
-  const [mailOpenId, setMailOpenId] = useState<number | null>(null);
+  // ホーム等から「このアカウント（このメール）を開く」の依頼。メール画面は捨てずに隠しておく
+  // ので、一度だけ読む初期値ではなく、依頼ごとに番号を進めて届ける（同じメールでも効く）。
+  const [mailOpen, setMailOpen] = useState<MailOpenRequest | null>(null);
   // メール画面で現在表示中のアカウント選択（'all'=全て）。フッターの件数表示に使う。
   const [mailSel, setMailSel] = useState<number | 'all' | null>(null);
-  // 作成セッション（新規/返信/転送/下書き再編集）。メール画面はビュー離脱でアンマウント
-  // されるため、作成中の状態が消えないよう App 側で保持する。カレンダー等へ移動して戻ると
-  // 未編集の返信もそのまま再表示される。
-  const [compose, setCompose] = useState<ComposeTarget | null>(null);
-  // 編集中の下書き id。書きかけて自動保存された内容を、戻った時に本文込みで復元するのに使う。
-  const [composeDraftId, setComposeDraftId] = useState<number | null>(null);
   // 背景のかぶせ（暗さ）。写真によって文字が見づらい時に上げる。
   const [dim, setDim] = useState<number>(() => Number(localStorage.getItem('rondine.dim') ?? 0));
   useEffect(() => {
@@ -122,14 +117,7 @@ export default function App() {
   }, []);
 
   const openMail = (accountId: number, mailId?: number) => {
-    // 特定メールを開く操作（ホームの新着クリック等）では、保持していた作成セッションは畳む
-    // （書きかけて保存済みの下書きは drafts に残る）。別のメールを見たい意図を優先する。
-    if (mailId != null) {
-      setCompose(null);
-      setComposeDraftId(null);
-    }
-    setMailAccountId(accountId);
-    setMailOpenId(mailId ?? null);
+    setMailOpen((prev) => ({ accountId, mailId: mailId ?? null, seq: (prev?.seq ?? 0) + 1 }));
     setView('mail');
   };
 
@@ -151,10 +139,9 @@ export default function App() {
   // フッター左に出す連絡先の件数（連絡先の一覧を出しているときだけ）。
   const contactCount = useContactCountStore((s) => s.count);
 
-  // タイトルバーからの遷移。メールは特定メッセージを開かずに開く。
+  // タイトルバーからの遷移。各画面は最後の作業状態のまま表示する（KeepAlivePanel）。
   // ホーム/メールは押すたびに同期（同じビューを再度押した時も含む）。
   const navigate = (v: AppView) => {
-    if (v === 'mail') setMailOpenId(null);
     if ((v === 'home' || v === 'mail') && v === view) syncNow();
     setView(v);
   };
@@ -178,31 +165,29 @@ export default function App() {
         <TitleBar onNavigate={navigate} onCycleBackground={cycleBackground} />
 
         <main
-          className="min-h-0 flex-1 overflow-hidden"
+          className="relative min-h-0 flex-1 overflow-hidden"
           style={view === 'home' ? undefined : { backgroundColor: panelTint }}
         >
-          {view === 'home' && (
+          {/* 一度開いた画面は捨てずに隠しておく（タブを移って戻っても作業状態が残る）。 */}
+          <KeepAlivePanel active={view === 'home'}>
             <Home
               accounts={accounts}
               onOpenMail={openMail}
               onOpenCalendar={() => navigate('calendar')}
             />
-          )}
-          {view === 'mail' && (
-            <MailboxView
-              accounts={accounts}
-              initialAccountId={mailAccountId}
-              initialMailId={mailOpenId}
-              onAccountChange={setMailSel}
-              compose={compose}
-              setCompose={setCompose}
-              restoreDraftId={composeDraftId}
-              onComposeDraftChange={setComposeDraftId}
-            />
-          )}
-          {view === 'contacts' && <AddressBook />}
-          {view === 'calendar' && <CalendarView />}
-          {view === 'settings' && <Settings accounts={accounts} onChanged={refreshAccounts} />}
+          </KeepAlivePanel>
+          <KeepAlivePanel active={view === 'mail'}>
+            <MailboxView accounts={accounts} openRequest={mailOpen} onAccountChange={setMailSel} />
+          </KeepAlivePanel>
+          <KeepAlivePanel active={view === 'contacts'}>
+            <AddressBook />
+          </KeepAlivePanel>
+          <KeepAlivePanel active={view === 'calendar'}>
+            <CalendarView />
+          </KeepAlivePanel>
+          <KeepAlivePanel active={view === 'settings'}>
+            <Settings accounts={accounts} onChanged={refreshAccounts} />
+          </KeepAlivePanel>
         </main>
 
         <BottomBar

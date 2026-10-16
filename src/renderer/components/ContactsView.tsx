@@ -39,6 +39,7 @@ import { CONTACTS_SYNCED_EVENT } from '../hooks/useAutoSync';
 import { LOCAL_CHANGE_EVENT } from '../utils/localChange';
 import { useVirtualRows } from '../hooks/useVirtualRows';
 import { useContactsStore } from '../stores/contacts';
+import { useOnTabActivated } from '../hooks/useTabActive';
 import { useContactCountStore } from '../stores/contactCount';
 import {
   CONTACT_SOURCE_FILTERS,
@@ -194,6 +195,12 @@ export function ContactsView({
       .catch(() => undefined);
   }, []);
   useEffect(reloadTags, [reloadTags]);
+  // 他のタブから戻ったら一覧とタグを取り直す（メール画面の連絡先パネルで直した等）。
+  // 開いている連絡先の編集欄は書きかけのまま残す。
+  useOnTabActivated(() => {
+    reload();
+    reloadTags();
+  });
 
   // 検索語・タグ絞り込みの変化に追随（打鍵中は軽いデバウンス）。既定の一覧（タブに入ったとき・
   // 検索を消したとき）は待たずに取り直す（写しは既に出ているので、差し替えるだけ）。

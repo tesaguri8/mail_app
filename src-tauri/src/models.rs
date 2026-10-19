@@ -905,6 +905,10 @@ pub struct SendInput {
     pub quoted_html: Option<String>,
     /// 返信元の Message-ID（スレッド化用。新規なら None）。
     pub in_reply_to: Option<String>,
+    /// 返信元メールの emails.id（返信・全員返信のとき）。あれば In-Reply-To／References はこの行から
+    /// 組む（控えに Message-ID の無い自分の送信への返信も、親のスレッドに残す。docs/COMPOSE.md）。
+    #[serde(default)]
+    pub reply_to_email_id: Option<i32>,
     /// References チェーン（祖先 Message-ID を空白区切り・古い順。相手メーラーで正しく
     /// スレッド表示させるため。返信時は「元メールの References ＋ 元メールの Message-ID」。
     /// docs/THREADING.md）。

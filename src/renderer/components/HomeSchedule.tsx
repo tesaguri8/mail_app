@@ -6,6 +6,7 @@ import { eventList } from '../services/calendar';
 import { expandEvents } from '../utils/recurrence';
 import { isHoliday } from '../utils/holidays';
 import { CALENDAR_SYNCED_EVENT } from '../hooks/useAutoSync';
+import { useOnTabActivated, useTabActive } from '../hooks/useTabActive';
 import { ymd, addDays, dayOf } from './CalendarView';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -66,11 +67,15 @@ export function HomeSchedule({ onOpenCalendar }: { onOpenCalendar?: () => void }
 
   const [events, setEvents] = useState<EventSummary[]>([]);
   // 現在時刻（30 秒ごとに更新し、「今」ラインと進行中判定を最新に保つ）。
+  // ホームのタブが隠れている間は止め、戻ったらすぐ合わせる。
   const [now, setNow] = useState<Date>(() => new Date());
+  const active = useTabActive();
   useEffect(() => {
+    if (!active) return;
+    setNow(new Date());
     const id = setInterval(() => setNow(new Date()), 30_000);
     return () => clearInterval(id);
-  }, []);
+  }, [active]);
   const todayStr = ymd(now);
   const tomorrowStr = ymd(addDays(new Date(`${todayStr}T00:00`), 1));
   const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -99,6 +104,8 @@ export function HomeSchedule({ onOpenCalendar }: { onOpenCalendar?: () => void }
     window.addEventListener(CALENDAR_SYNCED_EVENT, reload);
     return () => window.removeEventListener(CALENDAR_SYNCED_EVENT, reload);
   }, [reload]);
+  // 他のタブから戻ったら読み直す（カレンダーで予定を足した・消した等）。
+  useOnTabActivated(reload);
 
   // 期間内の各日を、予定のある日だけ抽出（本日のみのときは日ヘッダを出さない）。
   const groups = useMemo(() => {

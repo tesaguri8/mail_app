@@ -78,7 +78,8 @@ import {
 } from './mailListWindow';
 import { TimelineScrubber } from './timeline/TimelineScrubber';
 import type { DayCount } from './timeline/dayCounts';
-import { Compose, type ComposeTarget } from './Compose';
+import { Compose, composeKey, type ComposeTarget } from './Compose';
+import { useTabActiveRef } from '../hooks/useTabActive';
 import { FolderIcons } from './FolderIcons';
 import { MAIL_FILTERS, matchesFilters, matchesNoneOfFilters } from './mailFilters';
 import { Tooltip } from './Tooltip';
@@ -146,37 +147,36 @@ function searchRowToThread(m: MailSummary): ThreadListItem {
 }
 
 /**
+ * 他の画面から「このアカウント（このメール）を開く」の依頼（ホームの新着クリック等）。
+ * メール画面は捨てずに隠しておくので、`seq` が進んだときだけ 1 回効かせる。
+ */
+export interface MailOpenRequest {
+  accountId: number;
+  /** 開くメール（null はアカウントを切り替えるだけ）。 */
+  mailId: number | null;
+  seq: number;
+}
+
+/**
  * メールモード: 全幅。リスト＋本文。レイアウトは左右/上下を切替可能。
  */
 export function MailboxView({
   accounts,
-  initialAccountId,
-  initialMailId,
+  openRequest,
   onAccountChange,
-  compose,
-  setCompose,
-  restoreDraftId,
-  onComposeDraftChange,
 }: {
   accounts: AccountSummary[];
-  initialAccountId: number | null;
-  initialMailId: number | null;
+  openRequest: MailOpenRequest | null;
   /** 表示中アカウントの変化を親へ通知（フッターの件数表示用）。'all'=全アカウント。 */
   onAccountChange?: (id: number | 'all' | null) => void;
-  /** 作成セッション（新規/返信/転送/下書き再編集）。App が保持し、ビュー切替で
-   * メール画面がアンマウントされても消えないようにする（未編集の返信も戻せる）。 */
-  compose: ComposeTarget | null;
-  setCompose: (c: ComposeTarget | null) => void;
-  /** 直前まで編集していた下書き id（別ビューから戻った時に本文込みで復元する）。 */
-  restoreDraftId?: number | null;
-  /** 編集中の下書き id の変化を親へ通知（未編集/破棄後は null）。 */
-  onComposeDraftChange?: (id: number | null) => void;
 }) {
   const { t } = useTranslation();
+  // このタブが表示中か（隠れている間は全体のキー操作を受けない。KeepAlivePanel）。
+  const tabActive = useTabActiveRef();
   // 'all' = 全アカウント横断表示 / number = 特定アカウント / null = 未選択。
   const [selected, setSelected] = useState<number | 'all' | null>(() => {
     // ホームからの遷移（特定アカウント指定）が最優先。
-    if (initialAccountId != null) return initialAccountId;
+    if (openRequest != null) return openRequest.accountId;
     // 前回選択したアカウントを復元。'all' は複数アカウント時のみ有効。
     const saved = localStorage.getItem('rondine.mailAccount');
     if (saved === 'all' && accounts.length > 1) return 'all';
@@ -205,8 +205,10 @@ export function MailboxView({
       (typeof selected === 'number' && accounts.some((a) => a.id === selected));
     if (!isValid) setSelected(accounts.length > 1 ? 'all' : accounts[0].id);
   }, [accounts, selected]);
-  // 遷移直後に開くべきメッセージ（ホームの新着クリック）
-  const pendingOpen = useRef<number | null>(initialMailId);
+  // 一覧を読み終えたら開くメッセージ（ホームの新着クリックでアカウントが変わったとき）
+  const pendingOpen = useRef<number | null>(openRequest?.mailId ?? null);
+  // 効かせ終えた依頼の番号（初めて描いたときの依頼は、上の初期値で効かせ済み）。
+  const handledOpenSeq = useRef<number | null>(openRequest?.seq ?? null);
   // 一覧はスレッド単位（代表＋件数）。検索結果も同じ形へ写像して扱いを揃える。
   // フォルダ内の全スレッドを最初から枠（slots）として持ち、読み込んだ位置だけに行が入る
   // （null は未読み込み。日付のつまみで飛んだ先だけを読む。docs/MAIL_LIST_TIMELINE.md）。
@@ -341,8 +343,9 @@ export function MailboxView({
     document.addEventListener('mouseup', onUp);
   };
 
-  // 作成セッション（compose）は App 側で保持する（上の props）。メール画面はビュー切替で
-  // アンマウントされるが、compose は App にあるため未編集の返信/新規もそのまま残り、戻ると再表示される。
+  // 作成セッション（新規/返信/転送/下書き再編集）。メール画面は他のタブへ移っても捨てずに
+  // 隠しておくので（KeepAlivePanel）、書きかけもそのまま残る。
+  const [compose, setCompose] = useState<ComposeTarget | null>(null);
   // 作成画面に入ったら編集/カレンダーパネルは閉じる（全幅で作成に集中）。
   // 作成に入る前の一覧サイドバーの開閉を覚えておき、作成を終えたら（送信・下書き保存・破棄の
   // いずれでも）元に戻す。作成中はサイドバーを描かないので、その間に状態が変わっても画面では
@@ -363,21 +366,6 @@ export function MailboxView({
     // close* は毎回同じ挙動。compose の変化だけをトリガにする。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compose]);
-  // 別ビュー（カレンダー等）から戻った時（＝このマウント時）、書きかけて自動保存された下書きが
-  // あれば本文込みで開き直す。未編集の返信/新規は compose が保持されているのでそのまま表示され、
-  // 編集済みは保持していたセッションを本文付きの下書きへ差し替える。マウント時に一度だけ実行し、
-  // 編集中に自動保存で id が付いても（同一マウント中は再実行しない）ライブ編集を巻き戻さない。
-  const restoredRef = useRef(false);
-  useEffect(() => {
-    if (restoredRef.current) return;
-    restoredRef.current = true;
-    if (restoreDraftId == null) return; // 書きかけの保存済み下書きは無い（未編集は compose 保持で足りる）
-    // 既に同じ下書きを本文込みで表示中なら再取得しない（下書き再編集セッションの保持時）。
-    if (compose?.mode === 'draft' && compose.draft.id === restoreDraftId) return;
-    void openDraft(restoreDraftId);
-    // マウント時に一度だけ。openDraft/compose/restoreDraftId は初期値で十分。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
   // 表示するフォルダ/グループ（受信箱以外は後続実装）
   const [folder, setFolder] = useState('inbox');
   // リスト絞り込みトグル
@@ -458,6 +446,7 @@ export function MailboxView({
   useEffect(() => {
     if (selectedIds.size === 0) return;
     const onKey = (e: KeyboardEvent) => {
+      if (!tabActive.current) return;
       if (e.key !== 'Escape' || e.defaultPrevented) return;
       if (menu || tagPicker || compose) return;
       const el = e.target as HTMLElement | null;
@@ -468,7 +457,7 @@ export function MailboxView({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedIds.size, menu, tagPicker, compose]);
+  }, [selectedIds.size, menu, tagPicker, compose, tabActive]);
 
   // Ctrl+S（Mac は Cmd+S）でサイドバー（一覧ペイン）の表示を切替。ブラウザの保存は抑止。
   // 作成中は受け付けない。Compose で「保存」のつもりで Ctrl+S を押すと、画面に出ていない
@@ -476,7 +465,7 @@ export function MailboxView({
   // （利用者報告 2026-09-25。下書きは自動保存なので Compose 側に Ctrl+S の処理は無い）。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (compose) return;
+      if (compose || !tabActive.current) return;
       if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 's' || e.key === 'S')) {
         e.preventDefault();
         setSidebarOpen((v) => !v);
@@ -484,14 +473,14 @@ export function MailboxView({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [compose]);
+  }, [compose, tabActive]);
 
   // Del / Ctrl+D（Mac は Cmd+D）で、選択中（未選択なら閲覧中）のメールを削除する。
   // 重なり UI（メニュー/タグピッカー/作成モーダル/候補）や入力欄フォーカス中は対象外。
   // 最新の削除処理・抑止状態は delKeyRef 経由で参照する。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented) return;
+      if (e.defaultPrevented || !tabActive.current) return;
       // 押しっぱなしのオートリピートは無視する（1回押下＝1件削除）。削除後に次のメールを
       // 自動で開くため、リピートを通すと連続削除で「次のメールが飛ばされる」ように見える。
       if (e.repeat) return;
@@ -508,13 +497,13 @@ export function MailboxView({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [tabActive]);
 
   // Ctrl+Z（Mac は Cmd+Z）で、直前のゴミ箱移動を元に戻す（復元）。
   // 取消対象が無い／重なり UI／入力欄フォーカス中は対象外。最新値は undoKeyRef 経由で参照。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented) return;
+      if (e.defaultPrevented || !tabActive.current) return;
       if (
         !((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'z' || e.key === 'Z'))
       )
@@ -528,7 +517,7 @@ export function MailboxView({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [tabActive]);
 
   // 取消トーストは一定時間で自動的に消す（その後は Ctrl+Z も無効）。
   useEffect(() => {
@@ -549,6 +538,7 @@ export function MailboxView({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (!tabActive.current) return;
       const nav = keyNavRef.current;
       if (nav.blocked) return;
       const el = e.target as HTMLElement | null;
@@ -571,7 +561,7 @@ export function MailboxView({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [tabActive]);
 
   useEffect(() => {
     if (selected == null && accounts.length > 0) setSelected(accounts[0].id);
@@ -716,6 +706,30 @@ export function MailboxView({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, folder]);
+
+  // 他の画面からの「このアカウント（このメール）を開く」。メールを開く依頼では書きかけの作成は
+  // 畳み（書いた分は閉じる前に下書きへ保存される）、一覧もそのメールが載る受信箱へ戻す（ホームの
+  // 新着は受信箱から出している）。アカウントかフォルダが変わるなら、一覧を読み終えてから開く
+  // （上の effect）。
+  useEffect(() => {
+    if (openRequest == null || handledOpenSeq.current === openRequest.seq) return;
+    handledOpenSeq.current = openRequest.seq;
+    const { accountId, mailId } = openRequest;
+    if (mailId != null) {
+      setCompose(null);
+      setQuery('');
+    }
+    const switching = selected !== accountId || (mailId != null && folder !== 'inbox');
+    if (switching) {
+      pendingOpen.current = mailId;
+      setSelected(accountId);
+      if (mailId != null) setFolder('inbox');
+    } else if (mailId != null) {
+      void openMail(mailId);
+    }
+    // 依頼が来たときだけ効かせる（selected/openMail はその時点の値で足りる）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openRequest]);
 
   // 通常一覧・検索結果の両方へ同じ更新（既読/スター/削除/タグ）を反映する。
   // 一覧から外れた行（削除・移動）は枠から抜いて詰め、日ごとの件数も減らす（DB 側でも消えるので、
@@ -1952,13 +1966,14 @@ export function MailboxView({
   // メール作成はページとして表示（別ウィンドウにしない）。
   const composeEl = compose ? (
     <Compose
+      // 開く対象が変わったら作り直す（下書きへの差し替えで、前の対象の本文が残らないように）。
+      key={composeKey(compose)}
       accounts={accounts}
       // 返信/転送は元メールを受信したアカウントを既定に。新規は選択中（全ての時は先頭）。
       defaultAccountId={
         (composeSource?.account_id ?? null) ?? queryAccount ?? accounts[0]?.id ?? null
       }
       target={compose}
-      onDraftId={onComposeDraftChange}
       // 送信したら、作成前に閉じていても一覧サイドバーを開いて戻す（送ったメールを一覧で
       // 確かめられるように。利用者の要望 2026-10-03）。下書き保存・破棄は作成前の状態へ戻す。
       onSent={() => {
@@ -1966,8 +1981,6 @@ export function MailboxView({
       }}
       onClose={() => {
         setCompose(null);
-        // 作成画面を閉じたら復元対象もクリア（次にメールへ戻っても勝手に開かない）。
-        onComposeDraftChange?.(null);
         // 送信・下書き保存の結果を一覧へ反映（下書きフォルダ表示中でも見えるように）。
         void loadMails();
       }}

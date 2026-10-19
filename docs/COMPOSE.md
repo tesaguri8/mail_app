@@ -22,6 +22,17 @@
 - **署名**（**実装済み・一部**）: アカウント別の署名（`signatures` テーブル＋`signature_*` コマンド。アカウントへは `accounts.signature_id` で紐付け）。※**返信時の挿入位置の設定は未実装**。
   - 作成画面が自動で入れる署名は「**そのアカウントで最後に使った署名**」→ 無ければアカウント既定（`accounts.signature_id`）→ 無ければ署名なし。**「署名なし」を選んだことも覚える**ので、毎回消す手間が要らない（記憶は端末ローカル・`rondine.lastSignature.<アカウントid>`）。
   - 設定でアカウントの既定署名を変えたときは記憶も更新する（設定変更が次の作成画面に反映されないのを防ぐ）。記憶していた署名が削除されていればアカウント既定へ戻す。
+- **返信の宛先とスレッド**（**実装済み**・2026-10-20）:
+  - **相手からのメール**: To は Reply-To（無ければ From）。全員返信の Cc は「元の To＋元の Cc」から自分・差出人・返信先を除く。
+  - **自分が送ったメール**（From が自分のアドレスのどれか。全アカウント）: Gmail・Thunderbird と同じく**元の宛先へ送り直す**。
+    To は元の To、全員返信の Cc は元の Cc（どちらも自分を除く）。元の To が自分だけ（自分宛のメモ）なら自分へ返す。
+    以前は To が自分になり、全員返信では相手が Cc に回っていた（`utils/replyRecipients.ts`）。
+  - **Message-ID は送信のたびに自前で採番する**（`smtp::new_message_id`。`<ナノ秒.乱数@差出人のドメイン>`）。
+    lettre の `build()` は Date しか補わず、以前は自分宛のとき以外 Message-ID を付けていなかった。そのため Sent の控えに
+    ID が無く、自分の送信へ返信すると親が分からなかった。自分宛の検証マーク（HMAC）も同じ値で計算する。
+    `MessageId::from` は値をそのまま出すので、山括弧は `build_message` で付ける（以前は自分宛の ID に山括弧が無く、RFC 5322 違反だった）。
+  - In-Reply-To／References は返信元メールの行（`SendInput.reply_to_email_id`）から組む。控えに ID の無い親は、
+    親の祖先から References を組み、`thread_hints` で親のスレッドに残す（[THREADING.md](THREADING.md) §2）。
 - **送信取消（Undo Send）**（**未実装**）: 送信後すぐの待機時間内なら取消（ローカル保留→実送信）。`mail_undo_send` は未実装。
 - **送信予約（スケジュール送信）**（**未実装**）: 指定時刻に送信。`mail_schedule_send` は未実装。
 - **テンプレート（定型文）**（**未実装**）: 再利用スニペット。`templates` テーブル・`template_*` コマンドとも未実装。**宿泊施設の問い合わせ定型返信**に有効なので後続で。
@@ -57,7 +68,7 @@
 
 ## 4. データモデル（要約） / コマンド
 
-- `signatures` テーブル（**実装済み**）、下書きは `emails`（folder=draft）＋添付は `draft_attachments`（0051）で管理（[DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)）。破棄済み下書きの墓標は `deleted_keys`（0050。§1）。※`templates` テーブル・`emails.snooze_until` は**未実装**。
+- `signatures` テーブル（**実装済み**）、下書きは `emails`（folder=draft）＋添付は `draft_attachments`（0051）で管理（[DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)）。破棄済み下書きの墓標は `deleted_keys`（0050。§1）。返信のスレッドの手がかりは `thread_hints`（0067。§1）。※`templates` テーブル・`emails.snooze_until` は**未実装**。
 - 添付メタデータ削除ポリシーは設定ストア（`strip_attachment_metadata`: `all` | `gps` | `off`）で保持（配線は §3 のとおり保留）。
 
 | コマンド | 用途 | 状態 |

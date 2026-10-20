@@ -530,7 +530,8 @@ impl Store {
         for m in messages.iter_mut() {
             if !anchors.is_empty() {
                 if let Some(clean) = m.clean_body.clone() {
-                    let trimmed = crate::services::quotes::cut_at_known_anchor(&clean, &anchors);
+                    let trimmed =
+                        crate::services::quotes::anchor::cut_at_known_anchor(&clean, &anchors);
                     if trimmed.len() < clean.len() {
                         m.has_quotes = true; // 追加で剥がせた＝畳んだ引用がある
                         m.clean_body = Some(trimmed);
@@ -540,7 +541,7 @@ impl Store {
             if let Some(a) = m
                 .clean_body
                 .as_deref()
-                .and_then(crate::services::quotes::first_anchor)
+                .and_then(crate::services::quotes::anchor::first_anchor)
             {
                 anchors.insert(a);
             }

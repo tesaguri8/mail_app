@@ -723,7 +723,7 @@ pub struct ThreadMessage {
 pub struct UnseenQuote {
     /// 差出人（見出しのまま。"名前 <addr>" 等）。
     pub from: String,
-    /// 差出人の表示（名前があれば名前、無ければアドレス。`quotes::header::sender_label`）。
+    /// 差出人の表示（名前があれば名前、無ければアドレス。`quotes::sender::sender_label`）。
     pub sender: String,
     /// 送信日時（見出しのまま）。
     pub at: String,

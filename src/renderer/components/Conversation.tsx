@@ -217,6 +217,29 @@ function Bubble({
     return () => io.disconnect();
   }, []);
   const [showQuotes, setShowQuotes] = useState(false);
+  // 「引用を表示／隠す」で上の未受信の枠が消えたり出たりしても、押したバブル本体をその場に留める。
+  // 切り替える直前のバブルの表示位置（スクロール域の上端からの距離）を控え、描画後に差の分だけ戻す。
+  const quotesAnchor = useRef<number | null>(null);
+  const bubbleTop = () => {
+    const el = document.getElementById(`bubble-${m.id}`);
+    const container = el?.closest('[data-conversation-scroll]');
+    return el && container instanceof HTMLElement
+      ? { container, top: el.getBoundingClientRect().top - container.getBoundingClientRect().top }
+      : null;
+  };
+  const toggleQuotes = (next: boolean) => {
+    quotesAnchor.current = bubbleTop()?.top ?? null;
+    setShowQuotes(next);
+  };
+  useLayoutEffect(() => {
+    const before = quotesAnchor.current;
+    quotesAnchor.current = null;
+    const now = before === null ? null : bubbleTop();
+    if (before === null || !now) return;
+    now.container.scrollTop += now.top - before;
+    // bubbleTop は m.id だけに依る（showQuotes の切り替えの直後だけ動かす）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showQuotes]);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   // 文字選択中の右クリックで出す「コピー／引用としてコピー」メニュー（選択テキストを保持）。
   const [selMenu, setSelMenu] = useState<{ x: number; y: number; text: string } | null>(null);
@@ -725,7 +748,7 @@ function Bubble({
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      setShowQuotes(false);
+                      toggleQuotes(false);
                     }}
                     className="hover:text-sky-300"
                   >
@@ -793,7 +816,7 @@ function Bubble({
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      setShowQuotes((v) => !v);
+                      toggleQuotes(!showQuotes);
                     }}
                     className="hover:text-sky-300"
                   >

@@ -64,7 +64,9 @@ fn header_field(line: &str) -> Option<(Field, &str)> {
 
 /// 区切り行の文字か（`>` の有無は見ない）。"-----Original Message-----" / "-----元のメッセージ-----" /
 /// Gmail の "---------- Forwarded message ---------" / "--- 引用元メッセージ ---" /
-/// "--- 転送されたメール ---" / Outlook の下線。"--- Original Message Ends ---"（終わりの印）は除く。
+/// "--- 転送されたメール ---" / Apple の "Begin forwarded message:"。
+/// "--- Original Message Ends ---"（終わりの印）は除く。
+/// 罫線だけの行（Outlook の下線ほか）は、続く行を見ないと決まらないので [`starts_rule_separator`] で見る。
 pub fn is_separator_text(line: &str) -> bool {
     let l = line.trim();
     let lower = l.to_lowercase();
@@ -74,12 +76,44 @@ pub fn is_separator_text(line: &str) -> bool {
         || l.contains("転送メッセージ")
         || l.contains("引用元メッセージ")
         || l.contains("転送されたメール")
-        || l.starts_with("________________")
 }
 
 /// 「元のメッセージ」の区切り行か（[`is_separator_text`]。`>` の付いた行は除く）。
 pub fn is_separator(line: &str) -> bool {
     !line.trim_start().starts_with('>') && is_separator_text(line)
+}
+
+/// 罫線に使われる字。
+const RULE_CHARS: &[char] = &[
+    '_', '-', '=', '*', '~', '━', '─', '＿', '－', '＝', '＊', '～', '☆', '★',
+];
+
+/// 罫線とみなす最短の字数（"-- " の署名の区切りや "---" と分ける）。
+const MIN_RULE_LEN: usize = 5;
+
+/// 区切りの罫線の後ろで、見出しを探す行数（空行は数えない）。
+const RULE_LOOKAHEAD: usize = 4;
+
+/// 罫線だけの行か（"________________" / "=====" / "━━━" / "****" / "____…☆☆"）。`>` の付いた行は除く。
+pub fn is_rule_line(line: &str) -> bool {
+    let l = line.trim();
+    !line.trim_start().starts_with('>')
+        && l.chars().count() >= MIN_RULE_LEN
+        && l.chars().all(|c| RULE_CHARS.contains(&c))
+}
+
+/// `j` の行が、区切りとして使われた罫線か。罫線はメールマガジンの飾りや署名にも使われるので、
+/// 罫線の次の行（空行と罫線は飛ばす。空でない行は [`RULE_LOOKAHEAD`] 行まで）が見出し（差出人・日時）か
+/// 区切りの文字（"Begin forwarded message:" 等）のときだけ区切りとみなす（Outlook の下線の後の
+/// "From:" ほか）。罫線と見出しの間に本文の行（飾りの見出し語）があれば区切りではない。
+pub fn starts_rule_separator(lines: &[&str], j: usize) -> bool {
+    is_rule_line(lines[j])
+        && lines[j + 1..]
+            .iter()
+            .filter(|l| !l.trim().is_empty())
+            .take(RULE_LOOKAHEAD)
+            .find(|l| !is_rule_line(l))
+            .is_some_and(|l| is_from_line(l) || is_date_line(l) || is_separator(l))
 }
 
 /// 見出しの最初の行（"From:" / "差出人:" / "送信者:"）なら、その値（差出人）を返す。
@@ -90,6 +124,20 @@ pub fn from_value(line: &str) -> Option<&str> {
     match header_field(line) {
         Some((Field::From, value)) => Some(value),
         _ => None,
+    }
+}
+
+/// `j` の行が "From:" の見出しなら、引用の始まりとして裏付けがあるか。値にアドレスがあるか、
+/// 空でない次の [`RULE_LOOKAHEAD`] 行までに別の見出しが来ること（アドレスも続く見出しも無い
+/// "送信者：名前" は、通知メールの本文のことが多い）。"From:" の見出しでなければ true。
+pub fn from_line_backed(lines: &[&str], j: usize) -> bool {
+    match from_value(lines[j]) {
+        Some(value) if !value.contains('@') => lines[j + 1..]
+            .iter()
+            .filter(|l| !l.trim().is_empty())
+            .take(RULE_LOOKAHEAD)
+            .any(|l| is_header_line(l)),
+        _ => true,
     }
 }
 
@@ -169,7 +217,21 @@ fn is_table_form(block: &[&str], first_field: usize) -> bool {
 /// 項目名と値が別の行にある書式（[`is_table_form`]）では、値は空行を挟んだ次の行から取り、
 /// 空行の先に次の項目が続く間は見出しとして読み続ける。
 pub fn parse_header(block: &[&str], skip_first: bool) -> Header {
-    let mut i = usize::from(skip_first || block.first().is_some_and(|l| is_separator(l)));
+    parse_header_after(block, usize::from(skip_first))
+}
+
+/// [`parse_header`] の、飛ばす行数を数で指定する版（属性行が改行で 2 行に割れたとき 2）。
+/// `skip` が 0 なら、先頭の区切り行・罫線だけを飛ばす。
+pub fn parse_header_after(block: &[&str], skip: usize) -> Header {
+    // 飛ばす行数の指定が無ければ、先頭の区切り行・罫線（"=====" の次の "Begin forwarded message:"
+    // のように重なっていれば両方）を飛ばす。
+    let mut i = match skip {
+        0 => block
+            .iter()
+            .take_while(|l| l.trim().is_empty() || is_separator(l) || is_rule_line(l))
+            .count(),
+        n => n,
+    };
     while block.get(i).is_some_and(|l| l.trim().is_empty()) {
         i += 1;
     }

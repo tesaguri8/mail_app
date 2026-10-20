@@ -71,19 +71,26 @@ pub fn parse_quoted_time(text: &str) -> Option<QuotedTime> {
     // 区切りを空白にそろえる。'-' は数字の直後（"2026-10-02"）だけ区切りとみなし、
     // 時差の符号（" -0700"）は残す。
     // 「10月」の「月」は、直前の数字を月とする印として字句に残す（"10月 2 2026" のように年が後でも読む）。
-    let text = text.replace('月', " 月 ");
+    // 数字に続かない「月」（曜日の "(月)" / "月曜日"）は印にしない。
     let mut prev = ' ';
     let spaced: String = text
         .chars()
-        .map(|c| {
+        .flat_map(|c| {
             let out = match c {
-                ',' | '(' | ')' | '（' | '）' | '年' | '日' | '/' => ' ',
-                '-' if prev.is_ascii_digit() => ' ',
-                '：' => ':',
-                _ => c,
+                '月' if prev.is_ascii_digit() => " 月 ",
+                ',' | '、' | '，' | '(' | ')' | '（' | '）' | '年' | '日' | '/' | '月' => {
+                    " "
+                }
+                '-' if prev.is_ascii_digit() => " ",
+                '：' => ":",
+                _ => "",
             };
             prev = c;
-            out
+            if out.is_empty() {
+                vec![c]
+            } else {
+                out.chars().collect()
+            }
         })
         .collect();
 
@@ -262,6 +269,27 @@ mod tests {
         );
         assert_eq!(
             parse_quoted_time("2026年10月20日周二 11:21").map(|t| t.local),
+            Some(at(2026, 10, 20, 11, 21))
+        );
+    }
+
+    /// 曜日の「月」（"(月)" / "月曜日"）を月の印と取り違えない。日付と時刻の間の読点（Android 版 Gmail）も読む。
+    #[test]
+    fn reads_monday_and_comma_between_date_and_time() {
+        assert_eq!(
+            parse_quoted_time("2026年10月5日(月) 17:55").map(|t| t.local),
+            Some(at(2026, 10, 5, 17, 55))
+        );
+        assert_eq!(
+            parse_quoted_time("2026/10/05(月) 17:55").map(|t| t.local),
+            Some(at(2026, 10, 5, 17, 55))
+        );
+        assert_eq!(
+            parse_quoted_time("月曜日, 2026年10月5日 17:55").map(|t| t.local),
+            Some(at(2026, 10, 5, 17, 55))
+        );
+        assert_eq!(
+            parse_quoted_time("火, 20 10月 2026、11:21").map(|t| t.local),
             Some(at(2026, 10, 20, 11, 21))
         );
     }

@@ -161,15 +161,21 @@ fn is_clock_token(tok: &str) -> bool {
 }
 
 /// 時刻の後に空白で差出人が続く属性行（Gmail 日本語版の "2026年10月2日(金) 17:55 名前 <addr>:" /
-/// "2026年10月2日 17:55:00 addr:" / "2026/10/2 12:10:00 に addr 名前:"）を (差出人, 日時) に読む。
+/// "2026年10月2日 17:55:00 addr:" / "2026/10/2 12:10:00 に addr 名前:" / Android 版 Gmail の
+/// "火, 20 10月 2026、11:21 名前 <addr>:"）を (差出人, 日時) に読む。
 /// 日時は最初の時刻の字句（と、続く午前午後・時差）まで。日時として読めて、残りにアドレスがあるときだけ。
+/// 曜日から始まる形（[`starts_with_weekday`]）は、アドレスが無くても名前を差出人として読む。
 fn time_then_sender(l: &str) -> Option<(Option<String>, Option<String>)> {
     let head = l.strip_suffix(':')?.trim_end();
-    if !head.contains('@') {
+    if !head.contains('@') && !starts_with_weekday(head) {
         return None;
     }
     let mut end: Option<usize> = None;
-    for tok in head.split_whitespace() {
+    // Android 版 Gmail は日付と時刻の間を読点で区切る（"2026、11:21"）。
+    for tok in head
+        .split(|c: char| c.is_whitespace() || c == '、')
+        .filter(|t| !t.is_empty())
+    {
         // 字句の終わりの位置（`head` の中のバイト位置）。
         let tok_end = tok.as_ptr() as usize - head.as_ptr() as usize + tok.len();
         match end {
@@ -184,8 +190,22 @@ fn time_then_sender(l: &str) -> Option<(Option<String>, Option<String>)> {
     when::parse_quoted_time(at)?;
     let who = head[end..].trim();
     let who = who.strip_prefix("に ").unwrap_or(who);
-    who.contains('@')
+    (who.contains('@') || starts_with_weekday(head))
         .then(|| (none_if_empty(strip_sender_suffix(who)), none_if_empty(at)))
+        .filter(|(from, _)| from.is_some())
+}
+
+/// 行が曜日とカンマで始まるか（"火, 20 10月 2026、11:21 …" / "Tue, Oct 20, 2026 …"）。
+/// 曜日の字句は和文 1 字か英字 3 文字（"火" / "Tue"）。
+fn starts_with_weekday(head: &str) -> bool {
+    head.split_once([',', '，']).is_some_and(|(w, _)| {
+        let w = w.trim();
+        matches!(w, "月" | "火" | "水" | "木" | "金" | "土" | "日")
+            || matches!(
+                w.to_ascii_lowercase().as_str(),
+                "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun"
+            )
+    })
 }
 
 /// 中国語の属性行（"在 2026-10-02 12:10:00，"名前" <addr> 写道:" / "名前 <addr> 于 2026年10月20日 11:21 写道:"）を
@@ -269,5 +289,45 @@ pub(super) fn looks_like_attribution(line: &str) -> bool {
         || ends_with_angle_addr_colon(l)
         || l.ends_with("のメール:")
         || header::is_separator_text(l)
+        || header::is_rule_line(l)
         || header::is_from_line(l)
+}
+
+/// 属性行の後ろ半分らしい行か（"<addr>:" / "<addr>のメール:" / 山括弧の途中で割れた "addr>:"）。
+fn is_attribution_tail(line: &str) -> bool {
+    let l = line.trim();
+    !l.starts_with('>')
+        && [">:", ">：", ">のメール:", ">のメール："]
+            .iter()
+            .any(|end| l.ends_with(end))
+}
+
+/// 属性行が改行で 2 行に割れた形（"Oct 2, 2026, 9:05 PM +0900, 名前" の次の行が "<addr>:" /
+/// "…、名前 <" の次の行が "hanako@example.com>:"）を、つないで読む。
+/// `line` が後ろ半分らしく、つないだ行にアドレスがあり、つないだほうが 1 行だけより多く読めるとき（日時が取れる・1 行では
+/// 属性行と分からない）だけ Some。山括弧の途中で割れた形（`line` に "<" が無い）は空白を入れずにつなぐ。
+pub(super) fn wrapped_attribution(
+    prev: &str,
+    line: &str,
+) -> Option<(Option<String>, Option<String>)> {
+    let p = prev.trim();
+    if !is_attribution_tail(line) || p.is_empty() || p.starts_with('>') || header::is_header_line(p)
+    {
+        return None;
+    }
+    let l = line.trim();
+    let joined = if l.contains('<') {
+        format!("{p} {l}")
+    } else {
+        format!("{p}{l}")
+    };
+    if !joined.contains('@') {
+        return None;
+    }
+    let (from, at) = parse_attribution(&joined)?;
+    let better = match parse_attribution(l) {
+        None => from.is_some(),
+        Some((_, single_at)) => at.is_some() && single_at.is_none(),
+    };
+    better.then_some((from, at))
 }

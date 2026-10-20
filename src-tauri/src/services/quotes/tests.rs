@@ -38,7 +38,15 @@ fn strips_japanese_attribution() {
     let s = split_reply(body);
     assert_eq!(s.clean, "承知しました。火曜の午後でお願いします。");
     assert_eq!(s.quotes.len(), 1);
-    assert_eq!(s.quotes[0].quoted_from.as_deref(), Some("sato@example.com"));
+    // 曜日の「(月)」を月と取り違えなくなったので、日時と「名前 <addr>」まで読む。
+    assert_eq!(
+        s.quotes[0].quoted_from.as_deref(),
+        Some("佐藤 <sato@example.com>")
+    );
+    assert_eq!(
+        s.quotes[0].quoted_at.as_deref(),
+        Some("2026年6月30日(月) 10:00")
+    );
 }
 
 #[test]
@@ -349,3 +357,5 @@ fn dump_quote_sample() {
         );
     }
 }
+
+mod forms;

@@ -16,7 +16,7 @@ pub mod sender;
 mod signature;
 pub mod when;
 
-use attribution::parse_attribution;
+use attribution::{parse_attribution, wrapped_attribution};
 use blocks::quote_blocks;
 use signature::strip_signature;
 
@@ -54,12 +54,28 @@ pub fn split_reply(plain: &str) -> Split {
     //    a) まず属性行（"On … wrote:" / "…が書きました:" / "-----元のメッセージ-----" 等）。
     //       これは末尾の返信引用の確実な目印なので、本文途中のインライン `>` 引用より優先する
     //       （インライン引用の後ろに書いた新規テキストを clean から落とさないため）。
+    //       属性行が改行で 2 行に割れていれば、前の行から始める（`wrapped_attribution`）。
+    //       罫線は、続く行に見出しが来るときだけ区切りとみなす（`header::starts_rule_separator`）。
+    //       アドレスの無い "From: 名前" / "送信者：名前" は、続く行に見出しが来るときだけ
+    //       （通知メールの本文の「送信者：○○」で切らないため）。
     let mut quote_start: Option<usize> = None;
     let mut attribution: Option<(Option<String>, Option<String>)> = None;
+    let mut attribution_lines = 1;
     for (i, line) in lines.iter().enumerate() {
-        if let Some((from, at)) = parse_attribution(line) {
+        if let Some(found) = i
+            .checked_sub(1)
+            .and_then(|p| wrapped_attribution(lines[p], line))
+        {
+            quote_start = Some(i - 1);
+            attribution = Some(found);
+            attribution_lines = 2;
+            break;
+        }
+        let found = parse_attribution(line)
+            .or_else(|| header::starts_rule_separator(&lines, i).then_some((None, None)));
+        if let Some(found) = found.filter(|_| header::from_line_backed(&lines, i)) {
             quote_start = Some(i);
-            attribution = Some((from, at));
+            attribution = Some(found);
             break;
         }
     }
@@ -95,7 +111,7 @@ pub fn split_reply(plain: &str) -> Split {
 
     // 3) 引用ブロック（引用開始〜末尾）。「元のメッセージ」が連なっていれば 1 通ずつに分ける。
     let quotes = match quote_start {
-        Some(qs) => quote_blocks(&lines[qs..], attribution),
+        Some(qs) => quote_blocks(&lines[qs..], attribution, attribution_lines),
         None => Vec::new(),
     };
 

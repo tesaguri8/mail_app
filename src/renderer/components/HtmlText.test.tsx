@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
-import { AutoLinkText, HtmlText } from './HtmlText';
+import { AutoLinkText, HtmlText, hasAutoLinkUrl } from './HtmlText';
 
 /**
  * 引用の表示（縦線＋段ごとの色）を固定する。段の深さは「入れ子の数」で、色は
@@ -81,5 +81,26 @@ describe('HtmlText の引用表示', () => {
   it('引用でないブロック要素は引用ブロックにしない', () => {
     act(() => root.render(<HtmlText html={'<div>本文</div><p>段落</p>'} />));
     expect(quotes()).toHaveLength(0);
+  });
+});
+
+describe('hasAutoLinkUrl（日付のつまみの「リンクあり」）', () => {
+  it('http(s) と www. の URL を数える', () => {
+    expect(hasAutoLinkUrl('資料: https://deliver.example.invalid/d/abc123')).toBe(true);
+    expect(hasAutoLinkUrl('サイト www.maeda.invalid をご覧ください')).toBe(true);
+  });
+
+  it('メールアドレスだけ（署名の mailto）はリンクに数えない', () => {
+    expect(
+      hasAutoLinkUrl('前田 三郎\nEmail: maeda@example.invalid <mailto:maeda@example.invalid>')
+    ).toBe(false);
+    expect(hasAutoLinkUrl('よろしくお願いします。')).toBe(false);
+  });
+
+  it('表示と同じく、アドレスの後ろの URL も数える', () => {
+    const text = 'taro@maeda.invalid\r\r\nhttps://deliver.example.invalid/d/abc123';
+    expect(hasAutoLinkUrl(text)).toBe(true);
+    act(() => root.render(<AutoLinkText text={text} />));
+    expect(container.querySelectorAll('a').length).toBe(1);
   });
 });

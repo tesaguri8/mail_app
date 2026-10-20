@@ -52,7 +52,7 @@ import { EmailDownloads } from './AttachmentDownloadLine';
 import { useToast } from './SyncProvider';
 import { hasReadableBody, htmlHasContent } from '../utils/mailBody';
 import { MailBody, makeRenderDate } from './MailBody';
-import { AutoLinkText, HtmlText, inlineCidRefs } from './HtmlText';
+import { AutoLinkText, HtmlText, hasAutoLinkUrl, inlineCidRefs } from './HtmlText';
 import { AttachedImages, isImage } from './AttachedImages';
 import { PrintMail } from './PrintMail';
 import { UnseenQuotes } from './UnseenQuotes';
@@ -60,7 +60,7 @@ import { ContextMenu, type MenuItem } from './ContextMenu';
 import type { CalendarPanelInitial } from './CalendarPanel';
 import { TimelineScrubber } from './timeline/TimelineScrubber';
 import { scrollTopForFraction, startFractions, type DayCount } from './timeline/dayCounts';
-import { readMarks, summarizeMarks, TIMELINE_DATE_ATTR } from './timeline/marks';
+import { markAttrs, readMarks, summarizeMarks, type MarkBadge } from './timeline/marks';
 
 /** 全文展開時、本文カードの先頭を表示域の上端から少しだけ下げて置くための余白（px）。 */
 const EXPAND_TOP_GAP = 8;
@@ -1191,6 +1191,17 @@ export function Conversation({
       ? messages
       : messages.filter((m) => m.folder !== 'trash' && m.folder !== 'spam');
   }, [view, folder]);
+  // 本文（バブルが既定で出す新規部分）に URL のあるメール。日付のつまみに鎖を出す目安で、
+  // スクロールのたびに本文を走査しないよう、会話が変わったときだけ数える。
+  const linkIds = useMemo(
+    () =>
+      new Set(
+        visibleMessages
+          .filter((m) => hasAutoLinkUrl((m.clean_body ?? '').trim() || (m.body_plain ?? '')))
+          .map((m) => m.id)
+      ),
+    [visibleMessages]
+  );
 
   // 日付のつまみ（docs/CONVERSATION_TIMELINE.md）。バブルと、その下の未受信の引用の枠を 1 件ずつ
   // 載せる。描かれている目印（timeline/marks.ts）を並び順に測り、日ごとの件数と目盛り（各件が実際に
@@ -1200,6 +1211,7 @@ export function Conversation({
   const [days, setDays] = useState<DayCount[]>([]);
   const [starts, setStarts] = useState<number[]>([]);
   const [quoteMarks, setQuoteMarks] = useState<boolean[]>([]);
+  const [badgeMarks, setBadgeMarks] = useState<MarkBadge[]>([]);
   const [viewRange, setViewRange] = useState<{ top: number; bottom: number } | null>(null);
   const measureFrame = useRef<number | null>(null);
   const measureTimeline = useCallback(() => {
@@ -1228,6 +1240,12 @@ export function Conversation({
         prev.length === marks.quotes.length && prev.every((q, i) => q === marks.quotes[i])
           ? prev
           : marks.quotes
+      );
+      setBadgeMarks((prev) =>
+        prev.length === marks.badges.length &&
+        prev.every((b, i) => b.attach === marks.badges[i].attach && b.link === marks.badges[i].link)
+          ? prev
+          : marks.badges
       );
       setViewRange(
         scrollHeight > 0
@@ -1352,6 +1370,7 @@ export function Conversation({
             days={days}
             starts={starts}
             accents={quoteMarks}
+            badges={badgeMarks}
             viewRange={viewRange}
             onJump={jumpToFraction}
           />
@@ -1398,7 +1417,15 @@ export function Conversation({
           }}
         >
           {visibleMessages.map((m) => (
-            <div key={m.id} id={`bubble-${m.id}`} {...{ [TIMELINE_DATE_ATTR]: m.date ?? '' }}>
+            <div
+              key={m.id}
+              id={`bubble-${m.id}`}
+              {...markAttrs({
+                date: m.date,
+                attach: m.has_attachments,
+                link: linkIds.has(m.id),
+              })}
+            >
               <Bubble
                 m={m}
                 you={you}

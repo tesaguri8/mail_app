@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { topVisibleIndex, type DayCount } from './dayCounts';
 import {
+  buildBadges,
   buildDayLabels,
   buildTicks,
   fisheye,
@@ -277,5 +278,32 @@ describe('日付が逆に進む並び（転送の中の引用）', () => {
   it('押した位置の件は、位置の並び（昇順）で引ける', () => {
     expect(topVisibleIndex(starts, 0.55)).toBe(3);
     expect(topVisibleIndex(starts, 0.85)).toBe(5);
+  });
+});
+
+describe('buildBadges', () => {
+  const a = { attach: true, link: false };
+  const l = { attach: false, link: true };
+  const n = { attach: false, link: false };
+
+  it('添付・リンクのある件だけを、その件の位置に出す', () => {
+    expect(buildBadges([0, 40, 80], [a, n, l], undefined, 13)).toEqual([
+      { y: 0, attach: true, link: false, muted: false },
+      { y: 80, attach: false, link: true, muted: false },
+    ]);
+  });
+
+  it('札と同じ間隔より詰まったところは、手前の件にまとめる（どれかにあれば出す）', () => {
+    expect(buildBadges([0, 5, 10, 30], [a, l, a, l], undefined, 13)).toEqual([
+      { y: 0, attach: true, link: true, muted: false },
+      { y: 30, attach: false, link: true, muted: false },
+    ]);
+  });
+
+  it('まとめた件がすべて枠のときだけ控えめにする', () => {
+    expect(buildBadges([0, 5, 40], [l, l, l], [true, false, true], 13)).toEqual([
+      { y: 0, attach: false, link: true, muted: false },
+      { y: 40, attach: false, link: true, muted: true },
+    ]);
   });
 });

@@ -200,8 +200,11 @@ pub fn thread_bodies(messages: &[ThreadMessage]) -> Vec<String> {
 }
 
 /// メール 1 通の本文から、手元に無いメールの引用を拾う。差出人と日時の両方が読めて、
-/// 照らし合わせで見つからず、同じ会話（`known`。[`thread_bodies`]）にも無いものだけ。差出人・日時の分からない
-/// 引用（"…が書きました:" 等）は、手元にあるかを確かめられないので、いままでどおり畳む。
+/// 照らし合わせで見つからず、同じ会話（`known`。[`thread_bodies`]）にも無いものだけ。
+///
+/// 差出人・日時の分からない引用（"…が書きました:" や、読めない見出しの転送）は、1 通の枠に
+/// できない。直前の枠を出していれば、その続きとして見出しごと残す（黙って捨てない）。直前の
+/// 1 通が手元にある（または最初の引用）ときは、そのメールの側で読めるので、いままでどおり畳む。
 ///
 /// # Errors
 /// 照らし合わせの問い合わせに失敗したとき。
@@ -211,14 +214,22 @@ pub fn unseen_quotes(
     body_plain: &str,
     known: &[String],
 ) -> rusqlite::Result<Vec<UnseenQuote>> {
-    let mut out = Vec::new();
+    let mut out: Vec<UnseenQuote> = Vec::new();
+    // 直前の引用を枠として出したか（読めない引用をその枠に残すため）。
+    let mut last_shown = false;
     for q in quotes::split_reply(body_plain).quotes {
-        let (Some(from), Some(at)) = (q.quoted_from, q.quoted_at) else {
+        let time = q.quoted_at.as_deref().and_then(parse_quoted_time);
+        let (Some(from), Some(at), Some(time)) = (q.quoted_from, q.quoted_at, time) else {
+            if let Some(prev) = out.last_mut().filter(|_| last_shown && !q.text.is_empty()) {
+                prev.body.push_str("\n\n");
+                prev.body.push_str(&q.text);
+            }
             continue;
         };
-        let Some(time) = parse_quoted_time(&at).filter(|_| !q.body.is_empty()) else {
+        last_shown = false;
+        if q.body.is_empty() {
             continue;
-        };
+        }
         let norm = normalize_body(&q.body);
         if known.iter().any(|k| norm.contains(k.as_str())) {
             continue;
@@ -226,6 +237,7 @@ pub fn unseen_quotes(
         if find_quoted_email(conn, email_id, Some(&from), Some(&at))?.is_some() {
             continue;
         }
+        last_shown = true;
         out.push(UnseenQuote {
             sender: quotes::header::sender_label(&from),
             date: time.to_iso(),
@@ -463,5 +475,33 @@ mod tests {
             0,
             "手元に無い 1 通は結び付かないまま"
         );
+    }
+
+    /// 1 通として読めない引用（見出しの無い区切り）は、直前の枠の続きとして残す（名前は作り物）。
+    #[test]
+    fn unreadable_quote_stays_in_the_previous_frame() {
+        let store = store();
+        let conn = store.conn.lock().unwrap();
+        let body = "転送します。\n\n\
+-----Original Message-----\n\
+From: 高橋 花子 <takahashi@example.com>\n\
+Sent: Friday, October 2, 2026 2:50 PM\n\
+Subject: 図面\n\
+\n\
+田中様\n図面を送ります。\n\
+\n\
+-----Original Message-----\n\
+見出しの読めない 1 通\nhttps://files.example.jp/d/xyz";
+        let quotes = unseen_quotes(&conn, 0, body, &[]).unwrap();
+        assert_eq!(quotes.len(), 1, "{quotes:?}");
+        let q = &quotes[0];
+        assert_eq!(q.sender, "高橋 花子");
+        assert!(
+            q.body.starts_with("田中様\n図面を送ります。"),
+            "{:?}",
+            q.body
+        );
+        assert!(q.body.contains("-----Original Message-----"));
+        assert!(q.body.contains("https://files.example.jp/d/xyz"));
     }
 }

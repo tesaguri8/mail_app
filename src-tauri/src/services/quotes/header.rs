@@ -31,7 +31,7 @@ fn header_field(line: &str) -> Option<(Field, &str)> {
         "from" | "差出人" | "送信者" => Field::From,
         "sent" | "date" | "送信日時" | "日付" | "日時" => Field::Date,
         "subject" | "件名" => Field::Subject,
-        "to" | "cc" | "bcc" | "宛先" | "reply-to" => Field::Other,
+        "to" | "cc" | "bcc" | "宛先" | "reply-to" | "返信先" => Field::Other,
         _ => return None,
     };
     Some((field, value.trim().trim_start_matches('*').trim_start()))
@@ -83,8 +83,11 @@ pub struct Header {
     pub body_start: usize,
 }
 
-/// 見出しとして読む行数の上限（宛先が多いと To が折り返して長くなる）。
+/// 見出しとして読む行数の上限（宛先が多いと To が折り返して長くなる）。空行は数えない。
 const MAX_HEADER_LINES: usize = 20;
+
+/// 項目名と値が別の行にある書式で、項目名と値・値と次の項目名の間に挟まってよい空行の数。
+const MAX_TABLE_GAP: usize = 3;
 
 /// 値が空なら None。
 fn non_empty(v: &str) -> Option<String> {
@@ -92,8 +95,37 @@ fn non_empty(v: &str) -> Option<String> {
     (!v.is_empty()).then(|| v.to_string())
 }
 
+/// `from` の次から、空行を `MAX_TABLE_GAP` 個まで飛ばした先の行の添字。
+fn next_non_blank(block: &[&str], from: usize) -> Option<usize> {
+    (from + 1..block.len())
+        .take(MAX_TABLE_GAP + 1)
+        .find(|&k| !block[k].trim().is_empty())
+}
+
+/// 項目名と値が別の行にある書式か。Thunderbird が HTML の表（項目名の欄・値の欄）を文字にすると
+/// こうなる。最初の項目の値が空で、空行を挟んだ次の行が項目でなければ、その行を値とみなす。
+///
+/// ```text
+/// -------- Forwarded Message --------
+/// Subject:
+///
+/// RE: 打ち合わせの件
+///
+/// Date:
+///
+/// Tue, 20 Oct 2026 11:21:08 +0900
+/// ```
+fn is_table_form(block: &[&str], first_field: usize) -> bool {
+    let value_empty = matches!(header_field(block[first_field]), Some((_, v)) if v.is_empty());
+    value_empty
+        && next_non_blank(block, first_field).is_some_and(|k| header_field(block[k]).is_none())
+}
+
 /// 引用ブロックの先頭の見出しを読む。区切り行・属性行（`skip_first`）を飛ばし、"Key: value" の
 /// 並びを空行まで読む。見出しが無ければ、本文は区切り行・属性行の次から始まる。
+///
+/// 項目名と値が別の行にある書式（[`is_table_form`]）では、値は空行を挟んだ次の行から取り、
+/// 空行の先に次の項目が続く間は見出しとして読み続ける。
 pub fn parse_header(block: &[&str], skip_first: bool) -> Header {
     let mut i = usize::from(skip_first || block.first().is_some_and(|l| is_separator(l)));
     while block.get(i).is_some_and(|l| l.trim().is_empty()) {
@@ -103,33 +135,56 @@ pub fn parse_header(block: &[&str], skip_first: bool) -> Header {
         body_start: i,
         ..Header::default()
     };
+    let table = i < block.len() && is_table_form(block, i);
     let mut seen = false;
-    for (j, line) in block.iter().enumerate().skip(i).take(MAX_HEADER_LINES) {
+    let mut read = 0;
+    let mut j = i;
+    while j < block.len() && read < MAX_HEADER_LINES {
+        let line = block[j];
         if line.trim().is_empty() {
-            if seen {
-                h.body_start = j + 1;
+            // 表の形なら、空行の先に次の項目が続く。そうでなければ空行で見出しが終わる。
+            match next_non_blank(block, j) {
+                Some(k) if table && header_field(block[k]).is_some() => {
+                    j = k;
+                    continue;
+                }
+                _ => {
+                    if seen {
+                        h.body_start = j + 1;
+                    }
+                    break;
+                }
             }
-            break;
         }
+        read += 1;
         match header_field(line) {
             Some((field, value)) => {
                 seen = true;
-                let slot = match field {
-                    Field::From => &mut h.from,
-                    Field::Date => &mut h.at,
-                    Field::Subject => &mut h.subject,
-                    Field::Other => {
-                        h.body_start = j + 1;
-                        continue;
+                // 表の形で値が空なら、値は空行を挟んだ次の行（項目名の行なら値は空のまま）。
+                let (value, end) = match next_non_blank(block, j) {
+                    Some(k) if table && value.is_empty() && header_field(block[k]).is_none() => {
+                        read += 1;
+                        (block[k].trim(), k)
                     }
+                    _ => (value, j),
                 };
-                if slot.is_none() {
+                let slot = match field {
+                    Field::From => Some(&mut h.from),
+                    Field::Date => Some(&mut h.at),
+                    Field::Subject => Some(&mut h.subject),
+                    Field::Other => None,
+                };
+                if let Some(slot) = slot.filter(|s| s.is_none()) {
                     *slot = non_empty(value);
                 }
-                h.body_start = j + 1;
+                h.body_start = end + 1;
+                j = end + 1;
             }
             // 見出しの途中の、項目名の無い行は折り返し（長い To）とみなす。見出しより前なら本文。
-            None if seen => h.body_start = j + 1,
+            None if seen => {
+                h.body_start = j + 1;
+                j += 1;
+            }
             None => break,
         }
     }
@@ -250,6 +305,98 @@ mod tests {
         assert_eq!(h.at.as_deref(), Some("Wednesday, October 7, 2026 7:36 PM"));
         assert_eq!(h.subject.as_deref(), Some("RE: 図面"));
         assert_eq!(block[h.body_start], "本文です。");
+    }
+
+    /// Thunderbird が HTML の表を文字にした見出し（項目名と値が別の行・間に空行。名前は作り物）。
+    #[test]
+    fn reads_thunderbird_table_header() {
+        let block = [
+            "-------- Forwarded Message -------- ",
+            "",
+            "",
+            "Subject: ",
+            "",
+            "RE: Fwd: 図面 その3",
+            "",
+            "",
+            "Date: ",
+            "",
+            "Tue, 20 Oct 2026 11:21:08 +0900",
+            "",
+            "",
+            "From: ",
+            "",
+            "木材商事 山田花子  <mailto:hanako@mokuzai.example.jp> <hanako@mokuzai.example.jp>",
+            "",
+            "",
+            "To: ",
+            "",
+            "'佐藤 一郎'  <mailto:ichiro@example.jp> <ichiro@example.jp>",
+            "",
+            "",
+            "",
+            "佐藤様",
+            "図面はこちらから取ってください。",
+        ];
+        let h = parse_header(&block, false);
+        assert_eq!(
+            h.from.as_deref(),
+            Some(
+                "木材商事 山田花子  <mailto:hanako@mokuzai.example.jp> <hanako@mokuzai.example.jp>"
+            )
+        );
+        assert_eq!(h.at.as_deref(), Some("Tue, 20 Oct 2026 11:21:08 +0900"));
+        assert_eq!(h.subject.as_deref(), Some("RE: Fwd: 図面 その3"));
+        assert_eq!(
+            block[h.body_start..].iter().find(|l| !l.is_empty()),
+            Some(&"佐藤様")
+        );
+    }
+
+    /// 日本語版の Thunderbird の同じ形（"-------- 転送メッセージ --------" / 件名・日付・差出人・宛先）。
+    #[test]
+    fn reads_japanese_thunderbird_table_header() {
+        let block = [
+            "-------- 転送メッセージ --------",
+            "",
+            "件名:",
+            "",
+            "見積もりの件",
+            "",
+            "日付:",
+            "",
+            "Fri, 9 Oct 2026 15:29:01 +0900",
+            "",
+            "差出人:",
+            "",
+            "鈴木 次郎 <jiro@example.com>",
+            "",
+            "宛先:",
+            "",
+            "佐藤 一郎 <ichiro@example.jp>",
+            "",
+            "佐藤様",
+        ];
+        let h = parse_header(&block, false);
+        assert_eq!(h.from.as_deref(), Some("鈴木 次郎 <jiro@example.com>"));
+        assert_eq!(h.at.as_deref(), Some("Fri, 9 Oct 2026 15:29:01 +0900"));
+        assert_eq!(h.subject.as_deref(), Some("見積もりの件"));
+        assert_eq!(block[h.body_start], "佐藤様");
+    }
+
+    /// 普通の見出しで件名が空でも、空行の後の本文の 1 行目を件名として読まない。
+    #[test]
+    fn empty_subject_in_ordinary_header_stays_empty() {
+        let block = [
+            "From: 山田 花子 <hanako@example.com>",
+            "Sent: Friday, October 2, 2026 5:55 PM",
+            "Subject: ",
+            "",
+            "ご確認ください。",
+        ];
+        let h = parse_header(&block, false);
+        assert_eq!(h.subject, None);
+        assert_eq!(block[h.body_start], "ご確認ください。");
     }
 
     #[test]

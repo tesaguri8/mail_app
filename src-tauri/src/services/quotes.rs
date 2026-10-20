@@ -22,6 +22,8 @@ pub struct QuoteBlock {
     pub subject: Option<String>,
     /// 見出しを除いた引用の本文（表示用で、保存はしない）。
     pub body: String,
+    /// 見出しも含めた、このブロックの全文（1 通として読めなかったとき、直前の枠に残す。表示用）。
+    pub text: String,
     /// 引用本文の正規化ハッシュ（同じ履歴を引いているかの照合キー）。
     pub fingerprint: String,
 }
@@ -358,8 +360,18 @@ fn quote_blocks(
 ) -> Vec<QuoteBlock> {
     // 先頭のブロックが属性行（"On … wrote:" 等）から始まるなら、その行は見出しとして飛ばす。
     let skip_attribution_line = attribution.is_some() && !header::is_from_line(region[0]);
+    // 次の 1 通の始まりは、いまの 1 通の見出しより後ろでだけ探す（項目名と値が別の行にある
+    // 見出しでは "From:" の後に "To:" 等が続き、区切りの無い見出しと見分けられないため）。
     let mut starts: Vec<usize> = vec![0];
-    starts.extend((1..region.len()).filter(|&j| starts_next_block(region, j)));
+    let mut header_end = header::parse_header(region, skip_attribution_line).body_start;
+    for j in 1..region.len() {
+        if j < header_end || !starts_next_block(region, j) {
+            continue;
+        }
+        starts.push(j);
+        let skip = inner_attribution(region[j]).is_some();
+        header_end = j + header::parse_header(&region[j..], skip).body_start;
+    }
     let mut first = Some(attribution.unwrap_or((None, None)));
     starts
         .iter()
@@ -385,6 +397,7 @@ fn quote_blocks(
                 quoted_at: h.at.or(attr_at),
                 subject: h.subject,
                 body: dedent(&block[h.body_start.min(block.len())..]),
+                text: dedent(block),
                 fingerprint: fingerprint(&quoted_text),
             }
         })
@@ -894,6 +907,79 @@ To: <tanaka@example.jp>\n\
         assert!(s.quotes[0].body.contains("彼は書きました:"));
     }
 
+    /// Outlook の見出しの間に、Thunderbird の表の形の転送（項目名と値が別の行）が挟まっても、
+    /// 1 通ずつに分け、差出人・日時を読む（名前・宛先・URL は作り物）。
+    #[test]
+    fn splits_thunderbird_table_forward_between_outlook_headers() {
+        let body = "前田様\n\n転送します。\n\n\
+From: 仲村 亮 <ryo@shinko.example.jp> \r\n\
+Sent: Tuesday, October 20, 2026 11:36 AM\r\n\
+To: Mak <mak@example.jp>\r\n\
+Subject: Fwd: 図面 その3\r\n\
+\r\n\
+前田様\r\n\r\n下記の通りです。\r\n\r\n新興　仲村\r\n\r\n\r\n\
+-------- Forwarded Message -------- \r\n\r\n\r\n\
+Subject: \r\n\r\nRE: Fwd: 図面 その3\r\n\r\n\r\n\
+Date: \r\n\r\nTue, 20 Oct 2026 11:21:08 +0900\r\n\r\n\r\n\
+From: \r\n\r\n木材商事 山田花子  <mailto:hanako@mokuzai.example.jp> <hanako@mokuzai.example.jp>\r\n\r\n\r\n\
+To: \r\n\r\n'仲村 亮'  <mailto:ryo@shinko.example.jp> <ryo@shinko.example.jp>\r\n\r\n\r\n\r\n\
+仲村様\r\n\r\n図面はこちらから取ってください。\r\nhttps://files.example.jp/d/abc123\r\n\r\n\
+From: 仲村 亮 <ryo@shinko.example.jp> \r\n\
+Sent: Monday, October 19, 2026 6:46 AM\r\n\
+To: 木材商事 山田花子 <hanako@mokuzai.example.jp>\r\n\
+Subject: Fwd: 図面 その3\r\n\
+\r\n\
+山田様\r\nお願いします。";
+        let s = split_reply(body);
+        assert_eq!(s.clean, "前田様\n\n転送します。");
+        assert_eq!(s.quotes.len(), 3);
+        let tb = &s.quotes[1];
+        assert_eq!(
+            tb.quoted_from.as_deref(),
+            Some(
+                "木材商事 山田花子  <mailto:hanako@mokuzai.example.jp> <hanako@mokuzai.example.jp>"
+            )
+        );
+        assert_eq!(
+            tb.quoted_at.as_deref(),
+            Some("Tue, 20 Oct 2026 11:21:08 +0900")
+        );
+        assert_eq!(tb.subject.as_deref(), Some("RE: Fwd: 図面 その3"));
+        assert!(tb.body.starts_with("仲村様"), "{:?}", tb.body);
+        assert!(tb.body.contains("https://files.example.jp/d/abc123"));
+        // 直前の 1 通は自分の署名で終わり、転送の中身を抱えない。
+        assert!(
+            s.quotes[0].body.ends_with("新興　仲村"),
+            "{:?}",
+            s.quotes[0].body
+        );
+        assert_eq!(
+            s.quotes[2].quoted_at.as_deref(),
+            Some("Monday, October 19, 2026 6:46 AM")
+        );
+    }
+
+    /// "-------- Original Message --------" の表の形も同じに読む。
+    #[test]
+    fn splits_thunderbird_table_original_message() {
+        let body = "了解です。\n\n-------- Original Message --------\n\nSubject:\n\n見積もり\n\n\
+Date:\n\nFri, 9 Oct 2026 15:29:01 +0900\n\nFrom:\n\n鈴木 次郎 <jiro@example.com>\n\n\
+To:\n\n佐藤 一郎 <ichiro@example.jp>\n\n\n佐藤様\n見積もりを送ります。";
+        let s = split_reply(body);
+        assert_eq!(s.clean, "了解です。");
+        assert_eq!(s.quotes.len(), 1);
+        let q = &s.quotes[0];
+        assert_eq!(
+            q.quoted_from.as_deref(),
+            Some("鈴木 次郎 <jiro@example.com>")
+        );
+        assert_eq!(
+            q.quoted_at.as_deref(),
+            Some("Fri, 9 Oct 2026 15:29:01 +0900")
+        );
+        assert_eq!(q.body, "佐藤様\n見積もりを送ります。");
+    }
+
     #[test]
     fn fingerprint_is_whitespace_stable() {
         assert_eq!(fingerprint("hello   world"), fingerprint("hello world\n"));
@@ -926,5 +1012,32 @@ To: <tanaka@example.jp>\n\
     fn first_anchor_skips_short_lines() {
         assert_eq!(first_anchor("はい\n\n見積もりの件について"), Some("見積もりの件について".to_string()));
         assert_eq!(first_anchor("> 引用だけ"), Some("引用だけ".to_string()));
+    }
+
+    /// 手元確認用: 実物の本文を `RONDINE_QUOTE_SAMPLE`（ファイル。先頭 3 行は DB の行情報）から読み、
+    /// 枠ごとの差出人・日時・本文の最初と最後の行を出す。本物の本文はリポジトリに入れない。
+    /// `RONDINE_QUOTE_SAMPLE=… cargo test dump_quote_sample -- --ignored --nocapture`
+    #[test]
+    #[ignore = "手元の実物の本文が要る"]
+    fn dump_quote_sample() {
+        let Ok(path) = std::env::var("RONDINE_QUOTE_SAMPLE") else {
+            return;
+        };
+        let text = std::fs::read_to_string(path).unwrap();
+        let body: String = text.lines().skip(3).collect::<Vec<_>>().join("\n");
+        let s = split_reply(&body);
+        for q in &s.quotes {
+            let lines: Vec<&str> = q.body.lines().filter(|l| !l.trim().is_empty()).collect();
+            println!(
+                "#{} from={:?} at={:?} subject={:?} lines={}\n    first={:?}\n    last={:?}",
+                q.order,
+                q.quoted_from,
+                q.quoted_at,
+                q.subject,
+                lines.len(),
+                lines.first(),
+                lines.last()
+            );
+        }
     }
 }

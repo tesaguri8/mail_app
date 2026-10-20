@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { MailPlus } from 'lucide-react';
 import type { UnseenQuote } from '@bindings/UnseenQuote';
 import { AutoLinkText } from './HtmlText';
+import { formatQuotedDateTime } from '../utils/datetime';
 import { TIMELINE_DATE_ATTR, TIMELINE_QUOTE_ATTR } from './timeline/marks';
 
 /**
@@ -52,7 +53,10 @@ export function UnseenQuotes({
               <span className="text-white/60" title={q.from}>
                 {q.sender}
               </span>
-              <span className="tabular-nums text-white/45">{q.at}</span>
+              {/* 表記はバブルにそろえ、見出しに書かれていた元の文字列はツールチップに残す */}
+              <span className="tabular-nums text-white/45" title={q.at}>
+                {q.date ? formatQuotedDateTime(q.date, q.at) : q.at}
+              </span>
               {q.subject && <span className="min-w-0 truncate text-white/45">{q.subject}</span>}
             </div>
             <AutoLinkText text={q.body} highlight={highlight} renderDate={renderDate} />

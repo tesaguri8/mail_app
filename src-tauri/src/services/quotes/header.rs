@@ -24,38 +24,60 @@ enum Field {
     Other,
 }
 
+/// 項目名の全角英字を半角にそろえる（"ＣＣ" / "Ｃｃ" → "CC" / "Cc"）。
+fn to_half_width_alpha(key: &str) -> String {
+    key.chars()
+        .map(|c| match c {
+            'Ａ'..='Ｚ' | 'ａ'..='ｚ' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+            _ => c,
+        })
+        .collect()
+}
+
 /// "Key: value" の行を (項目, 値) に読む。知らない項目なら None。
 ///
 /// HTML の太字を text/plain に落とした "*From:* 山田 <…>" も読む（項目名の前後の `*` と、
-/// 値の先頭に残る `*` を外す）。
+/// 値の先頭に残る `*` を外す）。項目名の全角英字は半角にそろえてから照らす。
+/// 古い日本語版 Outlook の「送信:」は、値が日時として読めるときだけ日時とみなす
+/// （本文の「送信: ○○」で誤らないため）。
 fn header_field(line: &str) -> Option<(Field, &str)> {
     let l = line.trim();
     let (key, value) = l.split_once([':', '：'])?;
-    let field = match key.trim().trim_matches('*').trim().to_lowercase().as_str() {
-        "from" | "差出人" | "送信者" => Field::From,
-        "sent" | "date" | "送信日時" | "日付" | "日時" => Field::Date,
-        "subject" | "件名" => Field::Subject,
-        "to" | "宛先" => Field::To,
-        "cc" => Field::Cc,
+    let value = value.trim().trim_start_matches('*').trim_start();
+    let key = to_half_width_alpha(key.trim().trim_matches('*').trim()).to_lowercase();
+    let field = match key.as_str() {
+        "from" | "差出人" | "送信者" | "送信元" | "发件人" | "寄件者" => Field::From,
+        "sent" | "date" | "送信日時" | "日付" | "日時" | "时间" | "发送时间" | "日期" => {
+            Field::Date
+        }
+        "送信" if super::when::parse_quoted_time(value).is_some() => Field::Date,
+        "subject" | "件名" | "主题" | "主旨" => Field::Subject,
+        "to" | "宛先" | "收件人" | "收件者" => Field::To,
+        "cc" | "抄送" | "副本" => Field::Cc,
         "bcc" | "reply-to" | "返信先" => Field::Other,
         _ => return None,
     };
-    Some((field, value.trim().trim_start_matches('*').trim_start()))
+    Some((field, value))
 }
 
-/// 「元のメッセージ」の区切り行か（"-----Original Message-----" / "-----元のメッセージ-----" /
-/// Gmail の "---------- Forwarded message ---------" / Outlook の下線 / 転送の区切り）。
-pub fn is_separator(line: &str) -> bool {
+/// 区切り行の文字か（`>` の有無は見ない）。"-----Original Message-----" / "-----元のメッセージ-----" /
+/// Gmail の "---------- Forwarded message ---------" / "--- 引用元メッセージ ---" /
+/// "--- 転送されたメール ---" / Outlook の下線。"--- Original Message Ends ---"（終わりの印）は除く。
+pub fn is_separator_text(line: &str) -> bool {
     let l = line.trim();
-    if l.starts_with('>') {
-        return false;
-    }
     let lower = l.to_lowercase();
-    lower.contains("original message")
+    (lower.contains("original message") && !lower.contains("original message end"))
         || lower.contains("forwarded message")
         || l.contains("元のメッセージ")
         || l.contains("転送メッセージ")
+        || l.contains("引用元メッセージ")
+        || l.contains("転送されたメール")
         || l.starts_with("________________")
+}
+
+/// 「元のメッセージ」の区切り行か（[`is_separator_text`]。`>` の付いた行は除く）。
+pub fn is_separator(line: &str) -> bool {
+    !line.trim_start().starts_with('>') && is_separator_text(line)
 }
 
 /// 見出しの最初の行（"From:" / "差出人:" / "送信者:"）なら、その値（差出人）を返す。
@@ -104,6 +126,13 @@ const MAX_TABLE_GAP: usize = 3;
 fn non_empty(v: &str) -> Option<String> {
     let v = v.trim();
     (!v.is_empty()).then(|| v.to_string())
+}
+
+/// 値の無い項目名だけの行か（"Message-ID:" / "場所:"。項目名は 20 文字まで）。
+fn is_bare_label(line: &str) -> bool {
+    line.trim()
+        .strip_suffix([':', '：'])
+        .is_some_and(|k| !k.is_empty() && k.chars().count() <= 20 && !k.contains(':'))
 }
 
 /// `from` の次から、空行を `MAX_TABLE_GAP` 個まで飛ばした先の行の添字。
@@ -191,7 +220,14 @@ pub fn parse_header(block: &[&str], skip_first: bool) -> Header {
                 h.body_start = end + 1;
                 j = end + 1;
             }
-            // 見出しの途中の、項目名の無い行は折り返し（長い To）とみなす。見出しより前なら本文。
+            // 表の形で、知らない項目（"Message-ID:" / "場所:" 等）は、空行を挟んだ次の行の値ごと飛ばす。
+            None if seen && table && is_bare_label(line) => {
+                let end = next_non_blank(block, j).unwrap_or(j);
+                h.body_start = end + 1;
+                j = end + 1;
+            }
+            // 見出しの途中の、項目名の無い行は折り返し（長い To）や知らない項目
+            // （"Message-ID: …" / "場所: …"）とみなして飛ばす。見出しより前なら本文。
             None if seen => {
                 h.body_start = j + 1;
                 j += 1;
@@ -464,6 +500,80 @@ mod tests {
         let h = parse_header(&block, false);
         assert_eq!(h.subject, None);
         assert_eq!(block[h.body_start], "ご確認ください。");
+    }
+
+    /// 全角の "ＣＣ"・古い日本語版 Outlook の「送信:」・中国語の項目名も読む（名前は作り物）。
+    #[test]
+    fn reads_full_width_cc_old_sent_and_chinese_labels() {
+        let block = [
+            "差出人: 山田 花子 <hanako@example.com>",
+            "送信: 2026年10月2日 17:55",
+            "宛先: 佐藤 一郎",
+            "ＣＣ: 鈴木 次郎",
+            "件名: RE: 図面の件",
+            "",
+            "ご確認ください。",
+        ];
+        let h = parse_header(&block, false);
+        assert_eq!(h.at.as_deref(), Some("2026年10月2日 17:55"));
+        assert_eq!(h.subject.as_deref(), Some("RE: 図面の件"));
+        assert_eq!(block[h.body_start], "ご確認ください。");
+        assert!(matches!(header_field("Ｃｃ: x"), Some((Field::Cc, _))));
+        // 値が日時でなければ「送信:」は項目とみなさない（本文の「送信: 済み」）。
+        assert!(header_field("送信: 済み").is_none());
+
+        let zh = [
+            "发件人: 王 小明 <wang@example.cn>",
+            "时间: 2026年10月20日 11:21",
+            "收件人: 佐藤 一郎 <ichiro@example.jp>",
+            "主题: 图纸",
+            "",
+            "您好",
+        ];
+        let h = parse_header(&zh, false);
+        assert_eq!(h.from.as_deref(), Some("王 小明 <wang@example.cn>"));
+        assert_eq!(h.at.as_deref(), Some("2026年10月20日 11:21"));
+        assert_eq!(h.subject.as_deref(), Some("图纸"));
+        assert_eq!(zh[h.body_start], "您好");
+    }
+
+    /// 表の形の見出しに知らない項目（"Message-ID:" / "場所:"）が混じっても、値ごと飛ばして読み続ける。
+    #[test]
+    fn table_header_skips_unknown_labels() {
+        let block = [
+            "-------- Forwarded Message --------",
+            "Subject:",
+            "",
+            "打ち合わせ",
+            "Message-ID:",
+            "",
+            "<abc@example.jp>",
+            "Date:",
+            "",
+            "Fri, 9 Oct 2026 15:29:01 +0900",
+            "場所:",
+            "",
+            "本社",
+            "From:",
+            "",
+            "鈴木 次郎 <jiro@example.com>",
+            "",
+            "佐藤様",
+        ];
+        let h = parse_header(&block, false);
+        assert_eq!(h.subject.as_deref(), Some("打ち合わせ"));
+        assert_eq!(h.at.as_deref(), Some("Fri, 9 Oct 2026 15:29:01 +0900"));
+        assert_eq!(h.from.as_deref(), Some("鈴木 次郎 <jiro@example.com>"));
+        assert_eq!(block[h.body_start], "佐藤様");
+    }
+
+    #[test]
+    fn separator_forms() {
+        assert!(is_separator("--- 引用元メッセージ ---"));
+        assert!(is_separator("--- 転送されたメール ---"));
+        assert!(is_separator("---Original Message---"));
+        assert!(!is_separator("--- Original Message Ends ---"));
+        assert!(!is_separator("> -----Original Message-----"));
     }
 
     #[test]

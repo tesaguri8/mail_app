@@ -241,14 +241,23 @@ pub fn parse_header_after(block: &[&str], skip: usize) -> Header {
     };
     let table = i < block.len() && is_table_form(block, i);
     let mut seen = false;
+    // 読んだ項目の種類（空行を挟んで同じ種類が来たら、次の 1 通の見出しとみなして止まる）。
+    let mut kinds: Vec<Field> = Vec::new();
     let mut read = 0;
     let mut j = i;
     while j < block.len() && read < MAX_HEADER_LINES {
         let line = block[j];
         if line.trim().is_empty() {
-            // 表の形なら、空行の先に次の項目が続く。そうでなければ空行で見出しが終わる。
+            // 表の形なら、空行の先に次の項目が続く。そうでなければ、空行の先がまだ読んでいない
+            // 種類の項目のときだけ続ける（HTML を文字にしたときの 2 重改行で、"差出人:" "日付:" …
+            // の各行の間に空行が入る書き方）。本文の行が来たら、空行で見出しが終わる。
+            let continues = |k: usize| match header_field(block[k]) {
+                Some(_) if table => true,
+                Some((field, _)) => seen && (field == Field::Other || !kinds.contains(&field)),
+                None => false,
+            };
             match next_non_blank(block, j) {
-                Some(k) if table && header_field(block[k]).is_some() => {
+                Some(k) if continues(k) => {
                     j = k;
                     continue;
                 }
@@ -264,6 +273,7 @@ pub fn parse_header_after(block: &[&str], skip: usize) -> Header {
         match header_field(line) {
             Some((field, value)) => {
                 seen = true;
+                kinds.push(field);
                 // 表の形で値が空なら、値は空行を挟んだ次の行（項目名の行なら値は空のまま）。
                 let (value, end) = match next_non_blank(block, j) {
                     Some(k) if table && value.is_empty() && header_field(block[k]).is_none() => {

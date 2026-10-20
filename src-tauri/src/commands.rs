@@ -488,13 +488,28 @@ pub async fn mail_send(
         Some(qh) => compose_html(&input.body, Some(qh)),
         None => plain_to_html(&body_plain),
     };
-    // References チェーン: フロント指定が無ければ、返信元（in_reply_to）から親の祖先連鎖を組む。
-    let references = match input.references.filter(|s| !s.trim().is_empty()) {
-        Some(r) => Some(r),
-        None => store
-            .references_chain_for(input.in_reply_to.as_deref())
+    // 返信のスレッド化: 返信元メール（reply_to_email_id）が分かれば、その行から In-Reply-To と
+    // References を組む（控えに Message-ID の無い親でも、親の祖先から References を組み、
+    // 親のスレッドを手がかりに残す）。分からなければ従来どおり in_reply_to から親の祖先連鎖を組む。
+    let threading = match input.reply_to_email_id {
+        Some(id) => store
+            .reply_threading(i64::from(id))
             .map_err(|e| e.to_string())?,
+        None => None,
     };
+    let (in_reply_to, references, hint_parent_key) = match threading {
+        Some(t) => (t.in_reply_to, t.references, t.hint_parent_key),
+        None => {
+            let refs = store
+                .references_chain_for(input.in_reply_to.as_deref())
+                .map_err(|e| e.to_string())?;
+            (input.in_reply_to, refs, None)
+        }
+    };
+    let references = input
+        .references
+        .filter(|s| !s.trim().is_empty())
+        .or(references);
     // 添付を読み込む（ローカルパスから Rust が直接読む）。合計サイズを検証する。
     let mut attachments: Vec<(String, Vec<u8>, String)> = Vec::new();
     let mut total: u64 = 0;
@@ -514,8 +529,11 @@ pub async fn mail_send(
         attachments.push((name, bytes, ct));
     }
 
+    // Message-ID は毎回自前で採番する（lettre は付けない）。Sent の控え・DB に同じ値が入り、
+    // 自分の送信へ返信したときに親が分かる（docs/COMPOSE.md）。
+    let message_id = smtp::new_message_id(&acct.email);
     // 自分宛（自分の口座アドレスが宛先に含まれる）なら「本物の自分から」検証マークを付ける。
-    // Message-ID を自前で採番し、その HMAC を X-Rondine-Self ヘッダに載せる（docs/SPAM.md）。
+    // 採番した Message-ID の HMAC を X-Rondine-Self ヘッダに載せる（docs/SPAM.md）。
     let self_addr = acct.email.trim().to_lowercase();
     let norm_addr = |s: &str| -> String {
         let s = s.trim();
@@ -530,26 +548,21 @@ pub async fn mail_send(
         .chain(cc.iter())
         .chain(bcc.iter())
         .any(|a| norm_addr(a) == self_addr);
-    let (self_message_id, self_mark) = if is_self_send && !self_addr.is_empty() {
-        match store.get_or_create_self_secret(input.account_id as i64) {
-            Ok(secret) => {
-                let domain = self_addr.split('@').nth(1).unwrap_or("localhost");
-                let mut rnd = [0u8; 8];
-                let _ = getrandom::getrandom(&mut rnd);
-                let rnd_hex: String = rnd.iter().map(|b| format!("{b:02x}")).collect();
-                let nanos = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0);
-                let mid = format!("{nanos}.{rnd_hex}@{domain}");
-                let mark = crate::services::selfmark::compute_mark(&secret, &mid);
-                (Some(mid), mark)
-            }
-            Err(_) => (None, None),
-        }
+    let self_mark = if is_self_send && !self_addr.is_empty() {
+        store
+            .get_or_create_self_secret(input.account_id as i64)
+            .ok()
+            .and_then(|secret| crate::services::selfmark::compute_mark(&secret, &message_id))
     } else {
-        (None, None)
+        None
     };
+    // 親へヘッダで戻れない返信は、取り込みの前に手がかりを残す（Sent の控えも受信箱の写しも
+    // 親のスレッドに載る）。残せなくても送信は止めない。
+    if let Some(key) = hint_parent_key.as_deref() {
+        if let Err(e) = store.put_thread_hint(input.account_id as i64, &message_id, key) {
+            log::warn!("返信のスレッドの手がかりを残せませんでした: {e}");
+        }
+    }
 
     let config = smtp::SmtpConfig {
         host: acct.smtp_host,
@@ -567,10 +580,9 @@ pub async fn mail_send(
         subject: input.subject,
         body_plain,
         body_html: Some(body_html),
-        in_reply_to: input.in_reply_to,
+        in_reply_to,
         references,
-        // 自分宛は自前採番の Message-ID（HMAC 検証のため）。それ以外は lettre の自動採番でよい。
-        message_id: self_message_id,
+        message_id: Some(message_id),
         attachments,
         self_mark,
     };

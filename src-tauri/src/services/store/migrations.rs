@@ -303,6 +303,12 @@ const MIGRATIONS: &[Migration] = &[
         version: 66,
         sql: include_str!("migrations/0066_org_contacts.sql"),
     },
+    Migration {
+        // 67 は返信のスレッドの手がかり（控えに Message-ID の無い自分の送信への返信を、親の
+        // スレッドに残す。docs/THREADING.md §2）。
+        version: 67,
+        sql: include_str!("migrations/0067_thread_hints.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

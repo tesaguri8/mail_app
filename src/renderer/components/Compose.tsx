@@ -39,6 +39,7 @@ import {
 } from '../config/prefs';
 import { playFlySound } from '../utils/flySound';
 import { RecipientInput } from './RecipientInput';
+import { replyRecipients } from '../utils/replyRecipients';
 import { ContextMenu } from './ContextMenu';
 import { copyText, readText } from '../utils/clipboard';
 import { FlySwallow, type FlySwallowHandle } from './FlySwallow';
@@ -217,33 +218,6 @@ function committed(list: string): string {
   return s ? `${s}, ` : '';
 }
 
-/** "名前 <addr>" / "addr" からメールアドレス部分だけを取り出す（小文字化はしない）。 */
-function extractEmail(token: string): string {
-  const m = token.match(/<([^>]+)>/);
-  return (m ? m[1] : token).trim();
-}
-
-/**
- * 複数のアドレスリスト文字列（"名前 <addr>, ..."）を結合し、exclude のメール（自分・差出人など）と
- * 重複を除いて 1 本の文字列にする。表示名付きの表記はそのまま残す。全員返信の Cc 生成に使う。
- */
-function mergeAddressList(lists: string[], exclude: string[]): string {
-  const skip = new Set(exclude.map((e) => extractEmail(e).toLowerCase()).filter(Boolean));
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const list of lists) {
-    for (const token of list.split(',')) {
-      const t = token.trim();
-      if (!t) continue;
-      const email = extractEmail(t).toLowerCase();
-      if (!email || skip.has(email) || seen.has(email)) continue;
-      seen.add(email);
-      out.push(t);
-    }
-  }
-  return out.join(', ');
-}
-
 /**
  * メール作成ページ（新規／返信／全員返信／転送）。別ウィンドウにせず、メール画面内の
  * 全面ペインとして表示する（返信/転送は左=下書き・右=元メールの2分割）。
@@ -279,6 +253,7 @@ export function Compose({
         quoted: '',
         quotedHtml: null as string | null,
         inReplyTo: null as string | null,
+        replyToEmailId: null as number | null,
       };
     }
     if (target.mode === 'draft') {
@@ -293,6 +268,7 @@ export function Compose({
         quoted: '',
         quotedHtml: null as string | null,
         inReplyTo: d.in_reply_to,
+        replyToEmailId: d.source_id,
       };
     }
     const s = target.source;
@@ -325,23 +301,18 @@ export function Compose({
         quoted: fwd,
         quotedHtml: srcHtml.trim() ? `<br><br>${fwdHeaderHtml}<br><br>${srcHtml}` : null,
         inReplyTo: null,
+        replyToEmailId: null,
       };
     }
-    // 返信先: 差出人が Reply-To を指定していればそちらへ返信する（ML・no-reply＋実返信先 等）。
-    // 無ければ従来どおり From。
-    const replyTarget = s.reply_to?.trim() ? s.reply_to.trim() : (s.from_address ?? '');
-    // reply / replyAll。全員返信の Cc には「元の宛先(To)＋元の Cc」を入れる。
-    // 自分（受信アカウント）と返信先（To に入る）・差出人は Cc から除外し、重複も除く。
-    const selfEmail = accounts.find((a) => a.id === s.account_id)?.email ?? '';
-    const cc =
-      target.mode === 'replyAll'
-        ? mergeAddressList(
-            [s.to_addresses ?? '', s.cc_addresses ?? ''],
-            [selfEmail, s.from_address ?? '', replyTarget]
-          )
-        : '';
+    // 返信先: 相手からなら Reply-To（無ければ From）、自分の送信なら元の宛先（utils/replyRecipients）。
+    // 全員返信の Cc は元の宛先から自分と To に入れた相手を除く。
+    const { to: replyTo, cc } = replyRecipients(
+      s,
+      target.mode,
+      accounts.map((a) => a.email)
+    );
     return {
-      to: committed(replyTarget),
+      to: committed(replyTo),
       cc: committed(cc),
       bcc: '',
       subject: withPrefix(s.subject, 'Re'),
@@ -350,6 +321,7 @@ export function Compose({
         ? `<br><br>${escapeHtml(attribution)}<br>${blockquote(srcHtml)}`
         : null,
       inReplyTo: s.message_id,
+      replyToEmailId: s.id as number | null,
     };
   }, [target, t, accounts]);
 
@@ -830,7 +802,9 @@ export function Compose({
       quoted_plain: quotedRef.current || null,
       quoted_html: quotedHtmlRef.current || null,
       in_reply_to: init.inReplyTo,
-      // References チェーンは Rust 側で in_reply_to から祖先を辿って積む（docs/THREADING.md）。
+      // In-Reply-To／References は Rust 側で返信元メールの行から組む（控えに Message-ID の無い
+      // 自分の送信への返信も、親の祖先から References を組んで同じスレッドに残す。docs/THREADING.md）。
+      reply_to_email_id: init.replyToEmailId,
       references: null,
       // 添付はローカルパスを渡し、Rust が送信時に読み込んで MIME に同梱する。
       attachments: paths,

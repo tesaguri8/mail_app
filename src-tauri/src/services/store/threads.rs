@@ -91,6 +91,11 @@ fn compute_root_key(
     to_addresses: Option<&str>,
     folder: Option<&str>,
 ) -> rusqlite::Result<String> {
+    // 送信のときに残した手がかり（控えに Message-ID の無い親への返信。ヘッダでは親へ戻れない）。
+    // 親は先に（古い順で）割り当て済みなので、そのキーを継承する。
+    if let Some(hint) = thread_hint(conn, account_id, message_id)? {
+        return Ok(hint);
+    }
     // 既知の祖先（In-Reply-To または References のいずれか）が手元にあれば、そのスレッドを継承する。
     // References 先頭が真の root でないクライアント（Spark/titan.email 等、参照順が非標準）でも、
     // 参照している祖先の 1 つが手元にあれば同じスレッドに束ねられる（古い順処理で親は割当済み）。
@@ -139,6 +144,26 @@ fn compute_root_key(
         normalize_subject(subject),
         counterparty
     ))
+}
+
+/// 送信のときに残した手がかり（thread_hints）から、その Message-ID の返信の親が載っている
+/// スレッドのキー（emails.thread_id）を引く。手がかりが無いか、親がまだ割り当てられていなければ None。
+fn thread_hint(
+    conn: &Connection,
+    account_id: i64,
+    message_id: Option<&str>,
+) -> rusqlite::Result<Option<String>> {
+    let Some(mid) = message_id.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    conn.prepare_cached(
+        "SELECT e.thread_id FROM thread_hints h
+         JOIN emails e ON e.account_id = h.account_id AND e.canonical_key = h.parent_key
+         WHERE h.account_id = ?1 AND h.message_id = ?2 AND e.thread_id IS NOT NULL
+         LIMIT 1",
+    )?
+    .query_row(params![account_id, mid], |r| r.get(0))
+    .optional()
 }
 
 /// (account_id, root_key) の論理スレッドを取得、無ければ作成して id を返す。
@@ -354,6 +379,42 @@ fn map_thread_message(r: &rusqlite::Row) -> rusqlite::Result<ThreadMessage> {
     })
 }
 
+/// 同じ Message-ID の写し（自分宛の送信の、受信箱と送信済み）を 1 つのバブルにまとめる。
+///
+/// 残すのは送信済み以外の写し（受信箱の未読・既読の操作と「本物の自分から」の印を持つ）。
+/// 並び（日時順）は先に出た写しの位置を保つ。Message-ID の無い行はまとめない。
+fn collapse_copies(messages: Vec<ThreadMessage>) -> Vec<ThreadMessage> {
+    let mut out: Vec<ThreadMessage> = Vec::with_capacity(messages.len());
+    let mut at: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for m in messages {
+        let key = m
+            .message_id
+            .as_deref()
+            .map(|s| s.trim().trim_start_matches('<').trim_end_matches('>'))
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let Some(key) = key else {
+            out.push(m);
+            continue;
+        };
+        match at.get(&key) {
+            Some(&i) => {
+                let kept = &mut out[i];
+                let verified = kept.verified_self || m.verified_self;
+                if kept.folder.as_deref() == Some("sent") && m.folder.as_deref() != Some("sent") {
+                    *kept = m;
+                }
+                kept.verified_self = verified;
+            }
+            None => {
+                at.insert(key, out.len());
+                out.push(m);
+            }
+        }
+    }
+    out
+}
+
 impl Store {
     /// 指定メールが属する論理スレッドの会話（時系列）を返す。
     /// スレッド未割当のメール（旧データ）はここで遅延割当する。
@@ -440,9 +501,10 @@ impl Store {
                    ORDER BY e.date_ts ASC, e.id ASC"
         );
         let mut stmt = conn.prepare(&sql)?;
-        let mut messages: Vec<ThreadMessage> = stmt
+        let messages: Vec<ThreadMessage> = stmt
             .query_map(params![tid], map_thread_message)?
             .collect::<rusqlite::Result<_>>()?;
+        let mut messages = collapse_copies(messages);
         // 表示名が無いものは住所録から補完する（スレッドは少数なので個別照合で十分）。
         for m in messages.iter_mut() {
             if m.from_name.is_none() {
@@ -845,6 +907,7 @@ fn rebuild_threads_conn(conn: &Connection, account_id: i64) -> rusqlite::Result<
     // 1 つでもあれば同じスレッドにまとまる（同一件名内の断片化を解消。件名が変われば別スレッド）。
     struct Row {
         id: i64,
+        canonical_key: String,
         message_id: Option<String>,
         in_reply_to: Option<String>,
         references_ids: Option<String>,
@@ -855,7 +918,8 @@ fn rebuild_threads_conn(conn: &Connection, account_id: i64) -> rusqlite::Result<
     }
     let rows: Vec<Row> = {
         let mut stmt = conn.prepare(
-            "SELECT id, message_id, in_reply_to, references_ids, subject, from_address, to_addresses, folder
+            "SELECT id, message_id, in_reply_to, references_ids, subject, from_address, to_addresses, folder,
+                    canonical_key
              FROM emails
              WHERE account_id = ?1 AND COALESCE(thread_assignment,'auto') <> 'manual'
              ORDER BY date_ts ASC, id ASC",
@@ -871,6 +935,7 @@ fn rebuild_threads_conn(conn: &Connection, account_id: i64) -> rusqlite::Result<
                     from_address: r.get(5)?,
                     to_addresses: r.get(6)?,
                     folder: r.get(7)?,
+                    canonical_key: r.get(8)?,
                 })
             })?
             .collect::<rusqlite::Result<_>>()?;
@@ -906,6 +971,26 @@ fn rebuild_threads_conn(conn: &Connection, account_id: i64) -> rusqlite::Result<
         }
     }
 
+    // 送信のときに残した手がかり（控えに Message-ID の無い親への返信）で、返信と親を結ぶ。
+    // 親はヘッダを持たないので、結んだ親も件名のフォールバックではなく束ねたキーで割り当てる。
+    let hints: Vec<(String, String)> = {
+        let mut stmt =
+            conn.prepare("SELECT message_id, parent_key FROM thread_hints WHERE account_id = ?1")?;
+        let out = stmt
+            .query_map(params![account_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        out
+    };
+    let by_key: std::collections::HashMap<&str, &Row> =
+        rows.iter().map(|r| (r.canonical_key.as_str(), r)).collect();
+    let mut hinted_parents: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    for (mid, parent_key) in &hints {
+        if let Some(parent) = by_key.get(parent_key.as_str()) {
+            uf.union(mid, &self_key(parent));
+            hinted_parents.insert(parent.id);
+        }
+    }
+
     // コンポーネントごとの正準キー＝メンバー self_key の最小（決定的・安定）。
     let mut canon: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for row in &rows {
@@ -924,11 +1009,12 @@ fn rebuild_threads_conn(conn: &Connection, account_id: i64) -> rusqlite::Result<
     // 割当。ヘッダ（Message-ID/In-Reply-To/References）が全く無いメールだけ、従来どおり
     // 件名正規化＋相手アドレスでフォールバックする（控えめ）。
     for row in &rows {
-        let has_headers = row
-            .message_id
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|s| !s.is_empty())
+        let has_headers = hinted_parents.contains(&row.id)
+            || row
+                .message_id
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|s| !s.is_empty())
             || row
                 .in_reply_to
                 .as_deref()

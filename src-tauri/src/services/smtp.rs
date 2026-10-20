@@ -35,8 +35,10 @@ pub struct OutgoingMessage {
     /// References チェーン（祖先 Message-ID を空白区切り・古い順。相手メーラーで正しくスレッド
     /// 表示させるため。docs/THREADING.md）。None のときは in_reply_to 単体で代用する。
     pub references: Option<String>,
-    /// 自メッセージの Message-ID を明示指定する（山括弧なしの中身）。None なら lettre が自動採番。
-    /// 下書きをサーバー Drafts へ APPEND する際、後で同定・削除できるよう固定 ID を使う。
+    /// 自メッセージの Message-ID（山括弧つき/なしどちらでも可。ヘッダには山括弧つきで出す）。
+    /// 送信は [`new_message_id`] で毎回採番し、Sent の控え・DB・自分宛の HMAC で同じ値を使う。
+    /// 下書きをサーバー Drafts へ APPEND する際は、後で同定・削除できるよう固定 ID を使う。
+    /// None なら lettre に任せる（lettre は `message_id()` を呼ばない限り付けないので、付かない）。
     pub message_id: Option<String>,
     /// 添付（表示名, バイト列, content-type）。空なら添付なし（本文のみ）。
     pub attachments: Vec<(String, Vec<u8>, String)>,
@@ -99,6 +101,29 @@ fn angle_wrap(id: &str) -> String {
     }
 }
 
+/// 送信するメールの Message-ID を採番する（山括弧つき。`<ナノ秒.乱数@差出人のドメイン>`）。
+///
+/// lettre の `build()` は Date しか補わないので、送信のたびにここで付ける。中継が後から付けた ID は
+/// Sent の控えに入らず、自分の送信へ返信したときに親が分からなくなるため（docs/COMPOSE.md）。
+/// `from_email` にドメインが無ければ `localhost` を使う。
+pub fn new_message_id(from_email: &str) -> String {
+    let domain = from_email
+        .trim()
+        .rsplit_once('@')
+        .map(|(_, d)| d.trim().to_lowercase())
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| "localhost".to_string());
+    let mut rnd = [0u8; 8];
+    // 乱数が取れなくてもナノ秒で一意性はほぼ保てるので、失敗は 0 のまま進める。
+    let _ = getrandom::getrandom(&mut rnd);
+    let rnd_hex: String = rnd.iter().map(|b| format!("{b:02x}")).collect();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("<{nanos}.{rnd_hex}@{domain}>")
+}
+
 /// OutgoingMessage から lettre の Message を組み立てる（SMTP 送信と Sent 保存で共有）。
 pub fn build_message(msg: &OutgoingMessage) -> Result<Message, String> {
     let from = {
@@ -112,11 +137,10 @@ pub fn build_message(msg: &OutgoingMessage) -> Result<Message, String> {
 
     let mut builder = Message::builder().from(from).subject(msg.subject.clone());
 
-    // 自メッセージの Message-ID を固定したい場合（下書きのサーバー同期）だけ明示指定する。
-    // lettre は山括弧なしの中身を受け取り自前で <...> を付ける。
+    // 自メッセージの Message-ID。lettre の MessageId は値をそのまま出すので、山括弧はここで付ける
+    // （RFC 5322 §3.6.4 の msg-id は `<id-left@id-right>`）。
     if let Some(mid) = msg.message_id.as_ref().filter(|s| !s.trim().is_empty()) {
-        let inner = mid.trim().trim_start_matches('<').trim_end_matches('>');
-        builder = builder.message_id(Some(inner.to_string()));
+        builder = builder.message_id(Some(angle_wrap(mid)));
     }
 
     // 自分宛メールの検証マーク（本物の自分からを受信側で判定できるように。docs/SPAM.md）。
@@ -262,5 +286,99 @@ mod tests {
     fn アドレス部が不正なら元のエラーを返す() {
         let err = parse_mailbox("名前 <not-an-address>").expect_err("不正アドレスはエラー");
         assert!(err.contains("宛先を解釈できません"));
+    }
+
+    /// 試験用の 1 通（宛先・本文だけ。ヘッダは各試験で足す）。
+    fn outgoing() -> OutgoingMessage {
+        OutgoingMessage {
+            from_name: None,
+            from_email: "me@example.invalid".into(),
+            to: vec!["you@example.invalid".into()],
+            cc: Vec::new(),
+            bcc: Vec::new(),
+            subject: "件名".into(),
+            body_plain: "本文".into(),
+            body_html: None,
+            in_reply_to: None,
+            references: None,
+            message_id: None,
+            attachments: Vec::new(),
+            self_mark: None,
+        }
+    }
+
+    /// 組み立てたメールのヘッダ部から、名前の一致する行の値を返す（折り返しは畳む）。
+    fn header(msg: &OutgoingMessage, name: &str) -> Option<String> {
+        let raw = String::from_utf8(build_message(msg).expect("組み立てられる").formatted())
+            .expect("ヘッダは ASCII");
+        let head = raw
+            .split("\r\n\r\n")
+            .next()
+            .unwrap_or("")
+            .replace("\r\n ", " ");
+        let prefix = format!("{}: ", name.to_ascii_lowercase());
+        head.lines()
+            .find(|l| l.to_ascii_lowercase().starts_with(&prefix))
+            .map(|l| l[prefix.len()..].trim().to_string())
+    }
+
+    #[test]
+    fn 採番した_message_id_は山括弧つきで差出人のドメイン() {
+        let mid = new_message_id("Me@Example.Invalid");
+        assert!(mid.starts_with('<') && mid.ends_with('>'), "{mid}");
+        assert!(mid.ends_with("@example.invalid>"), "{mid}");
+        assert_ne!(mid, new_message_id("me@example.invalid"), "毎回違う値");
+    }
+
+    #[test]
+    fn message_id_は山括弧つきで出る() {
+        let mut m = outgoing();
+        m.message_id = Some("1792.ab@example.invalid".into());
+        assert_eq!(
+            header(&m, "Message-ID").as_deref(),
+            Some("<1792.ab@example.invalid>")
+        );
+        // 山括弧つきで渡しても二重にならない。
+        m.message_id = Some("<1792.ab@example.invalid>".into());
+        assert_eq!(
+            header(&m, "Message-ID").as_deref(),
+            Some("<1792.ab@example.invalid>")
+        );
+    }
+
+    #[test]
+    fn 返信は_in_reply_to_と_references_を山括弧つきで出す() {
+        let mut m = outgoing();
+        m.in_reply_to = Some("parent@example.invalid".into());
+        m.references = Some("root@example.invalid <parent@example.invalid>".into());
+        assert_eq!(
+            header(&m, "In-Reply-To").as_deref(),
+            Some("<parent@example.invalid>")
+        );
+        assert_eq!(
+            header(&m, "References").as_deref(),
+            Some("<root@example.invalid> <parent@example.invalid>")
+        );
+    }
+
+    #[test]
+    fn 親の_message_id_が無くても_references_だけ出せる() {
+        let mut m = outgoing();
+        m.references = Some("root@example.invalid".into());
+        assert_eq!(header(&m, "In-Reply-To"), None);
+        assert_eq!(
+            header(&m, "References").as_deref(),
+            Some("<root@example.invalid>")
+        );
+    }
+
+    #[test]
+    fn references_が無ければ_in_reply_to_で代用する() {
+        let mut m = outgoing();
+        m.in_reply_to = Some("<parent@example.invalid>".into());
+        assert_eq!(
+            header(&m, "References").as_deref(),
+            Some("<parent@example.invalid>")
+        );
     }
 }

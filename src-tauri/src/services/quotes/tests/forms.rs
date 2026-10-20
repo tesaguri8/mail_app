@@ -269,3 +269,59 @@ Sent: Friday, October 2, 2026 5:55 PM\n\n最初の文";
     assert!(s.quotes[0].body.contains("飾り"));
     assert_eq!(s.quotes[1].body, "最初の文");
 }
+
+/// 見出しの各行の間に空行が 1 行ずつ入る書き方（HTML を文字にしたときの 2 重改行）でも、
+/// 差出人だけでなく日時・件名まで読み、本文は見出しの後ろから始まる。
+#[test]
+fn reads_header_with_blank_lines_between_fields() {
+    let body =
+        "本文\n\n差出人: 松本 花子 <hanako@example.jp>\n\n日付: 金曜日, 2026年8月28日 16:27\n\n\
+宛先: 佐藤 <s@example.jp>\n\nCC: 鈴木 <j@example.jp>\n\n件名: RE: 請求書\n\n引用の本文\n\n二段落目";
+    let s = split_reply(body);
+    assert_eq!(s.quotes.len(), 1);
+    assert_eq!(s.quotes[0].subject.as_deref(), Some("RE: 請求書"));
+    assert_eq!(s.quotes[0].body, "引用の本文\n\n二段落目");
+    assert_eq!(
+        frames(body),
+        vec![(
+            some("松本 花子 <hanako@example.jp>"),
+            some("金曜日, 2026年8月28日 16:27")
+        )]
+    );
+}
+
+/// 英語の Outlook の形で、行頭に空白が付き、1 行おきに並ぶ見出し。
+#[test]
+fn reads_indented_english_header_with_blank_lines() {
+    let body = "Thanks.\n\n  From: Hanako Yamada <hanako@example.com>\n\n  Sent: Friday, August 28, 2026 4:27 PM\n\n\
+  To: Ichiro Sato <ichiro@example.com>\n\n  Subject: RE: invoice\n\n  Please find the invoice.";
+    let s = split_reply(body);
+    assert_eq!(s.clean, "Thanks.");
+    assert_eq!(s.quotes.len(), 1);
+    assert_eq!(s.quotes[0].subject.as_deref(), Some("RE: invoice"));
+    assert_eq!(s.quotes[0].body, "Please find the invoice.");
+    assert_eq!(
+        frames(body),
+        vec![(
+            some("Hanako Yamada <hanako@example.com>"),
+            some("Friday, August 28, 2026 4:27 PM")
+        )]
+    );
+}
+
+/// 空行を挟んだ連なりの中で、同じ種類の項目（2 通目の "差出人:"）が来たら、そこは次の 1 通。
+#[test]
+fn blank_separated_header_stops_at_next_message_header() {
+    let body = "本文\n\n差出人: 松本 <m@example.jp>\n\n日付: 2026年8月28日 16:27\n\n\
+差出人: 佐藤 <s@example.jp>\n\n日付: 2026年8月27日 10:00\n\n最初の文";
+    let s = split_reply(body);
+    assert_eq!(s.quotes.len(), 2);
+    assert_eq!(
+        frames(body),
+        vec![
+            (some("松本 <m@example.jp>"), some("2026年8月28日 16:27")),
+            (some("佐藤 <s@example.jp>"), some("2026年8月27日 10:00")),
+        ]
+    );
+    assert_eq!(s.quotes[1].body, "最初の文");
+}

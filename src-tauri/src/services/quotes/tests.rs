@@ -66,9 +66,14 @@ Dec 26, 2025, 17:25 +0900, 伊佐　日和 <isa@matsudamariko.com>:\n\n\
         "松田様、伊佐様\n\n本年も引き続き宜しくお願い致します。\n\n末松"
     );
     assert_eq!(s.quotes.len(), 1);
+    // 日時が読めるので、日時と「名前 <addr>」を取る。
     assert_eq!(
         s.quotes[0].quoted_from.as_deref(),
-        Some("isa@matsudamariko.com")
+        Some("伊佐　日和 <isa@matsudamariko.com>")
+    );
+    assert_eq!(
+        s.quotes[0].quoted_at.as_deref(),
+        Some("Dec 26, 2025, 17:25 +0900")
     );
 }
 
@@ -157,7 +162,7 @@ fn reads_more_attribution_forms() {
         ),
         (
             "山田 花子 <hanako@example.com> 于2026年10月20日周二 11:21写道：",
-            Some("hanako@example.com"),
+            Some("山田 花子 <hanako@example.com>"),
         ),
         (
             "Le mar. 20 oct. 2026 à 11:21, Hanako <hanako@example.com> a écrit :",
@@ -197,6 +202,119 @@ fn reads_more_attribution_forms() {
     // アドレスの無い「写道：」は本文の一文とみなす。
     let body = "他这样写道：\n今天天气很好。";
     assert!(split_reply(body).quotes.is_empty());
+}
+
+/// 日時が先で差出人が続く属性行から、差出人と日時の両方を取る（vaio の集計で多かった形。名前は作り物）。
+#[test]
+fn reads_dates_of_attribution_lines() {
+    let forms = [
+        // Apple Mail（月違い・午前午後・24 時間）
+        (
+            "Sep 9, 2026, 9:09 AM +0900, 山田 花子 <hanako@example.com>:",
+            "山田 花子 <hanako@example.com>",
+            "Sep 9, 2026, 9:09 AM +0900",
+        ),
+        (
+            "Jun 3, 2026, 4:12 PM +0900, hanako@example.com:",
+            "hanako@example.com",
+            "Jun 3, 2026, 4:12 PM +0900",
+        ),
+        (
+            "Jun 3, 2026, 4:12 PM +0900, hanako@example.com <mailto:hanako@example.com> :",
+            "hanako@example.com <mailto:hanako@example.com>",
+            "Jun 3, 2026, 4:12 PM +0900",
+        ),
+        (
+            "Dec 26, 2025, 17:25 +0900, 山田 花子 <hanako@example.com>:",
+            "山田 花子 <hanako@example.com>",
+            "Dec 26, 2025, 17:25 +0900",
+        ),
+        // Gmail 日本語版
+        (
+            "2026年10月2日(金) 17:55 山田 花子 <hanako@example.com>:",
+            "山田 花子 <hanako@example.com>",
+            "2026年10月2日(金) 17:55",
+        ),
+        (
+            "2026年10月2日(金) 午後5:55 山田 花子 <hanako@example.com>:",
+            "山田 花子 <hanako@example.com>",
+            "2026年10月2日(金) 午後5:55",
+        ),
+        // 全角コロン
+        (
+            "2026年10月2日 17:55:00 hanako@example.com：",
+            "hanako@example.com",
+            "2026年10月2日 17:55:00",
+        ),
+        // 「に」の形
+        (
+            "2026/10/2 12:10:00 に hanako@example.com 山田 花子:",
+            "hanako@example.com 山田 花子",
+            "2026/10/2 12:10:00",
+        ),
+        // 中国語
+        (
+            "在 2026-10-02 12:10:00，\"hanako@example.com\" <hanako@example.com> 写道：",
+            "\"hanako@example.com\" <hanako@example.com>",
+            "2026-10-02 12:10:00",
+        ),
+        (
+            "山田 花子 <hanako@example.com> 于2026年10月20日周二 11:21写道：",
+            "山田 花子 <hanako@example.com>",
+            "2026年10月20日周二 11:21",
+        ),
+        // Gmail 英語版（日付が数字）
+        (
+            "On 2026/10/02 12:10, 山田 花子 wrote:",
+            "山田 花子",
+            "2026/10/02 12:10",
+        ),
+        // iPhone（読点の前後の空白・カンマ・名前なし）
+        (
+            "2026/10/02 12:10、山田 花子 <hanako@example.com>のメール:",
+            "山田 花子 <hanako@example.com>",
+            "2026/10/02 12:10",
+        ),
+        (
+            "2026/10/02 12:10 、 山田 花子 <hanako@example.com> のメール:",
+            "山田 花子 <hanako@example.com>",
+            "2026/10/02 12:10",
+        ),
+        (
+            "2026/10/02 12:10, 山田 花子 <hanako@example.com>のメール:",
+            "山田 花子 <hanako@example.com>",
+            "2026/10/02 12:10",
+        ),
+        (
+            "2026/10/02 12:10、<hanako@example.com>のメール:",
+            "<hanako@example.com>",
+            "2026/10/02 12:10",
+        ),
+    ];
+    for (attr, from, at) in forms {
+        let s = split_reply(&format!("了解です。\n\n{attr}\n\n> 図面を送ります。"));
+        assert_eq!(s.clean, "了解です。", "{attr:?}");
+        assert_eq!(s.quotes.len(), 1, "{attr:?}");
+        assert_eq!(s.quotes[0].quoted_from.as_deref(), Some(from), "{attr:?}");
+        assert_eq!(s.quotes[0].quoted_at.as_deref(), Some(at), "{attr:?}");
+        assert!(when::parse_quoted_time(at).is_some(), "{attr:?}");
+    }
+}
+
+/// 日時を取るのは、日時として読めて差出人にアドレスがあるときだけ（本文の時刻入りの一文では日時を取らない）。
+#[test]
+fn does_not_take_dates_from_body_sentences() {
+    // アドレスが無い: 本文のまま。
+    let body = "了解です。\n2026年10月2日(金) 17:55 に伺います。\n以上";
+    assert!(split_reply(body).quotes.is_empty());
+    // 日時が読めない Apple Mail の形は、これまでどおり差出人だけ。
+    let s = split_reply("了解です。\n\nyesterday, 山田 花子 <hanako@example.com>:\n> 図面");
+    assert_eq!(s.quotes.len(), 1);
+    assert_eq!(
+        s.quotes[0].quoted_from.as_deref(),
+        Some("hanako@example.com")
+    );
+    assert_eq!(s.quotes[0].quoted_at, None);
 }
 
 #[test]

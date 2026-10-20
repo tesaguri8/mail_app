@@ -39,12 +39,22 @@ pub(super) fn parse_attribution(line: &str) -> Option<(Option<String>, Option<St
         return Some((none_if_empty(inner.trim()), None));
     }
 
-    // 中国語の "… <addr> 于 2026年10月20日 11:21 写道:" / フランス語の "Le …, Name <addr> a écrit :"。
-    // 本文の一文と紛れないよう、アドレスを含む行だけ。
-    if l.contains('@')
-        && (l.ends_with("写道:") || lower.ends_with("a écrit:") || lower.ends_with("a écrit :"))
-    {
+    // 中国語の "在 2026-10-02 12:10:00，"名前" <addr> 写道:" / "名前 <addr> 于 2026年10月20日 11:21 写道:" /
+    // フランス語の "Le …, Name <addr> a écrit :"。本文の一文と紛れないよう、アドレスを含む行だけ。
+    if l.contains('@') && l.ends_with("写道:") {
+        return Some(chinese_attribution(l).unwrap_or((extract_angle_addr(l), None)));
+    }
+    if l.contains('@') && (lower.ends_with("a écrit:") || lower.ends_with("a écrit :")) {
         return Some((extract_angle_addr(l), None));
+    }
+
+    // 日時が先で差出人が続く属性行。日時は `when::parse_quoted_time` で読めるときだけ取る。
+    // - Apple Mail の "Sep 9, 2026, 9:09 AM +0900, 名前 <addr>:" / iPhone の
+    //   "2026/10/02 12:10、名前 <addr>のメール:"（日時と差出人を読点・カンマで区切る）
+    // - Gmail 日本語版の "2026年10月2日(金) 17:55 名前 <addr>:" / "2026年10月2日 17:55:00 addr：" /
+    //   "2026/10/2 12:10:00 に addr 名前:"（時刻の後に空白で差出人が続く）
+    if let Some(found) = date_then_sender(l).or_else(|| time_then_sender(l)) {
+        return Some(found);
     }
 
     // Apple Mail / iOS メール系の属性行: 行末が「名前 <addr>:」（日付＋差出人を 1 行に含む）。
@@ -52,6 +62,7 @@ pub(super) fn parse_attribution(line: &str) -> Option<(Option<String>, Option<St
     //     "Nov 17, 2025, 1:22 PM +0900, 名城楓 <nashiro@matsudamariko.com>:"
     // "On … wrote:" でも西暦始まりでもないため既存規則では拾えない。山括弧内アドレス＋末尾コロンを
     // 手がかりに属性行とみなす（本文行が "<addr>:" で終わることはまず無く、誤検知は小さい）。
+    // 日時の読める形は上の `date_then_sender` で読む。ここに来るのは日時の読めない形。
     if ends_with_angle_addr_colon(l) {
         return Some((extract_angle_addr(l), None));
     }
@@ -60,10 +71,6 @@ pub(super) fn parse_attribution(line: &str) -> Option<(Option<String>, Option<St
     // 誤検知抑制: 「〜書きました:」で終わる本文の一文（例: 会議録を彼は書きました:）で誤って
     // 切らないよう、属性行の裏付け（送信元アドレス @ か 4 桁の西暦）を要求する。
     // メールクライアントの属性行はほぼ必ず日付か差出人アドレスを含むため、これで区別できる。
-    // iPhone などの "2026/10/02 12:10、名前 <addr> のメール:"（日付が先・読点で区切る）。日時も読む。
-    if let Some(found) = date_first_attribution(l) {
-        return Some(found);
-    }
     // "<名前> <addr> のメール:"（Thunderbird 日本語版）。
     if (l.ends_with("書きました:") || l.ends_with("wrote:") || l.ends_with("のメール:"))
         && line_has_date_or_email(l)
@@ -97,22 +104,104 @@ pub(super) fn parse_attribution(line: &str) -> Option<(Option<String>, Option<St
     None
 }
 
-/// 日付が先で読点の後に差出人が続く属性行（iPhone の "2026/10/02 12:10、名前 <addr> のメール:"）を
-/// (差出人, 日時) に読む。行頭が日時として読めて、読点の後ろにアドレスがあるときだけ
-/// （無ければ、従来の「西暦で始まりコロンで終わる行」として読む）。`l` は行末のコロンを半角にそろえたもの。
-fn date_first_attribution(l: &str) -> Option<(Option<String>, Option<String>)> {
-    let head = l.strip_suffix(':')?;
-    let (at, who) = head.split_once(['、', '，'])?;
-    when::parse_quoted_time(at.trim())?;
-    if !who.contains('@') {
+/// 差出人の後ろに付く決まり文句（"のメール" / "さんは書きました" / "wrote" 等）を外す。
+fn strip_sender_suffix(who: &str) -> &str {
+    [
+        "のメール",
+        "さんは書きました",
+        "さんが書きました",
+        "が書きました",
+        "書きました",
+        "wrote",
+    ]
+    .iter()
+    .fold(who.trim(), |w, suffix| {
+        w.strip_suffix(suffix).unwrap_or(w).trim_end()
+    })
+}
+
+/// 日時の後に読点・カンマで差出人が続く属性行（Apple Mail の "Sep 9, 2026, 9:09 AM +0900, 名前 <addr>:" /
+/// iPhone の "2026/10/02 12:10、名前 <addr>のメール:"）を (差出人, 日時) に読む。
+/// 区切りは前から順に試し、前半が日時として読めて、後半にアドレスがある最初の位置で分ける
+/// （"Sep 9" / "Sep 9, 2026" はまだ日時として読めないので、時刻まで含んだ位置で分かれる）。
+/// `l` は行末のコロンを半角にそろえたもの。
+fn date_then_sender(l: &str) -> Option<(Option<String>, Option<String>)> {
+    let head = l.strip_suffix(':')?.trim_end();
+    if !head.contains('@') {
         return None;
     }
-    let who = ["のメール", "が書きました", "書きました", "wrote"]
-        .iter()
-        .fold(who.trim(), |w, suffix| {
-            w.strip_suffix(suffix).unwrap_or(w).trim_end()
-        });
-    Some((none_if_empty(who), none_if_empty(at)))
+    head.char_indices()
+        .filter(|(_, c)| matches!(c, ',' | '、' | '，'))
+        .find_map(|(i, c)| {
+            let (at, who) = (head[..i].trim(), head[i + c.len_utf8()..].trim());
+            (who.contains('@') && when::parse_quoted_time(at).is_some()).then_some((at, who))
+        })
+        .map(|(at, who)| (none_if_empty(strip_sender_suffix(who)), none_if_empty(at)))
+}
+
+/// 時刻の後ろに続いてよい字句（午前午後・時差・時間帯の略号）か。
+fn is_time_suffix(tok: &str) -> bool {
+    let t = tok.trim_matches(['(', ')', '（', '）']);
+    let offset = t
+        .strip_prefix(['+', '-'])
+        .is_some_and(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit() || c == ':'));
+    offset
+        || matches!(
+            t.to_ascii_lowercase().as_str(),
+            "am" | "pm" | "a.m." | "p.m." | "jst" | "gmt" | "utc"
+        )
+}
+
+/// 時刻の字句か（"17:55" / "12:10:00" / "午後5:55"）。
+fn is_clock_token(tok: &str) -> bool {
+    let t = tok.trim_start_matches("午前").trim_start_matches("午後");
+    t.contains(':')
+        && t.split(':')
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// 時刻の後に空白で差出人が続く属性行（Gmail 日本語版の "2026年10月2日(金) 17:55 名前 <addr>:" /
+/// "2026年10月2日 17:55:00 addr:" / "2026/10/2 12:10:00 に addr 名前:"）を (差出人, 日時) に読む。
+/// 日時は最初の時刻の字句（と、続く午前午後・時差）まで。日時として読めて、残りにアドレスがあるときだけ。
+fn time_then_sender(l: &str) -> Option<(Option<String>, Option<String>)> {
+    let head = l.strip_suffix(':')?.trim_end();
+    if !head.contains('@') {
+        return None;
+    }
+    let mut end: Option<usize> = None;
+    for tok in head.split_whitespace() {
+        // 字句の終わりの位置（`head` の中のバイト位置）。
+        let tok_end = tok.as_ptr() as usize - head.as_ptr() as usize + tok.len();
+        match end {
+            None if is_clock_token(tok) => end = Some(tok_end),
+            Some(_) if is_time_suffix(tok) => end = Some(tok_end),
+            Some(_) => break,
+            None => {}
+        }
+    }
+    let end = end?;
+    let at = head[..end].trim();
+    when::parse_quoted_time(at)?;
+    let who = head[end..].trim();
+    let who = who.strip_prefix("に ").unwrap_or(who);
+    who.contains('@')
+        .then(|| (none_if_empty(strip_sender_suffix(who)), none_if_empty(at)))
+}
+
+/// 中国語の属性行（"在 2026-10-02 12:10:00，"名前" <addr> 写道:" / "名前 <addr> 于 2026年10月20日 11:21 写道:"）を
+/// (差出人, 日時) に読む。日時が読めなければ None（呼び出し側は差出人だけを取る）。
+fn chinese_attribution(l: &str) -> Option<(Option<String>, Option<String>)> {
+    let head = l.strip_suffix("写道:")?.trim();
+    let (at, who) = match head.strip_prefix('在') {
+        Some(rest) => rest.split_once(['，', ','])?,
+        None => {
+            let (who, at) = head.rsplit_once('于')?;
+            (at, who)
+        }
+    };
+    let at = at.trim();
+    when::parse_quoted_time(at)?;
+    Some((none_if_empty(who.trim()), none_if_empty(at)))
 }
 
 /// 属性行の裏付け（送信元アドレス @ か 4 桁連続の西暦）を含むか。

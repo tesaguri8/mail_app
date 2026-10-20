@@ -104,6 +104,14 @@ describe('matchDates', () => {
     expect(hits[0].parsed).toEqual({ day: '2026-07-13', allDay: true });
   });
 
+  it('秒まである時刻は秒まで部品に含める（予定に足す時刻は HH:MM のまま）', () => {
+    // 「2026/10/14 12:50:57 に…」で「:57」が部品の外に残らないこと（属性行を写すと割れていた件）。
+    const hits = matchDates('2026/10/14 12:50:57 に yamada@example.jp さんが書きました:', BASE);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].raw).toBe('2026/10/14 12:50:57');
+    expect(hits[0].parsed).toEqual({ day: '2026-10-14', time: '12:50', allDay: false });
+  });
+
   it('数字だけの M/D は隣接数字ガードを維持（電話番号を拾わない）', () => {
     expect(matchDates('お電話は 03-1234-5678 まで', BASE)).toHaveLength(0);
   });

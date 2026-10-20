@@ -144,7 +144,7 @@ function EmailAdd({
     : t('mailbox.addContact');
 
   return (
-    <span className="group/email inline-flex items-center gap-0.5 align-baseline">
+    <span className="group/email">
       {onCompose ? (
         <button
           type="button"
@@ -161,14 +161,40 @@ function EmailAdd({
         onClick={handle}
         title={title}
         aria-label={title}
-        className="inline-flex h-4 items-center justify-center gap-0.5 rounded-full bg-white/10 px-1 text-white/60 opacity-0 transition-opacity hover:bg-sky-500/50 hover:text-white focus:opacity-100 focus:outline-none group-hover/email:opacity-100"
+        className={`${HOVER_ADD_BUTTON} group-hover/email:opacity-100`}
       >
-        {willEdit ? <Pencil size={11} /> : <Plus size={11} />}
-        {dup && <span className="text-[9px] font-semibold leading-none text-amber-300">{count}</span>}
+        {/* 重複件数は ::after で出す（文字にしないので、写したときに件数が混ざらない）。 */}
+        <span
+          data-count={dup ? count : undefined}
+          className={`${HOVER_ADD_PILL} ${
+            dup
+              ? 'after:ml-0.5 after:text-[9px] after:font-semibold after:text-amber-300 after:content-[attr(data-count)]'
+              : ''
+          }`}
+        >
+          {willEdit ? <Pencil size={11} /> : <Plus size={11} />}
+        </span>
       </button>
     </span>
   );
 }
+
+/**
+ * 本文中の日付・アドレスの横に、ホバー/フォーカスで現れる＋ボタン（の外枠）。
+ * - 幅 0 で右へはみ出して描く: 見えない間も幅を取らず（「12:50」と「:57」の間に隙間を作らない）、
+ *   現れても文字が左右に動かない
+ * - inline-flex にしない: flex の中身はブロック扱いになり、選んで写すと前後に改行が入る
+ *   （Chromium / WebView2 で確かめた）
+ */
+const HOVER_ADD_BUTTON =
+  'inline-block w-0 overflow-visible whitespace-nowrap align-middle opacity-0 transition-opacity focus:opacity-100 focus:outline-none';
+
+/**
+ * ＋ボタンの見た目（丸い枠）。後ろの文字に重なって出るので、背景は不透明にして手前に描く。
+ * 中身も inline-flex にしない（上と同じ理由）。
+ */
+const HOVER_ADD_PILL =
+  'relative z-10 ml-0.5 inline-block h-4 rounded-full bg-zinc-700 px-1 leading-4 text-white/80 shadow hover:bg-sky-600 hover:text-white [&>svg]:inline [&>svg]:align-[-1px]';
 
 /**
  * 本文中の日付＋（ホバー/フォーカスで現れる）カレンダー追加ボタン。
@@ -185,7 +211,7 @@ function DateAdd({
 }) {
   const { t } = useTranslation();
   return (
-    <span className="group/date inline-flex items-center gap-0.5 align-baseline">
+    <span className="group/date">
       <span>{raw}</span>
       <button
         type="button"
@@ -196,9 +222,11 @@ function DateAdd({
         }}
         title={t('cal.addFromDate')}
         aria-label={t('cal.addFromDate')}
-        className="inline-flex h-4 items-center justify-center rounded-full bg-white/10 px-1 text-white/60 opacity-0 transition-opacity hover:bg-sky-500/50 hover:text-white focus:opacity-100 focus:outline-none group-hover/date:opacity-100"
+        className={`${HOVER_ADD_BUTTON} group-hover/date:opacity-100`}
       >
-        <CalendarPlus size={11} />
+        <span className={HOVER_ADD_PILL}>
+          <CalendarPlus size={11} />
+        </span>
       </button>
     </span>
   );
@@ -256,10 +284,11 @@ function AddressLine({
   if (!a) return <>—</>;
   if (!onAdd) return <>{formatAddress(name, address)}</>;
   return (
-    <span className="inline-flex max-w-full items-center gap-1">
-      {n && <span className="truncate">{n} &lt;</span>}
+    // inline-flex にしない（選んで写すと名前・アドレス・「>」の間に改行が入る。HOVER_ADD_BUTTON）。
+    <span className="break-words">
+      {n && <>{n} &lt;</>}
       <EmailAdd email={a} name={n || null} onAdd={onAdd} onEdit={onEdit} onCompose={onCompose} />
-      {n && <span>&gt;</span>}
+      {n && <>&gt;</>}
     </span>
   );
 }

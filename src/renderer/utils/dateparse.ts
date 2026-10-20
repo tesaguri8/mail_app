@@ -33,9 +33,10 @@ const JP_YEAR = `(?:${D}{4}|${ERA}\\s*(?:${D}{1,2}|元))\\s*年`;
 // 日付本体: 「(YYYY|和暦)年M月D日(曜)」または「(YYYY/)M/D」。
 const JP_DATE = `(?:${JP_YEAR}\\s*)?${D}{1,2}\\s*月\\s*${D}{1,2}\\s*日(?:\\s*[（(][日月火水木金土][）)])?`;
 const NUM_DATE = `(?:${D}{4}${SEP})?${D}{1,2}${SEP}${D}{1,2}`;
-// 時刻（日付の直後に続くときだけ拾う）: 「HH:MM」「H時MM分」「午前/午後H時」など。
+// 時刻（日付の直後に続くときだけ拾う）: 「HH:MM」「HH:MM:SS」「H時MM分」「午前/午後H時」など。
+// 秒は部品の範囲に含めるだけで、予定に足す時刻（parseTime）は HH:MM のまま。
 const AMPM = '(?:午前|午後|AM|PM|am|pm)';
-const CLOCK = `${D}{1,2}\\s*:\\s*${D}{2}|${D}{1,2}\\s*時(?:\\s*${D}{1,2}\\s*分?)?`;
+const CLOCK = `${D}{1,2}\\s*:\\s*${D}{2}(?:\\s*:\\s*${D}{2})?|${D}{1,2}\\s*時(?:\\s*${D}{1,2}\\s*分?)?`;
 const TIME = `(?:\\s*(?:${AMPM}\\s*)?(?:${CLOCK}))`;
 
 const DATE_RE = new RegExp(`(?:${JP_DATE}|${NUM_DATE})(?:${TIME})?`, 'g');

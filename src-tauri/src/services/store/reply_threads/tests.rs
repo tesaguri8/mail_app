@@ -190,6 +190,10 @@ fn 控えに_message_id_が無い新規の送信への返信も同じスレッ�
     let view = store.thread_view(parent).unwrap().unwrap();
     let ids: Vec<i64> = view.messages.iter().map(|m| i64::from(m.id)).collect();
     assert_eq!(ids, vec![parent, inbox]);
+    // 一覧の件数も、写しを 1 通と数える（会話の表示と揃える）。
+    let list = store.list_threads(Some(1), "inbox", 10, 0).unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].message_count, 2);
 
     // 相手からの、その返信への返信も同じスレッドに続く。
     let next = put(
@@ -216,4 +220,54 @@ fn 控えに_message_id_が無い新規の送信への返信も同じスレッ�
 fn 親が無ければ_none() {
     let store = test_store();
     assert_eq!(store.reply_threading(999).unwrap(), None);
+}
+
+#[test]
+fn ずれてしまった返信は手がかりを足して再構築すると親のスレッドに戻る() {
+    let store = test_store();
+    let parent = put(
+        &store,
+        &mk(
+            None,
+            "sent",
+            "me@example.invalid",
+            "you@example.invalid",
+            1,
+            None,
+            None,
+        ),
+    );
+    // 0.1.0-alpha.34 で送った全員返信: ヘッダに親が無く、受信箱と送信済みの写しが別スレッドになった。
+    let reply = |folder| {
+        mk(
+            Some("old@example.invalid"),
+            folder,
+            "me@example.invalid",
+            "me@example.invalid",
+            2,
+            None,
+            None,
+        )
+    };
+    let sent = put(&store, &reply("sent"));
+    let inbox = put(&store, &reply("inbox"));
+    assert_ne!(thread_of(&store, sent), thread_of(&store, parent));
+
+    // 戻し方: 返信の Message-ID と親の行を手がかりに足し、アカウントを再構築する。
+    let parent_key: String = store
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT canonical_key FROM emails WHERE id = ?1",
+            params![parent],
+            |r| r.get(0),
+        )
+        .unwrap();
+    store
+        .put_thread_hint(1, "old@example.invalid", &parent_key)
+        .unwrap();
+    store.rebuild_threads(1).unwrap();
+    assert_eq!(thread_of(&store, sent), thread_of(&store, parent));
+    assert_eq!(thread_of(&store, inbox), thread_of(&store, parent));
 }

@@ -13,6 +13,10 @@ pub struct PurgeRef {
     pub message_id: String,
 }
 
+/// スレッドの件数で、同じメールの写しを 1 通と数えるための鍵（`emails t` の行に対する SQL 式）。
+/// Message-ID があればそれ、無ければ行ごとに別（会話ビューの `collapse_copies` と同じ基準）。
+const COPY_KEY: &str = "COALESCE(NULLIF(TRIM(t.message_id), ''), 'id:' || t.id)";
+
 /// メール挿入用（内部）。
 pub struct NewEmail {
     pub account_id: i64,
@@ -890,7 +894,8 @@ impl Store {
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = e.id AND COALESCE(a.kind, 'attachment') <> 'inline')) AS has_real,
                     e.to_addresses, {known_vip}, e.from_name, e.to_name, e.account_id,
                     CASE WHEN e.logical_thread_id IS NULL THEN 1
-                         ELSE (SELECT count(*) FROM emails t WHERE t.logical_thread_id = e.logical_thread_id)
+                         ELSE (SELECT count(DISTINCT {copy_key}) FROM emails t
+                               WHERE t.logical_thread_id = e.logical_thread_id)
                     END AS message_count,
                     {replied}
              FROM matched m JOIN emails e ON e.id = m.id
@@ -899,6 +904,7 @@ impl Store {
             known_vip = known_vip_cols("e.from_address"),
             replied = replied_col("e.from_address"),
             fp = folder_predicate(folder, "e.", "?2"),
+            copy_key = COPY_KEY,
         );
         let mut stmt = conn.prepare(&sql)?;
         let mut rows: Vec<MailSummary> = match account_id {
@@ -958,7 +964,7 @@ impl Store {
                      OR EXISTS(SELECT 1 FROM attachments a WHERE a.email_id = r.id AND COALESCE(a.kind,'attachment') <> 'inline')) AS has_real,
                     {known_vip},
                     CASE WHEN r.logical_thread_id IS NULL THEN 1
-                         ELSE (SELECT count(*) FROM emails t
+                         ELSE (SELECT count(DISTINCT {copy_key}) FROM emails t
                                WHERE t.logical_thread_id = r.logical_thread_id {mc_filter}) END AS msg_count,
                     CASE WHEN r.logical_thread_id IS NULL THEN (CASE WHEN r.is_read = 0 THEN 1 ELSE 0 END)
                          ELSE (SELECT count(*) FROM emails t INDEXED BY idx_emails_thread_folder
@@ -975,6 +981,8 @@ impl Store {
             fp_page = folder_predicate(folder, "", "?1"),
             fp_sub = folder_predicate(folder, "t.", "?1"),
             // 件数バッジ（msg_count）は会話ビューの表示内容に合わせる。下書きは常に数えない。
+            // 同じ Message-ID の写し（自分宛の受信箱と送信済み）は会話で 1 つにまとめるので 1 通と数える。
+            copy_key = COPY_KEY,
             // ゴミ箱は Trash フォルダ閲覧時のみ数える（それ以外の一覧では除外）。
             mc_filter = if folder == "trash" {
                 "AND t.folder <> 'drafts'"

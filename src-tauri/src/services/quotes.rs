@@ -22,6 +22,8 @@ pub struct QuoteBlock {
     pub subject: Option<String>,
     /// 見出しを除いた引用の本文（表示用で、保存はしない）。
     pub body: String,
+    /// 見出しも含めた、このブロックの全文（1 通として読めなかったとき、直前の枠に残す。表示用）。
+    pub text: String,
     /// 引用本文の正規化ハッシュ（同じ履歴を引いているかの照合キー）。
     pub fingerprint: String,
 }
@@ -42,20 +44,24 @@ fn parse_attribution(line: &str) -> Option<(Option<String>, Option<String>)> {
     if l.is_empty() {
         return None;
     }
+    // 行末の全角コロン（"wrote："）は半角にそろえて読む。
+    let owned;
+    let l = match l.strip_suffix('：') {
+        Some(head) => {
+            owned = format!("{head}:");
+            owned.as_str()
+        }
+        None => l,
+    };
 
     // 区切り系（差出人/時刻は行に無いことが多い）。
     // "-----Original Message-----" / "-----元のメッセージ-----" / Outlook の下線区切り。
-    let lower = l.to_lowercase();
-    if lower.contains("original message")
-        || lower.contains("forwarded message")
-        || l.contains("元のメッセージ")
-        || l.contains("転送メッセージ")
-        || l.starts_with("________________")
-    {
+    if header::is_separator_text(l) {
         return Some((None, None));
     }
 
     // 英語: "On <date>, <who> wrote:"（複数行に割れる場合もあるが、まず 1 行で拾う）。
+    let lower = l.to_lowercase();
     if lower.starts_with("on ") && lower.trim_end().ends_with("wrote:") {
         let inner = &l[3..l.len() - "wrote:".len()];
         // 最後のカンマで日付側 / 差出人側に分ける（"On Mon, 30 Jun 2026 10:00, Taro <t@e> wrote:"）。
@@ -65,6 +71,14 @@ fn parse_attribution(line: &str) -> Option<(Option<String>, Option<String>)> {
             return Some((none_if_empty(&from), none_if_empty(&at)));
         }
         return Some((none_if_empty(inner.trim()), None));
+    }
+
+    // 中国語の "… <addr> 于 2026年10月20日 11:21 写道:" / フランス語の "Le …, Name <addr> a écrit :"。
+    // 本文の一文と紛れないよう、アドレスを含む行だけ。
+    if l.contains('@')
+        && (l.ends_with("写道:") || lower.ends_with("a écrit:") || lower.ends_with("a écrit :"))
+    {
+        return Some((extract_angle_addr(l), None));
     }
 
     // Apple Mail / iOS メール系の属性行: 行末が「名前 <addr>:」（日付＋差出人を 1 行に含む）。
@@ -80,15 +94,20 @@ fn parse_attribution(line: &str) -> Option<(Option<String>, Option<String>)> {
     // 誤検知抑制: 「〜書きました:」で終わる本文の一文（例: 会議録を彼は書きました:）で誤って
     // 切らないよう、属性行の裏付け（送信元アドレス @ か 4 桁の西暦）を要求する。
     // メールクライアントの属性行はほぼ必ず日付か差出人アドレスを含むため、これで区別できる。
-    if (l.ends_with("書きました:") || l.ends_with("書きました：") || l.ends_with("wrote:"))
+    // iPhone などの "2026/10/02 12:10、名前 <addr> のメール:"（日付が先・読点で区切る）。日時も読む。
+    if let Some(found) = date_first_attribution(l) {
+        return Some(found);
+    }
+    // "<名前> <addr> のメール:"（Thunderbird 日本語版）。
+    if (l.ends_with("書きました:") || l.ends_with("wrote:") || l.ends_with("のメール:"))
         && line_has_date_or_email(l)
     {
-        // "<誰か>さんは…書きました:" の "さんは" より前を差出人とみなす。
+        // "<誰か>さんは…書きました:" の "さんは" より前を差出人とみなす。無ければ <addr>。
         if let Some(pos) = l.find("さんは") {
             let from = l[..pos].trim().to_string();
             return Some((none_if_empty(&from), None));
         }
-        return Some((None, None));
+        return Some((extract_angle_addr(l), None));
     }
     // 日付始まりの日本語属性行（"2026年…日 … <addr>:"）。行頭が西暦で末尾がコロン。
     if l.ends_with(':') || l.ends_with('：') {
@@ -110,6 +129,24 @@ fn parse_attribution(line: &str) -> Option<(Option<String>, Option<String>)> {
     }
 
     None
+}
+
+/// 日付が先で読点の後に差出人が続く属性行（iPhone の "2026/10/02 12:10、名前 <addr> のメール:"）を
+/// (差出人, 日時) に読む。行頭が日時として読めて、読点の後ろにアドレスがあるときだけ
+/// （無ければ、従来の「西暦で始まりコロンで終わる行」として読む）。`l` は行末のコロンを半角にそろえたもの。
+fn date_first_attribution(l: &str) -> Option<(Option<String>, Option<String>)> {
+    let head = l.strip_suffix(':')?;
+    let (at, who) = head.split_once(['、', '，'])?;
+    when::parse_quoted_time(at.trim())?;
+    if !who.contains('@') {
+        return None;
+    }
+    let who = ["のメール", "が書きました", "書きました", "wrote"]
+        .iter()
+        .fold(who.trim(), |w, suffix| {
+            w.strip_suffix(suffix).unwrap_or(w).trim_end()
+        });
+    Some((none_if_empty(who), none_if_empty(at)))
 }
 
 /// 属性行の裏付け（送信元アドレス @ か 4 桁連続の西暦）を含むか。
@@ -261,7 +298,21 @@ pub fn split_reply(plain: &str) -> Split {
             break;
         }
     }
-    //    b) 属性行が無いときだけ、最初の `>` 引用行を引用開始とする（属性行なしで下部に
+    //       "From:" の見出しで切ったときは、その上に続く見出しの行（"Date:" が先に来る書き方）も含める。
+    if let Some(qs) = quote_start.filter(|&qs| header::is_from_line(lines[qs])) {
+        let head = lines[..qs]
+            .iter()
+            .rev()
+            .take_while(|l| header::is_header_line(l))
+            .count();
+        quote_start = Some(qs - head);
+    }
+    //    b) 属性行が無ければ、見出しが近くに固まって始まる行（予備の判定。
+    //       `header::starts_header_cluster`）。
+    if quote_start.is_none() {
+        quote_start = (0..lines.len()).find(|&i| header::starts_header_cluster(&lines, i));
+    }
+    //    c) どちらも無いときだけ、最初の `>` 引用行を引用開始とする（属性行なしで下部に
     //       いきなり `>` 引用が来る返信のため。従来動作）。
     if quote_start.is_none() {
         for (i, line) in lines.iter().enumerate() {
@@ -308,18 +359,18 @@ fn starts_next_block(region: &[&str], j: usize) -> bool {
     if header::is_separator(region[j]) || inner_attribution(region[j]).is_some() {
         return true;
     }
-    if !header::is_from_line(region[j]) {
-        return false;
-    }
     let prev = region[..j].iter().rev().find(|l| !l.trim().is_empty());
     if prev.is_some_and(|l| header::is_separator(l)) {
         return false;
     }
     // 見出しらしさの裏付け: 続く数行に日時の項目がある。
-    region[j + 1..]
-        .iter()
-        .take(4)
-        .any(|l| header::is_date_line(l))
+    let known = header::is_from_line(region[j])
+        && region[j + 1..]
+            .iter()
+            .take(4)
+            .any(|l| header::is_date_line(l));
+    // 既知の形で読めなければ、見出しが近くに固まっているかで見る（予備の判定）。
+    known || header::starts_header_cluster(region, j)
 }
 
 /// 行の先頭の共通の字下げを外して 1 つの文字列にする（字下げされた転送の中の 1 通を、
@@ -357,9 +408,19 @@ fn quote_blocks(
     attribution: Option<(Option<String>, Option<String>)>,
 ) -> Vec<QuoteBlock> {
     // 先頭のブロックが属性行（"On … wrote:" 等）から始まるなら、その行は見出しとして飛ばす。
-    let skip_attribution_line = attribution.is_some() && !header::is_from_line(region[0]);
+    let skip_attribution_line = attribution.is_some() && !header::is_header_line(region[0]);
+    // 次の 1 通の始まりは、いまの 1 通の見出しより後ろでだけ探す（項目名と値が別の行にある
+    // 見出しでは "From:" の後に "To:" 等が続き、区切りの無い見出しと見分けられないため）。
     let mut starts: Vec<usize> = vec![0];
-    starts.extend((1..region.len()).filter(|&j| starts_next_block(region, j)));
+    let mut header_end = header::parse_header(region, skip_attribution_line).body_start;
+    for j in 1..region.len() {
+        if j < header_end || !starts_next_block(region, j) {
+            continue;
+        }
+        starts.push(j);
+        let skip = inner_attribution(region[j]).is_some();
+        header_end = j + header::parse_header(&region[j..], skip).body_start;
+    }
     let mut first = Some(attribution.unwrap_or((None, None)));
     starts
         .iter()
@@ -385,6 +446,7 @@ fn quote_blocks(
                 quoted_at: h.at.or(attr_at),
                 subject: h.subject,
                 body: dedent(&block[h.body_start.min(block.len())..]),
+                text: dedent(block),
                 fingerprint: fingerprint(&quoted_text),
             }
         })
@@ -439,10 +501,8 @@ pub fn looks_like_attribution(line: &str) -> bool {
         || l.ends_with("書きました：")
         || lower.ends_with("wrote:")
         || ends_with_angle_addr_colon(l)
-        || lower.contains("original message")
-        || lower.contains("forwarded message")
-        || l.contains("元のメッセージ")
-        || l.contains("転送メッセージ")
+        || l.ends_with("のメール:")
+        || header::is_separator_text(l)
         || header::is_from_line(l)
 }
 
@@ -894,6 +954,261 @@ To: <tanaka@example.jp>\n\
         assert!(s.quotes[0].body.contains("彼は書きました:"));
     }
 
+    /// Outlook の見出しの間に、Thunderbird の表の形の転送（項目名と値が別の行）が挟まっても、
+    /// 1 通ずつに分け、差出人・日時を読む（名前・宛先・URL は作り物）。
+    #[test]
+    fn splits_thunderbird_table_forward_between_outlook_headers() {
+        let body = "前田様\n\n転送します。\n\n\
+From: 仲村 亮 <ryo@shinko.example.jp> \r\n\
+Sent: Tuesday, October 20, 2026 11:36 AM\r\n\
+To: Mak <mak@example.jp>\r\n\
+Subject: Fwd: 図面 その3\r\n\
+\r\n\
+前田様\r\n\r\n下記の通りです。\r\n\r\n新興　仲村\r\n\r\n\r\n\
+-------- Forwarded Message -------- \r\n\r\n\r\n\
+Subject: \r\n\r\nRE: Fwd: 図面 その3\r\n\r\n\r\n\
+Date: \r\n\r\nTue, 20 Oct 2026 11:21:08 +0900\r\n\r\n\r\n\
+From: \r\n\r\n木材商事 山田花子  <mailto:hanako@mokuzai.example.jp> <hanako@mokuzai.example.jp>\r\n\r\n\r\n\
+To: \r\n\r\n'仲村 亮'  <mailto:ryo@shinko.example.jp> <ryo@shinko.example.jp>\r\n\r\n\r\n\r\n\
+仲村様\r\n\r\n図面はこちらから取ってください。\r\nhttps://files.example.jp/d/abc123\r\n\r\n\
+From: 仲村 亮 <ryo@shinko.example.jp> \r\n\
+Sent: Monday, October 19, 2026 6:46 AM\r\n\
+To: 木材商事 山田花子 <hanako@mokuzai.example.jp>\r\n\
+Subject: Fwd: 図面 その3\r\n\
+\r\n\
+山田様\r\nお願いします。";
+        let s = split_reply(body);
+        assert_eq!(s.clean, "前田様\n\n転送します。");
+        assert_eq!(s.quotes.len(), 3);
+        let tb = &s.quotes[1];
+        assert_eq!(
+            tb.quoted_from.as_deref(),
+            Some(
+                "木材商事 山田花子  <mailto:hanako@mokuzai.example.jp> <hanako@mokuzai.example.jp>"
+            )
+        );
+        assert_eq!(
+            tb.quoted_at.as_deref(),
+            Some("Tue, 20 Oct 2026 11:21:08 +0900")
+        );
+        assert_eq!(tb.subject.as_deref(), Some("RE: Fwd: 図面 その3"));
+        assert!(tb.body.starts_with("仲村様"), "{:?}", tb.body);
+        assert!(tb.body.contains("https://files.example.jp/d/abc123"));
+        // 直前の 1 通は自分の署名で終わり、転送の中身を抱えない。
+        assert!(
+            s.quotes[0].body.ends_with("新興　仲村"),
+            "{:?}",
+            s.quotes[0].body
+        );
+        assert_eq!(
+            s.quotes[2].quoted_at.as_deref(),
+            Some("Monday, October 19, 2026 6:46 AM")
+        );
+    }
+
+    /// "-------- Original Message --------" の表の形も同じに読む。
+    #[test]
+    fn splits_thunderbird_table_original_message() {
+        let body = "了解です。\n\n-------- Original Message --------\n\nSubject:\n\n見積もり\n\n\
+Date:\n\nFri, 9 Oct 2026 15:29:01 +0900\n\nFrom:\n\n鈴木 次郎 <jiro@example.com>\n\n\
+To:\n\n佐藤 一郎 <ichiro@example.jp>\n\n\n佐藤様\n見積もりを送ります。";
+        let s = split_reply(body);
+        assert_eq!(s.clean, "了解です。");
+        assert_eq!(s.quotes.len(), 1);
+        let q = &s.quotes[0];
+        assert_eq!(
+            q.quoted_from.as_deref(),
+            Some("鈴木 次郎 <jiro@example.com>")
+        );
+        assert_eq!(
+            q.quoted_at.as_deref(),
+            Some("Fri, 9 Oct 2026 15:29:01 +0900")
+        );
+        assert_eq!(q.body, "佐藤様\n見積もりを送ります。");
+    }
+
+    /// 既知の形に当たらない見出し（"Date:" から始まる・区切りの無い表の形）も、見出しが近くに
+    /// 固まっていれば 1 通の区切りとして読む（予備の判定。名前・宛先は作り物）。
+    #[test]
+    fn splits_at_header_cluster_of_unknown_form() {
+        let body = "了解です。\n\n\
+Date: Fri, 9 Oct 2026 15:29:01 +0900\n\
+From: 鈴木 次郎 <jiro@example.com>\n\
+Subject: 見積もり\n\
+\n\
+佐藤様\n見積もりを送ります。\n\n\
+Subject:\n\n見積もりの前の件\n\n\
+Date:\n\n2026年10月8日(木) 9:05\n\n\
+From:\n\n佐藤 一郎 <ichiro@example.jp>\n\n\n\
+鈴木様\nお願いします。";
+        let s = split_reply(body);
+        assert_eq!(s.clean, "了解です。");
+        assert_eq!(
+            s.quotes.len(),
+            2,
+            "{:?}",
+            s.quotes.iter().map(|q| &q.body).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            s.quotes[0].quoted_from.as_deref(),
+            Some("鈴木 次郎 <jiro@example.com>")
+        );
+        assert_eq!(
+            s.quotes[0].quoted_at.as_deref(),
+            Some("Fri, 9 Oct 2026 15:29:01 +0900")
+        );
+        assert_eq!(s.quotes[0].body, "佐藤様\n見積もりを送ります。");
+        assert_eq!(
+            s.quotes[1].quoted_from.as_deref(),
+            Some("佐藤 一郎 <ichiro@example.jp>")
+        );
+        assert_eq!(
+            s.quotes[1].quoted_at.as_deref(),
+            Some("2026年10月8日(木) 9:05")
+        );
+        assert_eq!(s.quotes[1].body, "鈴木様\nお願いします。");
+    }
+
+    /// 本文の申込書・見積の「件名:」「日付:」「宛先:」では区切らない（差出人が無い）。
+    #[test]
+    fn form_fields_in_body_are_not_a_header_cluster() {
+        let forms = [
+            "申込書を送ります。\n\n件名: 夏祭りの出店\n日付: 2026年8月1日 10:00\n担当: 佐藤\n\nよろしくお願いします。",
+            "件名: 夏祭りの出店 日付: 2026年8月1日 10:00\n\nよろしくお願いします。",
+            "見積です。\n\n件名: 見積\n日付: 2026年8月1日 10:00\n宛先: 鈴木 <suzuki@example.jp>\n\n合計 3 万円",
+        ];
+        for body in forms {
+            let s = split_reply(body);
+            assert!(s.quotes.is_empty(), "{body:?}");
+            assert_eq!(s.clean, body.trim());
+        }
+    }
+
+    /// 本文の後に、様々な書き方の 1 通が続く本文（見出しは作り物）。
+    fn outlook_then(second: &str) -> String {
+        format!(
+            "了解です。\n\n\
+-----Original Message-----\n\
+From: 高橋 花子 <takahashi@example.com>\n\
+Sent: Friday, October 2, 2026 5:55 PM\n\
+To: 田中 一郎 <tanaka@example.jp>\n\
+Subject: RE: 図面\n\
+\n\
+田中様\n修正しました。\n\n{second}\n\n2 通目の本文です。"
+        )
+    }
+
+    /// 見出しの順番が違っても（From が先頭でなくても）1 通に分けて差出人・日時・件名を読む。
+    #[test]
+    fn reads_headers_in_any_order() {
+        let forms = [
+            // Thunderbird の転送の見出し（値が同じ行）。
+            "Subject: 図面\nDate: Fri, 2 Oct 2026 14:50:00 +0900\nFrom: 鈴木 次郎 <jiro@example.com>\nTo: 高橋 花子 <takahashi@example.com>",
+            "From: 鈴木 次郎 <jiro@example.com>\nTo: 高橋 花子 <takahashi@example.com>\nDate: Fri, 2 Oct 2026 14:50:00 +0900\nSubject: 図面",
+            "差出人: 鈴木 次郎 <jiro@example.com>\n件名: 図面\n日付: Fri, 2 Oct 2026 14:50:00 +0900\n宛先: 高橋 花子 <takahashi@example.com>",
+        ];
+        for second in forms {
+            let s = split_reply(&outlook_then(second));
+            assert_eq!(s.clean, "了解です。", "{second:?}");
+            assert_eq!(s.quotes.len(), 2, "{second:?}");
+            let q = &s.quotes[1];
+            assert_eq!(
+                q.quoted_from.as_deref(),
+                Some("鈴木 次郎 <jiro@example.com>"),
+                "{second:?}"
+            );
+            assert_eq!(
+                q.quoted_at.as_deref(),
+                Some("Fri, 2 Oct 2026 14:50:00 +0900"),
+                "{second:?}"
+            );
+            assert_eq!(q.subject.as_deref(), Some("図面"), "{second:?}");
+            assert_eq!(q.body, "2 通目の本文です。", "{second:?}");
+            assert_eq!(s.quotes[0].body, "田中様\n修正しました。", "{second:?}");
+        }
+        // 本文の始まりでも、"From:" の上に続く見出しから引用とする。
+        let s = split_reply(&format!("了解です。\n\n{}\n\n本文", forms[0]));
+        assert_eq!(s.clean, "了解です。");
+        assert_eq!(s.quotes.len(), 1);
+        assert_eq!(s.quotes[0].subject.as_deref(), Some("図面"));
+    }
+
+    /// 日本語版・中国語版・フランス語版の属性行と、全角コロンの "wrote："（名前は作り物）。
+    #[test]
+    fn reads_more_attribution_forms() {
+        let forms = [
+            (
+                "山田 花子 <hanako@example.com> のメール:",
+                Some("hanako@example.com"),
+            ),
+            (
+                "2026/10/20 11:21、山田 花子 <hanako@example.com> のメール:",
+                Some("山田 花子 <hanako@example.com>"),
+            ),
+            (
+                "山田 花子 <hanako@example.com> 于2026年10月20日周二 11:21写道：",
+                Some("hanako@example.com"),
+            ),
+            (
+                "Le mar. 20 oct. 2026 à 11:21, Hanako <hanako@example.com> a écrit :",
+                Some("hanako@example.com"),
+            ),
+            (
+                "Hanako <hanako@example.com> wrote：",
+                Some("hanako@example.com"),
+            ),
+        ];
+        for (attr, from) in forms {
+            let s = split_reply(&format!("了解です。\n\n{attr}\n> 図面を送ります。"));
+            assert_eq!(s.clean, "了解です。", "{attr:?}");
+            assert_eq!(s.quotes.len(), 1, "{attr:?}");
+            assert_eq!(s.quotes[0].quoted_from.as_deref(), from, "{attr:?}");
+        }
+        let s = split_reply(
+            "了解です。\n\nOn Mon, 30 Jun 2026 10:00, Taro <t@example.com> wrote：\n> hello",
+        );
+        assert_eq!(
+            s.quotes[0].quoted_from.as_deref(),
+            Some("Taro <t@example.com>")
+        );
+        assert_eq!(
+            s.quotes[0].quoted_at.as_deref(),
+            Some("Mon, 30 Jun 2026 10:00")
+        );
+        // 日付が先の iPhone の形は、日時も読む（読点の後ろを差出人に）。
+        let s = split_reply(
+            "了解です。\n\n2026/10/02 12:10、佐藤 一郎 <ichiro@example.jp> のメール:\n\n> 高橋様",
+        );
+        assert_eq!(
+            s.quotes[0].quoted_from.as_deref(),
+            Some("佐藤 一郎 <ichiro@example.jp>")
+        );
+        assert_eq!(s.quotes[0].quoted_at.as_deref(), Some("2026/10/02 12:10"));
+        // アドレスの無い「写道：」は本文の一文とみなす。
+        let body = "他这样写道：\n今天天气很好。";
+        assert!(split_reply(body).quotes.is_empty());
+    }
+
+    /// 「--- 引用元メッセージ ---」「--- 転送されたメール ---」で分け、「--- Original Message Ends ---」では分けない。
+    #[test]
+    fn reads_more_separator_forms() {
+        for sep in ["--- 引用元メッセージ ---", "--- 転送されたメール ---"] {
+            let second = format!(
+                "{sep}\nFrom: 鈴木 次郎 <jiro@example.com>\nDate: Fri, 2 Oct 2026 14:50:00 +0900"
+            );
+            let s = split_reply(&outlook_then(&second));
+            assert_eq!(s.quotes.len(), 2, "{sep:?}");
+            assert_eq!(
+                s.quotes[1].quoted_from.as_deref(),
+                Some("鈴木 次郎 <jiro@example.com>")
+            );
+        }
+        let s = split_reply(&outlook_then("--- Original Message Ends ---"));
+        assert_eq!(s.quotes.len(), 1);
+        assert!(s.quotes[0].body.contains("--- Original Message Ends ---"));
+        assert!(s.quotes[0].body.ends_with("2 通目の本文です。"));
+    }
+
     #[test]
     fn fingerprint_is_whitespace_stable() {
         assert_eq!(fingerprint("hello   world"), fingerprint("hello world\n"));
@@ -926,5 +1241,32 @@ To: <tanaka@example.jp>\n\
     fn first_anchor_skips_short_lines() {
         assert_eq!(first_anchor("はい\n\n見積もりの件について"), Some("見積もりの件について".to_string()));
         assert_eq!(first_anchor("> 引用だけ"), Some("引用だけ".to_string()));
+    }
+
+    /// 手元確認用: 実物の本文を `RONDINE_QUOTE_SAMPLE`（ファイル。先頭 3 行は DB の行情報）から読み、
+    /// 枠ごとの差出人・日時・本文の最初と最後の行を出す。本物の本文はリポジトリに入れない。
+    /// `RONDINE_QUOTE_SAMPLE=… cargo test dump_quote_sample -- --ignored --nocapture`
+    #[test]
+    #[ignore = "手元の実物の本文が要る"]
+    fn dump_quote_sample() {
+        let Ok(path) = std::env::var("RONDINE_QUOTE_SAMPLE") else {
+            return;
+        };
+        let text = std::fs::read_to_string(path).unwrap();
+        let body: String = text.lines().skip(3).collect::<Vec<_>>().join("\n");
+        let s = split_reply(&body);
+        for q in &s.quotes {
+            let lines: Vec<&str> = q.body.lines().filter(|l| !l.trim().is_empty()).collect();
+            println!(
+                "#{} from={:?} at={:?} subject={:?} lines={}\n    first={:?}\n    last={:?}",
+                q.order,
+                q.quoted_from,
+                q.quoted_at,
+                q.subject,
+                lines.len(),
+                lines.first(),
+                lines.last()
+            );
+        }
     }
 }

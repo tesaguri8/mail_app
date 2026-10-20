@@ -70,12 +70,14 @@ fn parse_offset(tok: &str) -> Option<i32> {
 pub fn parse_quoted_time(text: &str) -> Option<QuotedTime> {
     // 区切りを空白にそろえる。'-' は数字の直後（"2026-10-02"）だけ区切りとみなし、
     // 時差の符号（" -0700"）は残す。
+    // 「10月」の「月」は、直前の数字を月とする印として字句に残す（"10月 2 2026" のように年が後でも読む）。
+    let text = text.replace('月', " 月 ");
     let mut prev = ' ';
     let spaced: String = text
         .chars()
         .map(|c| {
             let out = match c {
-                ',' | '(' | ')' | '（' | '）' | '年' | '月' | '日' | '/' => ' ',
+                ',' | '(' | ')' | '（' | '）' | '年' | '日' | '/' => ' ',
                 '-' if prev.is_ascii_digit() => ' ',
                 '：' => ':',
                 _ => c,
@@ -110,7 +112,17 @@ pub fn parse_quoted_time(text: &str) -> Option<QuotedTime> {
             continue;
         }
         let lower = tok.to_ascii_lowercase();
-        if lower == "pm" || lower == "p.m." {
+        if tok == "月" {
+            // 直前に取った数字を月とする。
+            let last = if year.is_some() && !after_year.is_empty() {
+                after_year.pop()
+            } else {
+                before_year.pop()
+            };
+            if let Some(m) = last {
+                month_name.get_or_insert(m);
+            }
+        } else if lower == "pm" || lower == "p.m." {
             pm = Some(true);
         } else if lower == "am" || lower == "a.m." {
             pm = Some(false);
@@ -218,6 +230,40 @@ mod tests {
         assert_eq!(t.local, at(2026, 10, 2, 17, 55));
         let t = parse_quoted_time("Thu, 1 Oct 2026 08:00:00 -0700").unwrap();
         assert_eq!(t.offset_secs, Some(-7 * 3600));
+    }
+
+    /// 属性行・見出しで見つかった書き方（年が後の「10月 2 2026」・曜日入り・時差の括弧・「*」の跡）。
+    #[test]
+    fn reads_more_forms_from_attribution_lines() {
+        assert_eq!(
+            parse_quoted_time("10月 2 2026, at 9:05 PM").map(|t| t.local),
+            Some(at(2026, 10, 2, 21, 5))
+        );
+        assert_eq!(
+            parse_quoted_time("2026 年 10 月 2 日 (金) 17:55").map(|t| t.local),
+            Some(at(2026, 10, 2, 17, 55))
+        );
+        assert_eq!(
+            parse_quoted_time("2026/10/02 木 17:55").map(|t| t.local),
+            Some(at(2026, 10, 2, 17, 55))
+        );
+        assert_eq!(
+            parse_quoted_time("金曜日, 2026年10月2日 17:55").map(|t| t.local),
+            Some(at(2026, 10, 2, 17, 55))
+        );
+        assert_eq!(
+            parse_quoted_time("October 2, 2026 at 17:55:00 JST").map(|t| t.local),
+            Some(at(2026, 10, 2, 17, 55))
+        );
+        let t = parse_quoted_time("2026年10月2日(金) 17:55(+09:00)").unwrap();
+        assert_eq!(
+            (t.local, t.offset_secs),
+            (at(2026, 10, 2, 17, 55), Some(32_400))
+        );
+        assert_eq!(
+            parse_quoted_time("2026年10月20日周二 11:21").map(|t| t.local),
+            Some(at(2026, 10, 20, 11, 21))
+        );
     }
 
     #[test]

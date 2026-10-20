@@ -267,6 +267,27 @@ mod tests {
         assert_eq!(block[h.body_start], "Please check the attached.");
     }
 
+    /// 値の頭に太字の跡の「*」が残る見出し（"Sent: * Friday …" / "送信日時: * 2026年…"）も日時を読む。
+    #[test]
+    fn reads_date_value_with_leftover_asterisk() {
+        let block = [
+            "From: 山田 花子 <hanako@example.com>",
+            "Sent: * Friday, October 2, 2026 5:55 PM",
+            "",
+            "本文",
+        ];
+        let h = parse_header(&block, false);
+        assert_eq!(h.at.as_deref(), Some("Friday, October 2, 2026 5:55 PM"));
+        let block = [
+            "差出人: 山田 花子",
+            "送信日時: * 2026年10月2日 17:55",
+            "",
+            "本文",
+        ];
+        let h = parse_header(&block, false);
+        assert_eq!(h.at.as_deref(), Some("2026年10月2日 17:55"));
+    }
+
     #[test]
     fn reads_outlook_japanese_header_without_separator() {
         let block = [

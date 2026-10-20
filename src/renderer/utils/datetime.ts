@@ -48,3 +48,51 @@ export function formatQuotedDateTime(iso: string, fallback: string): string {
   const dt = parseQuotedDate(iso);
   return dt ? formatDateTime(dt.toISOString()) : fallback;
 }
+
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const JA_WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
+const EN_WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const EN_MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+/** 端末の時差を "+0900" / "-0500" の形で返す（その日時の時差。夏時間を含む）。 */
+function zoneText(dt: Date): string {
+  const minutes = -dt.getTimezoneOffset();
+  const abs = Math.abs(minutes);
+  return `${minutes < 0 ? '-' : '+'}${pad2(Math.floor(abs / 60))}${pad2(abs % 60)}`;
+}
+
+/**
+ * 返信の引用見出し・転送の見出しに書く日時を組み立てる。日時は端末の時刻に直し、端末の時差を添える
+ * （元のメールの時差ではない）。曜日・月名は言語に合わせる。
+ * - 日本語: "2026/10/14(水) 12:50 +0900"
+ * - それ以外（英語）: Gmail と同じ "Wed, Oct 14, 2026 at 12:50 PM +0900"
+ *
+ * この形は Rondine の引用の解析（src-tauri の quotes）が読める形で、往復の試験で固定している。
+ * 読めない日時は元の文字列をそのまま返す。
+ */
+export function formatQuoteHeaderDate(d: string | null, lang: string): string {
+  if (!d) return '';
+  const dt = new Date(d);
+  if (isNaN(dt.getTime())) return d;
+  const [y, mo, day, w] = [dt.getFullYear(), dt.getMonth(), dt.getDate(), dt.getDay()];
+  const [h, mi] = [dt.getHours(), pad2(dt.getMinutes())];
+  const zone = zoneText(dt);
+  if (lang.startsWith('ja')) {
+    return `${y}/${pad2(mo + 1)}/${pad2(day)}(${JA_WEEKDAYS[w]}) ${pad2(h)}:${mi} ${zone}`;
+  }
+  const ampm = h < 12 ? 'AM' : 'PM';
+  return `${EN_WEEKDAYS[w]}, ${EN_MONTHS[mo]} ${day}, ${y} at ${h % 12 || 12}:${mi} ${ampm} ${zone}`;
+}

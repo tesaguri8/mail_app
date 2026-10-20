@@ -358,4 +358,5 @@ fn dump_quote_sample() {
     }
 }
 
+mod compose_header;
 mod forms;

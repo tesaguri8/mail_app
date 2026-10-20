@@ -30,8 +30,17 @@ pub(super) fn parse_attribution(line: &str) -> Option<(Option<String>, Option<St
     let lower = l.to_lowercase();
     if lower.starts_with("on ") && lower.trim_end().ends_with("wrote:") {
         let inner = &l[3..l.len() - "wrote:".len()];
-        // 最後のカンマで日付側 / 差出人側に分ける（"On Mon, 30 Jun 2026 10:00, Taro <t@e> wrote:"）。
-        if let Some(idx) = inner.rfind(',') {
+        // 日付側 / 差出人側をカンマで分ける（"On Mon, 30 Jun 2026 10:00, Taro <t@e> wrote:"）。
+        // 前から見て、前半が時刻で終わる日時として読める最初のカンマで分ける（差出人の名前の
+        // "Kinjo, Aya" のカンマで割らない）。読める位置が無ければ最後のカンマ。
+        let at_time = inner
+            .char_indices()
+            .filter(|&(_, c)| c == ',')
+            .map(|(i, _)| i)
+            .find(|&i| {
+                ends_with_time(&inner[..i]) && when::parse_quoted_time(&inner[..i]).is_some()
+            });
+        if let Some(idx) = at_time.or_else(|| inner.rfind(',')) {
             let at = inner[..idx].trim().trim_end_matches(',').trim().to_string();
             let from = inner[idx + 1..].trim().to_string();
             return Some((none_if_empty(&from), none_if_empty(&at)));
@@ -134,7 +143,8 @@ fn date_then_sender(l: &str) -> Option<(Option<String>, Option<String>)> {
         .filter(|(_, c)| matches!(c, ',' | '、' | '，'))
         .find_map(|(i, c)| {
             let (at, who) = (head[..i].trim(), head[i + c.len_utf8()..].trim());
-            (who.contains('@') && when::parse_quoted_time(at).is_some()).then_some((at, who))
+            (who.contains('@') && ends_with_time(at) && when::parse_quoted_time(at).is_some())
+                .then_some((at, who))
         })
         .map(|(at, who)| (none_if_empty(strip_sender_suffix(who)), none_if_empty(at)))
 }
@@ -150,6 +160,14 @@ fn is_time_suffix(tok: &str) -> bool {
             t.to_ascii_lowercase().as_str(),
             "am" | "pm" | "a.m." | "p.m." | "jst" | "gmt" | "utc"
         )
+}
+
+/// 日時の文字列が、時刻・午前午後・時差の字句で終わるか（"… 12:50 +0900" / "… 9:09 AM"）。
+/// 差出人の名前の途中（"… 12:50 +0900 Kinjo, Aya" の "Kinjo"）で日時を切らないための確かめ。
+fn ends_with_time(at: &str) -> bool {
+    at.split_whitespace()
+        .next_back()
+        .is_some_and(|tok| tok.contains(':') || is_time_suffix(tok))
 }
 
 /// 時刻の字句か（"17:55" / "12:10:00" / "午後5:55"）。

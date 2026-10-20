@@ -40,6 +40,8 @@ import {
 import { playFlySound } from '../utils/flySound';
 import { RecipientInput } from './RecipientInput';
 import { replyRecipients } from '../utils/replyRecipients';
+import { formatSender } from '../utils/address';
+import { formatQuoteHeaderDate } from '../utils/datetime';
 import { ContextMenu } from './ContextMenu';
 import { copyText, readText } from '../utils/clipboard';
 import { FlySwallow, type FlySwallowHandle } from './FlySwallow';
@@ -186,13 +188,6 @@ function blockquote(innerHtml: string): string {
   return `<blockquote type="cite" style="margin:0 0 0 0.8ex;border-left:1px solid #ccc;padding-left:1ex;color:inherit">${innerHtml}</blockquote>`;
 }
 
-/** 引用ヘッダ用に日付をローカル時刻表記へ（生の ISO/UTC 文字列を見せない）。 */
-function formatQuoteDate(d: string | null): string {
-  if (!d) return '';
-  const dt = new Date(d);
-  return isNaN(dt.getTime()) ? d : dt.toLocaleString();
-}
-
 /** カンマ・改行区切りの入力をアドレス配列へ。 */
 function splitAddresses(s: string): string[] {
   return s
@@ -231,7 +226,7 @@ export function Compose({
   /** 送信に成功した（onClose の直前に呼ぶ）。下書き保存・破棄では呼ばない。 */
   onSent?: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   // このタブ（メール）が表示中か（隠れている間は Esc を受けない。KeepAlivePanel）。
   const tabActive = useTabActiveRef();
 
@@ -267,23 +262,26 @@ export function Compose({
     }
     const s = target.source;
     const body = s.body_plain ?? s.clean_body ?? '';
-    const attribution = t('compose.quoteHeader', {
-      from: s.from_address ?? '',
-      date: formatQuoteDate(s.date),
-    });
+    // 見出しの差出人は「名前 <アドレス>」、日時は端末の時差付き。Rondine の引用の解析が読める形
+    // （src-tauri の quotes の往復の試験で固定。返信の引用・転送とも同じ組み立て）。
+    const from = formatSender(s.from_name, s.from_address);
+    const date = formatQuoteHeaderDate(s.date, i18n.language);
+    const attribution = t('compose.quoteHeader', { from, date });
     // 元メールが HTML を持つなら、その HTML をサニタイズして「丸ごと引用」に使う（B 案）。
     // 持たない（text/plain 元）ならプレーン引用だけで送る。
     const srcHtml = s.body_html?.trim() ? sanitizeQuotedHtml(s.body_html) : '';
     if (target.mode === 'forward') {
       const fwd =
         `\n\n${t('compose.forwardSep')}\n` +
-        `${t('mailbox.from')}: ${s.from_address ?? ''}\n` +
+        `${t('mailbox.from')}: ${from}\n` +
+        `${t('compose.date')}: ${date}\n` +
         `${t('mailbox.to')}: ${s.to_addresses ?? ''}\n` +
         `${t('compose.subject')}: ${s.subject ?? ''}\n\n` +
         body;
       const fwdHeaderHtml = [
         escapeHtml(t('compose.forwardSep')),
-        `${escapeHtml(t('mailbox.from'))}: ${escapeHtml(s.from_address ?? '')}`,
+        `${escapeHtml(t('mailbox.from'))}: ${escapeHtml(from)}`,
+        `${escapeHtml(t('compose.date'))}: ${escapeHtml(date)}`,
         `${escapeHtml(t('mailbox.to'))}: ${escapeHtml(s.to_addresses ?? '')}`,
         `${escapeHtml(t('compose.subject'))}: ${escapeHtml(s.subject ?? '')}`,
       ].join('<br>');
@@ -317,7 +315,7 @@ export function Compose({
       inReplyTo: s.message_id,
       replyToEmailId: s.id as number | null,
     };
-  }, [target, t, accounts]);
+  }, [target, t, i18n.language, accounts]);
 
   const [accountId, setAccountId] = useState<number | null>(
     // 下書きの再編集は保存時のアカウントを使う。

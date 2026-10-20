@@ -14,6 +14,7 @@ pub mod contact_uid;
 pub mod datadir;
 pub mod dataver;
 pub mod dedupe;
+pub mod eml_parts;
 pub mod distinct;
 pub mod gcsv;
 pub mod google;

@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import type { UnseenQuote } from '@bindings/UnseenQuote';
 import { UnseenQuotes } from './UnseenQuotes';
+import { formatDateTime } from '../utils/datetime';
 
 /**
  * 引用されていたメールの枠（未受信）の本文も、通常のバブルと同じく URL を押せるリンクにする。
@@ -50,5 +51,26 @@ describe('UnseenQuotes の本文のリンク', () => {
     const hrefs = [...container.querySelectorAll('a')].map((a) => a.getAttribute('href'));
     expect(hrefs).toEqual(['https://www.maeda.invalid']);
     expect(container.textContent).toContain('<mailto:taro@maeda.invalid>');
+  });
+});
+
+describe('UnseenQuotes の見出しの日時', () => {
+  const stamp = () => container.querySelector('span.tabular-nums');
+
+  it('表記はバブルと同じにし、見出しの元の文字列はツールチップに残す', () => {
+    const q = {
+      ...quote('本文'),
+      at: 'Tue, 20 Oct 2026 11:21:08 +0900',
+      date: '2026-10-20T11:21:08+09:00',
+    };
+    act(() => root.render(<UnseenQuotes quotes={[q]} out={false} />));
+    expect(stamp()?.textContent).toBe(formatDateTime('2026-10-20T11:21:08+09:00'));
+    expect(stamp()?.getAttribute('title')).toBe('Tue, 20 Oct 2026 11:21:08 +0900');
+  });
+
+  it('読んだ日時が無ければ、元の文字列をそのまま出す', () => {
+    const q = { ...quote('本文'), at: '2026/10/02 12:10', date: '' };
+    act(() => root.render(<UnseenQuotes quotes={[q]} out={false} />));
+    expect(stamp()?.textContent).toBe('2026/10/02 12:10');
   });
 });

@@ -263,7 +263,21 @@ pub fn split_reply(plain: &str) -> Split {
             break;
         }
     }
-    //    b) 属性行が無いときだけ、最初の `>` 引用行を引用開始とする（属性行なしで下部に
+    //       "From:" の見出しで切ったときは、その上に続く見出しの行（"Date:" が先に来る書き方）も含める。
+    if let Some(qs) = quote_start.filter(|&qs| header::is_from_line(lines[qs])) {
+        let head = lines[..qs]
+            .iter()
+            .rev()
+            .take_while(|l| header::is_header_line(l))
+            .count();
+        quote_start = Some(qs - head);
+    }
+    //    b) 属性行が無ければ、見出しが近くに固まって始まる行（予備の判定。
+    //       `header::starts_header_cluster`）。
+    if quote_start.is_none() {
+        quote_start = (0..lines.len()).find(|&i| header::starts_header_cluster(&lines, i));
+    }
+    //    c) どちらも無いときだけ、最初の `>` 引用行を引用開始とする（属性行なしで下部に
     //       いきなり `>` 引用が来る返信のため。従来動作）。
     if quote_start.is_none() {
         for (i, line) in lines.iter().enumerate() {
@@ -310,18 +324,18 @@ fn starts_next_block(region: &[&str], j: usize) -> bool {
     if header::is_separator(region[j]) || inner_attribution(region[j]).is_some() {
         return true;
     }
-    if !header::is_from_line(region[j]) {
-        return false;
-    }
     let prev = region[..j].iter().rev().find(|l| !l.trim().is_empty());
     if prev.is_some_and(|l| header::is_separator(l)) {
         return false;
     }
     // 見出しらしさの裏付け: 続く数行に日時の項目がある。
-    region[j + 1..]
-        .iter()
-        .take(4)
-        .any(|l| header::is_date_line(l))
+    let known = header::is_from_line(region[j])
+        && region[j + 1..]
+            .iter()
+            .take(4)
+            .any(|l| header::is_date_line(l));
+    // 既知の形で読めなければ、見出しが近くに固まっているかで見る（予備の判定）。
+    known || header::starts_header_cluster(region, j)
 }
 
 /// 行の先頭の共通の字下げを外して 1 つの文字列にする（字下げされた転送の中の 1 通を、
@@ -359,7 +373,7 @@ fn quote_blocks(
     attribution: Option<(Option<String>, Option<String>)>,
 ) -> Vec<QuoteBlock> {
     // 先頭のブロックが属性行（"On … wrote:" 等）から始まるなら、その行は見出しとして飛ばす。
-    let skip_attribution_line = attribution.is_some() && !header::is_from_line(region[0]);
+    let skip_attribution_line = attribution.is_some() && !header::is_header_line(region[0]);
     // 次の 1 通の始まりは、いまの 1 通の見出しより後ろでだけ探す（項目名と値が別の行にある
     // 見出しでは "From:" の後に "To:" 等が続き、区切りの無い見出しと見分けられないため）。
     let mut starts: Vec<usize> = vec![0];
@@ -978,6 +992,63 @@ To:\n\n佐藤 一郎 <ichiro@example.jp>\n\n\n佐藤様\n見積もりを送り�
             Some("Fri, 9 Oct 2026 15:29:01 +0900")
         );
         assert_eq!(q.body, "佐藤様\n見積もりを送ります。");
+    }
+
+    /// 既知の形に当たらない見出し（"Date:" から始まる・区切りの無い表の形）も、見出しが近くに
+    /// 固まっていれば 1 通の区切りとして読む（予備の判定。名前・宛先は作り物）。
+    #[test]
+    fn splits_at_header_cluster_of_unknown_form() {
+        let body = "了解です。\n\n\
+Date: Fri, 9 Oct 2026 15:29:01 +0900\n\
+From: 鈴木 次郎 <jiro@example.com>\n\
+Subject: 見積もり\n\
+\n\
+佐藤様\n見積もりを送ります。\n\n\
+Subject:\n\n見積もりの前の件\n\n\
+Date:\n\n2026年10月8日(木) 9:05\n\n\
+From:\n\n佐藤 一郎 <ichiro@example.jp>\n\n\n\
+鈴木様\nお願いします。";
+        let s = split_reply(body);
+        assert_eq!(s.clean, "了解です。");
+        assert_eq!(
+            s.quotes.len(),
+            2,
+            "{:?}",
+            s.quotes.iter().map(|q| &q.body).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            s.quotes[0].quoted_from.as_deref(),
+            Some("鈴木 次郎 <jiro@example.com>")
+        );
+        assert_eq!(
+            s.quotes[0].quoted_at.as_deref(),
+            Some("Fri, 9 Oct 2026 15:29:01 +0900")
+        );
+        assert_eq!(s.quotes[0].body, "佐藤様\n見積もりを送ります。");
+        assert_eq!(
+            s.quotes[1].quoted_from.as_deref(),
+            Some("佐藤 一郎 <ichiro@example.jp>")
+        );
+        assert_eq!(
+            s.quotes[1].quoted_at.as_deref(),
+            Some("2026年10月8日(木) 9:05")
+        );
+        assert_eq!(s.quotes[1].body, "鈴木様\nお願いします。");
+    }
+
+    /// 本文の申込書・見積の「件名:」「日付:」「宛先:」では区切らない（差出人が無い）。
+    #[test]
+    fn form_fields_in_body_are_not_a_header_cluster() {
+        let forms = [
+            "申込書を送ります。\n\n件名: 夏祭りの出店\n日付: 2026年8月1日 10:00\n担当: 佐藤\n\nよろしくお願いします。",
+            "件名: 夏祭りの出店 日付: 2026年8月1日 10:00\n\nよろしくお願いします。",
+            "見積です。\n\n件名: 見積\n日付: 2026年8月1日 10:00\n宛先: 鈴木 <suzuki@example.jp>\n\n合計 3 万円",
+        ];
+        for body in forms {
+            let s = split_reply(body);
+            assert!(s.quotes.is_empty(), "{body:?}");
+            assert_eq!(s.clean, body.trim());
+        }
     }
 
     #[test]

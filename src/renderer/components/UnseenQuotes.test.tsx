@@ -3,8 +3,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import type { UnseenQuote } from '@bindings/UnseenQuote';
-import { UnseenQuotes } from './UnseenQuotes';
-import { formatDateTime } from '../utils/datetime';
+import { oldestFirst, UnseenQuotes } from './UnseenQuotes';
+import { markAttrs, readMarks } from './timeline/marks';
+import { formatDateTime, parseQuotedDate } from '../utils/datetime';
 
 /**
  * 引用されていたメールの枠（未受信）の本文も、通常のバブルと同じく URL を押せるリンクにする。
@@ -72,5 +73,55 @@ describe('UnseenQuotes の見出しの日時', () => {
     const q = { ...quote('本文'), at: '2026/10/02 12:10', date: '' };
     act(() => root.render(<UnseenQuotes quotes={[q]} out={false} />));
     expect(stamp()?.textContent).toBe('2026/10/02 12:10');
+  });
+});
+
+describe('枠の並び（古い順・親のバブルの上）', () => {
+  /** 本文に出てくる順（転送の外側 → 内側＝新しい → 古い）。日時は時差あり・なしを混ぜる */
+  const at = (subject: string, date: string): UnseenQuote => ({ ...quote(subject), subject, date });
+  const inBody = [
+    at('e', '2026-10-19T22:00:00+09:00'),
+    at('d', '2026-10-15T09:00:00'),
+    at('c', '2026-10-09T15:29:01+09:00'),
+    at('b', '2026-10-07T17:55:00'),
+    at('a', '2026-10-02T12:10:00'),
+  ];
+  const subjects = (qs: UnseenQuote[]) => qs.map((q) => q.subject);
+
+  it('本文の新しい順を、古い順に並べ替える', () => {
+    expect(subjects(oldestFirst(inBody))).toEqual(['a', 'b', 'c', 'd', 'e']);
+  });
+
+  it('本文の順が日時の順と食い違っても、日時で並べる', () => {
+    expect(subjects(oldestFirst([inBody[2], inBody[0], inBody[4]]))).toEqual(['a', 'c', 'e']);
+  });
+
+  it('日時の読めない枠は、本文で直前の枠のすぐ上（古い側）に置く', () => {
+    const lost = at('c の続き', '');
+    expect(subjects(oldestFirst([inBody[0], inBody[2], lost, inBody[4]]))).toEqual([
+      'a',
+      'c の続き',
+      'c',
+      'e',
+    ]);
+  });
+
+  it('本文の先頭の枠が読めなければ、直後の枠のすぐ下（新しい側）に置く', () => {
+    const lost = at('先頭', '');
+    expect(subjects(oldestFirst([lost, inBody[2], inBody[4]]))).toEqual(['a', 'c', '先頭']);
+  });
+
+  it('つまみが DOM の順に読む日時は、枠 → 親のバブルで上から下へ単調に増える', () => {
+    act(() =>
+      root.render(
+        <>
+          <UnseenQuotes quotes={inBody} out={false} />
+          <div {...markAttrs({ date: '2026-10-20T09:00:00+09:00' })} />
+        </>
+      )
+    );
+    const times = readMarks(container).map((m) => parseQuotedDate(m.date ?? '')?.getTime() ?? NaN);
+    expect(times).toHaveLength(6);
+    times.slice(1).forEach((t, i) => expect(t).toBeGreaterThan(times[i]));
   });
 });

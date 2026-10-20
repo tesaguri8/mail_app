@@ -1008,8 +1008,8 @@
     "label": "Timeline"
   },
   "thread": {
-    "unseenQuote": "Included in this email — not in your mailbox",
-    "unseenQuotesHeading": "Quoted emails not in your mailbox: {{count}}",
+    "unseenQuote": "Included in the email below — not in your mailbox",
+    "unseenQuotesHeading": "Quoted in the email below, not in your mailbox: {{count}}",
     "you": "You",
     "untitled": "(untitled thread)",
     "count": "{{count}}",

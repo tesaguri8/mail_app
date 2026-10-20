@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { formatQuotedDateTime } from './datetime';
+import { formatQuotedDateTime, parseQuotedDate } from './datetime';
 
 /** バブルと同じ表記（formatDateTime の書式）で、端末の時刻として出したもの。 */
 const local = (d: Date) =>
@@ -40,5 +40,17 @@ describe('formatQuotedDateTime', () => {
   it('読めなければ元の文字列を返す', () => {
     expect(formatQuotedDateTime('', '2026/10/02 12:10')).toBe('2026/10/02 12:10');
     expect(formatQuotedDateTime('not a date', '元')).toBe('元');
+  });
+});
+
+describe('parseQuotedDate', () => {
+  it('時差の無い日時は端末の時刻として、時差のある日時はその時刻として読む', () => {
+    expect(parseQuotedDate('2026-10-20T11:36:00')?.getTime()).toBe(
+      new Date(2026, 9, 20, 11, 36).getTime()
+    );
+    expect(parseQuotedDate('2026-10-20T11:21:08+09:00')?.getTime()).toBe(
+      Date.UTC(2026, 9, 20, 2, 21, 8)
+    );
+    expect(parseQuotedDate('')).toBeNull();
   });
 });

@@ -145,6 +145,7 @@ function Bubble({
   htmlBody,
   inlineImagesOn,
   fetchingBody,
+  hasLink,
 }: {
   m: ThreadMessage;
   you: string;
@@ -159,6 +160,8 @@ function Bubble({
   inlineImagesOn?: boolean;
   /** 本文をサーバから取得中（「本文がありません」の代わりに取得中と出す）。 */
   fetchingBody?: boolean;
+  /** 本文に URL があるか（日付のつまみの鎖の目印。会話側でまとめて数える）。 */
+  hasLink: boolean;
 }) {
   const { t } = useTranslation();
   const toast = useToast();
@@ -214,6 +217,29 @@ function Bubble({
     return () => io.disconnect();
   }, []);
   const [showQuotes, setShowQuotes] = useState(false);
+  // 「引用を表示／隠す」で上の未受信の枠が消えたり出たりしても、押したバブル本体をその場に留める。
+  // 切り替える直前のバブルの表示位置（スクロール域の上端からの距離）を控え、描画後に差の分だけ戻す。
+  const quotesAnchor = useRef<number | null>(null);
+  const bubbleTop = () => {
+    const el = document.getElementById(`bubble-${m.id}`);
+    const container = el?.closest('[data-conversation-scroll]');
+    return el && container instanceof HTMLElement
+      ? { container, top: el.getBoundingClientRect().top - container.getBoundingClientRect().top }
+      : null;
+  };
+  const toggleQuotes = (next: boolean) => {
+    quotesAnchor.current = bubbleTop()?.top ?? null;
+    setShowQuotes(next);
+  };
+  useLayoutEffect(() => {
+    const before = quotesAnchor.current;
+    quotesAnchor.current = null;
+    const now = before === null ? null : bubbleTop();
+    if (before === null || !now) return;
+    now.container.scrollTop += now.top - before;
+    // bubbleTop は m.id だけに依る（showQuotes の切り替えの直後だけ動かす）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showQuotes]);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   // 文字選択中の右クリックで出す「コピー／引用としてコピー」メニュー（選択テキストを保持）。
   const [selMenu, setSelMenu] = useState<{ x: number; y: number; text: string } | null>(null);
@@ -521,323 +547,8 @@ function Bubble({
           setMenu({ x: e.clientX, y: e.clientY });
         }}
       >
-        {/* 上端固定の検出用センチネル（高さ0）。これが枠上端より上へ抜けるとラベルが固定中になる。 */}
-        <div ref={sentinelRef} aria-hidden className="pointer-events-none h-0" />
-        {/* 差出人＋時刻（相手は左、自分は右にそろえる）。スレッドヘッダのすぐ下に貼り付き（sticky）、
-            固定中は「アプリと同じ背景を同じ位置に」貼る（bg-fixed でビューポート基準に合わせる）。
-            写真は不透明なので下から潜り込む本文はラベル下端でスパッと隠れ、かつ周囲と一体で透明に
-            見える。バブルが尽きるとラベルも一緒に上へ流れて次のラベルと交代する。 */}
-        <div
-          className={`sticky top-0 z-10 mb-0.5 flex items-center gap-1.5 px-1 py-0.5 text-[10px] text-white/45 ${
-            out ? 'justify-end' : 'justify-start'
-          } ${stuck ? 'rounded-b-md shadow-sm shadow-black/20' : ''}`}
-          // 固定中だけ、アプリと同じ背景を同じ位置（bg-fixed=ビューポート基準）で貼る。写真は不透明
-          // なので本文を隠しつつ、周囲の背景と一体化して透明に見える。任意クラスの JIT 検出に頼らず
-          // インラインで指定する。
-          style={
-            stuck
-              ? {
-                  backgroundImage: 'var(--app-backdrop)',
-                  backgroundSize: 'cover',
-                  backgroundPosition: 'center',
-                  backgroundAttachment: 'fixed',
-                }
-              : undefined
-          }
-        >
-          {m.verified_self && (
-            <span
-              title={t('mailbox.verifiedSelf')}
-              className="inline-flex shrink-0 text-sky-300"
-            >
-              <BadgeCheck size={11} aria-label={t('mailbox.verifiedSelf')} />
-            </span>
-          )}
-          {!out && m.is_vip && (
-            <Gem
-              size={11}
-              className="shrink-0 fill-sky-300/30 text-sky-300"
-              aria-label={t('filter.vip')}
-            />
-          )}
-          {!out && senderDomain && isGreen && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                void toggleGreen();
-              }}
-              title={t('green.uncertify', { domain: senderDomain })}
-              aria-label={t('green.uncertify', { domain: senderDomain })}
-              aria-pressed={true}
-              className="flex shrink-0 items-center text-emerald-400 hover:text-emerald-300"
-            >
-              <LeafyGreen size={11} />
-            </button>
-          )}
-          <span className="truncate font-medium text-white/60">{senderName(m, you)}</span>
-          <span className="shrink-0">{formatDateTime(m.date)}</span>
-          {!read && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400" />}
-          {/* スター: バブルを見ながら付け外しできる。付与済みは常時アンバー、未付与は
-              ホバーで薄く出す（普段はチャットのラベルを汚さない。迷惑ボタンと同じ流儀）。 */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              toggleStar();
-            }}
-            title={t(starred ? 'ctx.unstar' : 'ctx.star')}
-            aria-label={t(starred ? 'ctx.unstar' : 'ctx.star')}
-            aria-pressed={starred}
-            className={`flex shrink-0 items-center transition-opacity ${
-              starred
-                ? 'text-amber-300'
-                : 'text-white/40 opacity-0 hover:text-amber-300 group-hover/bubble:opacity-100'
-            }`}
-          >
-            <Star size={11} className={starred ? 'fill-amber-300' : ''} />
-          </button>
-          {/* 迷惑メールとしてマーク（受信のみ）。ホバーで出す（普段はチャットのラベルを汚さない）。
-              迷惑フォルダ表示中は「非迷惑に戻す」に切り替える。 */}
-          {!out &&
-            (handlers.isSpam ? (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handlers.onMarkNotSpam(m.id);
-                }}
-                title={t('ctx.notSpam')}
-                aria-label={t('ctx.notSpam')}
-                className="flex shrink-0 items-center text-white/40 opacity-0 transition-opacity hover:text-emerald-300 group-hover/bubble:opacity-100"
-              >
-                <ThumbsUp size={11} />
-              </button>
-            ) : (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handlers.onMarkSpam(m.id);
-                }}
-                title={t('ctx.markSpam')}
-                aria-label={t('ctx.markSpam')}
-                className="flex shrink-0 items-center text-white/40 opacity-0 transition-opacity hover:text-rose-300 group-hover/bubble:opacity-100"
-              >
-                <ThumbsDown size={11} />
-              </button>
-            ))}
-          {/* 返信・全員に返信・転送。ラベルはスレッドヘッダ直下に貼り付く（sticky）ので、
-              長いバブルを読んでいる途中でも上端に留まり、フッターまで送らずに押せる。
-              普段はチャットのラベルを汚さないよう、スターや迷惑と同じくホバーで出す。
-              全文表示中は MailBody の固定ヘッダに同じ操作があるので出さない。 */}
-          {!expanded &&
-            COMPOSE_ACTIONS.map(({ key, Icon }) => (
-              <button
-                key={key}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handlers.onReply(key, m.id);
-                }}
-                title={t(`compose.${key}`)}
-                aria-label={t(`compose.${key}`)}
-                className="flex shrink-0 items-center text-white/40 opacity-0 transition-opacity hover:text-sky-300 group-hover/bubble:opacity-100"
-              >
-                <Icon size={11} />
-              </button>
-            ))}
-        </div>
-
-        {expanded && detail ? (
-          // 全文表示: 従来の MailBody をそのまま埋め込む（添付・HTML・外部画像・タグ・スター）。
-          // カードは高さ上限（max-h）＋ overflow-hidden にして「ヘッダ固定・本文だけ内部スクロール」
-          // のセクション構成にする。裏を本文が流れないのでヘッダはカードと同じ透過のまま保て、角の
-          // はみ出しも切れる。畳むボタンは固定ヘッダ内（onCollapse）にあるので常に押せる。
-          <div className="flex max-h-[70vh] min-h-0 flex-col overflow-hidden rounded-xl border border-white/15 bg-neutral-900/40">
-            <MailBody
-              detail={detail}
-              tags={handlers.tagsFor(m.id)}
-              starred={starred}
-              onToggleStar={toggleStar}
-              onTag={(x, y) => handlers.onTag(m.id, x, y)}
-              onRemoveTag={(tagId) => handlers.onRemoveTag(m.id, tagId)}
-              onReply={(mode) => handlers.onReply(mode, m.id)}
-              onMarkSpam={handlers.isSpam ? undefined : () => handlers.onMarkSpam(m.id)}
-              onMarkNotSpam={handlers.isSpam ? () => handlers.onMarkNotSpam(m.id) : undefined}
-              onAddContact={handlers.onAddContact}
-              onEditContact={handlers.onEditContact}
-              onComposeTo={handlers.onComposeTo}
-              onAddCalendar={handlers.onAddCalendar}
-              onOpenCalendar={
-                handlers.onAddCalendar
-                  ? () =>
-                      handlers.onAddCalendar?.({
-                        day: todayLocalDay(),
-                        title: m.subject ?? undefined,
-                        relatedEmailId: m.id,
-                      })
-                  : undefined
-              }
-              onGreenChange={handlers.onGreenChange}
-              highlight={highlight}
-              onCollapse={onToggleExpand}
-            />
-          </div>
-        ) : (
-          // 通常バブル: clean_body（新規部分）だけを chat 風に。ダブルクリックで全文展開する
-          // （シングルクリックは文字選択のまま。ダブルクリックで選ばれる単語は消してから開く。
-          // 「全文を開く」ボタンからも展開できる。内部のボタンは stopPropagation で独立動作）。
-          <div
-            onDoubleClick={() => {
-              window.getSelection()?.removeAllRanges();
-              onToggleExpand();
-            }}
-            className={`group relative cursor-pointer rounded-2xl px-3.5 py-2 text-sm leading-relaxed shadow-sm ${
-              out
-                ? 'rounded-tr-sm bg-sky-500/20 text-white/90'
-                : 'rounded-tl-sm bg-white/10 text-white/90'
-            }`}
-          >
-            {/* 引用表示中は長くなるため、上端にも「引用を隠す」を出す */}
-            {showQuotes && (
-              <div
-                className={`mb-1 flex items-center gap-2 text-[10px] text-white/45 ${
-                  out ? 'justify-end' : 'justify-start'
-                }`}
-              >
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowQuotes(false);
-                  }}
-                  className="hover:text-sky-300"
-                >
-                  {t('mailbox.hideQuotes')}
-                </button>
-              </div>
-            )}
-            {renderHtml ? (
-              <HtmlText
-                html={m.body_html as string}
-                inlineImages={inlineImages}
-                highlight={highlight}
-                renderDate={renderDate}
-                onInlineImageMenu={(cid, x, y) => {
-                  const att = inlineAtts[cid];
-                  if (att) setImgMenu({ x, y, att });
-                }}
-              />
-            ) : body ? (
-              <AutoLinkText text={body} highlight={highlight} renderDate={renderDate} />
-            ) : fetchingBody ? (
-              <span className="text-white/40">{t('mailbox.fetchingBody')}</span>
-            ) : bubbleImages.length === 0 ? (
-              <span className="text-white/40">{t('mailbox.noBody')}</span>
-            ) : null}
-
-            {/* 画像添付をバブルに並べる（保存は右クリック）。本文の有無に関わらず出すので、
-                本文のあるメールでも画像が付いていることに気づける。チャットの流れを埋めない
-                ようサムネイル表示にし、クリックで実寸に広げる。
-                除くのは「本文に **実際に表示できた** 埋め込み画像」だけ。cid: で参照されて
-                いても読み込めていなければ本文にはプレースホルダしか出ないので、その場合は
-                サムネイルを出す（実測 2026-09-01: 画像があるのに気づけない状態だった）。 */}
-            {shownImages.length > 0 && (
-              <AttachedImages
-                images={shownImages}
-                onMenu={(att, x, y) => setImgMenu({ x, y, att })}
-                compact
-              />
-            )}
-
-            {/* 操作行（フッター）: 返信・転送・引用トグル・添付・全文・メニュー */}
-            <div
-              className={`mt-1 flex items-center gap-2 text-[10px] text-white/45 ${
-                out ? 'justify-end' : 'justify-start'
-              }`}
-            >
-              {/* 折りたたみバブルのまま返信・転送を押せるようにする（「…」メニューにも同じ操作あり）。
-                  長いバブルではフッターまで送らないと押せないので、同じ操作を上端の
-                  固定ラベルにも出している（下の onReply と同一の呼び出し）。 */}
-              {COMPOSE_ACTIONS.map(({ key, Icon }) => (
-                <button
-                  key={key}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handlers.onReply(key, m.id);
-                  }}
-                  title={t(`compose.${key}`)}
-                  aria-label={t(`compose.${key}`)}
-                  className="inline-flex items-center gap-0.5 hover:text-sky-300"
-                >
-                  <Icon size={12} />
-                </button>
-              ))}
-              {!renderHtml && m.has_quotes && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowQuotes((v) => !v);
-                  }}
-                  className="hover:text-sky-300"
-                >
-                  {showQuotes ? t('mailbox.hideQuotes') : t('mailbox.showQuotes')}
-                </button>
-              )}
-              {m.has_attachments && (
-                <>
-                  {/* 添付をそのまま既定アプリで開く（従来どおり）。 */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void runAttachments(e.clientX, e.clientY, 'open');
-                    }}
-                    disabled={attBusy}
-                    title={t('mailbox.openAttachment')}
-                    aria-label={t('mailbox.openAttachment')}
-                    className="inline-flex items-center gap-0.5 hover:text-sky-300 disabled:opacity-50"
-                  >
-                    <Paperclip size={11} />
-                  </button>
-                  {/* 添付を保存（ダウンロード）。開く動作は残しつつ、保存も選べるようにする。 */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void runAttachments(e.clientX, e.clientY, 'save');
-                    }}
-                    disabled={attBusy}
-                    title={t('mailbox.attachmentDownload')}
-                    aria-label={t('mailbox.attachmentDownload')}
-                    className="inline-flex items-center gap-0.5 hover:text-sky-300 disabled:opacity-50"
-                  >
-                    <Download size={11} />
-                  </button>
-                </>
-              )}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleExpand();
-                }}
-                className="hover:text-white/80"
-              >
-                {t('thread.showFull')}
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const r = e.currentTarget.getBoundingClientRect();
-                  setMenu({ x: r.left, y: r.bottom + 4 });
-                }}
-                title={t('thread.actions')}
-                aria-label={t('thread.actions')}
-                className="flex h-4 w-4 items-center justify-center rounded hover:bg-white/15 hover:text-white/80"
-              >
-                <MoreHorizontal size={13} />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* このメールの添付の取得中・失敗（全文表示の中では、添付の行に出るので出さない）。 */}
-        {!expanded && <EmailDownloads emailId={m.id} />}
-
-        {/* このメールで初めて届いた、手元に無いメール（転送・「元のメッセージ」）。畳まずに出す。
+        {/* このメールで初めて届いた、手元に無いメール（転送・「元のメッセージ」）。畳まずに、
+            バブルの上に古い順で出す（会話全体を上から下へ時間どおりにする）。
             引用の表示中・全文の表示中は、本文に同じ内容があるので出さない。 */}
         {!expanded && !showQuotes && m.unseen_quotes.length > 0 && (
           <UnseenQuotes
@@ -847,6 +558,329 @@ function Bubble({
             renderDate={renderDate}
           />
         )}
+
+        {/* バブル本体。id（スクロールの基準）と日付のつまみの目印は、上の枠を含めずここに付ける
+            （最新のバブルへの初期スクロール・全文の開閉の位置合わせが、枠ではなくバブルに合う）。 */}
+        <div
+          id={`bubble-${m.id}`}
+          {...markAttrs({ date: m.date, attach: m.has_attachments, link: hasLink })}
+        >
+          {/* 上端固定の検出用センチネル（高さ0）。これが枠上端より上へ抜けるとラベルが固定中になる。 */}
+          <div ref={sentinelRef} aria-hidden className="pointer-events-none h-0" />
+          {/* 差出人＋時刻（相手は左、自分は右にそろえる）。スレッドヘッダのすぐ下に貼り付き（sticky）、
+              固定中は「アプリと同じ背景を同じ位置に」貼る（bg-fixed でビューポート基準に合わせる）。
+              写真は不透明なので下から潜り込む本文はラベル下端でスパッと隠れ、かつ周囲と一体で透明に
+              見える。バブルが尽きるとラベルも一緒に上へ流れて次のラベルと交代する。 */}
+          <div
+            className={`sticky top-0 z-10 mb-0.5 flex items-center gap-1.5 px-1 py-0.5 text-[10px] text-white/45 ${
+              out ? 'justify-end' : 'justify-start'
+            } ${stuck ? 'rounded-b-md shadow-sm shadow-black/20' : ''}`}
+            // 固定中だけ、アプリと同じ背景を同じ位置（bg-fixed=ビューポート基準）で貼る。写真は不透明
+            // なので本文を隠しつつ、周囲の背景と一体化して透明に見える。任意クラスの JIT 検出に頼らず
+            // インラインで指定する。
+            style={
+              stuck
+                ? {
+                    backgroundImage: 'var(--app-backdrop)',
+                    backgroundSize: 'cover',
+                    backgroundPosition: 'center',
+                    backgroundAttachment: 'fixed',
+                  }
+                : undefined
+            }
+          >
+            {m.verified_self && (
+              <span
+                title={t('mailbox.verifiedSelf')}
+                className="inline-flex shrink-0 text-sky-300"
+              >
+                <BadgeCheck size={11} aria-label={t('mailbox.verifiedSelf')} />
+              </span>
+            )}
+            {!out && m.is_vip && (
+              <Gem
+                size={11}
+                className="shrink-0 fill-sky-300/30 text-sky-300"
+                aria-label={t('filter.vip')}
+              />
+            )}
+            {!out && senderDomain && isGreen && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void toggleGreen();
+                }}
+                title={t('green.uncertify', { domain: senderDomain })}
+                aria-label={t('green.uncertify', { domain: senderDomain })}
+                aria-pressed={true}
+                className="flex shrink-0 items-center text-emerald-400 hover:text-emerald-300"
+              >
+                <LeafyGreen size={11} />
+              </button>
+            )}
+            <span className="truncate font-medium text-white/60">{senderName(m, you)}</span>
+            <span className="shrink-0">{formatDateTime(m.date)}</span>
+            {!read && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400" />}
+            {/* スター: バブルを見ながら付け外しできる。付与済みは常時アンバー、未付与は
+                ホバーで薄く出す（普段はチャットのラベルを汚さない。迷惑ボタンと同じ流儀）。 */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleStar();
+              }}
+              title={t(starred ? 'ctx.unstar' : 'ctx.star')}
+              aria-label={t(starred ? 'ctx.unstar' : 'ctx.star')}
+              aria-pressed={starred}
+              className={`flex shrink-0 items-center transition-opacity ${
+                starred
+                  ? 'text-amber-300'
+                  : 'text-white/40 opacity-0 hover:text-amber-300 group-hover/bubble:opacity-100'
+              }`}
+            >
+              <Star size={11} className={starred ? 'fill-amber-300' : ''} />
+            </button>
+            {/* 迷惑メールとしてマーク（受信のみ）。ホバーで出す（普段はチャットのラベルを汚さない）。
+                迷惑フォルダ表示中は「非迷惑に戻す」に切り替える。 */}
+            {!out &&
+              (handlers.isSpam ? (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handlers.onMarkNotSpam(m.id);
+                  }}
+                  title={t('ctx.notSpam')}
+                  aria-label={t('ctx.notSpam')}
+                  className="flex shrink-0 items-center text-white/40 opacity-0 transition-opacity hover:text-emerald-300 group-hover/bubble:opacity-100"
+                >
+                  <ThumbsUp size={11} />
+                </button>
+              ) : (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handlers.onMarkSpam(m.id);
+                  }}
+                  title={t('ctx.markSpam')}
+                  aria-label={t('ctx.markSpam')}
+                  className="flex shrink-0 items-center text-white/40 opacity-0 transition-opacity hover:text-rose-300 group-hover/bubble:opacity-100"
+                >
+                  <ThumbsDown size={11} />
+                </button>
+              ))}
+            {/* 返信・全員に返信・転送。ラベルはスレッドヘッダ直下に貼り付く（sticky）ので、
+                長いバブルを読んでいる途中でも上端に留まり、フッターまで送らずに押せる。
+                普段はチャットのラベルを汚さないよう、スターや迷惑と同じくホバーで出す。
+                全文表示中は MailBody の固定ヘッダに同じ操作があるので出さない。 */}
+            {!expanded &&
+              COMPOSE_ACTIONS.map(({ key, Icon }) => (
+                <button
+                  key={key}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handlers.onReply(key, m.id);
+                  }}
+                  title={t(`compose.${key}`)}
+                  aria-label={t(`compose.${key}`)}
+                  className="flex shrink-0 items-center text-white/40 opacity-0 transition-opacity hover:text-sky-300 group-hover/bubble:opacity-100"
+                >
+                  <Icon size={11} />
+                </button>
+              ))}
+          </div>
+
+          {expanded && detail ? (
+            // 全文表示: 従来の MailBody をそのまま埋め込む（添付・HTML・外部画像・タグ・スター）。
+            // カードは高さ上限（max-h）＋ overflow-hidden にして「ヘッダ固定・本文だけ内部スクロール」
+            // のセクション構成にする。裏を本文が流れないのでヘッダはカードと同じ透過のまま保て、角の
+            // はみ出しも切れる。畳むボタンは固定ヘッダ内（onCollapse）にあるので常に押せる。
+            <div className="flex max-h-[70vh] min-h-0 flex-col overflow-hidden rounded-xl border border-white/15 bg-neutral-900/40">
+              <MailBody
+                detail={detail}
+                tags={handlers.tagsFor(m.id)}
+                starred={starred}
+                onToggleStar={toggleStar}
+                onTag={(x, y) => handlers.onTag(m.id, x, y)}
+                onRemoveTag={(tagId) => handlers.onRemoveTag(m.id, tagId)}
+                onReply={(mode) => handlers.onReply(mode, m.id)}
+                onMarkSpam={handlers.isSpam ? undefined : () => handlers.onMarkSpam(m.id)}
+                onMarkNotSpam={handlers.isSpam ? () => handlers.onMarkNotSpam(m.id) : undefined}
+                onAddContact={handlers.onAddContact}
+                onEditContact={handlers.onEditContact}
+                onComposeTo={handlers.onComposeTo}
+                onAddCalendar={handlers.onAddCalendar}
+                onOpenCalendar={
+                  handlers.onAddCalendar
+                    ? () =>
+                        handlers.onAddCalendar?.({
+                          day: todayLocalDay(),
+                          title: m.subject ?? undefined,
+                          relatedEmailId: m.id,
+                        })
+                    : undefined
+                }
+                onGreenChange={handlers.onGreenChange}
+                highlight={highlight}
+                onCollapse={onToggleExpand}
+              />
+            </div>
+          ) : (
+            // 通常バブル: clean_body（新規部分）だけを chat 風に。ダブルクリックで全文展開する
+            // （シングルクリックは文字選択のまま。ダブルクリックで選ばれる単語は消してから開く。
+            // 「全文を開く」ボタンからも展開できる。内部のボタンは stopPropagation で独立動作）。
+            <div
+              onDoubleClick={() => {
+                window.getSelection()?.removeAllRanges();
+                onToggleExpand();
+              }}
+              className={`group relative cursor-pointer rounded-2xl px-3.5 py-2 text-sm leading-relaxed shadow-sm ${
+                out
+                  ? 'rounded-tr-sm bg-sky-500/20 text-white/90'
+                  : 'rounded-tl-sm bg-white/10 text-white/90'
+              }`}
+            >
+              {/* 引用表示中は長くなるため、上端にも「引用を隠す」を出す */}
+              {showQuotes && (
+                <div
+                  className={`mb-1 flex items-center gap-2 text-[10px] text-white/45 ${
+                    out ? 'justify-end' : 'justify-start'
+                  }`}
+                >
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleQuotes(false);
+                    }}
+                    className="hover:text-sky-300"
+                  >
+                    {t('mailbox.hideQuotes')}
+                  </button>
+                </div>
+              )}
+              {renderHtml ? (
+                <HtmlText
+                  html={m.body_html as string}
+                  inlineImages={inlineImages}
+                  highlight={highlight}
+                  renderDate={renderDate}
+                  onInlineImageMenu={(cid, x, y) => {
+                    const att = inlineAtts[cid];
+                    if (att) setImgMenu({ x, y, att });
+                  }}
+                />
+              ) : body ? (
+                <AutoLinkText text={body} highlight={highlight} renderDate={renderDate} />
+              ) : fetchingBody ? (
+                <span className="text-white/40">{t('mailbox.fetchingBody')}</span>
+              ) : bubbleImages.length === 0 ? (
+                <span className="text-white/40">{t('mailbox.noBody')}</span>
+              ) : null}
+
+              {/* 画像添付をバブルに並べる（保存は右クリック）。本文の有無に関わらず出すので、
+                  本文のあるメールでも画像が付いていることに気づける。チャットの流れを埋めない
+                  ようサムネイル表示にし、クリックで実寸に広げる。
+                  除くのは「本文に **実際に表示できた** 埋め込み画像」だけ。cid: で参照されて
+                  いても読み込めていなければ本文にはプレースホルダしか出ないので、その場合は
+                  サムネイルを出す（実測 2026-09-01: 画像があるのに気づけない状態だった）。 */}
+              {shownImages.length > 0 && (
+                <AttachedImages
+                  images={shownImages}
+                  onMenu={(att, x, y) => setImgMenu({ x, y, att })}
+                  compact
+                />
+              )}
+
+              {/* 操作行（フッター）: 返信・転送・引用トグル・添付・全文・メニュー */}
+              <div
+                className={`mt-1 flex items-center gap-2 text-[10px] text-white/45 ${
+                  out ? 'justify-end' : 'justify-start'
+                }`}
+              >
+                {/* 折りたたみバブルのまま返信・転送を押せるようにする（「…」メニューにも同じ操作あり）。
+                    長いバブルではフッターまで送らないと押せないので、同じ操作を上端の
+                    固定ラベルにも出している（下の onReply と同一の呼び出し）。 */}
+                {COMPOSE_ACTIONS.map(({ key, Icon }) => (
+                  <button
+                    key={key}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handlers.onReply(key, m.id);
+                    }}
+                    title={t(`compose.${key}`)}
+                    aria-label={t(`compose.${key}`)}
+                    className="inline-flex items-center gap-0.5 hover:text-sky-300"
+                  >
+                    <Icon size={12} />
+                  </button>
+                ))}
+                {!renderHtml && m.has_quotes && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleQuotes(!showQuotes);
+                    }}
+                    className="hover:text-sky-300"
+                  >
+                    {showQuotes ? t('mailbox.hideQuotes') : t('mailbox.showQuotes')}
+                  </button>
+                )}
+                {m.has_attachments && (
+                  <>
+                    {/* 添付をそのまま既定アプリで開く（従来どおり）。 */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void runAttachments(e.clientX, e.clientY, 'open');
+                      }}
+                      disabled={attBusy}
+                      title={t('mailbox.openAttachment')}
+                      aria-label={t('mailbox.openAttachment')}
+                      className="inline-flex items-center gap-0.5 hover:text-sky-300 disabled:opacity-50"
+                    >
+                      <Paperclip size={11} />
+                    </button>
+                    {/* 添付を保存（ダウンロード）。開く動作は残しつつ、保存も選べるようにする。 */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void runAttachments(e.clientX, e.clientY, 'save');
+                      }}
+                      disabled={attBusy}
+                      title={t('mailbox.attachmentDownload')}
+                      aria-label={t('mailbox.attachmentDownload')}
+                      className="inline-flex items-center gap-0.5 hover:text-sky-300 disabled:opacity-50"
+                    >
+                      <Download size={11} />
+                    </button>
+                  </>
+                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleExpand();
+                  }}
+                  className="hover:text-white/80"
+                >
+                  {t('thread.showFull')}
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setMenu({ x: r.left, y: r.bottom + 4 });
+                  }}
+                  title={t('thread.actions')}
+                  aria-label={t('thread.actions')}
+                  className="flex h-4 w-4 items-center justify-center rounded hover:bg-white/15 hover:text-white/80"
+                >
+                  <MoreHorizontal size={13} />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* このメールの添付の取得中・失敗（全文表示の中では、添付の行に出るので出さない）。 */}
+          {!expanded && <EmailDownloads emailId={m.id} />}
+        </div>
       </div>
 
       {menu && (
@@ -1417,15 +1451,7 @@ export function Conversation({
           }}
         >
           {visibleMessages.map((m) => (
-            <div
-              key={m.id}
-              id={`bubble-${m.id}`}
-              {...markAttrs({
-                date: m.date,
-                attach: m.has_attachments,
-                link: linkIds.has(m.id),
-              })}
-            >
+            <div key={m.id}>
               <Bubble
                 m={m}
                 you={you}
@@ -1436,6 +1462,7 @@ export function Conversation({
                 htmlBody={htmlBubbles}
                 inlineImagesOn={inlineImagesOn}
                 fetchingBody={fetchingIds.has(m.id)}
+                hasLink={linkIds.has(m.id)}
               />
             </div>
           ))}

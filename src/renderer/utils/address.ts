@@ -25,3 +25,17 @@ export function parseAddressList(raw: string | null | undefined): ParsedAddress[
     .map((part) => parseAddress(part))
     .filter((p) => p.name || p.email);
 }
+
+/**
+ * 差出人を "名前 <アドレス>" の形にする（返信の引用見出し・転送の見出しの From）。
+ * 名前が無い・アドレスと同じならアドレスだけ、アドレスが無ければ名前だけ。
+ */
+export function formatSender(
+  name: string | null | undefined,
+  address: string | null | undefined
+): string {
+  const n = (name ?? '').trim();
+  const a = (address ?? '').trim();
+  if (!a) return n;
+  return n && n.toLowerCase() !== a.toLowerCase() ? `${n} <${a}>` : a;
+}

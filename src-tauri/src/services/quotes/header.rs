@@ -10,6 +10,8 @@
 //! 本文…
 //! ```
 
+pub mod cluster;
+
 /// 見出しの項目。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Field {
@@ -236,104 +238,6 @@ pub fn parse_header(block: &[&str], skip_first: bool) -> Header {
         }
     }
     h
-}
-
-/// 見出しのかたまりとみなす範囲の行数（空行は数えない）。
-const CLUSTER_LINES: usize = 12;
-
-/// 見出しのかたまりに要る、見出しの種類の数（差出人・日付・宛先・件名・Cc のうち）。
-const CLUSTER_KINDS: usize = 3;
-
-/// 項目の値。同じ行に無ければ、空行を挟んだ次の行（それも項目なら値は無い）。
-fn field_value<'a>(block: &[&'a str], j: usize, inline: &'a str) -> &'a str {
-    if !inline.is_empty() {
-        return inline;
-    }
-    next_non_blank(block, j)
-        .filter(|&k| header_field(block[k]).is_none())
-        .map_or("", |k| block[k].trim())
-}
-
-/// 既知の書式で読めなかったときの予備の判定: `j` の行から、見出しがかたまって始まるか。
-///
-/// 空行を除いた [`CLUSTER_LINES`] 行の中に、差出人・日付・宛先・件名・Cc の見出しが
-/// [`CLUSTER_KINDS`] 種類以上あり、そのうちに**差出人と日付**があり、値に**アドレス**（`@`）と
-/// **日時として読めるもの**が 1 つ以上ある。値は同じ行でも、空行を挟んだ次の行でもよい。
-/// To と Subject は必須にしない（Bcc で受けたメール・"On … wrote:" の形には無い）。
-/// 本文の申込書や見積の「件名:」「日付:」だけの段落は、差出人・アドレスが無いので区切らない。
-/// かたまりの途中の行では始まらない（直前の空でない行が見出しなら false）。
-pub fn starts_header_cluster(block: &[&str], j: usize) -> bool {
-    let is_field = is_header_line;
-    if !is_field(block[j]) {
-        return false;
-    }
-    if block[..j]
-        .iter()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .is_some_and(|l| is_field(l))
-    {
-        return false;
-    }
-    let mut kinds: Vec<Field> = Vec::new();
-    let (mut addr, mut date) = (false, false);
-    let window = (j..block.len())
-        .filter(|&k| !block[k].trim().is_empty())
-        .take(CLUSTER_LINES);
-    for k in window {
-        let Some((field, inline)) = header_field(block[k]).filter(|_| is_field(block[k])) else {
-            continue;
-        };
-        let value = field_value(block, k, inline);
-        if field != Field::Other && !kinds.contains(&field) {
-            kinds.push(field);
-        }
-        addr |= value.contains('@');
-        date |= field == Field::Date && super::when::parse_quoted_time(value).is_some();
-    }
-    kinds.len() >= CLUSTER_KINDS && kinds.contains(&Field::From) && addr && date
-}
-
-/// 引用の差出人の書き方（"山田 花子 <hanako@example.com>" / "hanako@example.com" /
-/// "'山田 花子' [mailto:hanako@example.com]" / "山田 花子"）から、アドレスと名前を取り出す。
-pub fn split_sender(from: &str) -> (Option<String>, Option<String>) {
-    let s = from.trim();
-    let addr = if let Some(open) = s.find("mailto:") {
-        let rest = &s[open + "mailto:".len()..];
-        Some(
-            rest.split([']', '>', ' '])
-                .next()
-                .unwrap_or(rest)
-                .to_string(),
-        )
-    } else if let (Some(a), Some(b)) = (s.find('<'), s.rfind('>')) {
-        (a < b).then(|| s[a + 1..b].to_string())
-    } else {
-        s.split_whitespace()
-            .find(|w| w.contains('@'))
-            .map(str::to_string)
-    }
-    .map(|a| a.trim().to_lowercase())
-    .filter(|a| a.contains('@'));
-    // 名前は、アドレスの部分（<...> / [mailto:...] / アドレス単体）より前。
-    let name_end = s.find(['<', '[']).unwrap_or(s.len());
-    let name = s[..name_end]
-        .trim()
-        .trim_matches(['"', '\'', '“', '”'])
-        .trim();
-    let name = (!name.is_empty() && !name.contains('@')).then(|| name.to_string());
-    (addr, name)
-}
-
-/// 引用の差出人を画面に出す形にする（名前があれば名前、無ければアドレス、どちらも取れなければ見出しのまま）。
-/// "<addr> <mailto:addr>" / "addr <addr> <mailto:addr>" のように、名前の欄にアドレスが入った書き方でも
-/// アドレスだけを出す。
-pub fn sender_label(from: &str) -> String {
-    match split_sender(from) {
-        (_, Some(name)) => name,
-        (Some(addr), None) => addr,
-        (None, None) => from.trim().to_string(),
-    }
 }
 
 #[cfg(test)]
@@ -574,45 +478,5 @@ mod tests {
         assert!(is_separator("---Original Message---"));
         assert!(!is_separator("--- Original Message Ends ---"));
         assert!(!is_separator("> -----Original Message-----"));
-    }
-
-    #[test]
-    fn splits_sender_forms() {
-        assert_eq!(
-            split_sender("山田 花子 <Hanako@Example.com>"),
-            (Some("hanako@example.com".into()), Some("山田 花子".into()))
-        );
-        assert_eq!(
-            split_sender("'Yamada Hanako' [mailto:hanako@example.com]"),
-            (
-                Some("hanako@example.com".into()),
-                Some("Yamada Hanako".into())
-            )
-        );
-        assert_eq!(
-            split_sender("hanako@example.com"),
-            (Some("hanako@example.com".into()), None)
-        );
-        assert_eq!(split_sender("山田 花子"), (None, Some("山田 花子".into())));
-    }
-
-    /// 実物の引用にあった差出人の書き方（名前とアドレスは作り物）。
-    #[test]
-    fn labels_sender_by_name_or_address() {
-        assert_eq!(
-            sender_label("<taro@maeda.example> <mailto:taro@maeda.example>"),
-            "taro@maeda.example"
-        );
-        assert_eq!(
-            sender_label("taro@maeda.example <taro@maeda.example> <mailto:taro@maeda.example>"),
-            "taro@maeda.example"
-        );
-        assert_eq!(sender_label("高橋 健<12345TAKA@city.example.lg.jp>"), "高橋 健");
-        assert_eq!(
-            sender_label("木材商事　　山田花子<hanako@mokuzai.example.jp>"),
-            "木材商事　　山田花子"
-        );
-        assert_eq!(sender_label("鈴木次郎"), "鈴木次郎");
-        assert_eq!(sender_label("Hanako@Example.com"), "hanako@example.com");
     }
 }

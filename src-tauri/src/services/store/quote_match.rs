@@ -9,7 +9,7 @@ use rusqlite::{params, Connection};
 use crate::models::{ThreadMessage, UnseenQuote};
 use crate::services::quotes::{
     self,
-    header::split_sender,
+    sender::split_sender,
     when::{parse_quoted_time, QuotedTime},
 };
 
@@ -182,7 +182,7 @@ const MIN_KNOWN_CHARS: usize = 20;
 /// 引用の本文を比べる形にそろえる（行頭の `>` と空白を落とし、1 本につなぐ）。
 fn normalize_body(text: &str) -> String {
     text.lines()
-        .map(quotes::normalize_quote_line)
+        .map(quotes::anchor::normalize_quote_line)
         .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
@@ -239,7 +239,7 @@ pub fn unseen_quotes(
         }
         last_shown = true;
         out.push(UnseenQuote {
-            sender: quotes::header::sender_label(&from),
+            sender: quotes::sender::sender_label(&from),
             date: time.to_iso(),
             from,
             at,

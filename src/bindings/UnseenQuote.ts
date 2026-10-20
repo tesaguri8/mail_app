@@ -9,7 +9,7 @@ export type UnseenQuote = {
  */
 from: string, 
 /**
- * 差出人の表示（名前があれば名前、無ければアドレス。`quotes::header::sender_label`）。
+ * 差出人の表示（名前があれば名前、無ければアドレス。`quotes::sender::sender_label`）。
  */
 sender: string, 
 /**

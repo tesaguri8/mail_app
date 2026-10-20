@@ -102,7 +102,7 @@ On Mon, 30 Jun 2026 10:00:00 +0900, 山田太郎 <yamada@example.com> wrote:
 連なっていた。**2 通とも受信箱に無く、利用者が初めて読む内容**だったのに、引用として「引用を表示」に
 畳まれて見落とした。差出人・日時も取れていなかった（`quoted_from` / `quoted_at` が NULL）。
 
-- **1 通ずつに分ける**（`services/quotes.rs` の `quote_blocks`）: 引用の領域を、`>` の付かない
+- **1 通ずつに分ける**（`services/quotes/blocks.rs` の `quote_blocks`）: 引用の領域を、`>` の付かない
   「元のメッセージ」の区切り（`-----Original Message-----` / `-----元のメッセージ-----` /
   `---------- Forwarded message ---------` / `--- 引用元メッセージ ---` / `--- 転送されたメール ---` / Outlook の下線。
   終わりの印の `--- Original Message Ends ---` は区切りにしない。判定は `header::is_separator_text` の 1 か所）か、区切りの無い見出し（`From:` の後の数行に
@@ -121,7 +121,7 @@ On Mon, 30 Jun 2026 10:00:00 +0900, 山田太郎 <yamada@example.com> wrote:
     が 7 通重なっていたのに、最初の区切りで 1 か所しか切れず、残りが 1 つの枠に入っていた。
   - **次の 1 通の始まりは、いまの 1 通の見出しより後ろでだけ探す**（項目名と値が別の行にある見出しでは、
     `From:` の後に `To:` 等が続き、区切りの無い見出しと見分けられないため）。
-  - **予備の判定: 見出しが近くに固まっていれば区切る**（2026-10-20 利用者の発案。`header::starts_header_cluster`）。
+  - **予備の判定: 見出しが近くに固まっていれば区切る**（2026-10-20 利用者の発案。`quotes/header/cluster.rs` の `starts_header_cluster`）。
     既知の形をすべて並べる代わりに、**既知の形の判定で区切れなかった行だけ**を見る。空行を除いた 12 行の中に、
     差出人（`From` / `差出人` / `送信者`）・日付（`Date` / `Sent` / `日付` / `送信日時`）・宛先（`To` / `宛先`）・
     件名（`Subject` / `件名`）・`Cc` の見出しが **3 種類以上**あり、そのうちに**差出人と日付**があり、値に
@@ -268,7 +268,7 @@ On Mon, 30 Jun 2026 10:00:00 +0900, 山田太郎 <yamada@example.com> wrote:
    → DB 保存 ＋ FTS5(clean_body) インデックス
 ```
 
-すべて**ローカルの Rust 側**（`src-tauri/src/services/parser.rs`＝MIME解析／`services/quotes.rs`＝引用・署名分離／`services/store/threads.rs`＝論理スレッド束ね。専用の `threading/` ディレクトリは無く、フラットなファイル構成）で完結。SNS 中継のようなクラウド依存は不要。
+すべて**ローカルの Rust 側**（`src-tauri/src/services/parser.rs`＝MIME解析／`services/quotes.rs`＝引用・署名分離（属性行 `attribution`・署名 `signature`・1 通ずつの分け方 `blocks`・見出し `header`・差出人 `sender`・内容照合 `anchor`・日時 `when` を `services/quotes/` 配下に分けて置く）／`services/store/threads.rs`＝論理スレッド束ね。専用の `threading/` ディレクトリは無く、フラットなファイル構成）で完結。SNS 中継のようなクラウド依存は不要。
 
 ---
 

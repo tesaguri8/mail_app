@@ -4,6 +4,7 @@ import { Image as ImageIcon } from 'lucide-react';
 import type { AttachmentSummary } from '@bindings/AttachmentSummary';
 import { attachmentImage, peekAttachmentImage } from '../utils/imageCache';
 import { withActivity } from '../stores/activity';
+import { formatSize } from '../utils/fileSize';
 
 const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp|tiff?|heic|heif|avif)$/i;
 
@@ -18,13 +19,6 @@ export function isImage(a: AttachmentSummary): boolean {
  * （本体未取得の添付はサーバーから取り直すため、開いただけで大量に通信しないようにする）。
  */
 const AUTO_MAX_TOTAL = 25 * 1024 * 1024;
-
-/** バイト数を人が読みやすい単位に整形する。 */
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
 
 /** キャッシュ/state のキー（同じ画像でもサムネと実寸は別物として持つ）。 */
 function variantKey(id: number, thumb: boolean): string {

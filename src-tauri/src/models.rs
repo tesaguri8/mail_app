@@ -811,6 +811,33 @@ pub struct AttachmentSummary {
     pub content_id: Option<String>,
 }
 
+/// 添付された転送メール（message/rfc822・.eml）の見出しと、その中の添付の一覧。
+/// 中の添付は `index`（[`crate::services::parser::real_attachment_parts`] の序数）で取り出す。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct EmlContents {
+    /// 転送メールの件名。
+    pub subject: Option<String>,
+    /// 差出人（"名前 <addr>" か、アドレスだけ）。
+    pub from: Option<String>,
+    /// 送信日時（RFC 3339）。
+    pub date: Option<String>,
+    /// 中の添付（本文に埋め込まれた画像も含む）。
+    pub attachments: Vec<EmlAttachment>,
+}
+
+/// 転送メール（.eml）の中の添付 1 件。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct EmlAttachment {
+    /// 中の添付の序数（取り出しに使う）。
+    pub index: i32,
+    pub filename: String,
+    pub content_type: Option<String>,
+    /// 大きさ（復号後のバイト数）。
+    pub size: i32,
+}
+
 /// アカウントのローカル保存容量（添付キャッシュの使用量と上限）。
 /// バイト数は f64（TS の number）で扱い、2GB 超でも安全に渡す。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

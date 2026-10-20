@@ -45,6 +45,7 @@ import { copyText, readText } from '../utils/clipboard';
 import { FlySwallow, type FlySwallowHandle } from './FlySwallow';
 import { useTabActiveRef } from '../hooks/useTabActive';
 import swallowUrl from '../assets/swallow.png';
+import { formatSize } from '../utils/fileSize';
 
 /** 作成モード。返信/転送は元メール（source）を伴う。draft は保存済み下書きの再編集。
  * new は任意で宛先(to)を初期設定できる（アドレスのクリックから「このアドレスへ新規」）。 */
@@ -73,13 +74,6 @@ export function composeKey(target: ComposeTarget): string {
 /** "Re: " / "Fwd: " を二重に付けない。 */
 /** 添付の合計サイズ上限（Rust 側の MAX_ATTACHMENT_TOTAL と揃える）。 */
 const MAX_ATTACH_TOTAL = 25 * 1024 * 1024;
-
-/** バイト数を人が読みやすい単位に整形する。 */
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
 
 /**
  * 作成画面で保持する添付。送信時は `path` を Rust へ渡す。

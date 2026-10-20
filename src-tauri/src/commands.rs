@@ -1,7 +1,7 @@
 use crate::models::{
     AccountInput, AccountProfile, AccountProvider, AccountSummary, AppInfo, AttachmentMeta, AttachmentSummary, AutoconfigResult,
     AttendeeInput, CalendarInput, CalendarSummary, CompanyOnlyCandidate, ContactExportReport, ContactInput, ContactListItem, ContactMatch,
-    ContactSummary, DataLocation, DbInfo, DistinctPair, DraftContent, DraftInput, DuplicateGroup, EventAttendee,
+    ContactSummary, DataLocation, DbInfo, DistinctPair, DraftContent, DraftInput, DuplicateGroup, EmlContents, EventAttendee,
     EventInput, EventSummary, GoogleAccount, GoogleDisconnectResult, GoogleSyncResult,
     GoogleCredentialsStatus, GoogleService,
     GreenDomainEntry,
@@ -19,6 +19,7 @@ use crate::services::checksum::simple_checksum;
 use crate::services::contact_export;
 use crate::services::datadir;
 use crate::services::dataver;
+use crate::services::eml_parts;
 use crate::services::gcsv;
 use crate::services::google;
 use crate::services::imap_sync;
@@ -3244,6 +3245,66 @@ pub async fn attachment_export(
     dest: String,
 ) -> Result<(), String> {
     let src = ensure_attachment_file(&app, attachment_id).await?;
+    std::fs::copy(&src, &dest)
+        .map_err(|e| format!("保存に失敗しました: {e}"))
+        .inspect_err(|e| log_attachment_error(attachment_id, "書き出し", e))?;
+    Ok(())
+}
+
+/// 添付された転送メール（.eml）を手元に用意し、その中の `index` 番目の添付を書き出したパスを返す。
+async fn ensure_eml_part_file(
+    app: &AppHandle,
+    attachment_id: i64,
+    index: usize,
+) -> Result<std::path::PathBuf, String> {
+    let eml = ensure_attachment_file(app, attachment_id).await?;
+    tauri::async_runtime::spawn_blocking(move || eml_parts::extract_to_file(&eml, index))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+        .inspect_err(|e| log_attachment_error(attachment_id, "転送メールの添付の取り出し", e))
+}
+
+/// 添付された転送メール（message/rfc822・.eml）の見出しと、中の添付の一覧を返す（未取得なら先に取得）。
+#[tauri::command]
+pub async fn attachment_eml_contents(
+    app: AppHandle,
+    attachment_id: i64,
+) -> Result<EmlContents, String> {
+    let eml = ensure_attachment_file(&app, attachment_id).await?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let raw = std::fs::read(&eml).map_err(|e| e.to_string())?;
+        eml_parts::contents(&raw).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .inspect_err(|e| log_attachment_error(attachment_id, "転送メールの解析", e))
+}
+
+/// 転送メール（.eml）の中の添付を OS の関連アプリで開く。
+#[tauri::command]
+pub async fn attachment_eml_open(
+    app: AppHandle,
+    attachment_id: i64,
+    index: usize,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let path = ensure_eml_part_file(&app, attachment_id, index).await?;
+    app.opener()
+        .open_path(path.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| e.to_string())
+        .inspect_err(|e| log_attachment_error(attachment_id, "起動", e))
+}
+
+/// 転送メール（.eml）の中の添付を、ユーザー指定の場所（`dest`＝保存先のフルパス）へ保存する。
+#[tauri::command]
+pub async fn attachment_eml_export(
+    app: AppHandle,
+    attachment_id: i64,
+    index: usize,
+    dest: String,
+) -> Result<(), String> {
+    let src = ensure_eml_part_file(&app, attachment_id, index).await?;
     std::fs::copy(&src, &dest)
         .map_err(|e| format!("保存に失敗しました: {e}"))
         .inspect_err(|e| log_attachment_error(attachment_id, "書き出し", e))?;

@@ -34,7 +34,8 @@ const quote = (body: string): UnseenQuote => ({
 
 describe('UnseenQuotes の本文のリンク', () => {
   it('URL は通常のバブルと同じリンクになる（改行が \\r\\r\\n でも末尾に紛れない）', () => {
-    const body = 'データ便（IFCデータ）\r\r\nhttps://deliver.example.invalid/d/abc123\r\r\n\r\r\nよろしくお願いします。';
+    const body =
+      'データ便（IFCデータ）\r\r\nhttps://deliver.example.invalid/d/abc123\r\r\n\r\r\nよろしくお願いします。';
     act(() => root.render(<UnseenQuotes quotes={[quote(body)]} out={false} />));
     const links = [...container.querySelectorAll('a')];
     expect(links.map((a) => a.getAttribute('href'))).toEqual([

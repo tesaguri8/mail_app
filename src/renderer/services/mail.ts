@@ -7,6 +7,7 @@ import type { StorageInfo } from '@bindings/StorageInfo';
 import type { RetentionReport } from '@bindings/RetentionReport';
 import type { SendInput } from '@bindings/SendInput';
 import type { AttachmentMeta } from '@bindings/AttachmentMeta';
+import type { EmlContents } from '@bindings/EmlContents';
 import type { DraftInput } from '@bindings/DraftInput';
 import type { DraftContent } from '@bindings/DraftContent';
 import type { RemoteImage } from '@bindings/RemoteImage';
@@ -96,6 +97,18 @@ export const attachmentLocalPath = (attachmentId: number) =>
 // 添付を指定の場所へ保存（ダウンロード）。dest は保存先フルパス。
 export const attachmentExport = (attachmentId: number, dest: string) =>
   invoke<void>('attachment_export', { attachmentId, dest });
+
+// 添付された転送メール（.eml）の見出しと中の添付の一覧（未取得なら .eml を先に取得）。
+export const attachmentEmlContents = (attachmentId: number) =>
+  invoke<EmlContents>('attachment_eml_contents', { attachmentId });
+
+// 転送メール（.eml）の中の添付を OS の関連アプリで開く。
+export const attachmentEmlOpen = (attachmentId: number, index: number) =>
+  invoke<void>('attachment_eml_open', { attachmentId, index });
+
+// 転送メール（.eml）の中の添付を指定の場所へ保存する。dest は保存先フルパス。
+export const attachmentEmlExport = (attachmentId: number, index: number, dest: string) =>
+  invoke<void>('attachment_eml_export', { attachmentId, index, dest });
 
 export const mailSetRead = (ids: number[], read: boolean) =>
   invoke<void>('mail_set_read', { ids, read });

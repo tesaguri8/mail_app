@@ -53,8 +53,10 @@ import {
 } from '../utils/attachmentSave';
 import { useEmailDownloads } from '../stores/attachmentDownloads';
 import { AttachmentDownloadSlot } from './AttachmentDownloadLine';
+import { EmlInnerAttachments, isEmlAttachment } from './EmlInnerAttachments';
 import { useToast } from './SyncProvider';
 import { hasReadableBody, htmlHasContent } from '../utils/mailBody';
+import { formatSize } from '../utils/fileSize';
 
 /** 「表示名 <メール>」に整形。表示名が無ければアドレスのみ。 */
 function formatAddress(name: string | null, address: string | null): string {
@@ -287,12 +289,6 @@ function LinkifyEmails({
       )}
     </>
   );
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 /**
@@ -1241,6 +1237,8 @@ export function MailBody({
                     </div>
                     {/* 取得中は進み具合、失敗したら理由をこの行に出す。 */}
                     <AttachmentDownloadSlot id={a.id} />
+                    {/* 添付された転送メール（.eml）は、中の添付を開いて落とせるようにする。 */}
+                    {isEmlAttachment(a) && <EmlInnerAttachments att={attRef(a)} />}
                     {preview && (
                       <img
                         src={preview}

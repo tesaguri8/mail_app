@@ -1,7 +1,13 @@
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { downloadDir, join } from '@tauri-apps/api/path';
 import type { TFunction } from 'i18next';
-import { attachmentExport, attachmentOpen } from '../services/mail';
+import type { EmlAttachment } from '@bindings/EmlAttachment';
+import {
+  attachmentEmlExport,
+  attachmentEmlOpen,
+  attachmentExport,
+  attachmentOpen,
+} from '../services/mail';
 import { withActivity } from '../stores/activity';
 import { trackAttachment, type AttachmentRef } from '../stores/attachmentDownloads';
 
@@ -85,6 +91,43 @@ export async function saveAttachment(a: AttachmentRef, activityLabel: string): P
 /** 添付を OS の関連アプリで開く（未取得なら取得してから）。取得中は行とフッターに出す。 */
 export async function openAttachment(a: AttachmentRef, activityLabel: string): Promise<void> {
   await trackAttachment(a, () => withActivity(activityLabel, () => attachmentOpen(a.id)));
+}
+
+/**
+ * 添付された転送メール（.eml・`eml`）の中の添付 1 件を「名前を付けて保存」で保存する。
+ * .eml が未取得なら先に取るので、その進み具合は .eml の行に出す。
+ *
+ * @returns 実際に保存したら true、ダイアログをキャンセルしたら false。
+ */
+export async function saveEmlPart(
+  eml: AttachmentRef,
+  part: EmlAttachment,
+  activityLabel: string
+): Promise<boolean> {
+  const safe = safeFilename(part.filename);
+  let defaultPath = safe;
+  try {
+    defaultPath = await join(await downloadDir(), safe);
+  } catch {
+    /* ダウンロードフォルダを解決できなければファイル名だけを既定にする */
+  }
+  const dest = await save({ defaultPath }).catch(() => null);
+  if (!dest) return false;
+  await trackAttachment(eml, () =>
+    withActivity(activityLabel, () => attachmentEmlExport(eml.id, part.index, dest))
+  );
+  return true;
+}
+
+/** 添付された転送メール（.eml）の中の添付を OS の関連アプリで開く。 */
+export async function openEmlPart(
+  eml: AttachmentRef,
+  index: number,
+  activityLabel: string
+): Promise<void> {
+  await trackAttachment(eml, () =>
+    withActivity(activityLabel, () => attachmentEmlOpen(eml.id, index))
+  );
 }
 
 /**

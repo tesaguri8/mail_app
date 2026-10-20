@@ -94,7 +94,11 @@ fn parse_attribution(line: &str) -> Option<(Option<String>, Option<String>)> {
     // 誤検知抑制: 「〜書きました:」で終わる本文の一文（例: 会議録を彼は書きました:）で誤って
     // 切らないよう、属性行の裏付け（送信元アドレス @ か 4 桁の西暦）を要求する。
     // メールクライアントの属性行はほぼ必ず日付か差出人アドレスを含むため、これで区別できる。
-    // "<名前> <addr> のメール:"（Thunderbird 日本語版。日付が先の形は下の西暦始まりでも読める）。
+    // iPhone などの "2026/10/02 12:10、名前 <addr> のメール:"（日付が先・読点で区切る）。日時も読む。
+    if let Some(found) = date_first_attribution(l) {
+        return Some(found);
+    }
+    // "<名前> <addr> のメール:"（Thunderbird 日本語版）。
     if (l.ends_with("書きました:") || l.ends_with("wrote:") || l.ends_with("のメール:"))
         && line_has_date_or_email(l)
     {
@@ -125,6 +129,24 @@ fn parse_attribution(line: &str) -> Option<(Option<String>, Option<String>)> {
     }
 
     None
+}
+
+/// 日付が先で読点の後に差出人が続く属性行（iPhone の "2026/10/02 12:10、名前 <addr> のメール:"）を
+/// (差出人, 日時) に読む。行頭が日時として読めて、読点の後ろにアドレスがあるときだけ
+/// （無ければ、従来の「西暦で始まりコロンで終わる行」として読む）。`l` は行末のコロンを半角にそろえたもの。
+fn date_first_attribution(l: &str) -> Option<(Option<String>, Option<String>)> {
+    let head = l.strip_suffix(':')?;
+    let (at, who) = head.split_once(['、', '，'])?;
+    when::parse_quoted_time(at.trim())?;
+    if !who.contains('@') {
+        return None;
+    }
+    let who = ["のメール", "が書きました", "書きました", "wrote"]
+        .iter()
+        .fold(who.trim(), |w, suffix| {
+            w.strip_suffix(suffix).unwrap_or(w).trim_end()
+        });
+    Some((none_if_empty(who), none_if_empty(at)))
 }
 
 /// 属性行の裏付け（送信元アドレス @ か 4 桁連続の西暦）を含むか。
@@ -1121,7 +1143,7 @@ Subject: RE: 図面\n\
             ),
             (
                 "2026/10/20 11:21、山田 花子 <hanako@example.com> のメール:",
-                Some("hanako@example.com"),
+                Some("山田 花子 <hanako@example.com>"),
             ),
             (
                 "山田 花子 <hanako@example.com> 于2026年10月20日周二 11:21写道：",
@@ -1153,6 +1175,15 @@ Subject: RE: 図面\n\
             s.quotes[0].quoted_at.as_deref(),
             Some("Mon, 30 Jun 2026 10:00")
         );
+        // 日付が先の iPhone の形は、日時も読む（読点の後ろを差出人に）。
+        let s = split_reply(
+            "了解です。\n\n2026/10/02 12:10、佐藤 一郎 <ichiro@example.jp> のメール:\n\n> 高橋様",
+        );
+        assert_eq!(
+            s.quotes[0].quoted_from.as_deref(),
+            Some("佐藤 一郎 <ichiro@example.jp>")
+        );
+        assert_eq!(s.quotes[0].quoted_at.as_deref(), Some("2026/10/02 12:10"));
         // アドレスの無い「写道：」は本文の一文とみなす。
         let body = "他这样写道：\n今天天气很好。";
         assert!(split_reply(body).quotes.is_empty());

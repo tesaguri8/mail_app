@@ -504,4 +504,34 @@ Subject: 図面\n\
         assert!(q.body.contains("-----Original Message-----"));
         assert!(q.body.contains("https://files.example.jp/d/xyz"));
     }
+
+    /// Outlook の見出しの間に挟まった iPhone の「日付、名前 <addr> のメール:」も、日時が読めるので
+    /// 1 通の枠になる（名前は作り物）。
+    #[test]
+    fn iphone_date_first_attribution_becomes_its_own_frame() {
+        let store = store();
+        let conn = store.conn.lock().unwrap();
+        let body = "了解しました。\n\n\
+-----Original Message-----\n\
+From: 高橋 花子 <takahashi@example.com>\n\
+Sent: Friday, October 2, 2026 5:55 PM\n\
+Subject: RE: 打ち合わせ\n\
+\n\
+佐藤様\n10/2 夕方の本文です。\n\
+\n\
+2026/10/02 12:10、佐藤 一郎 <ichiro@example.jp> のメール:\n\
+\n\
+> 高橋様\n> 10/2 昼の本文です。\n\
+\n\
+-----Original Message-----\n\
+From: 鈴木 次郎 <jiro@example.com>\n\
+Sent: Thursday, October 1, 2026 9:00 AM\n\
+\n\
+佐藤様\n10/1 の本文です。";
+        let quotes = unseen_quotes(&conn, 0, body, &[]).unwrap();
+        let senders: Vec<&str> = quotes.iter().map(|q| q.sender.as_str()).collect();
+        assert_eq!(senders, ["高橋 花子", "佐藤 一郎", "鈴木 次郎"]);
+        assert_eq!(quotes[1].date, "2026-10-02T12:10:00");
+        assert_eq!(quotes[0].body, "佐藤様\n10/2 夕方の本文です。");
+    }
 }

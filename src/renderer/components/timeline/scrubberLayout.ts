@@ -341,3 +341,40 @@ export function snapToNearest(ys: readonly number[], y: number, radius: number):
   }
   return best;
 }
+
+/** つまみの左端に出す、添付・リンクの目安のアイコン 1 か所分 */
+export interface BadgeMark {
+  y: number;
+  attach: boolean;
+  link: boolean;
+  /** まとめた件がすべて控えめに出す件（未受信の引用の枠）か */
+  muted: boolean;
+}
+
+/**
+ * 各件の添付・リンクの有無から、つまみに出すアイコンの位置を決める。
+ * 札（buildDayLabels）と同じ最小の間隔で、詰まったところは手前の件にまとめる
+ * （間引いて消さず、まとめた件のどれかにあれば出す）。どちらも無い件は飛ばす。
+ */
+export function buildBadges(
+  ys: readonly number[],
+  badges: readonly { attach: boolean; link: boolean }[],
+  accents: readonly boolean[] | undefined,
+  minGap: number
+): BadgeMark[] {
+  const out: BadgeMark[] = [];
+  ys.forEach((y, i) => {
+    const b = badges[i];
+    if (!b || (!b.attach && !b.link)) return;
+    const muted = accents?.[i] ?? false;
+    const last = out[out.length - 1];
+    if (last && y - last.y < minGap) {
+      last.attach ||= b.attach;
+      last.link ||= b.link;
+      last.muted &&= muted;
+      return;
+    }
+    out.push({ y, attach: b.attach, link: b.link, muted });
+  });
+  return out;
+}

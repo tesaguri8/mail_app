@@ -2,9 +2,9 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { MailPlus } from 'lucide-react';
 import type { UnseenQuote } from '@bindings/UnseenQuote';
-import { AutoLinkText } from './HtmlText';
+import { AutoLinkText, hasAutoLinkUrl } from './HtmlText';
 import { formatQuotedDateTime } from '../utils/datetime';
-import { TIMELINE_DATE_ATTR, TIMELINE_QUOTE_ATTR } from './timeline/marks';
+import { markAttrs } from './timeline/marks';
 
 /**
  * このメールに含まれていた、手元に無いメール（転送・Outlook の「元のメッセージ」で初めて届いた内容）。
@@ -37,8 +37,9 @@ export function UnseenQuotes({
         return (
           <div
             key={i}
-            // 日付のつまみに 1 件として載せる（timeline/marks.ts）
-            {...{ [TIMELINE_DATE_ATTR]: q.date, [TIMELINE_QUOTE_ATTR]: '' }}
+            // 日付のつまみに 1 件として載せる（timeline/marks.ts）。添付は外側のメールのもので
+            // この枠のものか分からないので、リンクだけ載せる
+            {...markAttrs({ date: q.date, quote: true, link: hasAutoLinkUrl(q.body) })}
             className="w-full max-w-[92%] rounded-xl border border-dashed border-white/30 bg-white/10 px-3 py-1.5 text-[13px] leading-relaxed text-white/90"
           >
             <div className="mb-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px]">

@@ -9,8 +9,10 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link2, Paperclip } from 'lucide-react';
 import { topVisibleIndex, type DayCount } from './dayCounts';
 import {
+  buildBadges,
   buildDayLabels,
   buildTicks,
   layoutSegments,
@@ -38,6 +40,10 @@ interface TimelineScrubberProps {
    * 短く薄く、その件で始まる日の札を薄くする（枠は手元に届いたメールではないので、主役のバブルより下げる）
    */
   accents?: readonly boolean[];
+  /**
+   * i 件目に添付・リンクがあるか（`starts` と同じ並び）。線の左端に小さなアイコンで出す（目安だけで、押しても何も起きない）
+   */
+  badges?: readonly { attach: boolean; link: boolean }[];
   /** いま一覧の一番上に出ているのが何件目か（印を出す位置）。分からなければ null */
   viewOffset?: number | null;
   /** いま見えている範囲（全体に対する割合 0〜1）。渡すと viewOffset の印の代わりに範囲を出す */
@@ -89,6 +95,7 @@ export function TimelineScrubber({
   days,
   starts,
   accents,
+  badges,
   viewOffset = null,
   viewRange = null,
   onJump,
@@ -135,6 +142,11 @@ export function TimelineScrubber({
   const dots = useMemo(
     () => (starts && segments.length > 0 ? starts.map((f) => f * height) : []),
     [starts, segments, height]
+  );
+  // 添付・リンクのアイコン（札と同じ間隔で、詰まったところはまとめる）
+  const badgeMarks = useMemo(
+    () => (badges && dots.length > 0 ? buildBadges(dots, badges, accents, LABEL_MIN_GAP) : []),
+    [badges, dots, accents]
   );
   // マウス位置の日を含む年・月の帯（いまどの年・月の中かを見せる）
   const bands = useMemo(
@@ -246,7 +258,8 @@ export function TimelineScrubber({
   return (
     <div
       // 位置に合わせるときは札（「2026/10/12」）が入る幅にする
-      className={`relative h-full shrink-0 select-none border-r border-white/10 ${placed ? 'w-22' : 'w-16'}`}
+      // 左端に添付・リンクのアイコンの列を取る
+      className={`relative h-full shrink-0 select-none border-r border-white/10 ${placed ? 'w-26' : 'w-16'}`}
       role="navigation"
       aria-label={t('timeline.label')}
     >
@@ -316,6 +329,21 @@ export function TimelineScrubber({
             style={{ top: label.y }}
           >
             {(label.withYear ? labelFormat.year : labelFormat.day).format(dateOf(label.dateKey))}
+          </div>
+        ))}
+
+        {/* 添付・リンクの目安（色は札の文字と同じ薄さ。押しても何も起きない） */}
+        {badgeMarks.map((b, i) => (
+          <div
+            key={`badge-${i}`}
+            aria-hidden
+            className={`pointer-events-none absolute left-1 flex -translate-y-1/2 items-center gap-px ${
+              b.muted ? 'text-white/35' : 'text-white/60'
+            }`}
+            style={{ top: b.y }}
+          >
+            {b.attach && <Paperclip size={9} strokeWidth={2.25} />}
+            {b.link && <Link2 size={9} strokeWidth={2.25} />}
           </div>
         ))}
 

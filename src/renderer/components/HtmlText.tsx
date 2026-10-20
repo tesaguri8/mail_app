@@ -320,6 +320,22 @@ function highlightText(text: string, re: RegExp | null, keyBase: string): ReactN
 const AUTOLINK_RE =
   /((?:https?:\/\/|www\.)[^\s<>]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/g;
 
+/** URL として扱う一致か（メールアドレスでなく http(s) / www. で始まる）。 */
+function isUrlMatch(match: string): boolean {
+  return /^(https?:\/\/|www\.)/i.test(match);
+}
+
+/**
+ * プレーン本文に、リンクにする URL（http(s) / www.）があるか。表示（linkifyToNodes）と同じ判定。
+ * メールアドレス（署名の mailto など）は数えない。日付のつまみの「リンクあり」の目印に使う。
+ */
+export function hasAutoLinkUrl(text: string): boolean {
+  for (const m of text.matchAll(AUTOLINK_RE)) {
+    if (isUrlMatch(m[0])) return true;
+  }
+  return false;
+}
+
 /** URL 末尾に紛れがちな句読点・閉じ括弧をリンクから外す（表示テキストには残す）。 */
 function stripTrailingPunct(url: string): [string, string] {
   const m = url.match(/[)\]}>.,;:!?'"、。）」』】]+$/);
@@ -369,7 +385,7 @@ function linkifyToNodes(
     if (offset > last) pushText(text.slice(last, offset));
     last = offset + match.length;
 
-    const isUrl = /^(https?:\/\/|www\.)/i.test(match);
+    const isUrl = isUrlMatch(match);
     if (!isUrl && match.includes('@')) {
       // メールアドレス。導線があればそれで、無ければ素のテキスト（メールアプリなので mailto は張らない）。
       if (renderEmail) nodes.push(<Fragment key={key++}>{renderEmail(match)}</Fragment>);

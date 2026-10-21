@@ -28,6 +28,10 @@ date: string | null,
  */
 guessed: boolean, 
 /**
+ * 差出人を推定した枠の「>」の段（1 が最も新しい引用）。推定でない枠は None。
+ */
+guess_depth: number | null, 
+/**
  * 件名（見出しにあれば）。
  */
 subject: string | null, 

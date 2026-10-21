@@ -82,6 +82,10 @@ pub fn parse_quoted_time(text: &str) -> Option<QuotedTime> {
                     " "
                 }
                 '-' if prev.is_ascii_digit() => " ",
+                // ISO 8601 の "2023-10-30T10:00:00Z"（日付と時刻の間の T、UTC の Z）。
+                'T' if prev.is_ascii_digit() => " ",
+                'Z' if prev.is_ascii_digit() => " +0000",
+                '+' if prev.is_ascii_digit() => " +",
                 '：' => ":",
                 _ => "",
             };
@@ -291,6 +295,18 @@ mod tests {
         assert_eq!(
             parse_quoted_time("火, 20 10月 2026、11:21").map(|t| t.local),
             Some(at(2026, 10, 20, 11, 21))
+        );
+    }
+
+    /// ISO 8601 の日時（"2023-10-30T10:00:00Z" / "+09:00" 付き）も読む。
+    #[test]
+    fn reads_iso_8601() {
+        let t = parse_quoted_time("2023-10-30T10:00:00Z").unwrap();
+        assert_eq!((t.local, t.offset_secs), (at(2023, 10, 30, 10, 0), Some(0)));
+        let t = parse_quoted_time("2023-10-30T10:00:00+09:00").unwrap();
+        assert_eq!(
+            (t.local, t.offset_secs),
+            (at(2023, 10, 30, 10, 0), Some(32_400))
         );
     }
 

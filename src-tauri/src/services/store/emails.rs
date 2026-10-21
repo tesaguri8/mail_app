@@ -101,6 +101,8 @@ pub struct NewQuote {
     pub fingerprint: String,
     /// 差出人の行が無い「>」だけの引用か（差出人を推定する対象。quote_guess）。
     pub bare_gt: bool,
+    /// 枠の先頭の「>」の段の数（推定で、段ごとに相手と自分を入れ替える）。
+    pub gt_depth: usize,
     /// 見出しを除いた引用の本文（推定した差出人の手元のメールと照らし合わせるのに使う。保存はしない）。
     pub body: String,
 }
@@ -508,10 +510,10 @@ fn draft_attachments(
 
 /// 差出人の行が無い「>」だけの引用に、返信の向きから推定した差出人を入れる（quote_guess）。
 fn guess_quotes(conn: &Connection, email_id: i64, quotes: &[NewQuote]) -> rusqlite::Result<()> {
-    let blocks: Vec<(i64, &str)> = quotes
+    let blocks: Vec<(i64, usize, &str)> = quotes
         .iter()
         .filter(|q| q.bare_gt)
-        .map(|q| (q.order, q.body.as_str()))
+        .map(|q| (q.order, q.gt_depth, q.body.as_str()))
         .collect();
     super::quote_guess::guess_quotes_of_email(conn, email_id, &blocks)?;
     // 差出人は読めたのに日時の無い引用は、差出人と本文で照らし合わせる（quote_undated）。
@@ -1982,6 +1984,7 @@ mod tests {
                 quoted_at: Some("2026/10/14 12:50:57".to_string()),
                 fingerprint: "f0".to_string(),
                 bare_gt: false,
+                gt_depth: 0,
                 body: String::new(),
             }],
             ..new_email_for_test("reply")

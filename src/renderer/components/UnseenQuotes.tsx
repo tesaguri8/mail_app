@@ -100,7 +100,11 @@ export function UnseenQuotes({
                 <>
                   <span
                     className="inline-flex items-center gap-0.5 rounded-full border border-amber-300/40 px-1.5 text-amber-200/80"
-                    title={t('thread.quoteGuessedHint')}
+                    title={
+                      q.guess_depth
+                        ? `${t('thread.quoteGuessedHint')} ${t('thread.quoteGuessedDepth', { n: q.guess_depth })}`
+                        : t('thread.quoteGuessedHint')
+                    }
                   >
                     <Sparkles size={9} aria-hidden />
                     {t('thread.quoteGuessed')}

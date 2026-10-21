@@ -170,8 +170,11 @@ fn ends_with_time(at: &str) -> bool {
         .is_some_and(|tok| tok.contains(':') || is_time_suffix(tok))
 }
 
-/// 時刻の字句か（"17:55" / "12:10:00" / "午後5:55"）。
+/// 時刻の字句か（"17:55" / "12:10:00" / "午後5:55" / ISO 8601 の "2023-10-30T10:00:00Z"）。
 fn is_clock_token(tok: &str) -> bool {
+    if tok.contains('T') && tok.contains(':') && when::parse_quoted_time(tok).is_some() {
+        return true;
+    }
     let t = tok.trim_start_matches("午前").trim_start_matches("午後");
     t.contains(':')
         && t.split(':')

@@ -734,6 +734,8 @@ pub struct UnseenQuote {
     pub date: Option<String>,
     /// 差出人の行が無い「>」だけの引用で、差出人を返信の向きから推定した枠か（docs/THREADING.md §2）。
     pub guessed: bool,
+    /// 差出人を推定した枠の「>」の段（1 が最も新しい引用）。推定でない枠は None。
+    pub guess_depth: Option<u32>,
     /// 件名（見出しにあれば）。
     pub subject: Option<String>,
     /// 見出しを除いた本文。

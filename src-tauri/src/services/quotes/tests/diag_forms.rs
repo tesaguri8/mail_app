@@ -150,3 +150,28 @@ fn notices_after_rule_are_not_quotes() {
     assert!(s.quotes.is_empty());
     assert!(s.clean.contains("日時： 10月2日（金）"));
 }
+
+/// 本文の中の全角の「ｃｃ：…」（項目名は半角にそろえると "cc"）も、1 通の始まりにしない。
+#[test]
+fn fullwidth_cc_sentence_in_body_does_not_start_a_message() {
+    let body = "本文\n\nFrom: 山田 <taro@example.jp>\nSent: Friday, August 7, 2026 9:05 AM\n\
+To: 佐藤 <sato@example.jp>\nSubject: RE: 図面\n\n佐藤様\n\n\
+ｃｃ：鈴木さんに、ＣＧのデータ送信お願いできますか\n\n\
+From: 佐藤 <sato@example.jp>\nSent: Thursday, August 6, 2026 9:05 AM\nTo: 山田 <taro@example.jp>\n\
+Subject: 図面\n\n最初の本文";
+    let s = split_reply(body);
+    assert_eq!(
+        frames(body),
+        vec![
+            (
+                some("山田 <taro@example.jp>"),
+                some("Friday, August 7, 2026 9:05 AM")
+            ),
+            (
+                some("佐藤 <sato@example.jp>"),
+                some("Thursday, August 6, 2026 9:05 AM")
+            ),
+        ]
+    );
+    assert!(s.quotes[0].body.contains("ｃｃ：鈴木さんに"));
+}

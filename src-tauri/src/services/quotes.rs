@@ -136,4 +136,6 @@ pub fn fingerprint(text: &str) -> String {
 }
 
 #[cfg(test)]
+mod diag;
+#[cfg(test)]
 mod tests;

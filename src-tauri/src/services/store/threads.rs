@@ -854,6 +854,14 @@ pub fn reprocess_all_conn(conn: &mut Connection, account_id: i64) -> rusqlite::R
                 for q in &split.quotes {
                     insq.execute(params![id, q.order, q.quoted_from, q.quoted_at, q.fingerprint])?;
                 }
+                // 差出人の行が無い「>」だけの引用は、返信の相手から差出人を推定する。
+                let bare: Vec<(i64, &str)> = split
+                    .quotes
+                    .iter()
+                    .filter(|q| q.bare_gt)
+                    .map(|q| (q.order, q.body.as_str()))
+                    .collect();
+                super::quote_guess::guess_quotes_of_email(&tx, *id, &bare)?;
             }
         }
         tx.commit()?;
@@ -1415,8 +1423,8 @@ Subject: 図面\n\
         let q = &m.unseen_quotes[0];
         assert_eq!(q.from, "高橋 花子 <takahashi@example.com>");
         assert_eq!(q.sender, "高橋 花子");
-        assert_eq!(q.date, "2026-10-02T14:50:00");
-        assert_eq!(q.at, "Friday, October 2, 2026 2:50 PM");
+        assert_eq!(q.date.as_deref(), Some("2026-10-02T14:50:00"));
+        assert_eq!(q.at.as_deref(), Some("Friday, October 2, 2026 2:50 PM"));
         assert_eq!(q.subject.as_deref(), Some("図面"));
         assert_eq!(q.body, "田中様\n図面を送ります。");
     }

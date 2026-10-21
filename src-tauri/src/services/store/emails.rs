@@ -99,6 +99,10 @@ pub struct NewQuote {
     pub quoted_from: Option<String>,
     pub quoted_at: Option<String>,
     pub fingerprint: String,
+    /// 差出人の行が無い「>」だけの引用か（差出人を推定する対象。quote_guess）。
+    pub bare_gt: bool,
+    /// 見出しを除いた引用の本文（推定した差出人の手元のメールと照らし合わせるのに使う。保存はしない）。
+    pub body: String,
 }
 
 /// 添付メタ挿入用（内部）。
@@ -350,6 +354,8 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
     super::quote_match::match_quotes_of_email(conn, id)?;
     // 逆向き: 先に取り込んだ返信の引用が、このメールを指していれば結び付ける。
     super::quote_match::match_quotes_to_email(conn, id)?;
+    // 差出人の行が無い「>」だけの引用は、返信の相手から差出人を推定する。
+    guess_quotes(conn, id, &e.quotes)?;
     // 迷惑差出人に登録済みのアドレスからの新着（受信箱）は、受信時に自動で迷惑へ隔離する
     // （「このアドレスを迷惑にしたら今後の同アドレスも迷惑へ」。docs/SPAM.md）。
     // ただし本人検証・住所録の本人一致があれば隔離しない（誤登録での取りこぼし防止）。
@@ -500,6 +506,17 @@ fn draft_attachments(
     rows.collect()
 }
 
+/// 差出人の行が無い「>」だけの引用に、返信の相手から推定した差出人を入れる（quote_guess）。
+fn guess_quotes(conn: &Connection, email_id: i64, quotes: &[NewQuote]) -> rusqlite::Result<()> {
+    let blocks: Vec<(i64, &str)> = quotes
+        .iter()
+        .filter(|q| q.bare_gt)
+        .map(|q| (q.order, q.body.as_str()))
+        .collect();
+    super::quote_guess::guess_quotes_of_email(conn, email_id, &blocks)?;
+    Ok(())
+}
+
 /// 引用ブロック（message_quotes）を一括挿入する。
 fn insert_quotes(conn: &Connection, email_id: i64, quotes: &[NewQuote]) -> rusqlite::Result<()> {
     if quotes.is_empty() {
@@ -617,6 +634,7 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
     if has_quotes == 0 && !e.quotes.is_empty() {
         insert_quotes(conn, id, &e.quotes)?;
         super::quote_match::match_quotes_of_email(conn, id)?;
+        guess_quotes(conn, id, &e.quotes)?;
         touched = true;
     }
     // ヘッダを後付けできたら、auto 割当を「未処理」に戻して次のローカル加工で引き直させる
@@ -1950,6 +1968,8 @@ mod tests {
                 quoted_from: Some("ayaku@example.jp".to_string()),
                 quoted_at: Some("2026/10/14 12:50:57".to_string()),
                 fingerprint: "f0".to_string(),
+                bare_gt: false,
+                body: String::new(),
             }],
             ..new_email_for_test("reply")
         };

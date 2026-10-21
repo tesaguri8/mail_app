@@ -315,6 +315,12 @@ const MIGRATIONS: &[Migration] = &[
         version: 68,
         sql: include_str!("migrations/0068_unmatched_quotes_index.sql"),
     },
+    Migration {
+        // 69 は「>」だけの引用の、返信の相手から推定した差出人（quoted_from とは別の列。
+        // docs/THREADING.md §2）。
+        version: 69,
+        sql: include_str!("migrations/0069_quote_guessed_from.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

@@ -227,10 +227,10 @@ pub fn match_quotes_of_account(conn: &Connection, account_id: i64) -> rusqlite::
 }
 
 /// 同じ会話にあるとみなす本文の最短（正規化後の文字数）。挨拶だけの短い本文で一致させないため。
-const MIN_KNOWN_CHARS: usize = 20;
+pub(super) const MIN_KNOWN_CHARS: usize = 20;
 
 /// 引用の本文を比べる形にそろえる（行頭の `>` と空白を落とし、1 本につなぐ）。
-fn normalize_body(text: &str) -> String {
+pub(super) fn normalize_body(text: &str) -> String {
     text.lines()
         .map(quotes::anchor::normalize_quote_line)
         .filter(|l| !l.is_empty())
@@ -267,7 +267,40 @@ pub fn unseen_quotes(
     let mut out: Vec<UnseenQuote> = Vec::new();
     // 直前の引用を枠として出したか（読めない引用をその枠に残すため）。
     let mut last_shown = false;
+    // 再解析で入れた、返信の相手から推定した差出人（block_order → (推定の差出人, 照合できたか)）。
+    let guessed: std::collections::HashMap<i64, (String, bool)> = {
+        let mut stmt = conn.prepare_cached(
+            "SELECT block_order, guessed_from, matched_email_id IS NOT NULL FROM message_quotes
+             WHERE email_id = ?1 AND guessed_from IS NOT NULL",
+        )?;
+        let rows = stmt.query_map(params![email_id], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                (r.get::<_, String>(1)?, r.get::<_, bool>(2)?),
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
     for q in quotes::split_reply(body_plain).quotes {
+        // 差出人の行が無い「>」だけの引用で、差出人を推定できたもの: 日時不明の枠にする
+        // （手元にあるもの・会話の中で既に読めるものは畳んだまま）。
+        if let Some((from, matched)) = q.bare_gt.then(|| guessed.get(&q.order)).flatten() {
+            let norm = normalize_body(&q.body);
+            let known_here = known.iter().any(|k| norm.contains(k.as_str()));
+            if !*matched && !known_here && !q.body.is_empty() {
+                last_shown = true;
+                out.push(UnseenQuote {
+                    sender: quotes::sender::sender_label(from),
+                    from: from.clone(),
+                    at: None,
+                    date: None,
+                    guessed: true,
+                    subject: q.subject,
+                    body: q.body,
+                });
+            }
+            continue;
+        }
         let time = q.quoted_at.as_deref().and_then(parse_quoted_time);
         let (Some(from), Some(at), Some(time)) = (q.quoted_from, q.quoted_at, time) else {
             if let Some(prev) = out.last_mut().filter(|_| last_shown && !q.text.is_empty()) {
@@ -290,9 +323,10 @@ pub fn unseen_quotes(
         last_shown = true;
         out.push(UnseenQuote {
             sender: quotes::sender::sender_label(&from),
-            date: time.to_iso(),
+            date: Some(time.to_iso()),
             from,
-            at,
+            at: Some(at),
+            guessed: false,
             subject: q.subject,
             body: q.body,
         });
@@ -581,7 +615,7 @@ Sent: Thursday, October 1, 2026 9:00 AM\n\
         let quotes = unseen_quotes(&conn, 0, body, &[]).unwrap();
         let senders: Vec<&str> = quotes.iter().map(|q| q.sender.as_str()).collect();
         assert_eq!(senders, ["高橋 花子", "佐藤 一郎", "鈴木 次郎"]);
-        assert_eq!(quotes[1].date, "2026-10-02T12:10:00");
+        assert_eq!(quotes[1].date.as_deref(), Some("2026-10-02T12:10:00"));
         assert_eq!(quotes[0].body, "佐藤様\n10/2 夕方の本文です。");
     }
 

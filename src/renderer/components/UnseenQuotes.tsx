@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowDown, MailPlus } from 'lucide-react';
+import { ArrowDown, MailPlus, Sparkles } from 'lucide-react';
 import type { UnseenQuote } from '@bindings/UnseenQuote';
 import { AutoLinkText, hasAutoLinkUrl } from './HtmlText';
 import { formatQuotedDateTime, parseQuotedDate } from '../utils/datetime';
@@ -13,11 +13,15 @@ import { markAttrs } from './timeline/marks';
  * 日時の読めない枠は、本文で直前にあった（＝その続きとして枠になった）日時のある枠に寄せ、そのすぐ上
  * （古い側）に置く。本文の先頭にあって直前が無ければ、本文で直後の枠に寄せ、そのすぐ下に置く。
  * どちらも無ければ（全部読めない）本文の逆順のまま。同じ日時どうしも本文の逆順を保つ。
+ *
+ * 差出人を推定した枠（`guessed`。返信のいちばん新しい引用で、日時は分からない）は、日時の分かる枠の
+ * うち、いちばん新しいものの次（親のバブルのすぐ上）に置く。
  */
 export function oldestFirst(quotes: readonly UnseenQuote[]): UnseenQuote[] {
-  const times = quotes.map((q) => parseQuotedDate(q.date)?.getTime() ?? null);
-  // 寄せる先の日時: 本文で直前（i より前）の日時のある枠、無ければ直後
+  const times = quotes.map((q) => (q.date ? (parseQuotedDate(q.date)?.getTime() ?? null) : null));
+  // 寄せる先の日時: 推定の枠はいちばん後ろ。ほかは本文で直前（i より前）の日時のある枠、無ければ直後
   const keyOf = (i: number): number => {
+    if (quotes[i].guessed) return Number.POSITIVE_INFINITY;
     for (let j = i; j >= 0; j--) if (times[j] !== null) return times[j] as number;
     for (let j = i + 1; j < times.length; j++) if (times[j] !== null) return times[j] as number;
     return 0;
@@ -85,10 +89,24 @@ export function UnseenQuotes({
               <span className="text-white/60" title={q.from}>
                 {q.sender}
               </span>
-              {/* 表記はバブルにそろえ、見出しに書かれていた元の文字列はツールチップに残す */}
-              <span className="tabular-nums text-white/45" title={q.at}>
-                {q.date ? formatQuotedDateTime(q.date, q.at) : q.at}
-              </span>
+              {q.guessed ? (
+                // 差出人の行が無い「>」だけの引用: 差出人は返信の相手から推定、日時は分からない
+                <>
+                  <span
+                    className="inline-flex items-center gap-0.5 rounded-full border border-amber-300/40 px-1.5 text-amber-200/80"
+                    title={t('thread.quoteGuessedHint')}
+                  >
+                    <Sparkles size={9} aria-hidden />
+                    {t('thread.quoteGuessed')}
+                  </span>
+                  <span className="text-white/45">{t('thread.quoteDateUnknown')}</span>
+                </>
+              ) : (
+                // 表記はバブルにそろえ、見出しに書かれていた元の文字列はツールチップに残す
+                <span className="tabular-nums text-white/45" title={q.at ?? undefined}>
+                  {q.date ? formatQuotedDateTime(q.date, q.at ?? '') : q.at}
+                </span>
+              )}
               {q.subject && <span className="min-w-0 truncate text-white/45">{q.subject}</span>}
             </div>
             <AutoLinkText text={q.body} highlight={highlight} renderDate={renderDate} />

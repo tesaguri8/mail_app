@@ -32,6 +32,7 @@ const quote = (body: string): UnseenQuote => ({
   date: '2026-10-15T11:21:00',
   subject: '図面の件',
   body,
+  guessed: false,
 });
 
 describe('UnseenQuotes の本文のリンク', () => {
@@ -67,6 +68,15 @@ describe('UnseenQuotes の見出しの日時', () => {
     act(() => root.render(<UnseenQuotes quotes={[q]} out={false} />));
     expect(stamp()?.textContent).toBe(formatDateTime('2026-10-20T11:21:08+09:00'));
     expect(stamp()?.getAttribute('title')).toBe('Tue, 20 Oct 2026 11:21:08 +0900');
+  });
+
+  it('差出人を推定した枠は「推定」の印（理由はツールチップ）と「日時不明」を出す', () => {
+    const q: UnseenQuote = { ...quote('本文'), at: null, date: null, guessed: true };
+    act(() => root.render(<UnseenQuotes quotes={[q]} out={false} />));
+    expect(stamp()).toBeNull();
+    const badge = container.querySelector('span[title="thread.quoteGuessedHint"]');
+    expect(badge?.textContent).toBe('thread.quoteGuessed');
+    expect(container.textContent).toContain('thread.quoteDateUnknown');
   });
 
   it('読んだ日時が無ければ、元の文字列をそのまま出す', () => {
@@ -109,6 +119,23 @@ describe('枠の並び（古い順・親のバブルの上）', () => {
   it('本文の先頭の枠が読めなければ、直後の枠のすぐ下（新しい側）に置く', () => {
     const lost = at('先頭', '');
     expect(subjects(oldestFirst([lost, inBody[2], inBody[4]]))).toEqual(['a', 'c', '先頭']);
+  });
+
+  it('差出人を推定した枠（日時不明）は、日時の分かる枠のいちばん新しいものの次に置く', () => {
+    const guessed: UnseenQuote = {
+      ...quote('推定'),
+      subject: '推定',
+      at: null,
+      date: null,
+      guessed: true,
+    };
+    // 本文ではいちばん新しい引用（先頭）に出てくる
+    expect(subjects(oldestFirst([guessed, inBody[0], inBody[2], inBody[4]]))).toEqual([
+      'a',
+      'c',
+      'e',
+      '推定',
+    ]);
   });
 
   it('つまみが DOM の順に読む日時は、枠 → 親のバブルで上から下へ単調に増える', () => {

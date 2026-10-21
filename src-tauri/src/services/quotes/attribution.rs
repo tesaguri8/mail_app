@@ -311,17 +311,21 @@ pub(super) fn looks_like_attribution(line: &str) -> bool {
         || header::is_from_line(l)
 }
 
-/// 属性行の後ろ半分らしい行か（"<addr>:" / "<addr>のメール:" / 山括弧の途中で割れた "addr>:"）。
+/// 属性行の後ろ半分らしい行か（"<addr>:" / "<addr>のメール:" / 山括弧の途中で割れた "addr>:" /
+/// アドレスのある "名前 <addr> wrote:"）。
 fn is_attribution_tail(line: &str) -> bool {
     let l = line.trim();
+    let wrote = l.to_lowercase().ends_with("wrote:") && (l.contains('<') || l.contains('@'));
     !l.starts_with('>')
-        && [">:", ">：", ">のメール:", ">のメール："]
-            .iter()
-            .any(|end| l.ends_with(end))
+        && (wrote
+            || [">:", ">：", ">のメール:", ">のメール："]
+                .iter()
+                .any(|end| l.ends_with(end)))
 }
 
 /// 属性行が改行で 2 行に割れた形（"Oct 2, 2026, 9:05 PM +0900, 名前" の次の行が "<addr>:" /
-/// "…、名前 <" の次の行が "hanako@example.com>:"）を、つないで読む。
+/// "…、名前 <" の次の行が "hanako@example.com>:" / "On Fri, 2 Oct 2026 12:10:00 +0900" の次の行が
+/// "名前 <addr> wrote:"）を、つないで読む。
 /// `line` が後ろ半分らしく、つないだ行にアドレスがあり、つないだほうが 1 行だけより多く読めるとき（日時が取れる・1 行では
 /// 属性行と分からない）だけ Some。山括弧の途中で割れた形（`line` に "<" が無い）は空白を入れずにつなぐ。
 pub(super) fn wrapped_attribution(
@@ -334,7 +338,16 @@ pub(super) fn wrapped_attribution(
         return None;
     }
     let l = line.trim();
-    let joined = if l.contains('<') {
+    // "On Fri, 2 Oct 2026 12:10:00 +0900" の次の行が "名前 <addr> wrote:" の形は、日時の後ろに
+    // カンマを入れてつなぐ（"On …" の読み方は、最後のカンマで日時と差出人を分ける）。
+    let on_date = p
+        .get(..3)
+        .is_some_and(|h| h.eq_ignore_ascii_case("on "))
+        .then(|| p[3..].trim())
+        .is_some_and(|d| when::parse_quoted_time(d).is_some());
+    let joined = if on_date {
+        format!("{p}, {l}")
+    } else if l.contains('<') {
         format!("{p} {l}")
     } else {
         format!("{p}{l}")

@@ -48,6 +48,8 @@ pub struct Split {
 
 /// 本文（プレーン）を新規部分と引用に分離する。
 pub fn split_reply(plain: &str) -> Split {
+    // 1 行に詰まった見出し（"From：…To：…日時：…"）は、項目ごとの行に分けてから読む。
+    let plain = header::packed::expand(plain);
     let lines: Vec<&str> = plain.lines().collect();
 
     // 1) 引用開始行を探す。

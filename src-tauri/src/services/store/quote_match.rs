@@ -267,7 +267,7 @@ pub fn unseen_quotes(
     let mut out: Vec<UnseenQuote> = Vec::new();
     // 直前の引用を枠として出したか（読めない引用をその枠に残すため）。
     let mut last_shown = false;
-    // 再解析で入れた、返信の相手から推定した差出人（block_order → (推定の差出人, 照合できたか)）。
+    // 再解析で入れた、返信の向きから推定した差出人（block_order → (推定の差出人, 照合できたか)）。
     let guessed: std::collections::HashMap<i64, (String, bool)> = {
         let mut stmt = conn.prepare_cached(
             "SELECT block_order, guessed_from, matched_email_id IS NOT NULL FROM message_quotes

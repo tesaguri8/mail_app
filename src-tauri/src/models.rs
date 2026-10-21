@@ -730,7 +730,7 @@ pub struct UnseenQuote {
     /// 送信日時を読んだもの（ISO 8601。時差が書かれていなければ時差なし＝書かれたままの時刻。
     /// `QuotedTime::to_iso`）。日付のつまみの目盛りに使う。差出人を推定した枠では無い（日時不明）。
     pub date: Option<String>,
-    /// 差出人の行が無い「>」だけの引用で、差出人を返信の相手から推定した枠か（docs/THREADING.md §2）。
+    /// 差出人の行が無い「>」だけの引用で、差出人を返信の向きから推定した枠か（docs/THREADING.md §2）。
     pub guessed: bool,
     /// 件名（見出しにあれば）。
     pub subject: Option<String>,

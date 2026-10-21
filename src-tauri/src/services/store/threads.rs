@@ -854,7 +854,7 @@ pub fn reprocess_all_conn(conn: &mut Connection, account_id: i64) -> rusqlite::R
                 for q in &split.quotes {
                     insq.execute(params![id, q.order, q.quoted_from, q.quoted_at, q.fingerprint])?;
                 }
-                // 差出人の行が無い「>」だけの引用は、返信の相手から差出人を推定する。
+                // 差出人の行が無い「>」だけの引用は、返信の向きから差出人を推定する。
                 let bare: Vec<(i64, &str)> = split
                     .quotes
                     .iter()

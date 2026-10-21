@@ -354,7 +354,7 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
     super::quote_match::match_quotes_of_email(conn, id)?;
     // 逆向き: 先に取り込んだ返信の引用が、このメールを指していれば結び付ける。
     super::quote_match::match_quotes_to_email(conn, id)?;
-    // 差出人の行が無い「>」だけの引用は、返信の相手から差出人を推定する。
+    // 差出人の行が無い「>」だけの引用は、返信の向きから差出人を推定する。
     guess_quotes(conn, id, &e.quotes)?;
     // 迷惑差出人に登録済みのアドレスからの新着（受信箱）は、受信時に自動で迷惑へ隔離する
     // （「このアドレスを迷惑にしたら今後の同アドレスも迷惑へ」。docs/SPAM.md）。
@@ -506,7 +506,7 @@ fn draft_attachments(
     rows.collect()
 }
 
-/// 差出人の行が無い「>」だけの引用に、返信の相手から推定した差出人を入れる（quote_guess）。
+/// 差出人の行が無い「>」だけの引用に、返信の向きから推定した差出人を入れる（quote_guess）。
 fn guess_quotes(conn: &Connection, email_id: i64, quotes: &[NewQuote]) -> rusqlite::Result<()> {
     let blocks: Vec<(i64, &str)> = quotes
         .iter()

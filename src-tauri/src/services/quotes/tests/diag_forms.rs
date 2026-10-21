@@ -204,3 +204,16 @@ fn reads_header_inside_two_gt_levels() {
         vec![(some("taro@example.jp"), some("2023-10-30 10:00:00"))]
     );
 }
+
+/// Apple の 24 時間表記の属性行が、署名の名前の行に空行なしで続く形（日・時が 1 桁、名前の無いアドレス、
+/// 改行は \r\n。vaio の 6629 の形）。
+#[test]
+fn reads_apple_24h_attribution_right_after_signature() {
+    let body = "本文1\r\n本文2\r\n\r\n末松\r\nDec 4, 2023, 9:05 +0900, sato@example.jp:\r\n> 引用\r\n>\r\n> 引用 二";
+    let s = split_reply(body);
+    assert_eq!(s.clean, "本文1\n本文2\n\n末松");
+    assert_eq!(
+        frames(body),
+        vec![(some("sato@example.jp"), some("Dec 4, 2023, 9:05 +0900"))]
+    );
+}

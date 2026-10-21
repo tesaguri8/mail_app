@@ -786,6 +786,7 @@
     "title": "Accounts",
     "none": "No accounts yet. Add one to get started.",
     "addAccount": "Add account",
+    "backToAll": "All accounts",
     "email": "Email address",
     "username": "Server username (usually your email)",
     "password": "Password / app password",

@@ -1,4 +1,4 @@
-//! 差出人の行が無い「>」だけの引用に、返信の相手から推定した差出人を入れ、手元のメールと
+//! 差出人の行が無い「>」だけの引用に、返信の向きから推定した差出人を入れ、手元のメールと
 //! 照らし合わせる（docs/THREADING.md §2。規則は `quotes::guess`）。
 //!
 //! 推定した差出人は `message_quotes.guessed_from` に入れる（読めた `quoted_from` は上書きしない）。
@@ -7,13 +7,13 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
 use super::quote_match::{normalize_body, MIN_KNOWN_CHARS};
-use crate::services::quotes::guess::{guess_quote_sender, ReplyContext};
+use crate::services::quotes::guess::{guess_quote_sender, OwnAccount, ReplyContext};
 use crate::services::quotes::sender::split_sender;
 
 /// 照合の相手として見る、推定した差出人の直近のメールの数。
 const MATCH_CANDIDATES: i64 = 50;
 
-/// 推定に使うメールの列（件名・返信の印・差出人・宛先・Cc・List-Id・日時）。
+/// 推定に使うメールの列（件名・返信の印・差出人・宛先・Cc・List-Id・日時・受けたアカウントのアドレスと表示名）。
 type EmailRow = (
     Option<String>,
     Option<String>,
@@ -24,6 +24,8 @@ type EmailRow = (
     Option<String>,
     Option<String>,
     Option<i64>,
+    Option<String>,
+    Option<String>,
 );
 
 /// 自分のアドレス（すべてのアカウントとプロフィール。小文字）。
@@ -37,30 +39,43 @@ fn self_addresses(conn: &Connection) -> rusqlite::Result<Vec<String>> {
 }
 
 /// 推定した差出人の、このメールより前のメールのうち、本文が引用に入っているもの（新しい順で最初）。
+/// 推定が自分（`self_addrs` のどれか）なら、自分の全アカウントから送ったメールを相手にする
+/// （受信した返信の「>」は、自分が前にどのアカウントから送った文でもありうる）。
 fn match_guessed(
     conn: &Connection,
     email_id: i64,
     before_ts: i64,
     guessed: &str,
+    self_addrs: &[String],
     fingerprint: Option<&str>,
     quote_body: &str,
 ) -> rusqlite::Result<Option<i64>> {
     let Some(addr) = split_sender(guessed).0 else {
         return Ok(None);
     };
+    let senders: Vec<String> = if self_addrs.iter().any(|s| s.eq_ignore_ascii_case(&addr)) {
+        self_addrs.to_vec()
+    } else {
+        vec![addr]
+    };
+    let senders = serde_json::to_string(&senders).unwrap_or_else(|_| "[]".to_string());
     let quote = normalize_body(quote_body);
     let mut stmt = conn.prepare_cached(
         "SELECT id, clean_body, body_fingerprint FROM emails
-         WHERE lower(trim(from_address)) = ?1 AND date_ts < ?2 AND id <> ?3 AND folder <> 'drafts'
+         WHERE lower(trim(from_address)) IN (SELECT value FROM json_each(?1))
+           AND date_ts < ?2 AND id <> ?3 AND folder <> 'drafts'
          ORDER BY date_ts DESC LIMIT ?4",
     )?;
-    let rows = stmt.query_map(params![addr, before_ts, email_id, MATCH_CANDIDATES], |r| {
-        Ok((
-            r.get::<_, i64>(0)?,
-            r.get::<_, Option<String>>(1)?,
-            r.get::<_, Option<String>>(2)?,
-        ))
-    })?;
+    let rows = stmt.query_map(
+        params![senders, before_ts, email_id, MATCH_CANDIDATES],
+        |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        },
+    )?;
     for row in rows {
         let (id, clean, fp) = row?;
         if fingerprint.is_some_and(|f| fp.as_deref() == Some(f)) {
@@ -90,9 +105,9 @@ pub fn guess_quotes_of_email(
     };
     let row: Option<EmailRow> = conn
         .query_row(
-            "SELECT subject, in_reply_to, references_ids, from_address, from_name, to_addresses,
-                    cc_addresses, list_id, date_ts
-             FROM emails WHERE id = ?1",
+            "SELECT e.subject, e.in_reply_to, e.references_ids, e.from_address, e.from_name,
+                    e.to_addresses, e.cc_addresses, e.list_id, e.date_ts, a.email, a.display_name
+             FROM emails e LEFT JOIN accounts a ON a.id = e.account_id WHERE e.id = ?1",
             params![email_id],
             |r| {
                 Ok((
@@ -105,11 +120,15 @@ pub fn guess_quotes_of_email(
                     r.get(6)?,
                     r.get(7)?,
                     r.get(8)?,
+                    r.get(9)?,
+                    r.get(10)?,
                 ))
             },
         )
         .optional()?;
-    let Some((subject, irt, refs, from, from_name, to, cc, list_id, date_ts)) = row else {
+    let Some((subject, irt, refs, from, from_name, to, cc, list_id, date_ts, acct, acct_name)) =
+        row
+    else {
         return Ok(0);
     };
     let ctx = ReplyContext {
@@ -122,7 +141,12 @@ pub fn guess_quotes_of_email(
         cc: cc.as_deref(),
         list_id: list_id.as_deref(),
     };
-    let Some(guessed) = guess_quote_sender(&ctx, &self_addresses(conn)?) else {
+    let own = acct.as_deref().map(|address| OwnAccount {
+        address,
+        name: acct_name.as_deref(),
+    });
+    let self_addrs = self_addresses(conn)?;
+    let Some(guessed) = guess_quote_sender(&ctx, &self_addrs, own.as_ref()) else {
         return Ok(0);
     };
     let fingerprint: Option<String> = conn
@@ -134,7 +158,15 @@ pub fn guess_quotes_of_email(
         .optional()?
         .flatten();
     let matched = match date_ts {
-        Some(ts) => match_guessed(conn, email_id, ts, &guessed, fingerprint.as_deref(), body)?,
+        Some(ts) => match_guessed(
+            conn,
+            email_id,
+            ts,
+            &guessed,
+            &self_addrs,
+            fingerprint.as_deref(),
+            body,
+        )?,
         None => None,
     };
     let n = conn.execute(
@@ -284,5 +316,73 @@ mod tests {
         reprocess_all_conn(&mut conn, 1).unwrap();
         assert_eq!(guessed_of(&conn, fwd), (None, None));
         assert!(unseen_quotes(&conn, fwd, REPLY, &[]).unwrap().is_empty());
+    }
+
+    /// 相手から届いた返信の「>」は自分の前の文: 推定は自分（受けたアカウント）で、日時不明の枠になる。
+    #[test]
+    fn received_reply_quote_is_guessed_as_me() {
+        let store = store();
+        let mut conn = store.conn.lock().unwrap();
+        conn.execute("UPDATE accounts SET display_name = '末松' WHERE id = 1", [])
+            .unwrap();
+        let body = "了解です。火曜の午後で伺います。\n\n> 来週の打ち合わせは火曜の午後でいかがでしょうか。\n> 資料は前日までにお送りします。";
+        let reply = put(
+            &conn,
+            "r",
+            "Re: 打ち合わせ",
+            "sato@example.jp",
+            "me@example.jp",
+            Some("<mine@example.jp>"),
+            "2026-10-15T09:00:00+09:00",
+            body,
+        );
+        reprocess_all_conn(&mut conn, 1).unwrap();
+        assert_eq!(
+            guessed_of(&conn, reply),
+            (Some("me@example.jp".into()), None)
+        );
+        let frames = unseen_quotes(&conn, reply, body, &[]).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert!(frames[0].guessed);
+        assert_eq!(frames[0].sender, "me@example.jp");
+    }
+
+    /// 推定が自分なら、自分が前に送ったメール（自分の別アカウントからのものも）と照合し、枠にしない。
+    #[test]
+    fn received_reply_quote_matches_my_earlier_mail() {
+        let store = store();
+        let mut conn = store.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (2,'info@example.jp','i','s')",
+            [],
+        )
+        .unwrap();
+        let mine = put(
+            &conn,
+            "m",
+            "打ち合わせ",
+            "info@example.jp",
+            "sato@example.jp",
+            None,
+            "2026-10-14T18:00:00+09:00",
+            "来週の打ち合わせは火曜の午後でいかがでしょうか。\n資料は前日までにお送りします。",
+        );
+        let body = "了解です。火曜の午後で伺います。\n\n> 来週の打ち合わせは火曜の午後でいかがでしょうか。\n> 資料は前日までにお送りします。";
+        let reply = put(
+            &conn,
+            "r",
+            "Re: 打ち合わせ",
+            "sato@example.jp",
+            "末松 <me@example.jp>",
+            Some("<mine@example.jp>"),
+            "2026-10-15T09:00:00+09:00",
+            body,
+        );
+        reprocess_all_conn(&mut conn, 1).unwrap();
+        assert_eq!(
+            guessed_of(&conn, reply),
+            (Some("末松 <me@example.jp>".into()), Some(mine))
+        );
+        assert!(unseen_quotes(&conn, reply, body, &[]).unwrap().is_empty());
     }
 }

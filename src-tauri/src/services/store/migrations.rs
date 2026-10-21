@@ -316,7 +316,7 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0068_unmatched_quotes_index.sql"),
     },
     Migration {
-        // 69 は「>」だけの引用の、返信の相手から推定した差出人（quoted_from とは別の列。
+        // 69 は「>」だけの引用の、返信の向きから推定した差出人（quoted_from とは別の列。
         // docs/THREADING.md §2）。
         version: 69,
         sql: include_str!("migrations/0069_quote_guessed_from.sql"),

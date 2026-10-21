@@ -90,7 +90,7 @@ export function UnseenQuotes({
                 {q.sender}
               </span>
               {q.guessed ? (
-                // 差出人の行が無い「>」だけの引用: 差出人は返信の相手から推定、日時は分からない
+                // 差出人の行が無い「>」だけの引用: 差出人は返信の向きから推定、日時は分からない
                 <>
                   <span
                     className="inline-flex items-center gap-0.5 rounded-full border border-amber-300/40 px-1.5 text-amber-200/80"

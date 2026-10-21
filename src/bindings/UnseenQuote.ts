@@ -22,7 +22,7 @@ at: string | null,
  */
 date: string | null, 
 /**
- * 差出人の行が無い「>」だけの引用で、差出人を返信の相手から推定した枠か（docs/THREADING.md §2）。
+ * 差出人の行が無い「>」だけの引用で、差出人を返信の向きから推定した枠か（docs/THREADING.md §2）。
  */
 guessed: boolean, 
 /**

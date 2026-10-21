@@ -123,9 +123,11 @@ export function MailAccountDetails({
   // 再構築: データ形式バージョンで判定し、サーバーからの全体再取り込みが必要なときだけ
   // 再取り込み（バックグラウンド・進捗/中断は共通インジケータ）、それ以外はローカル再解析
   // （保存済み本文から引用分離・スレッド束ねを作り直し。通信なし）を実行する。
-  const [rebuilding, setRebuilding] = useState<number | null>(null);
+  // 実行中の再構築は全アカウントで 1 つ（SyncProvider が持つ。ほかのアカウントのボタンも止める）。
+  const rebuilding = sync.rebuilding?.accountId ?? null;
   const startRebuild = async (id: number, email: string) => {
-    setRebuilding(id);
+    if (sync.rebuilding) return;
+    sync.setRebuilding({ accountId: id, label: email });
     try {
       const plan = await rebuildPlan(id);
       if (plan.action === 'resync') {
@@ -139,9 +141,12 @@ export function MailAccountDetails({
     } catch (e) {
       sync.toast(String(e), 'error');
     } finally {
-      setRebuilding(null);
+      sync.setRebuilding(null);
     }
   };
+  // ほかのアカウントを再構築中なら、このアカウントの再構築は押せない（理由を注記に出す）。
+  const otherRebuilding =
+    sync.rebuilding && sync.rebuilding.accountId !== account.id ? sync.rebuilding : null;
 
   // 開発用: 添付本体を落とさず BODYSTRUCTURE だけ取り直し、添付メタを section 付きで作り直す。
   // ネスト添付の取りこぼし修正＆開発DBの掃除（再ダウンロードなしで軽い）。
@@ -423,12 +428,21 @@ export function MailAccountDetails({
         ) : (
           <button
             className={btnCls}
-            disabled={rebuilding === account.id || !!sync.active}
+            disabled={rebuilding !== null || !!sync.active}
             onClick={() => startRebuild(account.id, account.email)}
-            title={t('storage.rebuildHint')}
+            title={
+              otherRebuilding
+                ? t('storage.rebuildBusyOther', { label: otherRebuilding.label })
+                : t('storage.rebuildHint')
+            }
           >
             {rebuilding === account.id ? t('storage.rebuilding') : t('storage.rebuild')}
           </button>
+        )}
+        {otherRebuilding && (
+          <span className="mt-1 block text-[11px] leading-snug text-amber-300/90">
+            {t('storage.rebuildBusyOther', { label: otherRebuilding.label })}
+          </span>
         )}
         <span className="mt-1 block text-[11px] leading-snug text-white/40">
           {t('storage.rebuildHint')}

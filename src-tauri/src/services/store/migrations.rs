@@ -309,6 +309,12 @@ const MIGRATIONS: &[Migration] = &[
         version: 67,
         sql: include_str!("migrations/0067_thread_hints.sql"),
     },
+    Migration {
+        // 68 はまだ結び付いていない引用ブロックだけの部分索引（新しいメールの取り込みで、
+        // そのメールを指す引用を逆向きに照らし合わせるため。docs/THREADING.md §2）。
+        version: 68,
+        sql: include_str!("migrations/0068_unmatched_quotes_index.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
@@ -463,6 +469,9 @@ mod tests {
                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, deleted_at TEXT);
              -- 住所録（0016 で作成）。0057(contacts.dirty 追加)が動くよう用意する。
              CREATE TABLE contacts (id INTEGER PRIMARY KEY, display_name TEXT NOT NULL);
+             -- 引用ブロック（0001 で作成）。0068(未照合の引用の部分索引)が動くよう用意する。
+             CREATE TABLE message_quotes (id INTEGER PRIMARY KEY, email_id INTEGER NOT NULL,
+               quoted_at TEXT, matched_email_id INTEGER);
              PRAGMA user_version = 35;",
         )
         .unwrap();

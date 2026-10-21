@@ -47,7 +47,7 @@ pub use emails::{
     NewQuote, PurgeRef,
 };
 pub use server_accounts::NewServerAccount;
-pub use threads::process_pending_at;
+pub use threads::{process_pending_at, reprocess_all_at};
 pub use spam::SpamFeatures;
 pub use tombstones::{
     mark_remote_deleted, pending_remote_deletes, purge_old_tombstones, PendingRemoteDelete,

@@ -2947,8 +2947,21 @@ pub fn thread_rebuild(store: State<Store>, account_id: i64) -> Result<(), String
 /// ローカル再加工（再ダウンロード不要）: 保存済み本文から clean_body・引用・スレッド・代表フラグを
 /// 作り直す。パーサ改良を既存メールへ反映する用途（docs/THREADING.md §5）。処理件数を返す。
 #[tauri::command]
-pub fn mail_reprocess(store: State<Store>, account_id: i64) -> Result<i64, String> {
-    let n = store.reprocess_all(account_id).map_err(|e| e.to_string())?;
+pub async fn mail_reprocess(store: State<'_, Store>, account_id: i64) -> Result<i64, String> {
+    // 数万通で数十秒かかる。同期のコマンドにするとメインスレッドで走って窓ごと固まるので、
+    // ブロッキングスレッドで走らせる（別接続・小分けなので UI 用接続はブロックしない）。
+    let db_path = store.path();
+    let n = tauri::async_runtime::spawn_blocking(move || {
+        crate::services::store::reprocess_all_at(&db_path, account_id)
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|r| r.map_err(|e| e.to_string()))
+    .map_err(|e| {
+        // 画面の知らせだけでは後から追えないので、ログにも残す。
+        log::warn!("ローカル再解析に失敗（アカウント {account_id}）: {e}");
+        e
+    })?;
     // 現行パーサで全件を作り直せたので、解析バージョンを現行として記録する。
     store
         .mark_reprocessed(account_id)

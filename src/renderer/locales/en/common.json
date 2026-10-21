@@ -774,6 +774,7 @@
     "rebuild": "Rebuild",
     "rebuilding": "Rebuilding…",
     "rebuildHint": "Checks the recorded data-format version and picks what is needed automatically: re-imports everything from the server when the import format is outdated (including uid/attachment backfill); otherwise rebuilds quote separation and threading from the stored bodies only (no network).",
+    "rebuildBusyOther": "Rebuilding {{label}}. Try again when it finishes (one rebuild at a time).",
     "rebuildResync": "The import format has been updated — re-importing everything from the server",
     "resynced": "Fetched {{fetched}} / New {{stored}} / Backfilled {{backfilled}}",
     "reprocessed": "Re-analyzed {{count}} messages"

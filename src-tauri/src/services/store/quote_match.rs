@@ -4,7 +4,7 @@
 //! に入れる。見つからない引用は「このメールで初めて届いた内容」なので、会話ビューで畳まずに出す。
 
 use chrono::{DateTime, NaiveDateTime};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::models::{ThreadMessage, UnseenQuote};
 use crate::services::quotes::{
@@ -150,6 +150,56 @@ pub fn match_quotes_of_email(conn: &Connection, email_id: i64) -> rusqlite::Resu
              WHERE email_id = ?1 AND matched_email_id IS NULL AND quoted_at IS NOT NULL",
         )?;
         let mapped = stmt.query_map(params![email_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?;
+        mapped.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    match_rows(conn, rows)
+}
+
+/// 新しく入ったメール（`email_id`）を指しているかもしれない、まだ結び付いていない引用を照らし合わせる
+/// （逆向き。取り込みの直後）。返信が先に取り込まれ、元のメールが後から届いた場合に結び付ける。
+/// 結び付けた数を返す。
+///
+/// 探すのは、まだ結び付いていない引用（部分索引 `idx_quotes_unmatched`）のうち、差出人の欄に
+/// このメールのアドレスか名前を含むものだけ。相手は [`find_quoted_email`] で決める（時刻の近い
+/// 別のメールが見つかれば、そちらに結び付く）。下書きは相手にしない。
+///
+/// # Errors
+/// 問い合わせ・更新に失敗したとき。
+pub fn match_quotes_to_email(conn: &Connection, email_id: i64) -> rusqlite::Result<usize> {
+    let row: Option<(Option<String>, Option<String>, Option<String>)> = conn
+        .query_row(
+            "SELECT from_address, from_name, folder FROM emails WHERE id = ?1",
+            params![email_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    let Some((addr, name, folder)) = row else {
+        return Ok(0);
+    };
+    if folder.as_deref() == Some("drafts") {
+        return Ok(0);
+    }
+    let addr = addr
+        .map(|a| a.trim().to_lowercase())
+        .filter(|a| a.contains('@'));
+    // 名前は空白を除いて比べる（"山田　花子" と "山田 花子" をそろえる。same_sender と同じ考え）。
+    let name = name
+        .map(|n| n.chars().filter(|c| !c.is_whitespace()).collect::<String>())
+        .filter(|n| n.chars().count() >= 2);
+    if addr.is_none() && name.is_none() {
+        return Ok(0);
+    }
+    let rows = {
+        let mut stmt = conn.prepare_cached(
+            "SELECT email_id, block_order, quoted_from, quoted_at FROM message_quotes
+             WHERE matched_email_id IS NULL AND quoted_at IS NOT NULL AND email_id <> ?1
+               AND ((?2 IS NOT NULL AND instr(lower(quoted_from), ?2) > 0)
+                 OR (?3 IS NOT NULL
+                     AND instr(replace(replace(quoted_from, ' ', ''), '　', ''), ?3) > 0))",
+        )?;
+        let mapped = stmt.query_map(params![email_id, addr, name], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
         })?;
         mapped.collect::<rusqlite::Result<Vec<_>>>()?
@@ -533,5 +583,180 @@ Sent: Thursday, October 1, 2026 9:00 AM\n\
         assert_eq!(senders, ["高橋 花子", "佐藤 一郎", "鈴木 次郎"]);
         assert_eq!(quotes[1].date, "2026-10-02T12:10:00");
         assert_eq!(quotes[0].body, "佐藤様\n10/2 夕方の本文です。");
+    }
+
+    /// 返信が先に取り込まれ、元のメールが後から届いても、取り込みの直後に結び付く（逆向きの照合）。
+    #[test]
+    fn later_original_is_matched_to_earlier_reply() {
+        let store = store();
+        let conn = store.conn.lock().unwrap();
+        let reply = put(
+            &conn,
+            "reply",
+            "me@example.com",
+            None,
+            "2026-10-15T09:00:00+09:00",
+            "sent",
+        );
+        conn.execute(
+            "INSERT INTO message_quotes (email_id, block_order, quoted_from, quoted_at, fingerprint) VALUES
+             (?1, 0, 'ayaku@example.jp', '2026/10/14 12:50:57', 'f0'),
+             (?1, 1, '山田　花子', '2026/10/13 08:00', 'f1')",
+            params![reply],
+        )
+        .unwrap();
+        // 元のメールはまだ無い。
+        assert_eq!(match_quotes_of_email(&conn, reply).unwrap(), 0);
+        // 元のメールが届く（アドレスで結び付く）。関係の無いメールでは結び付かない。
+        let other = put(
+            &conn,
+            "other",
+            "other@example.jp",
+            None,
+            "2026-10-14T12:50:57+09:00",
+            "inbox",
+        );
+        assert_eq!(match_quotes_to_email(&conn, other).unwrap(), 0);
+        let orig = put(
+            &conn,
+            "orig",
+            "Ayaku@Example.jp",
+            None,
+            "2026-10-14T12:50:57+09:00",
+            "inbox",
+        );
+        assert_eq!(match_quotes_to_email(&conn, orig).unwrap(), 1);
+        // 名前だけの引用（Outlook がアドレスを落とした形）も、名前の空白の違いを越えて結び付く。
+        let named = put(
+            &conn,
+            "named",
+            "hanako@example.jp",
+            Some("山田 花子"),
+            "2026-10-13T08:00:00+09:00",
+            "inbox",
+        );
+        assert_eq!(match_quotes_to_email(&conn, named).unwrap(), 1);
+        let matched: Vec<Option<i64>> = conn
+            .prepare("SELECT matched_email_id FROM message_quotes WHERE email_id = ?1 ORDER BY block_order")
+            .unwrap()
+            .query_map(params![reply], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(matched, [Some(orig), Some(named)]);
+    }
+
+    /// 別の接続が書き込みを細かくコミットし続ける間に再構築しても、失敗せずに照合が付く
+    /// （2026-10-21 vaio: ほかの書き込みとぶつかった再構築の後半が "database is locked" で落ち、
+    /// 作り直した引用の照合が NULL のまま残った）。
+    #[test]
+    fn reprocess_survives_concurrent_writes_and_keeps_matches() {
+        const REPLIES: usize = 20;
+        const RUNS: usize = 3;
+        const HOLD_MS: u64 = 300;
+        use crate::services::store::threads::reprocess_all_conn;
+        let dir = std::env::temp_dir().join(format!(
+            "rondine-reprocess-lock-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mail.db");
+        let store = Store::open(&path).unwrap();
+        let ts = |d: &str| DateTime::parse_from_rfc3339(d).unwrap().timestamp();
+        {
+            let c = store.conn.lock().unwrap();
+            c.execute_batch(
+                "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES
+                 (1,'a1@example.com','i','s'), (2,'a2@example.com','i','s');",
+            )
+            .unwrap();
+            for n in 0..50 {
+                c.execute(
+                    "INSERT INTO emails (account_id, canonical_key, from_address, date, date_ts, folder, body_plain)
+                     VALUES (1, ?1, 'x@example.com', '2026-01-01T00:00:00+09:00', ?2, 'inbox', 'hello')",
+                    params![format!("a1-{n}"), ts("2026-01-01T00:00:00+09:00")],
+                )
+                .unwrap();
+            }
+            c.execute(
+                "INSERT INTO emails (account_id, canonical_key, from_address, date, date_ts, folder, body_plain)
+                 VALUES (2, 'orig', 'ayaku@example.jp', '2026-10-14T12:50:57+09:00', ?1, 'inbox', '新築のご相談です。')",
+                params![ts("2026-10-14T12:50:57+09:00")],
+            )
+            .unwrap();
+            // 照合の段の読み取りが長くなるよう、同じ引用を持つ返信を何通も入れる
+            // （読み始めてから書き込みに切り替えるまでの間に、別の接続のコミットが挟まるように）。
+            for n in 0..REPLIES {
+                c.execute(
+                    "INSERT INTO emails (account_id, canonical_key, from_address, date, date_ts, folder, body_plain)
+                     VALUES (2, ?1, 'a2@example.com', '2026-10-15T09:00:00+09:00', ?2, 'sent',
+                     '承知しました。\n\n2026/10/14 12:50:57 に ayaku@example.jp さんが書きました:\n> 新築のご相談です。')",
+                    params![format!("reply-{n}"), ts("2026-10-15T09:00:00+09:00")],
+                )
+                .unwrap();
+            }
+        }
+        let mut conn = Connection::open(&path).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")
+            .unwrap();
+        let orig: i64 = conn
+            .query_row(
+                "SELECT id FROM emails WHERE canonical_key = 'orig'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // 別の接続（ほかのアカウントの再構築・同期の代わり）が書き込みのロックを取り、
+        // 再構築が走り出してから少し後にコミットする間に、`account` を再構築する。
+        let reprocess_while_locked = |conn: &mut Connection, account: i64| {
+            let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+            let writer = {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let mut c = Connection::open(&path).unwrap();
+                    let tx = c
+                        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                        .unwrap();
+                    tx.execute(
+                        "UPDATE emails SET is_read = 1 - COALESCE(is_read, 0) WHERE account_id = 1",
+                        [],
+                    )
+                    .unwrap();
+                    locked_tx.send(()).unwrap();
+                    std::thread::sleep(std::time::Duration::from_millis(HOLD_MS));
+                    tx.commit().unwrap();
+                })
+            };
+            locked_rx.recv().unwrap();
+            let result = reprocess_all_conn(conn, account);
+            writer.join().unwrap();
+            result
+        };
+        // メールの無いアカウント 3: 前半が空で、すぐ後半（照合とスレッドの貼り直し）に入る。
+        // 後半が読んでから書き込みに切り替える作りだと、ここで落ちる。
+        conn.execute(
+            "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (3,'a3@example.com','i','s')",
+            [],
+        )
+        .unwrap();
+        reprocess_while_locked(&mut conn, 3).unwrap_or_else(|e| panic!("後半の再構築が失敗: {e}"));
+        for run in 0..RUNS {
+            let result = reprocess_while_locked(&mut conn, 2);
+            result.unwrap_or_else(|e| panic!("{run} 回目の再構築が失敗: {e}"));
+            let unmatched: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM message_quotes q JOIN emails e ON e.id = q.email_id
+                     WHERE e.canonical_key LIKE 'reply-%' AND q.matched_email_id IS NOT ?1",
+                    params![orig],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(unmatched, 0, "{run} 回目");
+        }
+        drop(conn);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

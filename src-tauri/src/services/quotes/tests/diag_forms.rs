@@ -217,3 +217,46 @@ fn reads_apple_24h_attribution_right_after_signature() {
         vec![(some("sato@example.jp"), some("Dec 4, 2023, 9:05 +0900"))]
     );
 }
+
+/// 区切りの文字列・見出し・本文が全部 1 行に詰まった引用（"----- 引用元メッセージ ----- From：…To：…
+/// 日時：…件名：…  本文"。vaio の 14044 ほか）を、区切り・項目・本文に分けて読む。空の枠を作らない。
+#[test]
+fn reads_separator_header_and_body_packed_into_one_line() {
+    let body = "本文です。\n\n----- 引用元メッセージ -----\nFrom：\"Taro Yamada\" <taro@example.jp>\n\
+To：\"me@example.jp\" <me@example.jp>\n日時：2023/10/03 火 10:00\n件名：Re: Re: Re: 打ち合わせ　の件\n\n\
+三通目の本文です。\n\n\
+----- 引用元メッセージ ----- From：\"Taro Yamada\" <taro@example.jp>To：\"me@example.jp\" <me@example.jp>\
+日時：2023/10/02 月 9:30件名：Re: Re: 打ち合わせ　の件  二通目の本文です。続きです。\n\n\
+----- 引用元メッセージ ----- From：\"末松 慎吾\" <me@example.jp>To：\"山田 太郎\" <taro@example.jp>\
+日時：2023/10/01 日 18:00件名：打ち合わせ　の件  一通目の本文です。よろしくお願いします。";
+    let s = split_reply(body);
+    assert_eq!(s.clean, "本文です。");
+    assert_eq!(
+        frames(body),
+        vec![
+            (
+                some("\"Taro Yamada\" <taro@example.jp>"),
+                some("2023/10/03 火 10:00")
+            ),
+            (
+                some("\"Taro Yamada\" <taro@example.jp>"),
+                some("2023/10/02 月 9:30")
+            ),
+            (
+                some("\"末松 慎吾\" <me@example.jp>"),
+                some("2023/10/01 日 18:00")
+            ),
+        ]
+    );
+    let subjects: Vec<Option<&str>> = s.quotes.iter().map(|q| q.subject.as_deref()).collect();
+    assert_eq!(
+        subjects,
+        [
+            Some("Re: Re: Re: 打ち合わせ\u{3000}の件"),
+            Some("Re: Re: 打ち合わせ\u{3000}の件"),
+            Some("打ち合わせ\u{3000}の件"),
+        ]
+    );
+    assert_eq!(s.quotes[1].body, "二通目の本文です。続きです。");
+    assert_eq!(s.quotes[2].body, "一通目の本文です。よろしくお願いします。");
+}

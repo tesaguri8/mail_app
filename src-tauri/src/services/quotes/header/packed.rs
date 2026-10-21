@@ -6,7 +6,7 @@
 
 use std::borrow::Cow;
 
-use super::{header_field, Field};
+use super::{header_field, is_separator_text, Field};
 
 /// 行の途中で区切りとみなす項目名（長いものから照らす。"送信日時" を "日時" より先に）。
 const INNER_KEYS: &[&str] = &[
@@ -84,14 +84,77 @@ fn split_packed(line: &str) -> Option<Vec<&str>> {
     Some(parts)
 }
 
+/// 区切りの文字列（"----- 引用元メッセージ -----" / "-----Original Message-----"）の後ろに、同じ行で
+/// 差出人の項目が続く行を、区切りと見出しに分ける。分けなければ None。
+fn split_separator(line: &str) -> Option<(&str, &str)> {
+    if line.trim_start().starts_with('>') || !is_separator_text(line) {
+        return None;
+    }
+    let cut = line.char_indices().map(|(i, _)| i).find(|&at| {
+        key_at(line, at).is_some_and(|len| {
+            boundary_ok(line, at, len)
+                && matches!(header_field(&line[at..]), Some((Field::From, _)))
+        })
+    })?;
+    let sep = line[..cut].trim_end();
+    // 区切りの文字列が行頭から始まっている（本文の一文の途中の「元のメッセージ」ではない）。
+    is_separator_text(sep).then_some((sep, &line[cut..]))
+}
+
+/// 件名の項目の値の後ろに、半角の空白 2 つ以上を挟んで本文が続く形（詰まった見出しの最後）を、
+/// 件名と本文に分ける。件名の項目でなければ、または空白 2 つ以上が無ければ、そのまま 1 つ。
+fn split_subject_body(part: &str) -> Vec<&str> {
+    if !matches!(header_field(part), Some((Field::Subject, _))) {
+        return vec![part];
+    }
+    let value_at = part.find([':', '：']).map_or(0, |i| {
+        i + part[i..].chars().next().map_or(1, char::len_utf8)
+    });
+    // 値の頭の空白は飛ばしてから探す（"件名：  Re: …" で切らない）。
+    let lead = part[value_at..].len() - part[value_at..].trim_start().len();
+    let from = value_at + lead;
+    match part[from..].find("  ") {
+        Some(gap) if gap > 0 => {
+            let cut = from + gap;
+            vec![part[..cut].trim_end(), part[cut..].trim_start()]
+        }
+        _ => vec![part],
+    }
+}
+
+/// 1 行を、詰まった見出しなら区切り・項目・本文の行に分ける。分けなければ None。
+fn expand_line(line: &str) -> Option<Vec<&str>> {
+    let (sep, rest) = match split_separator(line) {
+        Some((sep, rest)) => (Some(sep), rest),
+        None => (None, line),
+    };
+    let fields = split_packed(rest);
+    if sep.is_none() && fields.is_none() {
+        return None;
+    }
+    let fields = fields.unwrap_or_else(|| vec![rest]);
+    let last = fields.len() - 1;
+    let mut out: Vec<&str> = sep.into_iter().collect();
+    for (k, part) in fields.into_iter().enumerate() {
+        if k == last {
+            out.extend(split_subject_body(part));
+        } else {
+            out.push(part);
+        }
+    }
+    Some(out)
+}
+
 /// 本文のうち、1 行に詰まった見出しを項目ごとの行に分ける。分ける行が無ければ元のまま。
+/// 区切りの文字列から始まって同じ行に見出しが続く行（"----- 引用元メッセージ ----- From：…"）は、
+/// 区切り・項目・本文（件名の値の後ろに空白 2 つ以上を挟んで続く部分）の行に分ける。
 pub fn expand(plain: &str) -> Cow<'_, str> {
-    if !plain.lines().any(|l| split_packed(l).is_some()) {
+    if !plain.lines().any(|l| expand_line(l).is_some()) {
         return Cow::Borrowed(plain);
     }
     let lines: Vec<String> = plain
         .lines()
-        .map(|l| split_packed(l).map_or_else(|| l.to_string(), |parts| parts.join("\n")))
+        .map(|l| expand_line(l).map_or_else(|| l.to_string(), |parts| parts.join("\n")))
         .collect();
     Cow::Owned(lines.join("\n"))
 }
@@ -107,6 +170,29 @@ mod tests {
             expand(packed),
             "From：\"Taro Yamada\" <taro@example.jp>\nTo：\"佐藤 花子\" <hanako@example.jp>\n日時：2026/10/02 金 12:10\n件名：Re: 打ち合わせ"
         );
+    }
+
+    /// 区切りの文字列の後ろに同じ行で見出しが続く行は、区切りと見出しに分け、件名の後ろの空白 2 つ以上の
+    /// 先を本文の行にする（件名の中の全角の空白・空白 1 つでは分けない）。
+    #[test]
+    fn splits_separator_header_and_body_on_one_line() {
+        let line = "----- 引用元メッセージ ----- From：\"山田\" <taro@example.jp>日時：2023/10/02 月 9:30件名：Re: 打ち合わせ　の件  本文です。";
+        assert_eq!(
+            expand(line),
+            "----- 引用元メッセージ -----\nFrom：\"山田\" <taro@example.jp>\n日時：2023/10/02 月 9:30\n件名：Re: 打ち合わせ　の件\n本文です。"
+        );
+        let line = "-----Original Message----- From: Taro <taro@example.jp> Sent: Monday, October 2, 2023 9:30 AM Subject: Re: plan";
+        assert_eq!(
+            expand(line),
+            "-----Original Message-----\nFrom: Taro <taro@example.jp>\nSent: Monday, October 2, 2023 9:30 AM\nSubject: Re: plan"
+        );
+        // 見出しの続かない区切り行・本文の「元のメッセージ」は分けない。
+        for line in [
+            "----- 引用元メッセージ -----",
+            "元のメッセージをご確認ください。",
+        ] {
+            assert_eq!(expand(line), line);
+        }
     }
 
     /// 1 項目だけの行、"mailto:"・"送信日時:"・本文の「日時：」は分けない。

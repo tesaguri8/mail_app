@@ -894,6 +894,7 @@ fn parsed_to_new_email(
             quoted_at: q.quoted_at,
             fingerprint: q.fingerprint,
             bare_gt: q.bare_gt,
+            gt_depth: q.gt_depth,
             body: q.body,
         })
         .collect();

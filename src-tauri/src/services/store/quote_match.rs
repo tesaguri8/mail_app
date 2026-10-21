@@ -295,6 +295,7 @@ pub fn unseen_quotes(
                     at: None,
                     date: None,
                     guessed: true,
+                    guess_depth: u32::try_from(q.gt_depth).ok(),
                     subject: q.subject,
                     body: q.body,
                 });
@@ -327,6 +328,7 @@ pub fn unseen_quotes(
             from,
             at: Some(at),
             guessed: false,
+            guess_depth: None,
             subject: q.subject,
             body: q.body,
         });

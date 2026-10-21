@@ -855,11 +855,11 @@ pub fn reprocess_all_conn(conn: &mut Connection, account_id: i64) -> rusqlite::R
                     insq.execute(params![id, q.order, q.quoted_from, q.quoted_at, q.fingerprint])?;
                 }
                 // 差出人の行が無い「>」だけの引用は、返信の向きから差出人を推定する。
-                let bare: Vec<(i64, &str)> = split
+                let bare: Vec<(i64, usize, &str)> = split
                     .quotes
                     .iter()
                     .filter(|q| q.bare_gt)
-                    .map(|q| (q.order, q.body.as_str()))
+                    .map(|q| (q.order, q.gt_depth, q.body.as_str()))
                     .collect();
                 super::quote_guess::guess_quotes_of_email(&tx, *id, &bare)?;
             }

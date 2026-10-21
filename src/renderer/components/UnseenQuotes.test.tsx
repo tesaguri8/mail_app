@@ -33,6 +33,7 @@ const quote = (body: string): UnseenQuote => ({
   subject: '図面の件',
   body,
   guessed: false,
+  guess_depth: null,
 });
 
 describe('UnseenQuotes の本文のリンク', () => {
@@ -71,10 +72,19 @@ describe('UnseenQuotes の見出しの日時', () => {
   });
 
   it('差出人を推定した枠は「推定」の印（理由はツールチップ）と「日時不明」を出す', () => {
-    const q: UnseenQuote = { ...quote('本文'), at: null, date: null, guessed: true };
+    const q: UnseenQuote = {
+      ...quote('本文'),
+      at: null,
+      date: null,
+      guessed: true,
+      guess_depth: 2,
+    };
     act(() => root.render(<UnseenQuotes quotes={[q]} out={false} />));
     expect(stamp()).toBeNull();
-    const badge = container.querySelector('span[title="thread.quoteGuessedHint"]');
+    // ツールチップに、推定の理由と何段目の引用かを出す
+    const badge = container.querySelector(
+      'span[title="thread.quoteGuessedHint thread.quoteGuessedDepth"]'
+    );
     expect(badge?.textContent).toBe('thread.quoteGuessed');
     expect(container.textContent).toContain('thread.quoteDateUnknown');
   });

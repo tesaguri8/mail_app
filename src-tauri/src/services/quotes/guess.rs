@@ -86,17 +86,27 @@ pub struct OwnAccount<'a> {
     pub name: Option<&'a str>,
 }
 
-/// 差出人の行が無い「>」だけの引用の差出人を推定する。決められなければ None。
-/// `self_addrs` は自分のアドレス（小文字。そのアカウントと自分の別アカウント）。
-///
-/// - 自分が送った返信: 引用は相手の文。宛先（To）の自分以外が 1 人だけなら、その人（宛先の書き方のまま）。
-/// - 相手から届いた返信: 引用は自分が前に送った文。推定は自分（宛先に書かれた自分の書き方。無ければ
-///   `own` の表示名とアドレス）。宛先・Cc に自分と差出人以外がいるとき、List-Id があるときは推定しない。
-pub fn guess_quote_sender(
+/// 1 対 1 の返信の当事者（相手と自分の書き方）と、このメールを自分が送ったか。
+struct Parties {
+    other: String,
+    me: Option<String>,
+    sent_by_me: bool,
+}
+
+/// 「名前 <addr>」の形にする（名前が無ければアドレスだけ）。
+fn written(name: Option<&str>, addr: &str) -> String {
+    match name.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) => format!("{n} <{addr}>"),
+        None => addr.to_string(),
+    }
+}
+
+/// 返信の当事者を決める。1 対 1 と決められなければ None。
+fn reply_parties(
     ctx: &ReplyContext,
     self_addrs: &[String],
     own: Option<&OwnAccount>,
-) -> Option<String> {
+) -> Option<Parties> {
     let subject = ctx.subject.unwrap_or_default();
     if is_forward_subject(subject) {
         return None;
@@ -112,20 +122,30 @@ pub fn guess_quote_sender(
         .from_address
         .map(str::trim)
         .filter(|a| a.contains('@'))?;
+    let own_addr = own.map(|o| o.address.trim());
+    let own_written = || {
+        let o = own?;
+        let addr = o.address.trim();
+        addr.contains('@').then(|| written(o.name, addr))
+    };
     if is_self(from) {
-        // 自分の返信: 宛先の自分以外が 1 人だけなら、その人。
+        // 自分の返信: 宛先の自分以外が 1 人だけなら、その人が相手。
         let mut others: Vec<(String, &str)> = Vec::new();
-        for (a, written) in recipients(ctx.to) {
+        for (a, w) in recipients(ctx.to) {
             if !is_self(&a) && !others.iter().any(|(o, _)| *o == a) {
-                others.push((a, written));
+                others.push((a, w));
             }
         }
-        return match others.as_slice() {
-            [(_, written)] => Some((*written).to_string()),
-            _ => None,
+        let [(_, other)] = others.as_slice() else {
+            return None;
         };
+        return Some(Parties {
+            other: (*other).to_string(),
+            me: Some(written(ctx.from_name, from)),
+            sent_by_me: true,
+        });
     }
-    // 相手の返信: 引用は自分の前の文。メーリングリスト、ほかの人にも届いているものは推定しない。
+    // 相手の返信: メーリングリスト、ほかの人にも届いているものは推定しない。
     if ctx.list_id.is_some_and(|l| !l.trim().is_empty()) {
         return None;
     }
@@ -140,21 +160,46 @@ pub fn guess_quote_sender(
         return None;
     }
     // 宛先に書かれた自分の書き方（受けたアカウントのアドレスを優先）。無ければアカウントの表示名とアドレス。
-    let own_addr = own.map(|o| o.address.trim());
-    let written = to_cc
+    let me = to_cc
         .iter()
         .filter(|(a, _)| is_self(a))
         .min_by_key(|(a, _)| own_addr.map_or(true, |o| !a.eq_ignore_ascii_case(o)))
-        .map(|(_, w)| (*w).to_string());
-    written.or_else(|| {
-        let o = own?;
-        let addr = o.address.trim();
-        addr.contains('@')
-            .then(|| match o.name.map(str::trim).filter(|n| !n.is_empty()) {
-                Some(name) => format!("{name} <{addr}>"),
-                None => addr.to_string(),
-            })
+        .map(|(_, w)| (*w).to_string())
+        .or_else(own_written);
+    Some(Parties {
+        other: written(ctx.from_name, from),
+        me,
+        sent_by_me: false,
     })
+}
+
+/// 差出人の行が無い「>」だけの引用の差出人を推定する。決められなければ None。
+/// `self_addrs` は自分のアドレス（小文字。そのアカウントと自分の別アカウント）。`depth` は枠の先頭の
+/// 「>」の段の数（1 以上）。
+///
+/// 1 対 1 の返信で、段ごとに相手と自分が入れ替わる。
+/// - 1 段目: 自分が送った返信なら相手（宛先の自分以外が 1 人だけのとき。宛先の書き方のまま）、
+///   相手から届いた返信なら自分（宛先に書かれた自分の書き方。無ければ `own` の表示名とアドレス）。
+/// - 2 段目はその逆、以降も交互。
+///
+/// 相手から届いた返信で、宛先・Cc に自分と差出人以外がいるとき、List-Id があるときは推定しない。
+pub fn guess_quote_sender(
+    ctx: &ReplyContext,
+    self_addrs: &[String],
+    own: Option<&OwnAccount>,
+    depth: usize,
+) -> Option<String> {
+    if depth == 0 {
+        return None;
+    }
+    let p = reply_parties(ctx, self_addrs, own)?;
+    // 1 段目は「このメールの送り手の相手」。段が 1 つ深くなるごとに入れ替わる。
+    let quotes_other = p.sent_by_me == (depth % 2 == 1);
+    if quotes_other {
+        Some(p.other)
+    } else {
+        p.me
+    }
 }
 
 #[cfg(test)]
@@ -215,7 +260,7 @@ mod tests {
     fn own_reply_to_one_person() {
         let c = ctx("Re: 図面", "me@example.jp", "佐藤 一郎 <sato@example.jp>");
         assert_eq!(
-            guess_quote_sender(&c, &me(), Some(&own())).as_deref(),
+            guess_quote_sender(&c, &me(), Some(&own()), 1).as_deref(),
             Some("佐藤 一郎 <sato@example.jp>")
         );
         // 自分の別アカウントが宛先に入っていても数えない。
@@ -225,7 +270,7 @@ mod tests {
             "sato@example.jp, info@example.jp",
         );
         assert_eq!(
-            guess_quote_sender(&c, &me(), Some(&own())).as_deref(),
+            guess_quote_sender(&c, &me(), Some(&own()), 1).as_deref(),
             Some("sato@example.jp")
         );
     }
@@ -237,13 +282,13 @@ mod tests {
         let mut c = ctx("Re: 図面", "sato@example.jp", "末松 慎吾 <Me@example.jp>");
         c.from_name = Some("佐藤 一郎");
         assert_eq!(
-            guess_quote_sender(&c, &me(), Some(&own())).as_deref(),
+            guess_quote_sender(&c, &me(), Some(&own()), 1).as_deref(),
             Some("末松 慎吾 <Me@example.jp>")
         );
         // 宛先がメーリングリストの別名など、自分の書き方が無ければアカウントから。
         let c = ctx("Re: 図面", "sato@example.jp", "");
         assert_eq!(
-            guess_quote_sender(&c, &me(), Some(&own())).as_deref(),
+            guess_quote_sender(&c, &me(), Some(&own()), 1).as_deref(),
             Some("末松 <me@example.jp>")
         );
         // 受けたアカウントの書き方を優先する（自分の別アカウントも宛先にいるとき）。
@@ -253,23 +298,23 @@ mod tests {
             "info@example.jp, me@example.jp",
         );
         assert_eq!(
-            guess_quote_sender(&c, &me(), Some(&own())).as_deref(),
+            guess_quote_sender(&c, &me(), Some(&own()), 1).as_deref(),
             Some("me@example.jp")
         );
         // Cc にほかの人がいれば推定しない（相手が 1 人とは限らない）。
         let mut c = ctx("Re: 図面", "sato@example.jp", "me@example.jp");
         c.cc = Some("suzuki@example.jp");
-        assert_eq!(guess_quote_sender(&c, &me(), Some(&own())), None);
+        assert_eq!(guess_quote_sender(&c, &me(), Some(&own()), 1), None);
     }
 
     /// 件名から "Re:" が消えていても、In-Reply-To があれば返信とみなす。
     #[test]
     fn reply_marker_without_re_in_subject() {
         let mut c = ctx("図面の件", "sato@example.jp", "me@example.jp");
-        assert_eq!(guess_quote_sender(&c, &me(), Some(&own())), None);
+        assert_eq!(guess_quote_sender(&c, &me(), Some(&own()), 1), None);
         c.in_reply_to = Some("<orig@example.jp>");
         assert_eq!(
-            guess_quote_sender(&c, &me(), Some(&own())).as_deref(),
+            guess_quote_sender(&c, &me(), Some(&own()), 1).as_deref(),
             Some("me@example.jp")
         );
     }
@@ -279,7 +324,7 @@ mod tests {
     fn forward_is_not_guessed() {
         let mut c = ctx("Fwd: 図面", "sato@example.jp", "me@example.jp");
         c.in_reply_to = Some("<orig@example.jp>");
-        assert_eq!(guess_quote_sender(&c, &me(), Some(&own())), None);
+        assert_eq!(guess_quote_sender(&c, &me(), Some(&own()), 1), None);
     }
 
     /// 自分の返信で、宛先が複数なら推定しない。
@@ -290,7 +335,7 @@ mod tests {
             "me@example.jp",
             "sato@example.jp, suzuki@example.jp",
         );
-        assert_eq!(guess_quote_sender(&c, &me(), Some(&own())), None);
+        assert_eq!(guess_quote_sender(&c, &me(), Some(&own()), 1), None);
     }
 
     /// メーリングリストで、ほかの人にも届いている返信は推定しない。
@@ -298,13 +343,62 @@ mod tests {
     fn mailing_list_reply_is_not_guessed() {
         let mut c = ctx("Re: [dev] 質問", "sato@example.jp", "dev@lists.example.org");
         c.list_id = Some("<dev.lists.example.org>");
-        assert_eq!(guess_quote_sender(&c, &me(), Some(&own())), None);
+        assert_eq!(guess_quote_sender(&c, &me(), Some(&own()), 1), None);
     }
 
     /// 返信の印も件名の返信の印も無い（メールマガジンの中の「>」）は推定しない。
     #[test]
     fn newsletter_quote_is_not_guessed() {
         let c = ctx("木の家だより 10 月号", "news@example.jp", "me@example.jp");
-        assert_eq!(guess_quote_sender(&c, &me(), Some(&own())), None);
+        assert_eq!(guess_quote_sender(&c, &me(), Some(&own()), 1), None);
+    }
+
+    /// 1 対 1 のやり取りでは、「>」の段ごとに相手と自分が入れ替わる。
+    #[test]
+    fn alternates_by_quote_depth() {
+        // 自分の返信: 1 段目は相手、2 段目は自分、3 段目は相手。
+        let mut c = ctx("Re: 図面", "me@example.jp", "佐藤 <sato@example.jp>");
+        c.from_name = Some("末松");
+        let got: Vec<Option<String>> = (1..=3)
+            .map(|d| guess_quote_sender(&c, &me(), Some(&own()), d))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                Some("佐藤 <sato@example.jp>".into()),
+                Some("末松 <me@example.jp>".into()),
+                Some("佐藤 <sato@example.jp>".into()),
+            ]
+        );
+        // 届いた返信: 1 段目は自分、2 段目は相手、3 段目は自分。
+        let mut c = ctx("Re: 図面", "sato@example.jp", "me@example.jp");
+        c.from_name = Some("佐藤");
+        let got: Vec<Option<String>> = (1..=3)
+            .map(|d| guess_quote_sender(&c, &me(), Some(&own()), d))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                Some("me@example.jp".into()),
+                Some("佐藤 <sato@example.jp>".into()),
+                Some("me@example.jp".into()),
+            ]
+        );
+        // 「>」の無い枠は推定しない。
+        assert_eq!(guess_quote_sender(&c, &me(), Some(&own()), 0), None);
+    }
+
+    /// 宛先が複数なら、どの段も推定しない。
+    #[test]
+    fn many_recipients_guess_no_depth() {
+        let c = ctx(
+            "Re: 図面",
+            "me@example.jp",
+            "sato@example.jp, suzuki@example.jp",
+        );
+        assert!((1..=3).all(|d| guess_quote_sender(&c, &me(), Some(&own()), d).is_none()));
+        let mut c = ctx("Re: 図面", "sato@example.jp", "me@example.jp");
+        c.cc = Some("suzuki@example.jp");
+        assert!((1..=3).all(|d| guess_quote_sender(&c, &me(), Some(&own()), d).is_none()));
     }
 }

@@ -1,5 +1,9 @@
 use mail_parser::{MessageParser, MimeHeaders};
 
+mod plain_entities;
+
+pub use plain_entities::decode_literal_entities;
+
 /// 添付メタ（本体は同期時に落とさず、ダウンロード時に再取得する）。
 pub struct ParsedAttachment {
     /// message 内の attachment 序数（再取得時に attachment(pos) で特定）。
@@ -364,12 +368,17 @@ pub fn parse_message(raw: &[u8]) -> Option<ParsedEmail> {
     // text/plain の実パートが無い HTML 専用メール（multipart/related 等）は、mail_parser の
     // HTML→text がブロック改行を落として本文が 1 行に潰れる。実 plain パートが無く HTML があるときは
     // 自前のブロック対応変換で改行を復元する。これで表示だけでなく、返信で引用する本文も崩れない。
+    // text/plain に文字参照（"&nbsp;" 等）がそのまま書かれていれば解く（plain_entities）。
+    let plain_text = || {
+        msg.body_text(0)
+            .map(|c| decode_literal_entities(&c).unwrap_or_else(|| c.into_owned()))
+    };
     let body_plain = if has_real_plain_part(&msg) {
-        msg.body_text(0).map(|c| c.to_string())
+        plain_text()
     } else if let Some(h) = body_html.as_deref() {
         Some(html_to_text(h))
     } else {
-        msg.body_text(0).map(|c| c.to_string())
+        plain_text()
     };
     // ヘッダ素性（§7.7）: 認証結果・メール種別。トークン化と認証バッジで共有する。
     let auth_result = header_text(&msg, "Authentication-Results");

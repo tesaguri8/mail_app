@@ -348,6 +348,8 @@ pub fn insert_email(conn: &Connection, e: &NewEmail) -> rusqlite::Result<InsertO
     insert_quotes(conn, id, &e.quotes)?;
     // 引用ブロックを手元のメールと照らし合わせる（見つからない分は会話ビューで畳まずに出す）。
     super::quote_match::match_quotes_of_email(conn, id)?;
+    // 逆向き: 先に取り込んだ返信の引用が、このメールを指していれば結び付ける。
+    super::quote_match::match_quotes_to_email(conn, id)?;
     // 迷惑差出人に登録済みのアドレスからの新着（受信箱）は、受信時に自動で迷惑へ隔離する
     // （「このアドレスを迷惑にしたら今後の同アドレスも迷惑へ」。docs/SPAM.md）。
     // ただし本人検証・住所録の本人一致があれば隔離しない（誤登録での取りこぼし防止）。
@@ -1930,6 +1932,51 @@ mod tests {
             quotes: Vec::new(),
             verified_self: false,
         }
+    }
+
+    /// 返信が先に取り込まれ、元のメールが後から届いても、元のメールの取り込みで引用が結び付く
+    /// （逆向きの照合。quote_match::match_quotes_to_email）。
+    #[test]
+    fn inserting_the_original_later_matches_the_earlier_reply() {
+        let store = test_store();
+        let conn = store.conn.lock().unwrap();
+        let reply = NewEmail {
+            from_address: Some("me@example.com".to_string()),
+            date: Some("2026-10-15T09:00:00+09:00".to_string()),
+            date_ts: Some(1_792_022_400),
+            folder: "sent".to_string(),
+            quotes: vec![NewQuote {
+                order: 0,
+                quoted_from: Some("ayaku@example.jp".to_string()),
+                quoted_at: Some("2026/10/14 12:50:57".to_string()),
+                fingerprint: "f0".to_string(),
+            }],
+            ..new_email_for_test("reply")
+        };
+        insert_email(&conn, &reply).unwrap();
+        let unmatched: Option<i64> = conn
+            .query_row("SELECT matched_email_id FROM message_quotes", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(unmatched, None, "元のメールはまだ無い");
+        let orig = NewEmail {
+            from_address: Some("ayaku@example.jp".to_string()),
+            date: Some("2026-10-14T12:50:57+09:00".to_string()),
+            date_ts: Some(1_791_949_857),
+            uid: Some(2),
+            ..new_email_for_test("orig")
+        };
+        insert_email(&conn, &orig).unwrap();
+        let (matched, orig_id): (Option<i64>, i64) = conn
+            .query_row(
+                "SELECT q.matched_email_id, e.id FROM message_quotes q, emails e
+                 WHERE e.from_address = 'ayaku@example.jp'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(matched, Some(orig_id));
     }
 
     #[test]

@@ -12,7 +12,7 @@
 use super::contact_lookup::contact_name_for;
 use super::Store;
 use crate::models::{ThreadMessage, ThreadSummary, ThreadView};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 /// 件名の正規化（Re:/Fwd:/RE：/転送/Fw: などの接頭辞を繰り返し剥がし、小文字化・空白畳み）。
 pub fn normalize_subject(subject: Option<&str>) -> String {
@@ -766,6 +766,17 @@ pub fn process_pending_at(
     Ok(total)
 }
 
+/// ローカル再加工（[`Store::reprocess_all`] と同じ）を db_path から実行する（ブロッキングスレッドから呼ぶ）。
+/// 画面の「再構築」は数万通で数十秒かかるので、メインスレッドを塞がないよう、こちらを使う。処理件数を返す。
+///
+/// # Errors
+/// DB を開けないとき、または再加工の問い合わせ・更新に失敗したとき。
+pub fn reprocess_all_at(db_path: &std::path::Path, account_id: i64) -> rusqlite::Result<usize> {
+    let mut conn = Connection::open(db_path)?;
+    conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
+    reprocess_all_conn(&mut conn, account_id)
+}
+
 /// reprocess_all_conn が読み出す 1 行（id, body_plain, raw_headers, body_html_z）。
 type ReprocessRow = (i64, Option<String>, Option<String>, Option<Vec<u8>>);
 
@@ -786,7 +797,10 @@ pub fn reprocess_all_conn(conn: &mut Connection, account_id: i64) -> rusqlite::R
     };
     let count = rows.len();
     for chunk in rows.chunks(200) {
-        let tx = conn.transaction()?;
+        // 書き込みのロックを最初に取る（IMMEDIATE）。DEFERRED だと、読んだあとに別の接続
+        // （ほかのアカウントの再構築・同期）がコミットしていると、書き込みへの切り替えが
+        // busy_timeout を待たずに SQLITE_BUSY で落ちる（WAL のスナップショット）。
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         {
             let mut up =
                 tx.prepare("UPDATE emails SET clean_body = ?2, body_fingerprint = ?3 WHERE id = ?1")?;
@@ -839,7 +853,9 @@ pub fn reprocess_all_conn(conn: &mut Connection, account_id: i64) -> rusqlite::R
     }
     // (2) 作り直した引用ブロックを手元のメールと照らし合わせ（docs/THREADING.md §2）、
     //     スレッド割当・代表フラグを作り直す（1 トランザクション）。
-    let tx = conn.transaction()?;
+    //     ここも IMMEDIATE（最初の SELECT のあとで書き込みに切り替えると、上と同じく即座に落ちて、
+    //     作り直した引用の照合が NULL のまま残る。2026-10-21 vaio のアカウント 2）。
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     super::quote_match::match_quotes_of_account(&tx, account_id)?;
     rebuild_threads_conn(&tx, account_id)?;
     tx.commit()?;

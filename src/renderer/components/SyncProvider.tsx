@@ -15,6 +15,8 @@ import { mailResync, mailSync, mailSyncCancel } from '../services/mail';
 type SyncKind = 'sync' | 'resync';
 type ActiveSync = { accountId: number; label: string; kind: SyncKind; progress: SyncProgress | null };
 type ToastItem = { id: number; text: string; kind: 'ok' | 'error' };
+/** ローカル再解析（再構築）を実行中のアカウント。 */
+type ActiveRebuild = { accountId: number; label: string };
 
 type SyncApi = {
   /** 現在バックグラウンド実行中の同期（無ければ null）。 */
@@ -23,8 +25,15 @@ type SyncApi = {
   start: (accountId: number, label: string, kind: SyncKind) => void;
   /** 実行中の同期を中断する。 */
   cancel: () => void;
-  /** 任意のトーストを表示する。 */
+  /** 任意のトーストを表示する。失敗（error）は閉じるまで残す。 */
   toast: (text: string, kind?: 'ok' | 'error') => void;
+  /**
+   * ローカル再解析（再構築）を実行中のアカウント（無ければ null）。再構築は全アカウントで
+   * 同時に 1 つまで（並べると、DB の書き込みがぶつかって片方が失敗することがある）。
+   */
+  rebuilding: ActiveRebuild | null;
+  /** 再構築の開始・終了を知らせる（終了は null）。 */
+  setRebuilding: (r: ActiveRebuild | null) => void;
 };
 
 const SyncCtx = createContext<SyncApi | null>(null);
@@ -45,6 +54,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
   const [active, setActive] = useState<ActiveSync | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [rebuilding, setRebuilding] = useState<ActiveRebuild | null>(null);
   const activeRef = useRef<ActiveSync | null>(null);
   activeRef.current = active;
   const cancelledRef = useRef(false);
@@ -52,7 +62,8 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const pushToast = useCallback((text: string, kind: 'ok' | 'error' = 'ok') => {
     const id = ++toastSeq;
     setToasts((ts) => [...ts, { id, text, kind }]);
-    setTimeout(() => setToasts((ts) => ts.filter((x) => x.id !== id)), 5000);
+    // 失敗は閉じるまで残す（5 秒で消えると、別の成功の知らせに紛れて見落とす）。
+    if (kind === 'ok') setTimeout(() => setToasts((ts) => ts.filter((x) => x.id !== id)), 5000);
   }, []);
 
   const start = useCallback(
@@ -97,7 +108,9 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <SyncCtx.Provider value={{ active, start, cancel, toast: pushToast }}>
+    <SyncCtx.Provider
+      value={{ active, start, cancel, toast: pushToast, rebuilding, setRebuilding }}
+    >
       {children}
       {active && <SyncIndicator active={active} onCancel={cancel} />}
       <ToastHost toasts={toasts} onDismiss={(id) => setToasts((ts) => ts.filter((x) => x.id !== id))} />
@@ -153,7 +166,12 @@ function ToastHost({ toasts, onDismiss }: { toasts: ToastItem[]; onDismiss: (id:
       {toasts.map((tst) => (
         <div
           key={tst.id}
-          className="flex items-start gap-2 rounded-lg border border-white/15 bg-neutral-900/90 p-3 text-xs text-white shadow-2xl backdrop-blur"
+          role={tst.kind === 'error' ? 'alert' : 'status'}
+          className={`flex items-start gap-2 rounded-lg border p-3 text-xs text-white shadow-2xl backdrop-blur ${
+            tst.kind === 'error'
+              ? 'border-rose-400/60 bg-rose-950/90'
+              : 'border-white/15 bg-neutral-900/90'
+          }`}
         >
           {tst.kind === 'error' ? (
             <XCircle size={15} className="mt-0.5 shrink-0 text-rose-300" />

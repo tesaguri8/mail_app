@@ -785,6 +785,7 @@ pub fn reprocess_all_conn(conn: &mut Connection, account_id: i64) -> rusqlite::R
     // (1) 保存済み body_plain から clean_body / body_fingerprint / FTS / message_quotes を再生成（200件ずつ）。
     //     併せて保存済み raw_headers から reply_to を後付けし、HTML 専用メールで 1 行に潰れた
     //     body_plain は保存済み HTML から改行を復元して貼り直す（機能追加前の既存メール向け）。
+    //     text/plain に文字参照がそのまま書かれた body_plain も、解いて貼り直す。
     let rows: Vec<ReprocessRow> = {
         let mut stmt = conn.prepare(
             "SELECT id, body_plain, raw_headers, body_html_z FROM emails WHERE account_id = ?1",
@@ -828,7 +829,13 @@ pub fn reprocess_all_conn(conn: &mut Connection, account_id: i64) -> rusqlite::R
                             .filter(|fixed| !fixed.trim().is_empty())
                     }
                     _ => None,
-                };
+                }
+                // text/plain に文字参照（"&nbsp;" 等）がそのまま書かれた本文を解いて貼り直す
+                // （取り込みと同じ判定。parser::decode_literal_entities）。
+                .or_else(|| {
+                    body.as_deref()
+                        .and_then(crate::services::parser::decode_literal_entities)
+                });
                 if let Some(fixed) = &recovered {
                     upbp.execute(params![id, fixed])?;
                 }
@@ -1502,5 +1509,55 @@ Subject: 図面\n\
             Some("a@b.com")
         );
         assert_eq!(bare_addr(Some("")), None);
+    }
+
+    /// 再構築: text/plain に文字参照がそのまま書かれた既存の body_plain を解いて貼り直し、
+    /// 引用の見出しも読めるようにする。「&」を普通に使う本文は触らない。名前・アドレスは作り物。
+    #[test]
+    fn reprocess_decodes_literal_entities_in_plain_body() {
+        let store = test_store();
+        let raw = "了解です。\n\n&nbsp;&nbsp;2026/10/14&nbsp;12:50:57&nbsp;前田 三郎 &lt;maeda@example.invalid&gt; さんが書きました:\n> 図面を送ります。";
+        let plain = "A&B社と R&D の件です。&amp; は 1 つだけ。";
+        {
+            let conn = store.conn.lock().unwrap();
+            for (mid, ts, body) in [("e1@x", 1, raw), ("e2@x", 2, plain)] {
+                let mut e = mk(mid, "件", "maeda@example.invalid", "inbox", ts, None, None);
+                e.body_plain = Some(body.to_string());
+                e.clean_body = Some(body.to_string());
+                insert_email(&conn, &e).unwrap();
+            }
+        }
+        reprocess_all_conn(&mut store.conn.lock().unwrap(), 1).unwrap();
+        let conn = store.conn.lock().unwrap();
+        let row = |mid: &str| -> (String, String) {
+            conn.query_row(
+                "SELECT body_plain, clean_body FROM emails WHERE message_id = ?1",
+                [mid],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+        let (body, clean) = row("e1@x");
+        assert_eq!(
+            body,
+            "了解です。\n\n  2026/10/14 12:50:57 前田 三郎 <maeda@example.invalid> さんが書きました:\n> 図面を送ります。"
+        );
+        assert_eq!(clean, "了解です。");
+        let quote: (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT q.quoted_from, q.quoted_at FROM message_quotes q
+                 JOIN emails e ON e.id = q.email_id WHERE e.message_id = 'e1@x'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            quote,
+            (
+                Some("前田 三郎 <maeda@example.invalid>".to_string()),
+                Some("2026/10/14 12:50:57".to_string())
+            )
+        );
+        assert_eq!(row("e2@x"), (plain.to_string(), plain.to_string()));
     }
 }

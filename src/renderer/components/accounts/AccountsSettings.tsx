@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus } from 'lucide-react';
+import { ArrowLeft, Plus } from 'lucide-react';
 import type { AccountProfile } from '@bindings/AccountProfile';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { GoogleAccount } from '@bindings/GoogleAccount';
@@ -42,7 +42,9 @@ export function AccountsSettings({
   const [creds, setCreds] = useState<GoogleCredentialsStatus | null>(null);
   const [adding, setAdding] = useState(false);
   const [conn, setConn] = useState<Record<number, ConnState>>({});
-  // 開いているカード（同時に 1 枚だけ。最初は全部閉じる＝null）。
+  // 開いているカード（同時に 1 枚だけ。最初は全部閉じる＝null）。開いている間は、そのカードだけを
+  // 見せる（ほかのカード・「アカウントを追加」・Google の接続設定は描かない＝Tab でも入らない）。
+  // 閉じるのは、カードの見出しの開閉か、上の「すべてのアカウント」。
   const [openId, setOpenId] = useState<number | null>(null);
   // 追加の流れで作ったカードのアドレス。一覧に現れたら、そのカードを開く。
   const [created, setCreated] = useState<string | null>(null);
@@ -132,6 +134,10 @@ export function AccountsSettings({
       .catch(() => undefined);
   };
 
+  // 開いているカード（消えたアカウントを指していれば、一覧に戻る）。
+  const focused = profiles.find((p) => p.id === openId);
+  const shown = focused ? [focused] : profiles;
+
   return (
     <div className="max-w-xl space-y-3 text-left">
       <div>
@@ -143,7 +149,17 @@ export function AccountsSettings({
         <p className="text-sm text-white/60">{t('account.none')}</p>
       )}
 
-      {profiles.map((p) => (
+      {focused && (
+        <button
+          onClick={() => setOpenId(null)}
+          className="flex items-center gap-1 text-xs text-white/60 hover:text-white"
+        >
+          <ArrowLeft size={13} aria-hidden />
+          {t('account.backToAll')}
+        </button>
+      )}
+
+      {shown.map((p) => (
         <div
           key={p.id}
           draggable={armed === p.id}
@@ -182,13 +198,15 @@ export function AccountsSettings({
             onChanged={changed}
             open={openId === p.id}
             onToggleOpen={() => setOpenId(openId === p.id ? null : p.id)}
-            // 追加の途中は並べ替えない。
-            onDragHandleDown={profiles.length > 1 && !adding ? () => setArmed(p.id) : undefined}
+            // 追加の途中と、1 枚だけを見せている間は並べ替えない。
+            onDragHandleDown={
+              profiles.length > 1 && !adding && !focused ? () => setArmed(p.id) : undefined
+            }
           />
         </div>
       ))}
 
-      {adding ? (
+      {focused ? null : adding ? (
         <AddAccountFlow
           profiles={profiles}
           servers={servers}
@@ -207,9 +225,11 @@ export function AccountsSettings({
         </button>
       )}
 
-      <div className="pt-4">
-        <GoogleCredentialsPanel creds={creds} onSaved={load} />
-      </div>
+      {!focused && (
+        <div className="pt-4">
+          <GoogleCredentialsPanel creds={creds} onSaved={load} />
+        </div>
+      )}
       {!isTauri && <p className="text-xs text-white/40">{t('settings.spamPreviewNote')}</p>}
     </div>
   );

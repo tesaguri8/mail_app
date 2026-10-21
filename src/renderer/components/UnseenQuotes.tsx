@@ -14,6 +14,9 @@ import { markAttrs } from './timeline/marks';
  * （古い側）に置く。本文の先頭にあって直前が無ければ、本文で直後の枠に寄せ、そのすぐ下に置く。
  * どちらも無ければ（全部読めない）本文の逆順のまま。同じ日時どうしも本文の逆順を保つ。
  *
+ * 差出人は読めたのに日時の無い枠（日付の行が無い転送など）も、この「日時の読めない枠」と同じく本文の順を
+ * 手がかりに、前後の日時のある枠の間に置く。
+ *
  * 差出人を推定した枠（`guessed`。返信のいちばん新しい引用で、日時は分からない）は、日時の分かる枠の
  * うち、いちばん新しいものの次（親のバブルのすぐ上）に置く。
  */
@@ -73,8 +76,11 @@ export function UnseenQuotes({
           <div
             key={i}
             // 日付のつまみに 1 件として載せる（timeline/marks.ts）。添付は外側のメールのもので
-            // この枠のものか分からないので、リンクだけ載せる
-            {...markAttrs({ date: q.date, quote: true, link: hasAutoLinkUrl(q.body) })}
+            // この枠のものか分からないので、リンクだけ載せる。日時の無い枠（推定の枠・日付の行が無い
+            // 転送など）は、つまみの札も目印も出さない
+            {...(q.date
+              ? markAttrs({ date: q.date, quote: true, link: hasAutoLinkUrl(q.body) })
+              : {})}
             className="w-full max-w-[92%] rounded-xl border border-dashed border-white/30 bg-white/10 px-3 py-1.5 text-[13px] leading-relaxed text-white/90"
           >
             <div className="mb-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px]">
@@ -101,11 +107,16 @@ export function UnseenQuotes({
                   </span>
                   <span className="text-white/45">{t('thread.quoteDateUnknown')}</span>
                 </>
-              ) : (
+              ) : q.date || q.at ? (
                 // 表記はバブルにそろえ、見出しに書かれていた元の文字列はツールチップに残す
+                // （日時の行はあるが読めなければ、元の文字列のまま）
                 <span className="tabular-nums text-white/45" title={q.at ?? undefined}>
                   {q.date ? formatQuotedDateTime(q.date, q.at ?? '') : q.at}
                 </span>
+              ) : (
+                // 差出人は読めたのに、見出しに日時の行が無い枠（日付の行が無い転送など）。
+                // 差出人は見出しのままなので「推定」の印は付けない
+                <span className="text-white/45">{t('thread.quoteDateUnknown')}</span>
               )}
               {q.subject && <span className="min-w-0 truncate text-white/45">{q.subject}</span>}
             </div>

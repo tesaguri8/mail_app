@@ -249,10 +249,13 @@ pub fn thread_bodies(messages: &[ThreadMessage]) -> Vec<String> {
         .collect()
 }
 
-/// メール 1 通の本文から、手元に無いメールの引用を拾う。差出人と日時の両方が読めて、
+/// メール 1 通の本文から、手元に無いメールの引用を拾う。差出人（と日時）が読めて、
 /// 照らし合わせで見つからず、同じ会話（`known`。[`thread_bodies`]）にも無いものだけ。
 ///
-/// 差出人・日時の分からない引用（"…が書きました:" や、読めない見出しの転送）は、1 通の枠に
+/// 差出人は読めたのに日時の無い引用（日付の行が無い転送など）は、取り込み・再解析で差出人と本文で
+/// 照らし合わせ（quote_undated）、手元に無ければ日時不明の 1 通の枠にする。
+///
+/// 差出人の分からない引用（"…が書きました:" や、読めない見出しの転送）は、1 通の枠に
 /// できない。直前の枠を出していれば、その続きとして見出しごと残す（黙って捨てない）。直前の
 /// 1 通が手元にある（または最初の引用）ときは、そのメールの側で読めるので、いままでどおり畳む。
 ///
@@ -281,6 +284,16 @@ pub fn unseen_quotes(
         })?;
         rows.collect::<rusqlite::Result<_>>()?
     };
+    // 照らし合わせで手元のメールと結び付いた引用（block_order）。日時の無い引用は、取り込みと再解析で
+    // 差出人と本文で照らし合わせた結果をここで使う（quote_undated）。
+    let matched: std::collections::HashSet<i64> = {
+        let mut stmt = conn.prepare_cached(
+            "SELECT block_order FROM message_quotes
+             WHERE email_id = ?1 AND matched_email_id IS NOT NULL",
+        )?;
+        let rows = stmt.query_map(params![email_id], |r| r.get::<_, i64>(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
     for q in quotes::split_reply(body_plain).quotes {
         // 差出人の行が無い「>」だけの引用で、差出人を推定できたもの: 日時不明の枠にする
         // （手元にあるもの・会話の中で既に読めるものは畳んだまま）。
@@ -295,6 +308,40 @@ pub fn unseen_quotes(
                     at: None,
                     date: None,
                     guessed: true,
+                    subject: q.subject,
+                    body: q.body,
+                });
+            }
+            continue;
+        }
+        // 差出人は読めたのに日時の無い引用（日付の行が無い転送など）: 日時不明の 1 通の枠にする
+        // （照らし合わせで手元に見つかったもの・会話の中で既に読めるものは畳む）。
+        if super::quote_undated::is_undated(q.quoted_from.as_deref(), q.quoted_at.as_deref()) {
+            let norm = normalize_body(&q.body);
+            let known_here = known.iter().any(|k| norm.contains(k.as_str()));
+            // 取り込みの順（新しい順）で元のメールが後から入ることがあるので、保存した照合に無ければ
+            // 開くたびに照らし合わせる（日時のある引用を開くたびに探すのと同じ）。
+            last_shown = !q.body.is_empty()
+                && !known_here
+                && !matched.contains(&q.order)
+                && match q.quoted_from.as_deref() {
+                    Some(from) => super::quote_undated::find_undated_quote(
+                        conn,
+                        email_id,
+                        from,
+                        Some(&q.fingerprint),
+                        &q.body,
+                    )?
+                    .is_none(),
+                    None => false,
+                };
+            if let (true, Some(from)) = (last_shown, q.quoted_from) {
+                out.push(UnseenQuote {
+                    sender: quotes::sender::sender_label(&from),
+                    from,
+                    at: q.quoted_at,
+                    date: None,
+                    guessed: false,
                     subject: q.subject,
                     body: q.body,
                 });

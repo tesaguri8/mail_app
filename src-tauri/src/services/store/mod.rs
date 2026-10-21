@@ -24,6 +24,7 @@ mod org_tidy;
 mod organizations;
 mod quote_guess;
 mod quote_match;
+mod quote_undated;
 mod reply_threads;
 mod recipients;
 mod sent_addresses;

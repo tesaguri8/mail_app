@@ -29,7 +29,7 @@ type EmailRow = (
 );
 
 /// 自分のアドレス（すべてのアカウントとプロフィール。小文字）。
-fn self_addresses(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+pub(super) fn self_addresses(conn: &Connection) -> rusqlite::Result<Vec<String>> {
     let mut stmt = conn.prepare_cached(
         "SELECT lower(trim(email)) FROM accounts WHERE email IS NOT NULL
          UNION SELECT lower(trim(email)) FROM account_profiles WHERE email IS NOT NULL",
@@ -41,7 +41,7 @@ fn self_addresses(conn: &Connection) -> rusqlite::Result<Vec<String>> {
 /// 推定した差出人の、このメールより前のメールのうち、本文が引用に入っているもの（新しい順で最初）。
 /// 推定が自分（`self_addrs` のどれか）なら、自分の全アカウントから送ったメールを相手にする
 /// （受信した返信の「>」は、自分が前にどのアカウントから送った文でもありうる）。
-fn match_guessed(
+pub(super) fn match_by_body(
     conn: &Connection,
     email_id: i64,
     before_ts: i64,
@@ -158,7 +158,7 @@ pub fn guess_quotes_of_email(
         .optional()?
         .flatten();
     let matched = match date_ts {
-        Some(ts) => match_guessed(
+        Some(ts) => match_by_body(
             conn,
             email_id,
             ts,

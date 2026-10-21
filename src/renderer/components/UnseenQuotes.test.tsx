@@ -89,6 +89,16 @@ describe('UnseenQuotes の見出しの日時', () => {
     expect(container.textContent).toContain('thread.quoteDateUnknown');
   });
 
+  it('差出人は読めたのに日時の行が無い枠は「日時不明」を出し、「推定」の印は付けない', () => {
+    const q: UnseenQuote = { ...quote('本文'), at: null, date: null };
+    act(() => root.render(<UnseenQuotes quotes={[q]} out={false} />));
+    expect(stamp()).toBeNull();
+    expect(container.querySelector('span[title="thread.quoteGuessedHint"]')).toBeNull();
+    expect(container.textContent).not.toContain('thread.quoteGuessed');
+    expect(container.textContent).toContain('thread.quoteDateUnknown');
+    expect(container.textContent).toContain('前田 太郎');
+  });
+
   it('読んだ日時が無ければ、元の文字列をそのまま出す', () => {
     const q = { ...quote('本文'), at: '2026/10/02 12:10', date: '' };
     act(() => root.render(<UnseenQuotes quotes={[q]} out={false} />));
@@ -146,6 +156,31 @@ describe('枠の並び（古い順・親のバブルの上）', () => {
       'e',
       '推定',
     ]);
+  });
+
+  it('差出人は読めたのに日時の無い枠は、本文の順を手がかりに前後の日時のある枠の間に置き、推定の枠は最後', () => {
+    const undated = (subject: string): UnseenQuote => ({
+      ...at(subject, ''),
+      date: null,
+      at: null,
+    });
+    const guessed: UnseenQuote = { ...undated('推定'), guessed: true };
+    // 本文の順: 推定（いちばん新しい）→ e → 日時なし1 → c → 日時なし2 → a
+    expect(
+      subjects(
+        oldestFirst([guessed, inBody[0], undated('なし1'), inBody[2], undated('なし2'), inBody[4]])
+      )
+    ).toEqual(['a', 'なし2', 'c', 'なし1', 'e', '推定']);
+  });
+
+  it('日時の無い枠（日付の行が無い枠・推定の枠）は、つまみの目印に載せない', () => {
+    const undated: UnseenQuote = { ...at('なし', ''), date: null, at: null };
+    const guessed: UnseenQuote = { ...undated, subject: '推定', guessed: true };
+    act(() =>
+      root.render(<UnseenQuotes quotes={[guessed, inBody[0], undated, inBody[2]]} out={false} />)
+    );
+    expect(container.querySelectorAll('.rounded-xl')).toHaveLength(4);
+    expect(readMarks(container).map((m) => m.date)).toEqual([inBody[2].date, inBody[0].date]);
   });
 
   it('つまみが DOM の順に読む日時は、枠 → 親のバブルで上から下へ単調に増える', () => {

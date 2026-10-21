@@ -725,10 +725,12 @@ pub struct UnseenQuote {
     pub from: String,
     /// 差出人の表示（名前があれば名前、無ければアドレス。`quotes::sender::sender_label`）。
     pub sender: String,
-    /// 送信日時（見出しのまま）。差出人を推定した枠（`guessed`）では無い。
+    /// 送信日時（見出しのまま）。差出人を推定した枠（`guessed`）と、見出しに日時の行が無い枠では無い
+    /// （日時の行はあるが読めない枠は、見出しのまま入る）。
     pub at: Option<String>,
     /// 送信日時を読んだもの（ISO 8601。時差が書かれていなければ時差なし＝書かれたままの時刻。
-    /// `QuotedTime::to_iso`）。日付のつまみの目盛りに使う。差出人を推定した枠では無い（日時不明）。
+    /// `QuotedTime::to_iso`）。日付のつまみの目盛りに使う。差出人を推定した枠と、差出人は読めたのに
+    /// 日時の無い（読めない）枠では無い（日時不明。つまみの目盛りにも載せない）。
     pub date: Option<String>,
     /// 差出人の行が無い「>」だけの引用で、差出人を返信の向きから推定した枠か（docs/THREADING.md §2）。
     pub guessed: bool,

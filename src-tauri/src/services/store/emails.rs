@@ -516,6 +516,19 @@ fn guess_quotes(conn: &Connection, email_id: i64, quotes: &[NewQuote]) -> rusqli
         .map(|q| (q.order, q.gt_depth, q.body.as_str()))
         .collect();
     super::quote_guess::guess_quotes_of_email(conn, email_id, &blocks)?;
+    // 差出人は読めたのに日時の無い引用は、差出人と本文で照らし合わせる（quote_undated）。
+    let undated: Vec<(i64, Option<&str>, Option<&str>, &str)> = quotes
+        .iter()
+        .map(|q| {
+            (
+                q.order,
+                q.quoted_from.as_deref(),
+                q.quoted_at.as_deref(),
+                q.body.as_str(),
+            )
+        })
+        .collect();
+    super::quote_undated::match_undated_quotes_of_email(conn, email_id, &undated)?;
     Ok(())
 }
 

@@ -38,7 +38,9 @@ pub const INGEST_VERSION: i64 = 1;
 /// v11: text/plain の本文に HTML の文字参照（"&nbsp;" / "&amp;" ほか）がそのまま書かれたメールは、
 ///     解いてから body_plain にする（取り込み・再構築とも。`parser::decode_literal_entities`）。
 ///     "&nbsp;" が 1 つでもあるか、ほかの文字参照が 3 つ以上あるときだけ解く。
-pub const PARSE_VERSION: i64 = 11;
+/// v12: 差出人の行が無い「>」だけの引用の差出人を、返信の相手から推定する（message_quotes.guessed_from。
+///      quotes::guess / store::quote_guess）。推定した差出人の、このメールより前のメールと本文で照らし合わせる。
+pub const PARSE_VERSION: i64 = 12;
 
 /// 記録された取り込み形式バージョンから、サーバーからの全体再取り込みが必要かを判定する。
 /// 0（形式不明＝バージョン記録導入前のアカウント）も「必要」になる。

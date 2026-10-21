@@ -13,14 +13,18 @@ from: string,
  */
 sender: string, 
 /**
- * 送信日時（見出しのまま）。
+ * 送信日時（見出しのまま）。差出人を推定した枠（`guessed`）では無い。
  */
-at: string, 
+at: string | null, 
 /**
  * 送信日時を読んだもの（ISO 8601。時差が書かれていなければ時差なし＝書かれたままの時刻。
- * `QuotedTime::to_iso`）。日付のつまみの目盛りに使う。日時の読めない引用は枠にしないので必ずある。
+ * `QuotedTime::to_iso`）。日付のつまみの目盛りに使う。差出人を推定した枠では無い（日時不明）。
  */
-date: string, 
+date: string | null, 
+/**
+ * 差出人の行が無い「>」だけの引用で、差出人を返信の相手から推定した枠か（docs/THREADING.md §2）。
+ */
+guessed: boolean, 
 /**
  * 件名（見出しにあれば）。
  */

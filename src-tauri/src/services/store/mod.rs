@@ -22,6 +22,7 @@ mod migrations;
 mod org_contacts;
 mod org_tidy;
 mod organizations;
+mod quote_guess;
 mod quote_match;
 mod reply_threads;
 mod recipients;

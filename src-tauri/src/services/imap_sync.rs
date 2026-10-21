@@ -893,6 +893,8 @@ fn parsed_to_new_email(
             quoted_from: q.quoted_from,
             quoted_at: q.quoted_at,
             fingerprint: q.fingerprint,
+            bare_gt: q.bare_gt,
+            body: q.body,
         })
         .collect();
     // 📎 は BODYSTRUCTURE 由来の添付一覧を正本に判定する（本文を落とす Stage2 では p.has_attachments

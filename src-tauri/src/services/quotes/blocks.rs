@@ -186,9 +186,15 @@ pub(super) fn quote_blocks(
                 .filter(|l| !l.is_empty())
                 .collect::<Vec<_>>()
                 .join("\n");
+            let quoted_from = h.from.or(attr_from);
+            let starts_with_gt = block
+                .iter()
+                .find(|l| !l.trim().is_empty())
+                .is_some_and(|l| l.trim_start().starts_with('>'));
             QuoteBlock {
                 order: k as i64,
-                quoted_from: h.from.or(attr_from),
+                bare_gt: starts_with_gt && quoted_from.is_none(),
+                quoted_from,
                 quoted_at: h.at.or(attr_at),
                 subject: h.subject,
                 body: dedent(&block[h.body_start.min(block.len())..]),

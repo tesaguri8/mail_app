@@ -11,6 +11,7 @@
 pub mod anchor;
 mod attribution;
 mod blocks;
+pub mod guess;
 pub mod header;
 pub mod sender;
 mod signature;
@@ -35,6 +36,8 @@ pub struct QuoteBlock {
     pub text: String,
     /// 引用本文の正規化ハッシュ（同じ履歴を引いているかの照合キー）。
     pub fingerprint: String,
+    /// 差出人の行が無い「>」だけの引用か（返信の相手から差出人を推定する対象。`guess`）。
+    pub bare_gt: bool,
 }
 
 /// 分離結果。

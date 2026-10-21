@@ -1011,6 +1011,9 @@
   },
   "thread": {
     "unseenQuote": "Included in the email below — not in your mailbox",
+    "quoteGuessed": "Guessed",
+    "quoteGuessedHint": "This quote has no sender line. The sender was guessed from the person this email replies to",
+    "quoteDateUnknown": "Date unknown",
     "unseenQuotesHeading": "Quoted in the email below, not in your mailbox: {{count}}",
     "you": "You",
     "untitled": "(untitled thread)",

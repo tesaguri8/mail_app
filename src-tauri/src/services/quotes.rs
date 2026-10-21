@@ -38,6 +38,8 @@ pub struct QuoteBlock {
     pub fingerprint: String,
     /// 差出人の行が無い「>」だけの引用か（返信の向きから差出人を推定する対象。`guess`）。
     pub bare_gt: bool,
+    /// 枠の先頭の空でない行の「>」の段の数（"> …" は 1、">> …" / "> > …" は 2。「>」が無ければ 0）。
+    pub gt_depth: usize,
 }
 
 /// 分離結果。

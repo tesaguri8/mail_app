@@ -70,6 +70,14 @@ fn dedent(lines: &[&str]) -> String {
         .to_string()
 }
 
+/// 行頭の「>」の段の数（間の空白は許す。"> > 本文" は 2）。
+fn gt_depth(line: &str) -> usize {
+    line.chars()
+        .take_while(|c| *c == '>' || *c == ' ' || *c == '\t')
+        .filter(|c| *c == '>')
+        .count()
+}
+
 /// 行頭の「>」を 1 段外す（"> From: …" → "From: …"）。「>」が無ければそのまま。
 fn strip_one_quote_level(line: &str) -> &str {
     let t = line.trim_start_matches([' ', '\t']);
@@ -79,18 +87,22 @@ fn strip_one_quote_level(line: &str) -> &str {
     }
 }
 
-/// ブロックの見出しを読む（[`header::parse_header_after`]）。最初の空でない行が「>」で始まる
-/// ブロック（引用の中に入った "> Begin forwarded message:" / "> 差出人: …"）は、「>」を 1 段
-/// 外した形で読む（行の数は変わらないので、本文の始まりの添字はそのまま使える）。
+/// ブロックの見出しを読む（[`header::parse_header_after`]）。見出しが「>」の中にあるブロック
+/// （引用の中に入った "> Begin forwarded message:" / "> 差出人: …" / 区切りの後の ">> From: …"）は、
+/// 区切り行・罫線の次の最初の空でない行の「>」の段の数だけ外した形で読む（行の数は変わらないので、
+/// 本文の始まりの添字はそのまま使える）。
 fn header_of(block: &[&str], skip: usize) -> header::Header {
-    let quoted = block
+    let depth = block
         .iter()
-        .find(|l| !l.trim().is_empty())
-        .is_some_and(|l| l.trim_start().starts_with('>'));
-    if !quoted {
+        .find(|l| !l.trim().is_empty() && !header::is_separator(l) && !header::is_rule_line(l))
+        .map_or(0, |l| gt_depth(l));
+    if depth == 0 {
         return header::parse_header_after(block, skip);
     }
-    let view: Vec<&str> = block.iter().map(|l| strip_one_quote_level(l)).collect();
+    let view: Vec<&str> = block
+        .iter()
+        .map(|l| (0..depth).fold(*l, |acc, _| strip_one_quote_level(acc)))
+        .collect();
     header::parse_header_after(&view, skip)
 }
 
@@ -187,13 +199,15 @@ pub(super) fn quote_blocks(
                 .collect::<Vec<_>>()
                 .join("\n");
             let quoted_from = h.from.or(attr_from);
-            let starts_with_gt = block
+            // 段は本文の始まり（見出し・区切り行の後）の最初の空でない行で数える。
+            let gt_depth = block[h.body_start.min(block.len())..]
                 .iter()
                 .find(|l| !l.trim().is_empty())
-                .is_some_and(|l| l.trim_start().starts_with('>'));
+                .map_or(0, |l| gt_depth(l));
             QuoteBlock {
                 order: k as i64,
-                bare_gt: starts_with_gt && quoted_from.is_none(),
+                bare_gt: gt_depth > 0 && quoted_from.is_none(),
+                gt_depth,
                 quoted_from,
                 quoted_at: h.at.or(attr_at),
                 subject: h.subject,

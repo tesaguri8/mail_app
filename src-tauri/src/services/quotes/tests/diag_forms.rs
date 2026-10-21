@@ -175,3 +175,32 @@ Subject: 図面\n\n最初の本文";
     );
     assert!(s.quotes[0].body.contains("ｃｃ：鈴木さんに"));
 }
+
+/// ISO 8601 の日時の属性行（"2023-10-30T10:00:00Z に addr さんは書きました:" / "+09:00" 付き）。
+#[test]
+fn reads_iso_8601_attribution() {
+    let body = "本文\n\n2023-10-30T10:00:00Z に taro@example.jp さんは書きました:\n> 引用";
+    assert_eq!(
+        frames(body),
+        vec![(some("taro@example.jp"), some("2023-10-30T10:00:00Z"))]
+    );
+    let body = "本文\n\n2023-10-30T10:00:00+09:00 に taro@example.jp が書きました:\n> 引用";
+    assert_eq!(
+        frames(body),
+        vec![(some("taro@example.jp"), some("2023-10-30T10:00:00+09:00"))]
+    );
+}
+
+/// 区切り行の後の、「>>」の 2 段の中に入った見出しも読む（段の数だけ「>」を外す）。
+#[test]
+fn reads_header_inside_two_gt_levels() {
+    let body =
+        "本文\n\n----- Original Message -----\n>> From: taro@example.jp\n>> To: me@example.jp\n\
+>> Date: 2023-10-30 10:00:00\n>> Subject: 件名\n>>\n>> 引用";
+    let s = split_reply(body);
+    assert_eq!(s.quotes[0].subject.as_deref(), Some("件名"));
+    assert_eq!(
+        frames(body),
+        vec![(some("taro@example.jp"), some("2023-10-30 10:00:00"))]
+    );
+}

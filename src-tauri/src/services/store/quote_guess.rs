@@ -29,7 +29,7 @@ type EmailRow = (
 );
 
 /// 自分のアドレス（すべてのアカウントとプロフィール。小文字）。
-fn self_addresses(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+pub(super) fn self_addresses(conn: &Connection) -> rusqlite::Result<Vec<String>> {
     let mut stmt = conn.prepare_cached(
         "SELECT lower(trim(email)) FROM accounts WHERE email IS NOT NULL
          UNION SELECT lower(trim(email)) FROM account_profiles WHERE email IS NOT NULL",
@@ -41,16 +41,16 @@ fn self_addresses(conn: &Connection) -> rusqlite::Result<Vec<String>> {
 /// 推定した差出人の、このメールより前のメールのうち、本文が引用に入っているもの（新しい順で最初）。
 /// 推定が自分（`self_addrs` のどれか）なら、自分の全アカウントから送ったメールを相手にする
 /// （受信した返信の「>」は、自分が前にどのアカウントから送った文でもありうる）。
-fn match_guessed(
+pub(super) fn match_by_body(
     conn: &Connection,
     email_id: i64,
     before_ts: i64,
-    guessed: &str,
+    sender: &str,
     self_addrs: &[String],
     fingerprint: Option<&str>,
     quote_body: &str,
 ) -> rusqlite::Result<Option<i64>> {
-    let Some(addr) = split_sender(guessed).0 else {
+    let Some(addr) = split_sender(sender).0 else {
         return Ok(None);
     };
     let senders: Vec<String> = if self_addrs.iter().any(|s| s.eq_ignore_ascii_case(&addr)) {
@@ -89,20 +89,20 @@ fn match_guessed(
     Ok(None)
 }
 
-/// 1 通のメールの、差出人の行が無い「>」だけの引用（`blocks` = (block_order, 引用の本文)）に、
-/// 推定した差出人を入れ、照らし合わせる。推定は 1 段目（いちばん新しい引用＝block_order 0）だけ。
-/// 推定した数を返す。
+/// 1 通のメールの、差出人の行が無い「>」だけの引用（`blocks` = (block_order, 枠の先頭の「>」の段, 引用の本文)）に、
+/// 推定した差出人を入れ、照らし合わせる。1 対 1 の返信なら、段ごとに相手と自分を入れ替えて推定する
+/// （`quotes::guess::guess_quote_sender`）。推定した数を返す。
 ///
 /// # Errors
 /// 問い合わせ・更新に失敗したとき。
 pub fn guess_quotes_of_email(
     conn: &Connection,
     email_id: i64,
-    blocks: &[(i64, &str)],
+    blocks: &[(i64, usize, &str)],
 ) -> rusqlite::Result<usize> {
-    let Some(&(order, body)) = blocks.first().filter(|(o, _)| *o == 0) else {
+    if blocks.is_empty() {
         return Ok(0);
-    };
+    }
     let row: Option<EmailRow> = conn
         .query_row(
             "SELECT e.subject, e.in_reply_to, e.references_ids, e.from_address, e.from_name,
@@ -146,34 +146,37 @@ pub fn guess_quotes_of_email(
         name: acct_name.as_deref(),
     });
     let self_addrs = self_addresses(conn)?;
-    let Some(guessed) = guess_quote_sender(&ctx, &self_addrs, own.as_ref()) else {
-        return Ok(0);
-    };
-    let fingerprint: Option<String> = conn
-        .query_row(
-            "SELECT fingerprint FROM message_quotes WHERE email_id = ?1 AND block_order = ?2",
-            params![email_id, order],
-            |r| r.get(0),
-        )
-        .optional()?
-        .flatten();
-    let matched = match date_ts {
-        Some(ts) => match_guessed(
-            conn,
-            email_id,
-            ts,
-            &guessed,
-            &self_addrs,
-            fingerprint.as_deref(),
-            body,
-        )?,
-        None => None,
-    };
-    let n = conn.execute(
-        "UPDATE message_quotes SET guessed_from = ?3, matched_email_id = COALESCE(?4, matched_email_id)
-         WHERE email_id = ?1 AND block_order = ?2 AND quoted_from IS NULL",
-        params![email_id, order, guessed, matched],
-    )?;
+    let mut n = 0;
+    for &(order, depth, body) in blocks {
+        let Some(guessed) = guess_quote_sender(&ctx, &self_addrs, own.as_ref(), depth) else {
+            continue;
+        };
+        let fingerprint: Option<String> = conn
+            .query_row(
+                "SELECT fingerprint FROM message_quotes WHERE email_id = ?1 AND block_order = ?2",
+                params![email_id, order],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        let matched = match date_ts {
+            Some(ts) => match_by_body(
+                conn,
+                email_id,
+                ts,
+                &guessed,
+                &self_addrs,
+                fingerprint.as_deref(),
+                body,
+            )?,
+            None => None,
+        };
+        n += conn.execute(
+            "UPDATE message_quotes SET guessed_from = ?3, matched_email_id = COALESCE(?4, matched_email_id)
+             WHERE email_id = ?1 AND block_order = ?2 AND quoted_from IS NULL",
+            params![email_id, order, guessed, matched],
+        )?;
+    }
     Ok(n)
 }
 
@@ -384,5 +387,59 @@ mod tests {
             (Some("末松 <me@example.jp>".into()), Some(mine))
         );
         assert!(unseen_quotes(&conn, reply, body, &[]).unwrap().is_empty());
+    }
+
+    /// 1 対 1 のやり取りの 3 段の引用は、段ごとに相手と自分を入れ替えて推定する。宛先が複数ならどの段も推定しない。
+    #[test]
+    fn alternates_guess_by_quote_depth() {
+        let body = "了解です。\n\n-----Original Message-----\n> 一段目の文です。\n\n\
+-----Original Message-----\n>> 二段目の文です。\n\n-----Original Message-----\n>>> 三段目の文です。";
+        let store = store();
+        let mut conn = store.conn.lock().unwrap();
+        conn.execute("UPDATE accounts SET display_name = '末松' WHERE id = 1", [])
+            .unwrap();
+        let one = put(
+            &conn,
+            "one",
+            "Re: 図面",
+            "sato@example.jp",
+            "me@example.jp",
+            Some("<prev@example.jp>"),
+            "2026-10-15T09:00:00+09:00",
+            body,
+        );
+        let many = put(
+            &conn,
+            "many",
+            "Re: 図面",
+            "sato@example.jp",
+            "me@example.jp, suzuki@example.jp",
+            Some("<prev@example.jp>"),
+            "2026-10-15T09:10:00+09:00",
+            body,
+        );
+        reprocess_all_conn(&mut conn, 1).unwrap();
+        let guessed = |email: i64| -> Vec<Option<String>> {
+            conn.prepare(
+                "SELECT guessed_from FROM message_quotes WHERE email_id = ?1 ORDER BY block_order",
+            )
+            .unwrap()
+            .query_map(params![email], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+        };
+        assert_eq!(
+            guessed(one),
+            [
+                Some("me@example.jp".into()),
+                Some("sato@example.jp".into()),
+                Some("me@example.jp".into()),
+            ]
+        );
+        assert_eq!(guessed(many), [None, None, None]);
+        let frames = unseen_quotes(&conn, one, body, &[]).unwrap();
+        let depths: Vec<Option<u32>> = frames.iter().map(|f| f.guess_depth).collect();
+        assert_eq!(depths, [Some(1), Some(2), Some(3)]);
     }
 }

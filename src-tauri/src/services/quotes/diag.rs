@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! cargo test --no-run --lib        # "Executable unittests src/lib.rs (target/debug/deps/rondine_lib-<hash>)"
-//! RONDINE_DIAG_DB=<mail.db の場所> [RONDINE_DIAG_ACCOUNT=<アカウント id>] \
+//! RONDINE_DIAG_DB=<mail.db の場所> [RONDINE_DIAG_ACCOUNT=<アカウント id>] [RONDINE_DIAG_IDS=<id,id,…>] \
 //!   rondine_lib-<hash> services::quotes::diag::dump_unreadable_blocks --exact --ignored --nocapture
 //! ```
 //!
@@ -277,6 +277,60 @@ fn count_unreadable(
     n
 }
 
+/// 指定した id のメールを 1 通ずつ、いまの parser で分けた枠ごとに出す（差出人・日時の有無、
+/// 「>」だけの引用か、段の数、直前の 2 行と枠の先頭の 3 行の伏字）。本文の中身は出さない。
+fn dump_blocks_of_ids(conn: &Connection, ids: &str) {
+    let mut stmt = conn
+        .prepare("SELECT body_plain FROM emails WHERE id = ?1")
+        .expect("問い合わせ");
+    for id in ids.split(',').filter_map(|i| i.trim().parse::<i64>().ok()) {
+        let body: Option<String> = stmt.query_row(params![id], |r| r.get(0)).ok().flatten();
+        let Some(body) = body else {
+            println!("== {id}: 本文が無い");
+            continue;
+        };
+        let lines: Vec<&str> = body.lines().collect();
+        let split = split_reply(&body);
+        println!("== {id}: blocks {}", split.quotes.len());
+        let mut cursor = 0;
+        for q in split.quotes {
+            let first = q.text.lines().map(str::trim).find(|l| !l.is_empty());
+            let pos = first.and_then(|f| (cursor..lines.len()).find(|&i| lines[i].trim() == f));
+            if let Some(p) = pos {
+                cursor = p + 1;
+            }
+            let head: Vec<&str> = q
+                .text
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .take(3)
+                .collect();
+            let before: Vec<&str> = pos
+                .map(|p| {
+                    let mut b: Vec<&str> = lines[..p]
+                        .iter()
+                        .rev()
+                        .filter(|l| !l.trim().is_empty())
+                        .take(2)
+                        .copied()
+                        .collect();
+                    b.reverse();
+                    b
+                })
+                .unwrap_or_default();
+            println!(
+                "  #{} from={} at={} bare_gt={} depth={}  {}",
+                q.order,
+                q.quoted_from.is_some(),
+                q.quoted_at.is_some(),
+                q.bare_gt,
+                q.gt_depth,
+                shape_key(&before, &head)
+            );
+        }
+    }
+}
+
 /// 利用者の DB を読み取り専用で開き、読めない引用の枠の形を数えて、上位 80 を出す。
 #[test]
 #[ignore = "利用者の機械の DB が要る（RONDINE_DIAG_DB）"]
@@ -296,6 +350,11 @@ fn dump_unreadable_blocks() {
     .expect("RONDINE_DIAG_DB を読み取り専用で開けない");
     conn.execute_batch("PRAGMA query_only=ON;")
         .expect("query_only");
+    // RONDINE_DIAG_IDS（"2116,6629"）があれば、その id のメールだけを、枠ごとに出す。
+    if let Ok(ids) = std::env::var("RONDINE_DIAG_IDS") {
+        dump_blocks_of_ids(&conn, &ids);
+        return;
+    }
     let mut stmt = conn
         .prepare(
             "SELECT e.body_plain FROM emails e

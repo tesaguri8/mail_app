@@ -28,9 +28,17 @@ fn field_value<'a>(block: &[&'a str], j: usize, inline: &'a str) -> &'a str {
 /// To と Subject は必須にしない（Bcc で受けたメール・"On … wrote:" の形には無い）。
 /// 本文の申込書や見積の「件名:」「日付:」だけの段落は、差出人・アドレスが無いので区切らない。
 /// かたまりの途中の行では始まらない（直前の空でない行が見出しなら false）。
+///
+/// 始まりは差出人・日付・件名の項目に限る（宛先・Cc からは始めない。本文の 2 行目の「Cc：各位」を
+/// 1 通の始まりと取り違えないため）。数えるのは見出しの行が続いている間だけで、本文の行
+/// （項目でも、値の空いた項目の次の値でもない行）が来たら打ち切る（その先にある次の 1 通の
+/// 見出しまで数えないため。2026-10-21 vaio）。
 pub fn starts_header_cluster(block: &[&str], j: usize) -> bool {
     let is_field = is_header_line;
-    if !is_field(block[j]) {
+    if !matches!(
+        header_field(block[j]).filter(|_| is_field(block[j])),
+        Some((Field::From | Field::Date | Field::Subject, _))
+    ) {
         return false;
     }
     if block[..j]
@@ -46,10 +54,16 @@ pub fn starts_header_cluster(block: &[&str], j: usize) -> bool {
     let window = (j..block.len())
         .filter(|&k| !block[k].trim().is_empty())
         .take(CLUSTER_LINES);
+    // 直前の項目の値が空なら、次の行はその値（項目名と値が別の行にある書き方）。
+    let mut value_pending = false;
     for k in window {
         let Some((field, inline)) = header_field(block[k]).filter(|_| is_field(block[k])) else {
+            if !std::mem::take(&mut value_pending) {
+                break;
+            }
             continue;
         };
+        value_pending = inline.is_empty();
         let value = field_value(block, k, inline);
         if field != Field::Other && !kinds.contains(&field) {
             kinds.push(field);

@@ -11,6 +11,7 @@
 //! ```
 
 pub mod cluster;
+pub mod packed;
 
 /// 見出しの項目。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +63,32 @@ fn header_field(line: &str) -> Option<(Field, &str)> {
     Some((field, value))
 }
 
+/// 項目名の後ろにコロンが無い書き方（"差出人 \"山田\" <a@b>" / "日付 2026年10月2日 17:55"）を読む。
+/// 本文の「日付 未定」等と紛れるので、区切り行（「------ 元のメッセージ ------」等）から始まる
+/// ブロックの見出しでだけ使う（[`parse_header_after`]）。項目名の後ろは空白（半角・全角・タブ）。
+fn colonless_field(line: &str) -> Option<(Field, &str)> {
+    const KEYS: &[(&str, Field)] = &[
+        ("送信日時", Field::Date),
+        ("差出人", Field::From),
+        ("送信者", Field::From),
+        ("日付", Field::Date),
+        ("日時", Field::Date),
+        ("宛先", Field::To),
+        ("件名", Field::Subject),
+    ];
+    let l = line.trim();
+    KEYS.iter().find_map(|(k, field)| {
+        let rest = l.strip_prefix(k)?;
+        let value = rest.strip_prefix([' ', '\t', '\u{3000}'])?.trim();
+        (!value.is_empty()).then_some((*field, value))
+    })
+}
+
+/// 見出しの項目を読む。`loose` なら、コロンの無い項目（[`colonless_field`]）も読む。
+fn read_field(line: &str, loose: bool) -> Option<(Field, &str)> {
+    header_field(line).or_else(|| loose.then(|| colonless_field(line)).flatten())
+}
+
 /// 区切り行の文字か（`>` の有無は見ない）。"-----Original Message-----" / "-----元のメッセージ-----" /
 /// Gmail の "---------- Forwarded message ---------" / "--- 引用元メッセージ ---" /
 /// "--- 転送されたメール ---" / Apple の "Begin forwarded message:"。
@@ -103,17 +130,22 @@ pub fn is_rule_line(line: &str) -> bool {
 }
 
 /// `j` の行が、区切りとして使われた罫線か。罫線はメールマガジンの飾りや署名にも使われるので、
-/// 罫線の次の行（空行と罫線は飛ばす。空でない行は [`RULE_LOOKAHEAD`] 行まで）が見出し（差出人・日時）か
-/// 区切りの文字（"Begin forwarded message:" 等）のときだけ区切りとみなす（Outlook の下線の後の
-/// "From:" ほか）。罫線と見出しの間に本文の行（飾りの見出し語）があれば区切りではない。
+/// 罫線の次の行（空行と罫線は飛ばす。空でない行は [`RULE_LOOKAHEAD`] 行まで）が、裏付けのある
+/// 差出人の見出し（[`from_line_backed`]）か区切りの文字（"Begin forwarded message:" 等）のときだけ
+/// 区切りとみなす（Outlook の下線の後の "From:" ほか）。罫線と見出しの間に本文の行（飾りの見出し語）が
+/// あれば区切りではない。日時の項目だけ（催しの案内の「日時：10月2日 10:00～」）や、アドレスも続く
+/// 見出しも無い「送信元：店名」（通知メールの店名と住所）でも区切りにしない。
 pub fn starts_rule_separator(lines: &[&str], j: usize) -> bool {
-    is_rule_line(lines[j])
-        && lines[j + 1..]
-            .iter()
-            .filter(|l| !l.trim().is_empty())
-            .take(RULE_LOOKAHEAD)
-            .find(|l| !is_rule_line(l))
-            .is_some_and(|l| is_from_line(l) || is_date_line(l) || is_separator(l))
+    if !is_rule_line(lines[j]) {
+        return false;
+    }
+    let next = (j + 1..lines.len())
+        .filter(|&k| !lines[k].trim().is_empty())
+        .take(RULE_LOOKAHEAD)
+        .find(|&k| !is_rule_line(lines[k]));
+    next.is_some_and(|k| {
+        is_separator(lines[k]) || (is_from_line(lines[k]) && from_line_backed(lines, k))
+    })
 }
 
 /// 見出しの最初の行（"From:" / "差出人:" / "送信者:"）なら、その値（差出人）を返す。
@@ -172,6 +204,19 @@ const MAX_HEADER_LINES: usize = 20;
 /// 項目名と値が別の行にある書式で、項目名と値・値と次の項目名の間に挟まってよい空行の数。
 const MAX_TABLE_GAP: usize = 3;
 
+/// 知らない項目の行らしいか（"Reply: …" / "Message-ID: …"）。項目名は 20 文字までの英字・ハイフン、
+/// または和文で、空白を含まない。
+fn is_unknown_field_line(line: &str) -> bool {
+    let l = line.trim();
+    if l.starts_with('>') || header_field(l).is_some() {
+        return false;
+    }
+    l.split_once([':', '：']).is_some_and(|(k, _)| {
+        let k = k.trim();
+        !k.is_empty() && k.chars().count() <= 20 && k.chars().all(|c| c.is_alphabetic() || c == '-')
+    })
+}
+
 /// 値が空なら None。
 fn non_empty(v: &str) -> Option<String> {
     let v = v.trim();
@@ -223,6 +268,10 @@ pub fn parse_header(block: &[&str], skip_first: bool) -> Header {
 /// [`parse_header`] の、飛ばす行数を数で指定する版（属性行が改行で 2 行に割れたとき 2）。
 /// `skip` が 0 なら、先頭の区切り行・罫線だけを飛ばす。
 pub fn parse_header_after(block: &[&str], skip: usize) -> Header {
+    // 区切り行から始まるブロックでは、コロンの無い項目（"差出人 \"山田\" <a@b>"）も読む。
+    let loose = block
+        .first()
+        .is_some_and(|l| is_separator(l) || is_rule_line(l));
     // 飛ばす行数の指定が無ければ、先頭の区切り行・罫線（"=====" の次の "Begin forwarded message:"
     // のように重なっていれば両方）を飛ばす。
     let mut i = match skip {
@@ -234,6 +283,15 @@ pub fn parse_header_after(block: &[&str], skip: usize) -> Header {
     };
     while block.get(i).is_some_and(|l| l.trim().is_empty()) {
         i += 1;
+    }
+    // 見出しの前の、項目名だけの行（"転送:" / "山田さん:"）は、次に見出しが続くときだけ飛ばす。
+    if let Some(k) =
+        (i < block.len() && is_bare_label(block[i]) && read_field(block[i], loose).is_none())
+            .then(|| next_non_blank(block, i))
+            .flatten()
+            .filter(|&k| read_field(block[k], loose).is_some())
+    {
+        i = k;
     }
     let mut h = Header {
         body_start: i,
@@ -251,10 +309,17 @@ pub fn parse_header_after(block: &[&str], skip: usize) -> Header {
             // 表の形なら、空行の先に次の項目が続く。そうでなければ、空行の先がまだ読んでいない
             // 種類の項目のときだけ続ける（HTML を文字にしたときの 2 重改行で、"差出人:" "日付:" …
             // の各行の間に空行が入る書き方）。本文の行が来たら、空行で見出しが終わる。
-            let continues = |k: usize| match header_field(block[k]) {
+            let known_unseen = |k: usize| match read_field(block[k], loose) {
                 Some(_) if table => true,
                 Some((field, _)) => seen && (field == Field::Other || !kinds.contains(&field)),
                 None => false,
+            };
+            // 知らない項目（"Reply:" 等）なら、その先（空行を飛ばす）にまだ読んでいない項目が続くときだけ。
+            let continues = |k: usize| {
+                known_unseen(k)
+                    || (seen
+                        && is_unknown_field_line(block[k])
+                        && next_non_blank(block, k).is_some_and(known_unseen))
             };
             match next_non_blank(block, j) {
                 Some(k) if continues(k) => {
@@ -270,13 +335,15 @@ pub fn parse_header_after(block: &[&str], skip: usize) -> Header {
             }
         }
         read += 1;
-        match header_field(line) {
+        match read_field(line, loose) {
             Some((field, value)) => {
                 seen = true;
                 kinds.push(field);
                 // 表の形で値が空なら、値は空行を挟んだ次の行（項目名の行なら値は空のまま）。
                 let (value, end) = match next_non_blank(block, j) {
-                    Some(k) if table && value.is_empty() && header_field(block[k]).is_none() => {
+                    Some(k)
+                        if table && value.is_empty() && read_field(block[k], loose).is_none() =>
+                    {
                         read += 1;
                         (block[k].trim(), k)
                     }
@@ -299,6 +366,15 @@ pub fn parse_header_after(block: &[&str], skip: usize) -> Header {
                 let end = next_non_blank(block, j).unwrap_or(j);
                 h.body_start = end + 1;
                 j = end + 1;
+            }
+            // 件名の後ろの、項目名も値の形も無い行は本文の始まり（見出しと本文の間に空行が無い書き方。
+            // 1 行に詰まった見出しの次の行など）。知らない項目（"Message-ID: …"）は飛ばす。
+            None if seen
+                && !table
+                && kinds.contains(&Field::Subject)
+                && !is_unknown_field_line(line) =>
+            {
+                break;
             }
             // 見出しの途中の、項目名の無い行は折り返し（長い To）や知らない項目
             // （"Message-ID: …" / "場所: …"）とみなして飛ばす。見出しより前なら本文。

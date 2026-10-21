@@ -70,6 +70,30 @@ fn dedent(lines: &[&str]) -> String {
         .to_string()
 }
 
+/// 行頭の「>」を 1 段外す（"> From: …" → "From: …"）。「>」が無ければそのまま。
+fn strip_one_quote_level(line: &str) -> &str {
+    let t = line.trim_start_matches([' ', '\t']);
+    match t.strip_prefix('>') {
+        Some(rest) => rest.strip_prefix(' ').unwrap_or(rest),
+        None => line,
+    }
+}
+
+/// ブロックの見出しを読む（[`header::parse_header_after`]）。最初の空でない行が「>」で始まる
+/// ブロック（引用の中に入った "> Begin forwarded message:" / "> 差出人: …"）は、「>」を 1 段
+/// 外した形で読む（行の数は変わらないので、本文の始まりの添字はそのまま使える）。
+fn header_of(block: &[&str], skip: usize) -> header::Header {
+    let quoted = block
+        .iter()
+        .find(|l| !l.trim().is_empty())
+        .is_some_and(|l| l.trim_start().starts_with('>'));
+    if !quoted {
+        return header::parse_header_after(block, skip);
+    }
+    let view: Vec<&str> = block.iter().map(|l| strip_one_quote_level(l)).collect();
+    header::parse_header_after(&view, skip)
+}
+
 /// 1 通の始まり。
 struct Start {
     /// 領域の中の行の添字。
@@ -129,7 +153,7 @@ pub(super) fn quote_blocks(
     }];
     // 次の 1 通の始まりは、いまの 1 通の見出しより後ろでだけ探す（項目名と値が別の行にある
     // 見出しでは "From:" の後に "To:" 等が続き、区切りの無い見出しと見分けられないため）。
-    let mut header_end = header::parse_header_after(region, starts[0].skip).body_start;
+    let mut header_end = header_of(region, starts[0].skip).body_start;
     for j in 1..region.len() {
         if j < header_end {
             continue;
@@ -137,8 +161,7 @@ pub(super) fn quote_blocks(
         let Some(start) = next_start(region, j, header_end.saturating_sub(1)) else {
             continue;
         };
-        header_end =
-            start.line + header::parse_header_after(&region[start.line..], start.skip).body_start;
+        header_end = start.line + header_of(&region[start.line..], start.skip).body_start;
         starts.push(start);
     }
     let ends: Vec<usize> = starts
@@ -154,7 +177,7 @@ pub(super) fn quote_blocks(
         .map(|(k, (start, e))| {
             let block = &region[start.line..e];
             // 属性行で始まるなら、差出人・時刻はその行から取り、行は見出しとして飛ばす。
-            let h = header::parse_header_after(block, start.skip);
+            let h = header_of(block, start.skip);
             let (attr_from, attr_at) = start.attribution.unwrap_or((None, None));
             // フィンガープリントは引用本文（`>` と空白を正規化）から作る。
             let quoted_text: String = block

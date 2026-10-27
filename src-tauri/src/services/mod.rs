@@ -31,4 +31,5 @@ pub mod smtp;
 pub mod spam;
 pub mod store;
 pub mod sure_duplicates;
+pub mod sync_status;
 pub mod vcard;

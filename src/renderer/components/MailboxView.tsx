@@ -85,6 +85,8 @@ import { MAIL_FILTERS, matchesFilters, matchesNoneOfFilters } from './mailFilter
 import { Tooltip } from './Tooltip';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { Dropdown } from './Dropdown';
+import { AccountStatusDot, accountStatusLabel } from './AccountStatusDot';
+import { useAccountSyncStatus } from '../hooks/useAccountSyncStatus';
 import { PrintMail } from './PrintMail';
 import { DateFilter, matchesDate, type DateRange } from './DateFilter';
 import { SpamConflictAlert } from './SpamConflictAlert';
@@ -170,7 +172,9 @@ export function MailboxView({
   /** 表示中アカウントの変化を親へ通知（フッターの件数表示用）。'all'=全アカウント。 */
   onAccountChange?: (id: number | 'all' | null) => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  // アカウントごとのメールの接続状況（アカウント選択の印）。
+  const { statuses: syncStatus } = useAccountSyncStatus();
   // このタブが表示中か（隠れている間は全体のキー操作を受けない。KeepAlivePanel）。
   const tabActive = useTabActiveRef();
   // 'all' = 全アカウント横断表示 / number = 特定アカウント / null = 未選択。
@@ -1651,7 +1655,20 @@ export function MailboxView({
           value={String(selected ?? '')}
           options={[
             ...(accounts.length > 1 ? [{ value: 'all', label: t('mailbox.allAccounts') }] : []),
-            ...accounts.map((a) => ({ value: String(a.id), label: a.email })),
+            ...accounts.map((a) => {
+              // 各アカウントの行に、メールの接続状況の印（失敗のときは理由を補足の行にも出す）。
+              const status = syncStatus[a.id];
+              return {
+                value: String(a.id),
+                label: a.email,
+                icon: <AccountStatusDot status={status} />,
+                title: accountStatusLabel(t, status, undefined, i18n.language),
+                detail:
+                  status?.phase === 'failed'
+                    ? accountStatusLabel(t, status, undefined, i18n.language)
+                    : undefined,
+              };
+            }),
           ]}
           onChange={(v) => setSelected(v === 'all' ? 'all' : Number(v))}
           className="min-w-0 flex-1 text-xs"

@@ -130,3 +130,41 @@ fn a_trickling_tls_handshake_times_out_at_the_deadline() {
     assert!(matches!(r, Err(ImapError::Timeout)), "{:?}", r.err());
     assert!(took < Duration::from_secs(2), "{took:?}");
 }
+
+/// ログインを断られた（NO / BAD）ときはログインの失敗、時間切れ・切断はそのまま。
+#[test]
+fn a_refused_login_is_a_login_error() {
+    for e in [
+        imap::Error::No("[AUTHENTICATIONFAILED] Invalid credentials".into()),
+        imap::Error::Bad("LOGIN failed".into()),
+    ] {
+        assert!(matches!(login_error(e), ImapError::Login(_)));
+    }
+    let timed_out = imap::Error::Io(std::io::Error::from(std::io::ErrorKind::TimedOut));
+    assert!(matches!(login_error(timed_out), ImapError::Timeout));
+    assert!(matches!(
+        login_error(imap::Error::ConnectionLost),
+        ImapError::Imap(imap::Error::ConnectionLost)
+    ));
+}
+
+/// 待ち受けていないポートへの接続は、接続の失敗（「サーバーにつながらない」に分ける側）。
+#[test]
+fn a_refused_connection_is_a_connect_error() {
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let r = connect_login_with(
+        "127.0.0.1",
+        port,
+        "u@example.invalid",
+        "x",
+        ImapTimeouts {
+            connect: Duration::from_secs(2),
+            io: Duration::from_secs(2),
+            total: None,
+        },
+    );
+    assert!(matches!(r, Err(ImapError::Connect(_))), "{:?}", r.err());
+}

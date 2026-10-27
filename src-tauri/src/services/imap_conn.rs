@@ -59,6 +59,9 @@ pub enum ImapError {
     /// IMAP のやり取りに失敗した（サーバーの NO/BAD・切断など）。
     #[error("{0}")]
     Imap(imap::Error),
+    /// ログインを断られた（ユーザー名・パスワードの誤り、アカウントの停止など）。
+    #[error("ログインに失敗: {0}")]
+    Login(imap::Error),
     /// 応答の中身が想定と違った（メッセージ・パートが無い等）。
     #[error("{0}")]
     Other(String),
@@ -160,6 +163,28 @@ impl Write for GuardedStream {
     }
 }
 
+/// IMAP サーバーへ TCP でつながるかだけを確かめる（ログインしない。接続の点の軽い確認用。
+/// 何度打っても連続ログインとみなされない）。
+///
+/// # Errors
+/// 名前解決・接続に失敗したとき。上限を過ぎたら [`ImapError::Timeout`]。
+pub fn reach(host: &str, port: u16, timeout: Duration) -> Result<(), ImapError> {
+    let addr = format!("{host}:{port}")
+        .to_socket_addrs()
+        .map_err(|e| ImapError::Resolve(e.to_string()))?
+        .next()
+        .ok_or_else(|| ImapError::Resolve("アドレスを解決できませんでした".to_string()))?;
+    TcpStream::connect_timeout(&addr, timeout)
+        .map(|_| ())
+        .map_err(|e| {
+            if is_timeout(&e) {
+                ImapError::Timeout
+            } else {
+                ImapError::Connect(e)
+            }
+        })
+}
+
 /// 上限付きで IMAP に接続し、挨拶まで読んだクライアントを返す（ログインはまだ）。
 ///
 /// # Errors
@@ -211,7 +236,18 @@ pub fn connect_login_with(
     timeouts: ImapTimeouts,
 ) -> Result<ImapSession, ImapError> {
     let client = connect_client(host, port, timeouts)?;
-    client.login(user, password).map_err(|(e, _)| e.into())
+    client
+        .login(user, password)
+        .map_err(|(e, _)| login_error(e))
+}
+
+/// ログインの失敗を分ける。サーバーが応答したうえで断った（NO / BAD）なら [`ImapError::Login`]、
+/// 時間切れ・切断などはほかの失敗のまま。
+fn login_error(e: imap::Error) -> ImapError {
+    match ImapError::from(e) {
+        ImapError::Imap(e @ (imap::Error::No(_) | imap::Error::Bad(_))) => ImapError::Login(e),
+        other => other,
+    }
 }
 
 /// 既定の上限で IMAP に接続＋ログインし、Session を返す（接続の使い回し／プール用）。

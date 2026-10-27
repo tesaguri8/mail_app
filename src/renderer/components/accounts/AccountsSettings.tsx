@@ -17,9 +17,10 @@ import {
 import { googleAccounts, googleCredentialsStatus } from '../../services/google';
 import { signatureList } from '../../services/signatures';
 import { AccountCard } from './AccountCard';
+import { useAccountSyncStatus } from '../../hooks/useAccountSyncStatus';
 import { AddAccountFlow } from './AddAccountFlow';
 import { GoogleCredentialsPanel } from './GoogleCredentialsPanel';
-import { type ConnState, isTauri, sameAddress } from './shared';
+import { isTauri, sameAddress } from './shared';
 
 /**
  * 設定の「アカウント」（docs/ACCOUNTS.md）。アドレスごとに 1 枚のカードを並べ、その中で
@@ -35,13 +36,14 @@ export function AccountsSettings({
   onChanged: () => void;
 }) {
   const { t } = useTranslation();
+  // アカウントごとのメールの接続状況（カードの見出しの印。サイドバーのアカウント選択と同じ）。
+  const { statuses: syncStatus, loaded: syncStatusLoaded } = useAccountSyncStatus();
   const [profiles, setProfiles] = useState<AccountProfile[]>([]);
   const [googles, setGoogles] = useState<GoogleAccount[]>([]);
   const [servers, setServers] = useState<ServerAccountSummary[]>([]);
   const [signatures, setSignatures] = useState<SignatureSummary[]>([]);
   const [creds, setCreds] = useState<GoogleCredentialsStatus | null>(null);
   const [adding, setAdding] = useState(false);
-  const [conn, setConn] = useState<Record<number, ConnState>>({});
   // 開いているカード（同時に 1 枚だけ。最初は全部閉じる＝null）。開いている間は、そのカードだけを
   // 見せる（ほかのカード・「アカウントを追加」・Google の接続設定は描かない＝Tab でも入らない）。
   // 閉じるのは、カードの見出しの開閉か、上の「すべてのアカウント」。
@@ -86,29 +88,28 @@ export function AccountsSettings({
     load();
   };
 
-  // 接続の点のチェック。既定は軽量な TCP 到達確認（速い・固まらない・連続ログインにならない）。
-  // full=true（点のクリック）のときだけ、資格情報での実 LOGIN で厳密に確認する。
-  const checkConn = (id: number, full = false) => {
-    setConn((c) => ({ ...c, [id]: { state: 'checking' } }));
-    return (full ? accountCheck(id) : accountPing(id))
-      .then(() => setConn((c) => ({ ...c, [id]: { state: 'ok' } })))
-      .catch((e) => setConn((c) => ({ ...c, [id]: { state: 'error', msg: String(e) } })));
-  };
-  // 各アカウントの接続状態は「初めて見た時に1回だけ」チェックする。accounts は同期で件数が
-  // 更新されるたびに新配列になるため、そのたびにログインを投げるとサーバーに連続ログインと
+  // 接続の点のチェック。点の色は、メールの同期・このチェックの結果をまとめたバックエンドの接続状況
+  // （"sync:status"）で決まる（同期が成功すれば緑に戻る）。ここは確かめを頼むだけ。
+  // 既定は軽量な TCP 到達確認（速い・固まらない・連続ログインにならない。同期の結果がまだ無い
+  // アカウントだけ記録される）。full=true（点のクリック）のときだけ、資格情報での実 LOGIN で確かめる。
+  const checkConn = (id: number, full = false) =>
+    (full ? accountCheck(id) : accountPing(id)).catch(() => undefined);
+  // 軽い到達確認は「初めて見た時に1回だけ」、同期の結果がまだ無いアカウントにだけ打つ。accounts は
+  // 同期で件数が更新されるたびに新配列になるため、そのたびにログインを投げるとサーバーに連続ログインと
   // みなされ遮断される（さくら等）。手動チェックは点のクリックで随時できる。
   const checkedRef = useRef<Set<number>>(new Set());
   useEffect(() => {
-    if (!isTauri) return;
+    if (!isTauri || !syncStatusLoaded) return;
     const toCheck = accounts.filter((a) => !checkedRef.current.has(a.id));
     if (toCheck.length === 0) return;
     toCheck.forEach((a) => checkedRef.current.add(a.id));
-    // 同時に複数ログインを開かず、1件ずつ順番に確認する（サーバーの多重接続制限に配慮）。
+    const unknown = toCheck.filter((a) => (syncStatus[a.id]?.phase ?? 'never') === 'never');
+    // 同時に複数接続を開かず、1件ずつ順番に確認する（サーバーの多重接続制限に配慮）。
     void (async () => {
-      for (const a of toCheck) await checkConn(a.id);
+      for (const a of unknown) await checkConn(a.id);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accounts]);
+  }, [accounts, syncStatusLoaded]);
 
   // ドラッグ&ドロップの並べ替え（カード単位。メールの一覧の並びもカードの順にそろう）。
   const dragId = useRef<number | null>(null);
@@ -193,11 +194,11 @@ export function AccountsSettings({
             creds={creds}
             servers={servers}
             signatures={signatures}
-            conn={conn}
             onCheckConn={(id) => void checkConn(id, true)}
             onChanged={changed}
             open={openId === p.id}
             onToggleOpen={() => setOpenId(openId === p.id ? null : p.id)}
+            syncStatus={syncStatus}
             // 追加の途中と、1 枚だけを見せている間は並べ替えない。
             onDragHandleDown={
               profiles.length > 1 && !adding && !focused ? () => setArmed(p.id) : undefined

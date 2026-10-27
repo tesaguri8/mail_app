@@ -44,6 +44,8 @@ pub fn run() {
             app.manage(commands::SyncControl::default());
             // アカウントごとの IMAP 接続プール（接続＋ログインを使い回す）。
             app.manage(commands::ImapPool::default());
+            // アカウントごとのメールの同期の最後の結果（アカウント選択の接続状況の印）。
+            app.manage(crate::services::sync_status::SyncStatusBoard::default());
             // 添付ごとの取得の順番待ち（同じ添付を二重に取らない）。
             app.manage(crate::services::attachment_fetch::AttachmentFetches::default());
             Ok(())
@@ -67,6 +69,7 @@ pub fn run() {
             commands::account_set_password,
             commands::account_reorder,
             commands::mail_sync,
+            commands::account_sync_statuses,
             commands::mail_sync_cancel,
             commands::mail_send,
             commands::attachment_meta,

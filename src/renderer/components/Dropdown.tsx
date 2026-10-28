@@ -1,7 +1,16 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
 
-export type DropdownOption = { value: string; label: string };
+export type DropdownOption = {
+  value: string;
+  label: string;
+  /** 文字の前に出す小さな印（アカウントの接続状況など）。 */
+  icon?: ReactNode;
+  /** 候補の行のツールチップ。 */
+  title?: string;
+  /** 候補の行の下に小さく出す補足（失敗の理由など）。 */
+  detail?: string;
+};
 
 /**
  * 半透明（ブラー）背景の自前ドロップダウン。ネイティブ <select> は候補リストの背景を
@@ -85,7 +94,10 @@ export function Dropdown({
         onClick={() => setOpen((v) => !v)}
         className={`flex items-center justify-between gap-1 rounded-lg bg-white/10 px-2 py-1.5 text-sm outline-none ring-1 ring-white/10 hover:bg-white/15 focus:ring-white/30 ${className}`}
       >
-        <span className="truncate">{selected?.label ?? value}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          {selected?.icon}
+          <span className="truncate">{selected?.label ?? value}</span>
+        </span>
         <ChevronDown size={14} className="shrink-0 text-white/50" />
       </button>
       {open && pos && (
@@ -103,11 +115,20 @@ export function Dropdown({
                 onChange(o.value);
                 setOpen(false);
               }}
+              title={o.title}
               className={`block w-full px-3 py-1.5 text-left text-sm hover:bg-white/15 ${
                 o.value === value ? 'bg-white/10 text-white' : 'text-white/85'
               }`}
             >
-              {o.label}
+              <span className="flex items-center gap-1.5">
+                {o.icon}
+                <span className="truncate">{o.label}</span>
+              </span>
+              {o.detail && (
+                <span className={`block text-[11px] text-white/50 ${o.icon ? 'pl-3.5' : ''}`}>
+                  {o.detail}
+                </span>
+              )}
             </button>
           ))}
         </div>

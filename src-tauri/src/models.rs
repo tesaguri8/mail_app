@@ -1105,6 +1105,51 @@ pub struct SyncResult {
     pub backfilled: i32,
 }
 
+/// メールの同期の失敗の種類（アカウント選択の接続状況の印。services/sync_status.rs）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub enum SyncErrorKind {
+    /// サーバーにつながらない（時間切れ・名前解決・接続の拒否・遮断）。
+    Unreachable,
+    /// ログインを断られた、または資格情報が無い。
+    Auth,
+    /// それ以外（TLS・取り込みの途中の失敗など）。
+    Other,
+}
+
+/// メールの同期の、いまの状態。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub enum SyncPhase {
+    /// この起動ではまだ同期していない。
+    Never,
+    /// 同期中。
+    Syncing,
+    /// 最後の同期が成功した。
+    Ok,
+    /// 最後の同期が失敗した。
+    Failed,
+}
+
+/// アカウントごとのメールの同期の最後の結果（"sync:status" イベントと account_sync_statuses で渡す）。
+/// アプリの中だけで持つ（再起動すると「まだ同期していない」に戻る）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct AccountSyncStatus {
+    pub account_id: i32,
+    pub phase: SyncPhase,
+    /// 最後の同期が失敗したときの種類。
+    pub error_kind: Option<SyncErrorKind>,
+    /// 最後の同期が失敗したときの文言（ツールチップの補足。パスワード・アドレスは含まない）。
+    pub error: Option<String>,
+    /// 最後に成功した時刻（RFC 3339。この起動で一度も成功していなければ None）。
+    pub last_success_at: Option<String>,
+    /// 最後に同期を試みた時刻（RFC 3339）。
+    pub last_attempt_at: Option<String>,
+}
+
 /// 再構築で実行する処理。データ形式バージョンの比較で決まる（services/dataver.rs）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]

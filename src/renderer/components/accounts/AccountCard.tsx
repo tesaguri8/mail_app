@@ -13,10 +13,12 @@ import { accountDelete, accountProfileRename } from '../../services/accounts';
 import { useSync } from '../SyncProvider';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { GoogleServices } from './GoogleServices';
+import { AccountStatusDot, worstStatus } from '../AccountStatusDot';
+import type { AccountSyncStatus } from '@bindings/AccountSyncStatus';
 import { MailAccountDetails } from './MailAccountDetails';
 import { MailAccountForm } from './MailAccountForm';
 import { ServiceRow } from './ServiceRow';
-import { type ConnState, inputCls } from './shared';
+import { inputCls } from './shared';
 
 /** 提供元の印（カードの見出しの左）。 */
 export function ProviderMark({ provider }: { provider: AccountProvider }) {
@@ -47,12 +49,12 @@ export function AccountCard({
   creds,
   servers,
   signatures,
-  conn,
   onCheckConn,
   onChanged,
   onDragHandleDown,
   open,
   onToggleOpen,
+  syncStatus = {},
 }: {
   profile: AccountProfile;
   /** このカードのメールアカウント（`profile.mail_account_ids` の順）。 */
@@ -62,7 +64,7 @@ export function AccountCard({
   creds: GoogleCredentialsStatus | null;
   servers: ServerAccountSummary[];
   signatures: SignatureSummary[];
-  conn: Record<number, ConnState>;
+  /** 接続の点を押したとき（実際に LOGIN して確かめる。結果は接続状況に記録される）。 */
   onCheckConn: (id: number) => void;
   onChanged: () => void;
   /** 並べ替えのつまみを押したとき（つまみからだけドラッグを始める。入力欄の文字選択を妨げない）。
@@ -72,6 +74,8 @@ export function AccountCard({
   open: boolean;
   /** 見出しを押したとき（開く・閉じる）。 */
   onToggleOpen: () => void;
+  /** アカウントごとのメールの接続状況（見出しの先頭の印。サイドバーのアカウント選択と同じ）。 */
+  syncStatus?: Record<number, AccountSyncStatus>;
 }) {
   const { t } = useTranslation();
   const sync = useSync();
@@ -172,6 +176,10 @@ export function AccountCard({
               title={open ? t('account.collapse') : t('account.expand')}
               className="flex min-w-0 flex-1 items-center gap-2.5 rounded text-left focus-visible:outline focus-visible:outline-1 focus-visible:outline-sky-300/70"
             >
+              {/* メールを使っていれば、接続状況の印（いくつかあれば、いちばん悪いもの） */}
+              {mailOn && (
+                <AccountStatusDot status={worstStatus(mails.map((m) => syncStatus[m.id]))} />
+              )}
               <ProviderMark provider={profile.provider} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-medium text-white">{title}</span>
@@ -256,20 +264,16 @@ export function AccountCard({
                   onClick={() => setExpanded(expanded === m.id ? null : m.id)}
                   className="flex w-full items-center gap-2 rounded px-1 py-1 text-left text-xs text-white/60 hover:bg-white/5"
                 >
+                  {/* 接続状況の印（見出し・サイドバーと同じ部品）。押すと実 LOGIN で確かめる */}
                   <span
                     onClick={(e) => {
                       e.stopPropagation();
-                      onCheckConn(m.id); // クリック時は実 LOGIN で厳密確認
+                      onCheckConn(m.id);
                     }}
-                    title={conn[m.id]?.msg ?? conn[m.id]?.state ?? ''}
-                    className={`h-2 w-2 shrink-0 rounded-full ${
-                      conn[m.id]?.state === 'ok'
-                        ? 'bg-emerald-400'
-                        : conn[m.id]?.state === 'error'
-                          ? 'bg-red-400'
-                          : 'animate-pulse bg-amber-300'
-                    }`}
-                  />
+                    className="inline-flex shrink-0 cursor-pointer"
+                  >
+                    <AccountStatusDot status={syncStatus[m.id]} />
+                  </span>
                   <span className="flex-1 truncate">
                     {m.display_name
                       ? t('account.mailFrom', { name: m.display_name })

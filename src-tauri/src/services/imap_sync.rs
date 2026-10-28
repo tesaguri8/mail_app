@@ -102,6 +102,24 @@ pub use super::imap_conn::{
     connect_login, connect_login_with, ImapError, ImapSession, ImapTimeouts,
 };
 
+/// メールの同期の失敗。サーバーにつながる段（接続・TLS・ログイン）の失敗は型のまま持ち、
+/// 画面の接続状況の印で「つながらない／ログインできない」を分ける（`services::sync_status`）。
+#[derive(Debug, thiserror::Error)]
+pub enum SyncError {
+    /// サーバーへの接続・ログインに失敗した。
+    #[error("{0}")]
+    Connect(ImapError),
+    /// つながったあとの取り込み・保存などの失敗。
+    #[error("{0}")]
+    Other(String),
+}
+
+impl From<String> for SyncError {
+    fn from(e: String) -> Self {
+        Self::Other(e)
+    }
+}
+
 /// スロットのセッションが生きていれば再利用、なければ/死んでいれば張り直す（接続の使い回し）。
 fn ensure_live_session(
     guard: &mut Option<ImapSession>,
@@ -109,14 +127,20 @@ fn ensure_live_session(
     port: u16,
     user: &str,
     password: &str,
-) -> Result<(), String> {
+) -> Result<(), ImapError> {
     if let Some(s) = guard.as_mut() {
         if s.noop().is_ok() {
             return Ok(()); // 生きている → 再利用
         }
         // 死んでいる（サーバーが idle 切断した等）→ 下で張り直す。
     }
-    *guard = Some(connect_login(host, port, user, password)?);
+    *guard = Some(connect_login_with(
+        host,
+        port,
+        user,
+        password,
+        ImapTimeouts::DEFAULT,
+    )?);
     Ok(())
 }
 
@@ -362,7 +386,7 @@ pub fn sync_account(
     listed: &dyn Fn(&str, i32),
     cancel: &AtomicBool,
     slot: &Mutex<Option<ImapSession>>,
-) -> Result<SyncResult, String> {
+) -> Result<SyncResult, SyncError> {
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
     // busy_timeout: WAL でも書き込みロックは 1 つ。UI/ローカル加工/他アカウント同期と競合した
     // とき即エラー(database is locked)にせず待つ。他の接続（Store・process_pending）と揃える。
@@ -379,7 +403,7 @@ pub fn sync_account(
 
     let mut guard = slot.lock().unwrap();
     // 生きたセッションを用意（再利用 or 張り直し）。
-    ensure_live_session(&mut guard, host, port, user, password)?;
+    ensure_live_session(&mut guard, host, port, user, password).map_err(SyncError::Connect)?;
     let session = guard.as_mut().unwrap();
 
     let mut result = SyncResult {
@@ -403,7 +427,7 @@ pub fn sync_account(
         Err(e) => {
             // 壊れたセッションは捨てる（次回張り直す）。
             *guard = None;
-            Err(e)
+            Err(e.into())
         }
     }
 }
@@ -427,7 +451,7 @@ pub fn rederive_account_attachments(
     let _ = conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
 
     let mut guard = slot.lock().unwrap();
-    ensure_live_session(&mut guard, host, port, user, password)?;
+    ensure_live_session(&mut guard, host, port, user, password).map_err(|e| e.to_string())?;
     let session = guard.as_mut().unwrap();
 
     let mut updated = 0u32;

@@ -894,6 +894,17 @@
     "syncing": "Syncing…",
     "accountTotal": "{{total}} messages",
     "accountTotalOf": "{{shown}} / {{total}} messages",
+    "syncStatus": {
+      "reachable": "Server reachable (not synced yet)",
+      "never": "Not synced yet",
+      "syncing": "Syncing…",
+      "ok": "Connected (last sync {{time}})",
+      "unreachable": "Can't reach the server",
+      "auth": "Login failed (check the password)",
+      "other": "Sync failed",
+      "lastSuccess": " (last success {{time}})",
+      "noSuccess": " (no successful sync since startup)"
+    },
     "allAccounts": "All accounts",
     "loadedOf": "Showing {{shown}} / {{total}} (scroll for more)",
     "resize": "Drag to resize",

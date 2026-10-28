@@ -13,9 +13,16 @@ import type { DraftContent } from '@bindings/DraftContent';
 import type { RemoteImage } from '@bindings/RemoteImage';
 import type { RebuildPlan } from '@bindings/RebuildPlan';
 import type { HomeUnreadCounts } from '@bindings/HomeUnreadCounts';
+import type { AccountSyncStatus } from '@bindings/AccountSyncStatus';
 
 // Tauri v2 は camelCase の引数キーを snake_case の Rust 引数へ自動変換する。
 export const mailSync = (accountId: number) => invoke<SyncResult>('mail_sync', { accountId });
+
+// アカウントごとのメールの同期の最後の結果（この起動の分だけ。以後は "sync:status" イベントで届く）。
+export const accountSyncStatuses = () => invoke<AccountSyncStatus[]>('account_sync_statuses');
+
+/** メールの同期の状態が変わったときのイベント名（payload は AccountSyncStatus）。 */
+export const SYNC_STATUS_EVENT = 'sync:status';
 
 // 実行中の同期/再取り込みを中断する（次のチャンク境界で反映）。動作中なら true。
 export const mailSyncCancel = (accountId: number) =>

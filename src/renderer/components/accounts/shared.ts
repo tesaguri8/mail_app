@@ -13,6 +13,3 @@ export const localTime = (utc: string) => new Date(utc.replace(' ', 'T') + 'Z').
 /** 大文字小文字を無視してアドレスを比べる。 */
 export const sameAddress = (a: string, b: string) =>
   a.trim().toLowerCase() === b.trim().toLowerCase();
-
-/** メールアカウントの接続の確かめ（接続の点の色）。 */
-export type ConnState = { state: 'checking' | 'ok' | 'error'; msg?: string };

@@ -13,6 +13,7 @@ use crate::models::{
     StorageInfo, SureMergePreview, SureMergeResult, SyncListed, SyncProgress,
     SyncResult, TagSummary, ThreadDayCount, ThreadListItem, ThreadView, UnlinkedOrgName,
 };
+use crate::models::{AccountSyncStatus, SyncErrorKind};
 use crate::services::attachment_fetch;
 use crate::services::autoconfig;
 use crate::services::checksum::simple_checksum;
@@ -28,6 +29,7 @@ use crate::services::postal;
 use crate::services::smtp;
 use crate::services::spam;
 use crate::services::store::{NewAccount, NewAttachment, NewServerAccount, PurgeRef, Store};
+use crate::services::sync_status::SyncStatusBoard;
 use crate::services::vcard;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -334,6 +336,7 @@ pub async fn mail_sync(
     store: State<'_, Store>,
     control: State<'_, SyncControl>,
     pool: State<'_, ImapPool>,
+    board: State<'_, SyncStatusBoard>,
     account_id: i64,
 ) -> Result<SyncResult, String> {
     let (email, login_user, host, port) = store
@@ -341,10 +344,7 @@ pub async fn mail_sync(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "アカウントが見つかりません".to_string())?;
     // 資格情報は email をキーに保存（アカウント識別子）。ログインは login_user を使う。
-    let service = app.config().identifier.clone();
-    let password = keyring::Entry::new(&service, &email)
-        .and_then(|e| e.get_password())
-        .map_err(|e| format!("資格情報を取得できません: {e}"))?;
+    let password = account_password(&app, &board, account_id, &host, &email)?;
     let db_path = store.path();
     // このアカウントが既に同期中なら二重実行しない（自動同期と手動/再取り込みの衝突で
     // 進捗が上下してブレるのを防ぐ）。取得 0 件のスキップ結果を返す。
@@ -356,11 +356,14 @@ pub async fn mail_sync(
         });
     };
 
+    // 接続状況の印を「同期中」にする（アカウント選択。"sync:status"）。
+    emit_sync_status(&app, board.begin(account_id, &now_rfc3339()));
     // 進捗を "sync:progress" イベントで UI に通知する（フォルダ / 取得済み / 予定）。
     let app_ev = app.clone();
     let cancel_task = cancel.clone();
     // アカウントの接続スロット（使い回し）。
     let session_slot = pool.slot(account_id);
+    let host_task = host.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let progress = |folder: &str, current: i32, total: i32| {
             let _ = app_ev.emit(
@@ -386,7 +389,7 @@ pub async fn mail_sync(
         let res = imap_sync::sync_account(
             &db_path,
             account_id,
-            &host,
+            &host_task,
             port,
             &login_user,
             &password,
@@ -410,12 +413,80 @@ pub async fn mail_sync(
     // JoinError（タスクパニック）でも同期枠を必ず解放してから伝播する
     // （解放漏れは以後の同期が全てスキップされる原因になるため）。
     control.end(account_id);
-    let result = result.map_err(|e| e.to_string())?;
+    let result = finish_sync_status(&app, &board, account_id, &host, result)?;
     if result.is_ok() {
         // 保持ポリシーを適用（古い添付の削除・本文の要約保存・容量保険）。best-effort。
         let _ = store.apply_retention(account_id);
     }
-    result
+    result.map_err(|e| e.to_string())
+}
+
+/// いまの時刻（RFC 3339・端末の時差つき）。接続状況の記録に使う。
+fn now_rfc3339() -> String {
+    chrono::Local::now().to_rfc3339()
+}
+
+/// 接続状況を "sync:status" イベントで画面に知らせる（アカウント選択の印）。
+fn emit_sync_status(app: &AppHandle, status: AccountSyncStatus) {
+    let _ = app.emit("sync:status", status);
+}
+
+/// OS 金庫からアカウントのパスワードを取り出す。取れなければ「ログインできない」として記録して返す。
+fn account_password(
+    app: &AppHandle,
+    board: &SyncStatusBoard,
+    account_id: i64,
+    host: &str,
+    email: &str,
+) -> Result<String, String> {
+    let service = app.config().identifier.clone();
+    keyring::Entry::new(&service, email)
+        .and_then(|e| e.get_password())
+        .map_err(|e| {
+            let message = format!("資格情報を取得できません: {e}");
+            emit_sync_status(
+                app,
+                board.fail(
+                    account_id,
+                    host,
+                    SyncErrorKind::Auth,
+                    &message,
+                    &now_rfc3339(),
+                ),
+            );
+            message
+        })
+}
+
+/// 同期の結果を接続状況に記録して知らせる。タスクが落ちた（JoinError）ときも「その他の失敗」として記録する。
+fn finish_sync_status<T>(
+    app: &AppHandle,
+    board: &SyncStatusBoard,
+    account_id: i64,
+    host: &str,
+    joined: Result<Result<T, imap_sync::SyncError>, tauri::Error>,
+) -> Result<Result<T, imap_sync::SyncError>, String> {
+    let now = now_rfc3339();
+    match joined {
+        Ok(result) => {
+            emit_sync_status(app, board.finish(account_id, host, &result, &now));
+            Ok(result)
+        }
+        Err(e) => {
+            let message = e.to_string();
+            emit_sync_status(
+                app,
+                board.fail(account_id, host, SyncErrorKind::Other, &message, &now),
+            );
+            Err(message)
+        }
+    }
+}
+
+/// すべてのアカウントのメールの同期の最後の結果（アカウント選択の接続状況の印。この起動の分だけ）。
+#[tauri::command]
+pub fn account_sync_statuses(board: State<'_, SyncStatusBoard>) -> Vec<AccountSyncStatus> {
+    board.all()
 }
 
 /// プレーン本文から最小限の HTML を作る（エスケープ＋改行を <br> 化）。
@@ -3363,6 +3434,7 @@ pub async fn mail_resync(
     store: State<'_, Store>,
     control: State<'_, SyncControl>,
     pool: State<'_, ImapPool>,
+    board: State<'_, SyncStatusBoard>,
     account_id: i64,
 ) -> Result<SyncResult, String> {
     // 資格情報の取得（失敗しうる）は同期枠の確保より前に済ませる（確保後に失敗すると
@@ -3371,10 +3443,7 @@ pub async fn mail_resync(
         .get_account_imap(account_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "アカウントが見つかりません".to_string())?;
-    let service = app.config().identifier.clone();
-    let password = keyring::Entry::new(&service, &email)
-        .and_then(|e| e.get_password())
-        .map_err(|e| format!("資格情報を取得できません: {e}"))?;
+    let password = account_password(&app, &board, account_id, &host, &email)?;
 
     // 明示操作（再取り込み）は自動同期より優先する。実行中（多くは画面に出ないサイレントな
     // 自動同期）なら中断させ、枠が解放されるまで待ってから確保する。
@@ -3405,6 +3474,8 @@ pub async fn mail_resync(
     let app_ev = app.clone();
     let cancel_task = cancel.clone();
     let session_slot = pool.slot(account_id);
+    emit_sync_status(&app, board.begin(account_id, &now_rfc3339()));
+    let host_task = host.clone();
     let out = tauri::async_runtime::spawn_blocking(move || {
         let progress = |folder: &str, current: i32, total: i32| {
             let _ = app_ev.emit(
@@ -3430,7 +3501,7 @@ pub async fn mail_resync(
         imap_sync::sync_account(
             &db_path,
             account_id,
-            &host,
+            &host_task,
             port,
             &login_user,
             &password,
@@ -3442,7 +3513,7 @@ pub async fn mail_resync(
     })
     .await;
     control.end(account_id);
-    let result = out.map_err(|e| e.to_string())?;
+    let result = finish_sync_status(&app, &board, account_id, &host, out)?;
     if result.is_ok() {
         // フル再取得後は、保存済み本文からローカルで全面再加工（clean_body・スレッド・代表フラグ）。
         // 接続は閉じており、サーバーとは無関係。
@@ -3459,7 +3530,7 @@ pub async fn mail_resync(
             Err(e) => log::warn!("再取り込み後の再加工に失敗: {e}"),
         }
     }
-    result
+    result.map_err(|e| e.to_string())
 }
 
 /// 開発用: 添付本体を落とさず BODYSTRUCTURE だけ取り直し、既存メールの添付メタを section 付きで
@@ -3587,46 +3658,71 @@ pub async fn account_test_login(
 pub async fn account_check(
     app: AppHandle,
     store: State<'_, Store>,
+    board: State<'_, SyncStatusBoard>,
     account_id: i64,
 ) -> Result<(), String> {
     let (email, login, host, port) = store
         .get_account_imap(account_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "アカウントが見つかりません".to_string())?;
-    let service = app.config().identifier.clone();
-    let password = keyring::Entry::new(&service, &email)
-        .and_then(|e| e.get_password())
-        .map_err(|e| format!("資格情報を取得できません: {e}"))?;
-    tauri::async_runtime::spawn_blocking(move || {
-        imap_sync::test_login(&host, port, &login, &password)
+    let password = account_password(&app, &board, account_id, &host, &email)?;
+    // 確かめている間は「同期中」と同じ印にする。結果は接続状況に記録して知らせる。
+    emit_sync_status(&app, board.begin(account_id, &now_rfc3339()));
+    let host_task = host.clone();
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        let mut session = imap_sync::connect_login_with(
+            &host_task,
+            port,
+            &login,
+            &password,
+            imap_sync::ImapTimeouts::DEFAULT,
+        )?;
+        let _ = session.logout();
+        Ok::<(), imap_sync::ImapError>(())
     })
-    .await
-    .map_err(|e| e.to_string())?
+    .await;
+    let now = now_rfc3339();
+    match joined {
+        Ok(result) => {
+            emit_sync_status(&app, board.finish_check(account_id, &host, &result, &now));
+            result.map_err(|e| e.to_string())
+        }
+        Err(e) => {
+            let message = e.to_string();
+            emit_sync_status(
+                &app,
+                board.fail(account_id, &host, SyncErrorKind::Other, &message, &now),
+            );
+            Err(message)
+        }
+    }
 }
 
 /// 登録済みアカウントの IMAP サーバーへ TCP 到達確認だけ行う（LOGIN しない・タイムアウトつき）。
-/// 接続ドットの軽量チェック用。都度フル LOGIN すると遅いサーバーで緑になるまで待たされ、
+/// 接続の点の軽量チェック用。都度フル LOGIN すると遅いサーバーで緑になるまで待たされ、
 /// かつ連続ログインとみなされやすいため、状態表示はこの軽い疎通で済ませる。
+/// 結果は、同期・ログインの結果がまだ無いアカウントだけ接続状況に記録する。
 #[tauri::command]
-pub async fn account_ping(store: State<'_, Store>, account_id: i64) -> Result<(), String> {
+pub async fn account_ping(
+    app: AppHandle,
+    store: State<'_, Store>,
+    board: State<'_, SyncStatusBoard>,
+    account_id: i64,
+) -> Result<(), String> {
     let (_email, _login, host, port) = store
         .get_account_imap(account_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "アカウントが見つかりません".to_string())?;
-    tauri::async_runtime::spawn_blocking(move || {
-        use std::net::{TcpStream, ToSocketAddrs};
-        use std::time::Duration;
-        let addr = format!("{host}:{port}")
-            .to_socket_addrs()
-            .map_err(|e| format!("名前解決に失敗: {e}"))?
-            .next()
-            .ok_or_else(|| "アドレスを解決できませんでした".to_string())?;
-        TcpStream::connect_timeout(&addr, Duration::from_secs(6))
-            .map(|_| ())
-            .map_err(|e| format!("接続できませんでした: {e}"))
+    let host_task = host.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::services::imap_conn::reach(&host_task, port, std::time::Duration::from_secs(6))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    if let Some(status) = board.record_reach(account_id, &host, &result, &now_rfc3339()) {
+        emit_sync_status(&app, status);
+    }
+    result.map_err(|e| e.to_string())
 }
 
 /// 既存アカウントのパスワードだけを入れ直す（keyring を更新）。

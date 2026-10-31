@@ -100,6 +100,16 @@ zstd = "0.13"
 # DNS（MX 解決でプロバイダ自動判定。docs/ONBOARDING.md）
 hickory-resolver = "0.24"
 
+# TSG One のログイン（認可コード ＋ PKCE・端末の鍵 DPoP・X-Device-ID）。通信はせず、要求を作って応答を読むだけ
+# （送るのは reqwest）。Primadoc と同じ tsg-kit の部品（docs/TSG_ONE.md）
+tsg-auth = { git = "ssh://git@github.com/tesaguri8/tsg-kit", tag = "auth/v0.5.0" }
+# ログインの戻り（rondine://oauth/callback）を受ける。Windows / Linux は 2 つ目の起動の引数で届くので、
+# 単一インスタンスで受け止めて今の窓へ渡す
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = "2"
+# 端末の一覧に出す名前（OS のコンピューター名。tsg-core の CLIENT_DEVICE_INTEGRATION.md 3.1）
+hostname = "0.4"
+
 # 日時（同期ウィンドウの SINCE 日付計算）
 chrono = { version = "0.4", features = ["clock"] }
 

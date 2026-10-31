@@ -3,8 +3,94 @@ pub mod models;
 pub mod services;
 
 use services::datadir;
+use services::deep_link;
 use services::store::Store;
-use tauri::Manager;
+use services::tsg_one::{self, TsgOne};
+use tauri::{Emitter, Manager};
+
+/// ログインの戻り（deep link の URL）を受ける。TSG One の戻り以外は無視する。
+///
+/// Windows / Linux は 2 つ目の起動の引数（[`on_second_instance`]）、macOS は deep link のプラグインから届く。
+/// 引換券をトークンに替えるのは通信を待つので別タスクで行い、結果は "tsg-one:changed" で画面へ知らせる
+fn handle_deep_link(app: &tauri::AppHandle, url: &str) {
+    let Some(tsg) = app.try_state::<TsgOne>() else {
+        return;
+    };
+    if !deep_link::is_tsg_callback(url, &tsg.redirect_scheme()) {
+        return;
+    }
+    let app = app.clone();
+    let url = url.to_string();
+    // 投げっぱなしでよい（結果はイベントで知らせ、失敗の理由は状態に残る）
+    tauri::async_runtime::spawn(async move {
+        let tsg = app.state::<TsgOne>();
+        if let Err(e) = tsg.finish_login(&url).await {
+            log::warn!("[TsgOne] ログインの戻りを受け付けませんでした: {e}");
+        }
+        let _ = app.emit(tsg_one::CHANGED_EVENT, tsg.status());
+        bring_main_window_to_front(&app);
+    });
+}
+
+/// 2 つ目の起動（ブラウザからの戻り・アイコンの二度押し）。今の窓を前に出し、引数の deep link を受ける。
+#[cfg(desktop)]
+fn on_second_instance(app: &tauri::AppHandle, argv: Vec<String>, _cwd: String) {
+    bring_main_window_to_front(app);
+    for arg in &argv {
+        handle_deep_link(app, arg);
+    }
+}
+
+/// 主窓を前に出す（最小化していれば戻す）。
+fn bring_main_window_to_front(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// 単一インスタンス（デスクトップだけ。モバイルは OS がアプリを 1 つに保つ）。
+///
+/// Linux の開発版は、名前を実行ファイルごとに分ける（[`deep_link::dev_instance_id`]）。
+#[cfg(desktop)]
+fn single_instance_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    let builder = tauri_plugin_single_instance::Builder::new().callback(on_second_instance);
+    #[cfg(all(target_os = "linux", debug_assertions))]
+    let builder = match (
+        std::env::current_exe(),
+        tsg_one::identity::AppIdentity::load(),
+    ) {
+        (Ok(exe), Ok(identity)) => {
+            builder.dbus_id(deep_link::dev_instance_id(&identity.identifier, &exe))
+        }
+        _ => builder,
+    };
+    builder.build()
+}
+
+/// deep link の受け口を OS に登録し、プラグインから届く戻りを受ける。
+fn register_deep_link(app: &tauri::App) {
+    use tauri_plugin_deep_link::DeepLinkExt;
+    // 開発版（`tauri dev`）はインストーラーを通らないので、ここで OS に登録しないと
+    // 「scheme does not have a registered handler」になる（Primadoc と同じ）。
+    // **Windows の登録は raytrek では確かめられない**（zv で確かめる）
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    if let Err(e) = app.deep_link().register_all() {
+        log::warn!("deep link のスキームを登録できません: {e}");
+    }
+    // macOS とモバイルは 2 つ目の起動が無く、プラグインから届く。
+    // Windows / Linux は単一インスタンスの引数で受けるので、ここで受けると二重になる
+    #[cfg(any(mobile, target_os = "macos"))]
+    {
+        let handle = app.handle().clone();
+        app.deep_link().on_open_url(move |event| {
+            for url in event.urls() {
+                handle_deep_link(&handle, url.as_str());
+            }
+        });
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -12,7 +98,12 @@ pub fn run() {
     // Google OAuth の Client ID/Secret を dev で渡すのに使う（無ければ何もしない）。
     let _ = dotenvy::dotenv();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // 単一インスタンスは最初に登録する（2 つ目の起動が、ほかのプラグインを起こす前に今の窓へ渡すため）
+    #[cfg(desktop)]
+    let builder = builder.plugin(single_instance_plugin());
+    builder
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_log::Builder::default().build())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
@@ -48,6 +139,17 @@ pub fn run() {
             app.manage(crate::services::sync_status::SyncStatusBoard::default());
             // 添付ごとの取得の順番待ち（同じ添付を二重に取らない）。
             app.manage(crate::services::attachment_fetch::AttachmentFetches::default());
+            // TSG One のログイン。端末の鍵は、データの置き場（移動できる）ではなく、この機械のアプリの
+            // フォルダーに置く（鍵を別の機械へ写さない）
+            match services::tsg_one::build(&base, &app.config().identifier) {
+                Ok(tsg) => {
+                    app.manage(tsg);
+                }
+                Err(e) => {
+                    log::error!("[TsgOne] ログインの準備ができません（TSG One は使えません）: {e}")
+                }
+            }
+            register_deep_link(app);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -70,6 +172,12 @@ pub fn run() {
             commands::account_reorder,
             commands::mail_sync,
             commands::account_sync_statuses,
+            commands::tsg_one_status,
+            commands::tsg_one_login,
+            commands::tsg_one_cancel_login,
+            commands::tsg_one_logout,
+            commands::tsg_one_recheck_device,
+            commands::tsg_one_open_member_site,
             commands::mail_sync_cancel,
             commands::mail_send,
             commands::attachment_meta,

@@ -14,6 +14,7 @@ use crate::models::{
     SyncResult, TagSummary, ThreadDayCount, ThreadListItem, ThreadView, UnlinkedOrgName,
 };
 use crate::models::{AccountSyncStatus, SyncErrorKind};
+use crate::models::{TsgOneProvider, TsgOneStatus};
 use crate::services::attachment_fetch;
 use crate::services::autoconfig;
 use crate::services::checksum::simple_checksum;
@@ -30,6 +31,7 @@ use crate::services::smtp;
 use crate::services::spam;
 use crate::services::store::{NewAccount, NewAttachment, NewServerAccount, PurgeRef, Store};
 use crate::services::sync_status::SyncStatusBoard;
+use crate::services::tsg_one::TsgOne;
 use crate::services::vcard;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -3799,6 +3801,63 @@ pub fn account_test_connection(host: String, port: u16) -> Result<(), String> {
     TcpStream::connect_timeout(&sock, Duration::from_secs(8))
         .map(|_| ())
         .map_err(|e| format!("接続できませんでした: {e}"))
+}
+
+// ── TSG One のアカウント（Google の接続とは別。services/tsg_one.rs）──────────────
+// 失敗の理由は状態（`TsgOneStatus::problem`）に載せて返す。画面は ja / en で出す。
+
+/// TSG One のログインの状態。
+#[tauri::command]
+pub fn tsg_one_status(tsg: State<'_, TsgOne>) -> TsgOneStatus {
+    tsg.status()
+}
+
+/// TSG One のログインを始め、システムのブラウザで開く。戻りは deep link で届く（lib.rs）。
+#[tauri::command]
+pub async fn tsg_one_login(
+    app: AppHandle,
+    tsg: State<'_, TsgOne>,
+    provider: TsgOneProvider,
+) -> Result<TsgOneStatus, String> {
+    use tauri_plugin_opener::OpenerExt;
+    if let Ok(url) = tsg.start_login(provider).await {
+        if let Err(e) = app.opener().open_url(url, None::<&str>) {
+            tsg.cancel_login();
+            return Err(format!("ブラウザを開けません: {e}"));
+        }
+    }
+    Ok(tsg.status())
+}
+
+/// 進めているログインを取りやめる（画面が戻りを待つのをやめたとき）。
+#[tauri::command]
+pub fn tsg_one_cancel_login(tsg: State<'_, TsgOne>) -> TsgOneStatus {
+    tsg.cancel_login();
+    tsg.status()
+}
+
+/// TSG One からログアウトする（手元の控えは必ず消す）。
+#[tauri::command]
+pub async fn tsg_one_logout(tsg: State<'_, TsgOne>) -> Result<TsgOneStatus, String> {
+    tsg.logout().await.map_err(|e| e.to_string())?;
+    Ok(tsg.status())
+}
+
+/// この端末を登録し直し、台数の枠を確かめ直す（会員サイトでほかの端末を解除したあと）。
+#[tauri::command]
+pub async fn tsg_one_recheck_device(tsg: State<'_, TsgOne>) -> Result<TsgOneStatus, String> {
+    // 失敗の理由は状態（problem）に載るので、ここでは状態を返すだけ
+    let _ = tsg.recheck_device().await;
+    Ok(tsg.status())
+}
+
+/// 会員サイト（TSG One のブラウザ）を開く。端末の解除など、重い操作はそこで行う。
+#[tauri::command]
+pub fn tsg_one_open_member_site(app: AppHandle, tsg: State<'_, TsgOne>) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(format!("{}/account", tsg.member_site_url()), None::<&str>)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

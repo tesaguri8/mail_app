@@ -51,6 +51,7 @@ import { AccountsSettings } from './accounts/AccountsSettings';
 import { ConfirmDialog } from './ConfirmDialog';
 import { SignatureManager } from './SignatureManager';
 import { TagManager } from './TagManager';
+import { TsgOneSettings } from './TsgOneSettings';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -60,6 +61,7 @@ const SPAM_DEFAULTS: SpamSettingsType = { enabled: true, threshold_low: 0.5, thr
 
 type Section =
   | 'accounts'
+  | 'tsgOne'
   | 'signatures'
   | 'tags'
   | 'display'
@@ -95,6 +97,7 @@ export function Settings({
 
   const items: { key: Section; label: string }[] = [
     { key: 'accounts', label: t('settings.accounts') },
+    { key: 'tsgOne', label: t('settings.tsgOne') },
     { key: 'signatures', label: t('settings.signatures') },
     { key: 'tags', label: t('settings.tags') },
     { key: 'display', label: t('settings.display') },
@@ -122,6 +125,7 @@ export function Settings({
 
       <div className="min-h-0 overflow-y-auto p-5">
         {section === 'accounts' && <AccountsSettings accounts={accounts} onChanged={onChanged} />}
+        {section === 'tsgOne' && <TsgOneSettings />}
         {section === 'signatures' && <SignatureManager />}
         {section === 'tags' && <TagManager />}
         {section === 'display' && <DisplaySettings />}

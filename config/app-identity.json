@@ -4,5 +4,7 @@
   "vendor": "tesaguri",
   "slug": "rondine",
   "scheme": "rondine",
-  "channel": "dev"
+  "channel": "dev",
+  "tsgClientId": "rondine-desktop",
+  "tsgAppId": "rondine"
 }

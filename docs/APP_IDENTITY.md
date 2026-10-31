@@ -30,9 +30,14 @@
   "vendor":      "tesaguri",
   "slug":        "rondine",            // 両OS安全な連結（_・- を使わない）
   "scheme":      "rondine",            // ディープリンク用 URL スキーム
-  "channel":     "dev"                     // dev/staging/stable（正式時は app）
+  "channel":     "dev",                    // dev/staging/stable（正式時は app）
+  "tsgClientId": "rondine-desktop",        // TSG One の client_id（docs/TSG_ONE.md）
+  "tsgAppId":    "rondine"                 // TSG One のアプリ ID（利用権）
 }
 ```
+
+> TSG One のログインの戻り先のスキームは `scheme` と `channel` から求める（本番 `rondine`、ほかは `rondine-<channel>`）。
+> `sync-app-identity.mjs` が `tauri.conf.json` の deep link の登録に書き、Rust も同じ規則で求める（docs/TSG_ONE.md）。
 
 > slug は **連結（`rondine`）**。Apple bundle id は下線不可、Android package はハイフン不可のため、区切りなしが安全。
 

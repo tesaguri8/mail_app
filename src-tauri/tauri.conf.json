@@ -53,5 +53,13 @@
     "shortDescription": "Email that feels good to use",
     "copyright": "© 2026 Tesaguri tech"
   },
-  "plugins": {}
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "rondine-dev"
+        ]
+      }
+    }
+  }
 }

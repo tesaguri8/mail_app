@@ -3,8 +3,10 @@ use ts_rs::TS;
 
 mod account;
 mod contact;
+mod tsg_one;
 pub use account::*;
 pub use contact::*;
+pub use tsg_one::*;
 
 /// 境界型の例。ts-rs により `src/bindings/AppInfo.ts` を生成する。
 /// 生成: `npm run gen:bindings`（= cargo test --lib export_bindings）

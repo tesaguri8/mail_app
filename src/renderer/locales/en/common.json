@@ -629,6 +629,7 @@
   "settings": {
     "title": "Settings",
     "accounts": "Accounts",
+    "tsgOne": "TSG One",
     "signatures": "Signatures",
     "tags": "Tags",
     "display": "Display",
@@ -1044,5 +1045,29 @@
   "bottombar": {
     "backdrop": "Background dim",
     "textColor": "Text color (white→black)"
+  },
+  "tsgOne": {
+    "title": "TSG One account",
+    "lead": "Sign in with your TSG One account. It is used to check your Rondine license (including the trial). This is separate from the Google connection for mail (under \"Accounts\").",
+    "notSignedIn": "You are not signed in.",
+    "loginWith": "Sign in with {{provider}}",
+    "waiting": "Continue signing in in your browser…",
+    "cancel": "Cancel",
+    "signedInAs": "Signed in as",
+    "via": "Signed in with {{provider}}",
+    "logout": "Sign out",
+    "overCap": "This device is over the number of devices you can register. Remove another device on the member site, then press \"Check again\".",
+    "openMemberSite": "Open the member site",
+    "recheck": "Check again",
+    "problem": {
+      "denied": "Sign-in was cancelled.",
+      "expired": "Too much time passed since you started signing in. Please sign in again.",
+      "unreachable": "Cannot reach TSG One. Check your network and try again.",
+      "fix_clock": "Sign-in failed because this computer's clock is off. Set the clock correctly and sign in again.",
+      "update_app": "This version of the app cannot sign in. Update the app and sign in again.",
+      "relogin": "Your sign-in has expired. Please sign in again.",
+      "storage": "Could not use the credential store (the OS keychain) or the device key.",
+      "other": "Could not sign in."
+    }
   }
 }

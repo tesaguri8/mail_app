@@ -8,3 +8,9 @@
 #   （または VCPKG_ROOT を自分の vcpkg ツリーに向ける）
 [env]
 VCPKG_ROOT = "C:\\vcpkg"
+
+# tsg-kit（ssh://git@github.com/tesaguri8/tsg-kit）を git の依存として引くため。
+# Cargo 内蔵の git では ssh の認証が `no authentication methods succeeded` で落ちる
+# （Primadoc と同じ設定）。→ 手元の `git` に任せる。
+[net]
+git-fetch-with-cli = true

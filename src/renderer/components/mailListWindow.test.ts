@@ -5,7 +5,13 @@ import {
   daysOfRows,
   emptySlots,
   fillSlots,
+  ALL_FOLDED,
+  ALL_OPEN,
+  anyDayOpen,
   foldAllBut,
+  toggleFold,
+  unfoldDay,
+  type FoldState,
   foldedDayOf,
   indexOfId,
   jumpRow,
@@ -19,6 +25,7 @@ import {
   slotAtRow,
   slotSegments,
   stickyDay,
+  neighborDay,
   dayTone,
   rowBar,
   stickyPush,
@@ -29,6 +36,9 @@ import {
   withUnread,
   type ListDay,
 } from './mailListWindow';
+
+/** 試験用: 指定の日だけを畳んだ状態（既定は開く）。 */
+const foldDays = (keys: string[]): FoldState => ({ allFolded: false, flipped: new Set(keys) });
 
 const row = (id: number): ThreadListItem => ({
   thread_id: id,
@@ -219,7 +229,7 @@ describe('dayLayout（日の見出しと畳み）', () => {
     });
 
   it('全部開いているときは、日ごとに見出し ＋ 枠を並べる', () => {
-    const l = dayLayout(days, new Set(), 6);
+    const l = dayLayout(days, ALL_OPEN, 6);
     expect(l.rows).toBe(9);
     expect(kinds(l)).toEqual(['d0', 's0', 's1', 'd1', 's2', 's3', 's4', 'd2', 's5']);
     // 見出しを含めた offset: 枠 k の行番号
@@ -227,7 +237,7 @@ describe('dayLayout（日の見出しと畳み）', () => {
   });
 
   it('畳んだ日は見出しだけになり、行の数と後ろの日の位置から外れる', () => {
-    const l = dayLayout(days, new Set(['2026-11-05']), 6);
+    const l = dayLayout(days, foldDays(['2026-11-05']), 6);
     expect(l.rows).toBe(6);
     expect(kinds(l)).toEqual(['d0', 's0', 's1', 'd1', 'd2', 's5']);
     expect(rowOfSlot(l, 3)).toBeNull();
@@ -241,18 +251,17 @@ describe('dayLayout（日の見出しと畳み）', () => {
       [5, 6],
     ]);
     // 全部開いていれば、日をまたいでつながる
-    expect(slotSegments(dayLayout(days, new Set(), 6), 2, 9)).toEqual([[1, 6]]);
+    expect(slotSegments(dayLayout(days, ALL_OPEN, 6), 2, 9)).toEqual([[1, 6]]);
   });
 
   it('つまみで畳んだ日へ飛ぶときは、先に開いてから飛び、位置がずれない', () => {
-    const collapsed = foldAllBut(days, '2026-11-06');
-    expect([...collapsed]).toEqual(['2026-11-05', '2026-11-04']);
-    let l = dayLayout(days, collapsed, 6);
+    let fold = foldAllBut('2026-11-06');
+    let l = dayLayout(days, fold, 6);
     expect(kinds(l)).toEqual(['d0', 's0', 's1', 'd1', 'd2']);
     // 11/05 の 2 件目（枠 3）へ飛ぶ: その日を開く
     expect(foldedDayOf(l, 3)).toBe('2026-11-05');
-    collapsed.delete('2026-11-05');
-    l = dayLayout(days, collapsed, 6);
+    fold = unfoldDay(fold, '2026-11-05');
+    l = dayLayout(days, fold, 6);
     expect(foldedDayOf(l, 3)).toBeNull();
     const r = jumpRow(l, 3);
     expect(rowAt(l, r)).toEqual({ kind: 'slot', slot: 3 });
@@ -268,9 +277,9 @@ describe('dayLayout（日の見出しと畳み）', () => {
   it('読んでいない日を畳んで開いても、枠の番号はそのまま（開いたら正しく読める）', () => {
     // 11/05 の枠（2〜4）は未読み込み
     const slots = fillSlots(fillSlots(emptySlots(6), 0, [1, 2].map(row)), 5, [row(6)]);
-    const folded = dayLayout(days, new Set(['2026-11-05']), 6);
+    const folded = dayLayout(days, foldDays(['2026-11-05']), 6);
     expect(shownRows(slots, folded).map((m) => m.id)).toEqual([1, 2, 6]);
-    const open = dayLayout(days, new Set(), 6);
+    const open = dayLayout(days, ALL_OPEN, 6);
     // 開いた日の行の範囲 → 読むべき枠の区間 → ページ
     const segs = slotSegments(open, open.heads[1], open.heads[2]);
     expect(segs).toEqual([[2, 5]]);
@@ -280,15 +289,15 @@ describe('dayLayout（日の見出しと畳み）', () => {
   });
 
   it('日が無い・件数が合わないときは、見出しを置かずにそのまま並べる', () => {
-    for (const l of [dayLayout([], new Set(), 4), dayLayout(days, new Set(), 5)]) {
+    for (const l of [dayLayout([], ALL_OPEN, 4), dayLayout(days, ALL_OPEN, 5)]) {
       expect(l.heads).toEqual([]);
       expect(rowAt(l, 2)).toEqual({ kind: 'slot', slot: 2 });
       expect(rowOfSlot(l, 2)).toBe(2);
       expect(jumpRow(l, 2)).toBe(2);
       expect(foldedDayOf(l, 2)).toBeNull();
     }
-    expect(dayLayout([], new Set(), 4).rows).toBe(4);
-    expect(dayLayout(days, new Set(), 5).rows).toBe(5);
+    expect(dayLayout([], ALL_OPEN, 4).rows).toBe(4);
+    expect(dayLayout(days, ALL_OPEN, 5).rows).toBe(5);
   });
 });
 
@@ -300,10 +309,10 @@ describe('stickyDay / stickyPush（貼り付ける見出し）', () => {
   ];
   it('一番上の行が属する、開いている日を貼り付ける', () => {
     // 行: d0 s0 s1 | d1(畳み) | d2 s5
-    const l = dayLayout(days, new Set(['2026-11-05']), 6);
+    const l = dayLayout(days, foldDays(['2026-11-05']), 6);
     expect([0, 1, 2, 3, 4, 5].map((i) => stickyDay(l, i))).toEqual([0, 0, 0, null, 2, 2]);
     expect(stickyDay(l, 99)).toBeNull();
-    expect(stickyDay(dayLayout([], new Set(), 3), 1)).toBeNull();
+    expect(stickyDay(dayLayout([], ALL_OPEN, 3), 1)).toBeNull();
   });
   it('次の日の見出しが重なり始めたら、その分だけ上へ押し出す', () => {
     // 見出しの高さ 30px・スクロール 1000px
@@ -322,24 +331,93 @@ describe('dayTone / rowBar（左の縦の線）', () => {
     expect(dayTone('2026-11-01')).not.toBe(dayTone('2026-10-31'));
     expect(dayTone('2026-01-01')).not.toBe(dayTone('2025-12-31'));
   });
-  it('線は見出しからその日の最後の行まで。最後の行（畳んだ日は見出し）で切る', () => {
+  it('線はその日のメールの行だけ（見出しには引かない）。最初のメールで始め、最後のメールで切る', () => {
     const days: ListDay[] = [
       { dateKey: '2026-11-06', count: 2, unread: 0 },
       { dateKey: '2026-11-05', count: 3, unread: 0 },
       { dateKey: '2026-11-04', count: 1, unread: 0 },
     ];
     // 行: d0 s0 s1 | d1(畳み) | d2 s5
-    const l = dayLayout(days, new Set(['2026-11-05']), 6);
+    const l = dayLayout(days, foldDays(['2026-11-05']), 6);
     const bars = Array.from({ length: l.rows }, (_, i) => rowBar(l, i));
-    expect(bars.map((b) => b?.last)).toEqual([false, false, true, true, false, true]);
-    expect(bars.map((b) => b?.tone)).toEqual([
-      dayTone('2026-11-06'),
-      dayTone('2026-11-06'),
-      dayTone('2026-11-06'),
-      dayTone('2026-11-05'),
-      dayTone('2026-11-04'),
-      dayTone('2026-11-04'),
+    expect(bars.map((b) => (b ? `${b.first ? 'F' : '-'}${b.last ? 'L' : '-'}` : null))).toEqual([
+      null,
+      'F-',
+      '-L',
+      null,
+      null,
+      'FL',
     ]);
-    expect(rowBar(dayLayout([], new Set(), 3), 0)).toBeNull();
+    expect(bars[1]?.tone).toBe(dayTone('2026-11-06'));
+    expect(bars[5]?.tone).toBe(dayTone('2026-11-04'));
+    expect(rowBar(dayLayout([], ALL_OPEN, 3), 0)).toBeNull();
+  });
+});
+
+describe('neighborDay（見出しの ＜ ＞ で移る先）', () => {
+  // メールのある日だけが並ぶ（11/5・11/2 にはメールが無い）
+  const days: ListDay[] = [
+    { dateKey: '2026-11-06', count: 2, unread: 0 },
+    { dateKey: '2026-11-04', count: 3, unread: 0 },
+    { dateKey: '2026-11-03', count: 1, unread: 0 },
+    { dateKey: '2026-11-01', count: 2, unread: 0 },
+  ];
+  it('隣の日へ。メールの無い日は飛ばす', () => {
+    const l = dayLayout(days, ALL_OPEN, 8);
+    expect(neighborDay(l, 0, 'older')).toBe(1); // 11/6 → 11/4（11/5 を飛ばす）
+    expect(neighborDay(l, 2, 'older')).toBe(3); // 11/3 → 11/1（11/2 を飛ばす）
+    expect(neighborDay(l, 2, 'newer')).toBe(1);
+  });
+  it('端では移らない', () => {
+    const l = dayLayout(days, ALL_OPEN, 8);
+    expect(neighborDay(l, 0, 'newer')).toBeNull();
+    expect(neighborDay(l, 3, 'older')).toBeNull();
+  });
+  it('畳んだ日へも移り、開かずに見出しを一番上に出す（jumpRow で見出しの行）', () => {
+    const l = dayLayout(days, foldDays(['2026-11-04']), 8);
+    const to = neighborDay(l, 0, 'older');
+    expect(to).toBe(1);
+    expect(l.folded[1]).toBe(true);
+    expect(jumpRow(l, l.starts[1])).toBe(l.heads[1]);
+    expect(rowAt(l, l.heads[1])).toEqual({ kind: 'day', day: 1 });
+    // 畳んだ日から次へ
+    expect(jumpRow(l, l.starts[2])).toBe(l.heads[2]);
+  });
+});
+
+describe('FoldState（全部畳む・全部開く・1 日ずつ）', () => {
+  const days: ListDay[] = [
+    { dateKey: '2026-11-06', count: 2, unread: 0 },
+    { dateKey: '2026-11-05', count: 3, unread: 0 },
+    { dateKey: '2026-11-04', count: 1, unread: 0 },
+  ];
+  it('全部畳む・全部開くを 1 つのボタンで切り替える（開いた日が 1 日でもあれば「全部畳む」）', () => {
+    expect(anyDayOpen(dayLayout(days, ALL_OPEN, 6))).toBe(true);
+    expect(anyDayOpen(dayLayout(days, foldDays(['2026-11-05']), 6))).toBe(true);
+    const folded = dayLayout(days, ALL_FOLDED, 6);
+    expect(folded.folded).toEqual([true, true, true]);
+    expect(folded.rows).toBe(3);
+    expect(anyDayOpen(folded)).toBe(false);
+    // 全部畳んだあと 1 日だけ開いても「開いた日がある」
+    expect(anyDayOpen(dayLayout(days, toggleFold(ALL_FOLDED, '2026-11-05'), 6))).toBe(true);
+  });
+  it('新しく来た日は既定に従う（全部畳んだあとに届いた日も畳まれる）', () => {
+    const more: ListDay[] = [{ dateKey: '2026-11-07', count: 1, unread: 0 }, ...days];
+    expect(dayLayout(more, ALL_FOLDED, 7).folded).toEqual([true, true, true, true]);
+    expect(dayLayout(more, foldDays(['2026-11-05']), 7).folded).toEqual([
+      false,
+      false,
+      true,
+      false,
+    ]);
+  });
+  it('1 日ずつの開閉と、今日だけ開いておく形', () => {
+    let fold = toggleFold(ALL_FOLDED, '2026-11-05');
+    expect(dayLayout(days, fold, 6).folded).toEqual([true, false, true]);
+    fold = toggleFold(fold, '2026-11-05');
+    expect(dayLayout(days, fold, 6).folded).toEqual([true, true, true]);
+    expect(dayLayout(days, foldAllBut('2026-11-06'), 6).folded).toEqual([false, true, true]);
+    expect(dayLayout(days, foldAllBut(null), 6).folded).toEqual([true, true, true]);
+    expect(unfoldDay(ALL_OPEN, '2026-11-05')).toBe(ALL_OPEN);
   });
 });

@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import {
   CalendarPlus,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
@@ -72,7 +73,12 @@ import {
   daysOfRows,
   emptySlots,
   fillSlots,
+  ALL_FOLDED,
+  ALL_OPEN,
+  anyDayOpen,
   foldAllBut,
+  toggleFold,
+  unfoldDay,
   foldedDayOf,
   indexOfId,
   jumpRow,
@@ -86,6 +92,7 @@ import {
   shownRows,
   slotAtRow,
   slotSegments,
+  neighborDay,
   stickyDay,
   stickyPush,
   dayTone,
@@ -99,7 +106,7 @@ import {
 } from './mailListWindow';
 import { TimelineScrubber } from './timeline/TimelineScrubber';
 import { localDayKey } from './timeline/dayCounts';
-import { useCollapsedDays } from '../hooks/useCollapsedDays';
+import { useDayFold } from '../hooks/useDayFold';
 import { Compose, composeKey, type ComposeTarget } from './Compose';
 import { useTabActiveRef } from '../hooks/useTabActive';
 import { FolderIcons } from './FolderIcons';
@@ -146,9 +153,13 @@ const DAY_HEADING_ESTIMATE = 36;
 // 日の色（左の縦の線・畳んだ日の矢印）。dayTone の 0 / 1。どの背景の写真の上でも見える濃さにする。
 const DAY_TONE_BAR = ['bg-sky-400', 'bg-amber-400'] as const;
 const DAY_TONE_TEXT = ['text-sky-300', 'text-amber-300'] as const;
-// 差出人の表示名の色（senderTone）。日の線（水色・琥珀）・未読の印（水色）・グリーンの葉（emerald-400）と
-// 見分けられる色にする。
-const SENDER_TONE_TEXT = { replied: 'text-green-300', known: 'text-violet-300' } as const;
+// メールの行の字下げ（見出しの左端から px）と、その中の日の線の位置（見出しの左端から px）。
+// 線が見出しの下にぶら下がる形。サイドバーを最も狭くしても差出人・日時が窮屈にならない幅にする。
+const MAIL_INDENT = 14;
+const DAY_BAR_LEFT = 5;
+// 差出人の表示名の色（senderTone）。返信歴あり・知り合いのみとも、未読の印と同じ水色（利用者の要望。
+// 2026-11-06「どちらも青で良い」）。2 つの見分けはツールチップで付ける。
+const SENDER_TONE_TEXT = { replied: 'text-sky-300', known: 'text-sky-300' } as const;
 // 同期のあとに読み直す「見えている範囲」の上限（件。畳んだ日をまたいで広がりすぎないように）。
 const VISIBLE_RELOAD_CAP = 3 * PAGE_SIZE;
 
@@ -404,10 +415,8 @@ export function MailboxView({
   }, [compose]);
   // 表示するフォルダ/グループ（受信箱以外は後続実装）
   const [folder, setFolder] = useState('inbox');
-  // 一覧で畳んだ日（アカウント・フォルダの選択ごとに覚える。docs/MAIL_LIST_TIMELINE.md §6）。
-  const [collapsed, setCollapsed] = useCollapsedDays(
-    selected == null ? null : `${selected}.${folder}`
-  );
+  // 一覧の日の畳み（起動時・選択の切り替えでは全部開いて始める。覚えない。docs/MAIL_LIST_TIMELINE.md §6）。
+  const [collapsed, setCollapsed] = useDayFold(selected == null ? null : `${selected}.${folder}`);
   // リスト絞り込みトグル
   const [filters, setFilters] = useState<Set<string>>(new Set());
   // トグル絞り込みの反転（選択条件に「一致しない」ものを表示）。不要メールの一括選択に使う。
@@ -1454,11 +1463,7 @@ export function MailboxView({
       const day = foldedDayOf(l, slot);
       if (day) {
         pendingScrollRef.current = { slot, align };
-        setCollapsed((prev) => {
-          const next = new Set(prev);
-          next.delete(day);
-          return next;
-        });
+        setCollapsed((prev) => unfoldDay(prev, day));
         return;
       }
       const row = align === 'start' ? jumpRow(l, slot) : rowOfSlot(l, slot);
@@ -1504,16 +1509,13 @@ export function MailboxView({
       listLayout.folded.some(Boolean));
 
   // 日の見出し: 押すと開閉。右クリックで「今日以外を全部畳む」「全部開く」。
-  const toggleDay = (dateKey: string) =>
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(dateKey)) next.delete(dateKey);
-      else next.add(dateKey);
-      return next;
-    });
-  const foldOthers = () =>
-    setCollapsed(() => foldAllBut(listLayout.days, localDayKey(new Date().toISOString())));
-  const unfoldAll = () => setCollapsed(() => new Set());
+  const toggleDay = (dateKey: string) => setCollapsed((prev) => toggleFold(prev, dateKey));
+  const foldOthers = () => setCollapsed(() => foldAllBut(localDayKey(new Date().toISOString())));
+  const unfoldAll = () => setCollapsed(() => ALL_OPEN);
+  // サイドバーの上の 1 つのボタン: 開いた日が 1 日でもあれば「全部畳む」、全部畳んでいれば「全部開く」。
+  // 見出しの無い並び（検索中）では押せない。
+  const anyOpen = anyDayOpen(listLayout);
+  const toggleAllDays = () => setCollapsed(() => (anyOpen ? ALL_FOLDED : ALL_OPEN));
   const [dayMenu, setDayMenu] = useState<{ x: number; y: number } | null>(null);
   const pinnedRef = useRef<HTMLDivElement>(null);
   const dayMenuItems: MenuItem[] = [
@@ -1525,63 +1527,105 @@ export function MailboxView({
     },
     { key: 'unfoldAll', label: t('mailbox.unfoldAll'), Icon: ChevronsUpDown, onClick: unfoldAll },
   ];
-  // 見出しの帯。畳んだ日は帯を濃くし、矢印を日の色で太く出す（一目で畳まれていると分かるように）。
+  // 見出しの帯。畳んだ日は帯を濃くし、矢印を太く出す（一目で畳まれていると分かるように）。
   // pinned は一覧の上に貼り付けた見出し（押して畳んだら、その日の見出しの位置へ戻す）。
   const renderDayHeading = (day: number, pinned = false) => {
     const d = listLayout.days[day];
     const folded = listLayout.folded[day];
     const tone = dayTone(d.dateKey);
     const Chevron = folded ? ChevronRight : ChevronDown;
+    const older = neighborDay(listLayout, day, 'older');
+    const newer = neighborDay(listLayout, day, 'newer');
+    // ＜ ＞: 隣の日（メールのある日）の見出しを一番上へ。畳んだ日でも開かない。開閉の押す場所とは別のボタン
+    const navBtn = (to: number | null, Icon: typeof ChevronLeft, key: 'prevDay' | 'nextDay') => {
+      const label =
+        to == null
+          ? t(`mailbox.${key}None`)
+          : t(`mailbox.${key}`, {
+              date: formatDayShort(listLayout.days[to].dateKey, i18n.language, t),
+            });
+      return (
+        <button
+          onClick={() => to != null && jumpToDay(to)}
+          disabled={to == null}
+          title={label}
+          aria-label={label}
+          data-day-nav={key}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-white/45 hover:bg-white/15 hover:text-white disabled:pointer-events-none disabled:opacity-25"
+        >
+          <Icon size={15} strokeWidth={2.5} />
+        </button>
+      );
+    };
     return (
-      <button
-        onClick={() => {
-          // 畳むと下の行が詰まって見ていた位置がずれるので、貼り付けた見出しからはその日の頭へ戻す
-          if (pinned) rowVirtualizer.scrollToIndex(listLayout.heads[day], { align: 'start' });
-          toggleDay(d.dateKey);
-        }}
+      <div
         onContextMenu={(e) => {
           e.preventDefault();
           setDayMenu({ x: e.clientX, y: e.clientY });
         }}
-        aria-expanded={!folded}
-        title={folded ? t('mailbox.unfoldDay') : t('mailbox.foldDay')}
         data-day-heading={d.dateKey}
         data-folded={folded || undefined}
-        className={`flex h-[30px] w-full items-center gap-2 rounded-md px-2 text-left text-[13px] backdrop-blur-md transition-colors ${
+        className={`flex h-[30px] w-full items-center gap-1 rounded-md pr-1 text-[13px] backdrop-blur-md transition-colors ${
           pinned
             ? // 貼り付けた見出しは下の行の上に重なるので、透けないように濃くする
-              'bg-neutral-900/90 shadow-md shadow-black/40 hover:bg-neutral-800/90'
+              'bg-neutral-900/90 shadow-md shadow-black/40'
             : folded
-              ? 'bg-black/65 ring-1 ring-white/15 hover:bg-black/75'
-              : 'bg-black/40 hover:bg-black/55'
+              ? 'bg-black/65 ring-1 ring-white/15'
+              : 'bg-black/40'
         }`}
       >
-        <Chevron
-          size={16}
-          strokeWidth={folded ? 3 : 2.5}
-          className={`shrink-0 ${folded ? DAY_TONE_TEXT[tone] : 'text-white/85'}`}
-        />
-        <span className="font-semibold text-white">
-          {formatDayHeading(d.dateKey, i18n.language, t)}
-        </span>
-        <span className="text-white/75">{t('mailbox.dayCount', { count: d.count })}</span>
-        {d.unread > 0 && (
-          <span className="font-semibold text-sky-300">
-            {t('mailbox.dayUnread', { unread: d.unread })}
+        <button
+          onClick={() => {
+            // 畳むと下の行が詰まって見ていた位置がずれるので、貼り付けた見出しからはその日の頭へ戻す
+            if (pinned) rowVirtualizer.scrollToIndex(listLayout.heads[day], { align: 'start' });
+            toggleDay(d.dateKey);
+          }}
+          aria-expanded={!folded}
+          title={folded ? t('mailbox.unfoldDay') : t('mailbox.foldDay')}
+          className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-l-md pl-2 text-left hover:bg-white/[0.06]"
+        >
+          <Chevron
+            size={16}
+            strokeWidth={folded ? 3 : 2.5}
+            // 矢印は日の色（下にぶら下がるメールの線と同じ色で、どの範囲の見出しかが分かる）
+            className={`shrink-0 ${DAY_TONE_TEXT[tone]}`}
+          />
+          <span className="shrink-0 font-semibold text-white">
+            {formatDayHeading(d.dateKey, i18n.language, t)}
           </span>
-        )}
-      </button>
+          {/* 狭いときは件数・未読の側を省略する（日付と ＜ ＞ は削らない） */}
+          <span className="min-w-0 truncate">
+            <span className="text-white/75">{t('mailbox.dayCount', { count: d.count })}</span>
+            {d.unread > 0 && (
+              <span className="ml-2 font-semibold text-sky-300">
+                {t('mailbox.dayUnread', { unread: d.unread })}
+              </span>
+            )}
+          </span>
+        </button>
+        {navBtn(older, ChevronLeft, 'prevDay')}
+        {navBtn(newer, ChevronRight, 'nextDay')}
+      </div>
     );
   };
 
-  // 左の縦の線（その日の見出しから最後の行まで。日ごとに切る）。最後の行でなければ、行の間の隙間へ伸ばす。
-  const renderDayBar = (bar: { tone: 0 | 1; last: boolean }, first: boolean) => (
+  // ＜ ＞ で日 day の見出しを一番上へ（つまみで飛ぶのと同じ jumpRow。畳んだ日は開かずに見出しのまま）。
+  // まだ読んでいない日なら、止まったところで読む。
+  const jumpToDay = (day: number) =>
+    rowVirtualizer.scrollToIndex(jumpRow(listLayout, listLayout.starts[day]), { align: 'start' });
+
+  // 左の縦の線（その日のメールの範囲。見出しの下にぶら下がる形）。メールの行の字下げの中に置き、
+  // 最後のメールでなければ、行の間の隙間へ伸ばしてつなぐ。
+  const renderDayBar = (bar: { tone: 0 | 1; first: boolean; last: boolean }) => (
     <span
       aria-hidden
-      className={`absolute -left-3 top-0 w-[3px] ${DAY_TONE_BAR[bar.tone]} ${
-        first ? 'rounded-t-full' : ''
+      className={`absolute top-0 w-[3px] ${DAY_TONE_BAR[bar.tone]} ${
+        bar.first ? 'rounded-t-full' : ''
       } ${bar.last ? 'bottom-0 rounded-b-full' : ''}`}
-      style={bar.last ? undefined : { bottom: -ROW_GAP }}
+      style={{
+        left: DAY_BAR_LEFT - MAIL_INDENT,
+        bottom: bar.last ? undefined : -ROW_GAP,
+      }}
     />
   );
 
@@ -1906,6 +1950,17 @@ export function MailboxView({
         <FolderIcons value={folder} onChange={setFolder} />
         {/* 迷惑登録の矛盾（住所録/グリーンなのに迷惑）を知らせる情報アイコン。矛盾が無ければ非表示。 */}
         <SpamConflictAlert onResolved={() => loadMails({ keepScroll: true })} />
+        <Tooltip label={anyOpen ? t('mailbox.foldAll') : t('mailbox.unfoldAll')}>
+          <button
+            onClick={toggleAllDays}
+            disabled={listLayout.heads.length === 0}
+            aria-label={anyOpen ? t('mailbox.foldAll') : t('mailbox.unfoldAll')}
+            data-fold-all={anyOpen ? 'fold' : 'unfold'}
+            className={`${iconBtn} shrink-0 border-l border-white/10 pl-1`}
+          >
+            {anyOpen ? <ChevronsDownUp size={15} /> : <ChevronsUpDown size={15} />}
+          </button>
+        </Tooltip>
       </div>
       {/* 絞り込みツールバー: 一覧を絞る操作はリスト直上に置く（トグル/期間/タグ）。アイコンは中央寄せ */}
       <div className="flex shrink-0 flex-wrap items-center justify-center gap-1 border-b border-white/10 px-2 py-1">
@@ -2049,22 +2104,21 @@ export function MailboxView({
                 {rowVirtualizer.getVirtualItems().map((v) => {
                   const r = layoutRowAt(listLayout, v.index);
                   const bar = rowBar(listLayout, v.index);
-                  // 日の線があるときは、線の分だけ行を右へ寄せる
-                  const liCls = `absolute ${bar ? 'left-4' : 'left-2'} right-2 top-0`;
                   if (r.kind === 'day') {
                     return (
                       <li
                         key={v.key}
                         data-index={v.index}
                         ref={rowVirtualizer.measureElement}
-                        className={`${liCls} pt-1.5`}
+                        className="absolute left-2 right-2 top-0 pt-1.5"
                         style={{ transform: `translateY(${v.start}px)` }}
                       >
-                        {bar && renderDayBar(bar, true)}
                         {renderDayHeading(r.day)}
                       </li>
                     );
                   }
+                  // 日の見出しがある並びでは、メールの行を見出しより字下げし、その中に日の線を置く
+                  const liCls = `absolute right-2 top-0 ${bar ? '' : 'left-2'}`;
                   const m = slotRow(r.slot);
                   return (
                     <li
@@ -2072,9 +2126,12 @@ export function MailboxView({
                       data-index={v.index}
                       ref={rowVirtualizer.measureElement}
                       className={liCls}
-                      style={{ transform: `translateY(${v.start}px)` }}
+                      style={{
+                        transform: `translateY(${v.start}px)`,
+                        left: bar ? 8 + MAIL_INDENT : undefined,
+                      }}
                     >
-                      {bar && renderDayBar(bar, false)}
+                      {bar && renderDayBar(bar)}
                       {m ? (
                         renderRow(m)
                       ) : (
@@ -2100,17 +2157,13 @@ export function MailboxView({
           {showPinned && pinnedDay != null && (
             <div
               ref={pinnedRef}
-              className="absolute left-4 top-0 z-10 pt-1.5"
+              className="absolute left-2 top-0 z-10 pt-1.5"
               style={{
                 right: 8 + listScrollbarW,
                 transform: `translateY(${pinnedPush}px)`,
               }}
               data-pinned-day={listLayout.days[pinnedDay].dateKey}
             >
-              {renderDayBar(
-                { tone: dayTone(listLayout.days[pinnedDay].dateKey), last: true },
-                true
-              )}
               {renderDayHeading(pinnedDay, true)}
             </div>
           )}
@@ -2550,4 +2603,25 @@ function formatDayHeading(
     monthShort: new Intl.DateTimeFormat(lang, { month: 'short' }).format(date),
   };
   return t(y === new Date().getFullYear() ? 'mailbox.dayDate' : 'mailbox.dayDateYear', opts);
+}
+
+/** ＜ ＞ のツールチップの日付（例: 「11月5日」「Nov 5」）。今年でなければ年も付ける。 */
+function formatDayShort(
+  dateKey: string,
+  lang: string,
+  t: (key: string, opts?: Record<string, string | number>) => string
+): string {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  if (Number.isNaN(date.getTime())) return dateKey;
+  const opts = {
+    year: y,
+    month: m,
+    day: d,
+    monthShort: new Intl.DateTimeFormat(lang, { month: 'short' }).format(date),
+  };
+  return t(
+    y === new Date().getFullYear() ? 'mailbox.dayDateShort' : 'mailbox.dayDateShortYear',
+    opts
+  );
 }

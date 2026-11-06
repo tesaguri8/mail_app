@@ -26,6 +26,7 @@ import {
   slotSegments,
   stickyDay,
   neighborDay,
+  todayDay,
   dayTone,
   rowBar,
   stickyPush,
@@ -419,5 +420,28 @@ describe('FoldState（全部畳む・全部開く・1 日ずつ）', () => {
     expect(dayLayout(days, foldAllBut('2026-11-06'), 6).folded).toEqual([false, true, true]);
     expect(dayLayout(days, foldAllBut(null), 6).folded).toEqual([true, true, true]);
     expect(unfoldDay(ALL_OPEN, '2026-11-05')).toBe(ALL_OPEN);
+  });
+});
+
+describe('todayDay（見出しの「・」で移る先）', () => {
+  const days: ListDay[] = [
+    { dateKey: '2026-11-06', count: 2, unread: 0 },
+    { dateKey: '2026-11-05', count: 3, unread: 0 },
+    { dateKey: '2026-11-04', count: 1, unread: 0 },
+  ];
+  it('今日のメールがあれば今日へ（畳んでいても開かずに見出しへ）', () => {
+    const l = dayLayout(days, foldDays(['2026-11-05']), 6);
+    expect(todayDay(l, '2026-11-05')).toEqual({ day: 1, isToday: true });
+    expect(jumpRow(l, l.starts[1])).toBe(l.heads[1]);
+    expect(l.folded[1]).toBe(true);
+  });
+  it('今日のメールが無ければ、いちばん新しい日（一覧の先頭）へ', () => {
+    const l = dayLayout(days, ALL_OPEN, 6);
+    expect(todayDay(l, '2026-11-07')).toEqual({ day: 0, isToday: false });
+  });
+  it('今日の見出しにいれば、移り先は自分（押せない表示にする）', () => {
+    const l = dayLayout(days, ALL_OPEN, 6);
+    expect(todayDay(l, '2026-11-06')?.day).toBe(0);
+    expect(todayDay(dayLayout([], ALL_OPEN, 0), '2026-11-06')).toBeNull();
   });
 });

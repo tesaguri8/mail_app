@@ -2,12 +2,14 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import {
+  ArrowDown,
+  ArrowUp,
   CalendarPlus,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
+  Dot,
   Columns2,
   FlipHorizontal2,
   Gem,
@@ -93,6 +95,7 @@ import {
   slotAtRow,
   slotSegments,
   neighborDay,
+  todayDay,
   stickyDay,
   stickyPush,
   dayTone,
@@ -1529,6 +1532,9 @@ export function MailboxView({
   ];
   // 見出しの帯。畳んだ日は帯を濃くし、矢印を太く出す（一目で畳まれていると分かるように）。
   // pinned は一覧の上に貼り付けた見出し（押して畳んだら、その日の見出しの位置へ戻す）。
+  // 「・」の移り先（今日・無ければいちばん新しい日）。今日は描くたびに端末のローカル日付で決める
+  // （日付が変わったあとも、次に描くときに正しい今日を指す）。
+  const today = todayDay(listLayout, localDayKey(new Date().toISOString()) ?? '');
   const renderDayHeading = (day: number, pinned = false) => {
     const d = listLayout.days[day];
     const folded = listLayout.folded[day];
@@ -1536,24 +1542,26 @@ export function MailboxView({
     const Chevron = folded ? ChevronRight : ChevronDown;
     const older = neighborDay(listLayout, day, 'older');
     const newer = neighborDay(listLayout, day, 'newer');
-    // ＜ ＞: 隣の日（メールのある日）の見出しを一番上へ。畳んだ日でも開かない。開閉の押す場所とは別のボタン
-    const navBtn = (to: number | null, Icon: typeof ChevronLeft, key: 'prevDay' | 'nextDay') => {
-      const label =
-        to == null
-          ? t(`mailbox.${key}None`)
-          : t(`mailbox.${key}`, {
-              date: formatDayShort(listLayout.days[to].dateKey, i18n.language, t),
-            });
+    // ↑ ・ ↓: 次の日（上）・今日・前の日（下）の見出しを一番上へ。メールのある日だけを渡り、畳んだ日でも開かない。
+    // 開閉の押す場所とは別のボタン。山形（Chevron）は左の開閉の印と紛れるので、軸のある矢印にする
+    const dateOf = (to: number) => formatDayShort(listLayout.days[to].dateKey, i18n.language, t);
+    const navBtn = (
+      to: number | null,
+      Icon: typeof ArrowUp,
+      key: string,
+      label: string,
+      iconSize = 15
+    ) => {
       return (
         <button
-          onClick={() => to != null && jumpToDay(to)}
-          disabled={to == null}
+          onClick={() => to != null && to !== day && jumpToDay(to)}
+          disabled={to == null || to === day}
           title={label}
           aria-label={label}
           data-day-nav={key}
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-white/45 hover:bg-white/15 hover:text-white disabled:pointer-events-none disabled:opacity-25"
         >
-          <Icon size={15} strokeWidth={2.5} />
+          <Icon size={iconSize} strokeWidth={2.5} />
         </button>
       );
     };
@@ -1603,8 +1611,29 @@ export function MailboxView({
             )}
           </span>
         </button>
-        {navBtn(older, ChevronLeft, 'prevDay')}
-        {navBtn(newer, ChevronRight, 'nextDay')}
+        {navBtn(
+          newer,
+          ArrowUp,
+          'nextDay',
+          newer == null ? t('mailbox.nextDayNone') : t('mailbox.nextDay', { date: dateOf(newer) })
+        )}
+        {navBtn(
+          today?.day ?? null,
+          Dot,
+          'today',
+          today == null
+            ? t('mailbox.todayNone')
+            : t(today.isToday ? 'mailbox.today' : 'mailbox.newestDay', {
+                date: dateOf(today.day),
+              }),
+          22
+        )}
+        {navBtn(
+          older,
+          ArrowDown,
+          'prevDay',
+          older == null ? t('mailbox.prevDayNone') : t('mailbox.prevDay', { date: dateOf(older) })
+        )}
       </div>
     );
   };

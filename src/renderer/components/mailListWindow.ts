@@ -256,6 +256,20 @@ function dayIndexOf(starts: readonly number[], i: number): number {
 // ---- 日の見出しと畳み（設計: docs/MAIL_LIST_TIMELINE.md §6） ----
 
 /**
+ * 見出しの ＜ ・ ＞ の「・」で移る先（設計の §6.2）。todayKey は端末ローカルの今日（`YYYY-MM-DD`。date_key と同じ）。
+ * 今日のメールがあれば今日、無ければ一覧の先頭の日（いちばん新しい日）。日が無ければ null。
+ * 押した見出しがその日なら押せない表示にする（呼ぶ側で day と比べる）。
+ */
+export function todayDay(
+  layout: DayLayout,
+  todayKey: string
+): { day: number; isToday: boolean } | null {
+  if (layout.days.length === 0) return null;
+  const i = layout.days.findIndex((d) => d.dateKey === todayKey);
+  return i >= 0 ? { day: i, isToday: true } : { day: 0, isToday: false };
+}
+
+/**
  * 日の畳み: 既定（allFolded）と、それと逆にした日（flipped）。新しく来た日は既定に従う
  * （全部畳んだあとに届いた日も畳まれ、全部開いたあとなら開く）。
  */

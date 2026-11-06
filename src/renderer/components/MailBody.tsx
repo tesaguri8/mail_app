@@ -1114,6 +1114,10 @@ export function MailBody({
               const att = attachments.find((a) => a.kind === 'inline' && a.content_id === cid);
               if (att) setInlineMenu({ x, y, att });
             }}
+            onInlineImageAction={(cid, action) => {
+              const att = attachments.find((a) => a.kind === 'inline' && a.content_id === cid);
+              if (att) void (action === 'save' ? handleSave(att) : handleOpen(att));
+            }}
             renderEmail={
               onAddContact
                 ? (email) => (
@@ -1156,6 +1160,7 @@ export function MailBody({
           <AttachedImages
             images={bodyImages}
             onMenu={(att, x, y) => setInlineMenu({ x, y, att })}
+            onAction={(att, action) => void (action === 'save' ? handleSave(att) : handleOpen(att))}
           />
         )}
       </div>

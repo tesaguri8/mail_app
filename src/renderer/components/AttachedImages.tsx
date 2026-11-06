@@ -5,6 +5,7 @@ import type { AttachmentSummary } from '@bindings/AttachmentSummary';
 import { attachmentImage, peekAttachmentImage } from '../utils/imageCache';
 import { withActivity } from '../stores/activity';
 import { formatSize } from '../utils/fileSize';
+import { ImageActions, type ImageAction } from './ImageActions';
 
 const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp|tiff?|heic|heif|avif)$/i;
 
@@ -33,16 +34,20 @@ function variantKey(id: number, thumb: boolean): string {
  * - `compact`（会話バブル用）はサムネイルを横に並べ、クリックした 1 枚だけ実寸に広げる。
  *   チャットの流れを写真で埋めないための表示で、取得も小さいレンディションで済む。
  * - 合計が [`AUTO_MAX_TOTAL`] 以下なら開いた時点で自動取得、超えるときはボタンで明示取得。
- * - 右クリックで「保存 / 既定アプリで開く」（`onMenu`）。
+ * - 右クリックで「保存 / 既定アプリで開く」（`onMenu`）。同じ操作を画像の右上のボタン
+ *   （`onAction`）からも押せる（右クリックだけでは気づけないため）。
  */
 export function AttachedImages({
   images,
   onMenu,
+  onAction,
   compact = false,
 }: {
   images: AttachmentSummary[];
   /** 画像の右クリック（保存/開くメニューを出す）。 */
   onMenu?: (att: AttachmentSummary, x: number, y: number) => void;
+  /** 画像に重ねたボタンの「保存 / 開く」。 */
+  onAction?: (att: AttachmentSummary, action: ImageAction) => void;
   /** 会話バブル向けの小さい表示（サムネイル＋クリックで拡大）。 */
   compact?: boolean;
 }) {
@@ -165,36 +170,41 @@ export function AttachedImages({
           if (!url)
             return <div key={a.id}>{placeholder(!big, errors[variantKey(a.id, !big)])}</div>;
           return (
-            <img
+            <span
               key={a.id}
-              src={url}
-              alt={a.filename}
-              title={`${a.filename}・${formatSize(a.size)}`}
-              onClick={(e) => {
-                // 画像のクリックはバブルの展開トグルへ渡さない（拡大/縮小だけ）。
-                e.stopPropagation();
-                setZoomed((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(a.id)) next.delete(a.id);
-                  else next.add(a.id);
-                  return next;
-                });
-              }}
-              onContextMenu={
-                onMenu
-                  ? (e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      onMenu(a, e.clientX, e.clientY);
-                    }
-                  : undefined
-              }
-              className={
-                big
-                  ? 'block max-h-[60vh] max-w-full cursor-zoom-out rounded-md'
-                  : 'h-24 w-24 cursor-zoom-in rounded-md object-cover'
-              }
-            />
+              className={`group/img relative ${big ? 'block w-fit max-w-full' : 'block'}`}
+            >
+              <img
+                src={url}
+                alt={a.filename}
+                title={`${a.filename}・${formatSize(a.size)}`}
+                onClick={(e) => {
+                  // 画像のクリックはバブルの展開トグルへ渡さない（拡大/縮小だけ）。
+                  e.stopPropagation();
+                  setZoomed((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(a.id)) next.delete(a.id);
+                    else next.add(a.id);
+                    return next;
+                  });
+                }}
+                onContextMenu={
+                  onMenu
+                    ? (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onMenu(a, e.clientX, e.clientY);
+                      }
+                    : undefined
+                }
+                className={
+                  big
+                    ? 'block max-h-[60vh] max-w-full cursor-zoom-out rounded-md'
+                    : 'h-24 w-24 cursor-zoom-in rounded-md object-cover'
+                }
+              />
+              {onAction && <ImageActions name={a.filename} onAction={(x) => onAction(a, x)} />}
+            </span>
           );
         })}
       </div>
@@ -209,20 +219,23 @@ export function AttachedImages({
             {a.filename}・{formatSize(a.size)}
           </figcaption>
           {urls[variantKey(a.id, false)] ? (
-            <img
-              src={urls[variantKey(a.id, false)]}
-              alt={a.filename}
-              onContextMenu={
-                onMenu
-                  ? (e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      onMenu(a, e.clientX, e.clientY);
-                    }
-                  : undefined
-              }
-              className="block max-h-[70vh] max-w-full rounded-md"
-            />
+            <div className="group/img relative w-fit max-w-full">
+              <img
+                src={urls[variantKey(a.id, false)]}
+                alt={a.filename}
+                onContextMenu={
+                  onMenu
+                    ? (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onMenu(a, e.clientX, e.clientY);
+                      }
+                    : undefined
+                }
+                className="block max-h-[70vh] max-w-full rounded-md"
+              />
+              {onAction && <ImageActions name={a.filename} onAction={(x) => onAction(a, x)} />}
+            </div>
           ) : (
             placeholder(false, errors[variantKey(a.id, false)])
           )}

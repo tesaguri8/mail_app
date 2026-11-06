@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { matchesFilters, matchesNoneOfFilters } from './mailFilters';
+import { matchesFilters, matchesNoneOfFilters, senderTone } from './mailFilters';
 
 /** 試験用の一覧行。既定は「既読・スター無し・知り合いでない・添付なし」。 */
 const row = (over: Partial<Parameters<typeof matchesFilters>[0]> = {}) => ({
@@ -90,5 +90,17 @@ describe('matchesNoneOfFilters（反転＝どれにも当てはまらない）',
   it('flag は通常・反転ともに非適用（マーク手段が無いため）', () => {
     expect(matchesFilters(row(), f('flag'))).toBe(true);
     expect(matchesNoneOfFilters(row(), f('flag'))).toBe(true);
+  });
+});
+
+describe('senderTone（差出人の表示名の色）', () => {
+  it('返信歴あり > 知り合いのみ > どちらでもない', () => {
+    expect(senderTone(row({ is_replied: true, is_known: true }), false)).toBe('replied');
+    expect(senderTone(row({ is_replied: true }), false)).toBe('replied');
+    expect(senderTone(row({ is_known: true }), false)).toBe('known');
+    expect(senderTone(row(), false)).toBeNull();
+  });
+  it('宛先を表示する行（送信済み・下書き）には付けない', () => {
+    expect(senderTone(row({ is_replied: true, is_known: true }), true)).toBeNull();
   });
 });

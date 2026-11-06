@@ -69,3 +69,19 @@ export function matchesNoneOfFilters(m: FilterableRow, filters: Set<string>): bo
   // flag は matchesFilters と同じく非適用（反転でも対象にしない）
   return true;
 }
+
+/**
+ * 差出人の表示名の色分け（一覧の行）。返信したことがある相手（`is_replied`）がいちばん近い相手で、
+ * 住所録にいるだけの相手（`is_known`）がその次。どちらでもなければ null（いまのまま）。
+ * どちらも**差出人のアドレス**で判定した値なので、宛先を表示する行（送信済み・下書き。outgoing）には付けない
+ * （自分の差出人で判定した色が、宛先の名前に付いて見えてしまう）。
+ */
+export function senderTone(
+  m: Pick<FilterableRow, 'is_known' | 'is_replied'>,
+  outgoing: boolean
+): 'replied' | 'known' | null {
+  if (outgoing) return null;
+  if (m.is_replied) return 'replied';
+  if (m.is_known) return 'known';
+  return null;
+}

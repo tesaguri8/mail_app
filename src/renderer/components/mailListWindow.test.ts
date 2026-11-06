@@ -19,6 +19,7 @@ import {
   slotAtRow,
   slotSegments,
   stickyDay,
+  neighborDay,
   dayTone,
   rowBar,
   stickyPush,
@@ -342,5 +343,36 @@ describe('dayTone / rowBar（左の縦の線）', () => {
     expect(bars[1]?.tone).toBe(dayTone('2026-11-06'));
     expect(bars[5]?.tone).toBe(dayTone('2026-11-04'));
     expect(rowBar(dayLayout([], new Set(), 3), 0)).toBeNull();
+  });
+});
+
+describe('neighborDay（見出しの ＜ ＞ で移る先）', () => {
+  // メールのある日だけが並ぶ（11/5・11/2 にはメールが無い）
+  const days: ListDay[] = [
+    { dateKey: '2026-11-06', count: 2, unread: 0 },
+    { dateKey: '2026-11-04', count: 3, unread: 0 },
+    { dateKey: '2026-11-03', count: 1, unread: 0 },
+    { dateKey: '2026-11-01', count: 2, unread: 0 },
+  ];
+  it('隣の日へ。メールの無い日は飛ばす', () => {
+    const l = dayLayout(days, new Set(), 8);
+    expect(neighborDay(l, 0, 'older')).toBe(1); // 11/6 → 11/4（11/5 を飛ばす）
+    expect(neighborDay(l, 2, 'older')).toBe(3); // 11/3 → 11/1（11/2 を飛ばす）
+    expect(neighborDay(l, 2, 'newer')).toBe(1);
+  });
+  it('端では移らない', () => {
+    const l = dayLayout(days, new Set(), 8);
+    expect(neighborDay(l, 0, 'newer')).toBeNull();
+    expect(neighborDay(l, 3, 'older')).toBeNull();
+  });
+  it('畳んだ日へも移り、開かずに見出しを一番上に出す（jumpRow で見出しの行）', () => {
+    const l = dayLayout(days, new Set(['2026-11-04']), 8);
+    const to = neighborDay(l, 0, 'older');
+    expect(to).toBe(1);
+    expect(l.folded[1]).toBe(true);
+    expect(jumpRow(l, l.starts[1])).toBe(l.heads[1]);
+    expect(rowAt(l, l.heads[1])).toEqual({ kind: 'day', day: 1 });
+    // 畳んだ日から次へ
+    expect(jumpRow(l, l.starts[2])).toBe(l.heads[2]);
   });
 });

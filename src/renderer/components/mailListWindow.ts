@@ -426,6 +426,16 @@ export function rowBar(
   };
 }
 
+/**
+ * 見出しの ＜ ＞ で移る先の日（設計の §6.2）。`older` は 1 日古い日（一覧の下へ）、`newer` は 1 日新しい日（上へ）。
+ * 日の並びはメールのある日だけなので、メールの無い日は自然に飛ばす。畳んだ日も移り先になる（開かない）。
+ * 端（いちばん新しい日の newer・いちばん古い日の older）は null。
+ */
+export function neighborDay(layout: DayLayout, day: number, dir: 'older' | 'newer'): number | null {
+  const next = dir === 'older' ? day + 1 : day - 1;
+  return next >= 0 && next < layout.days.length ? next : null;
+}
+
 /** 「keep 以外を全部畳む」ときの畳む日の集合。 */
 export function foldAllBut(days: readonly DayCount[], keep: string | null): Set<string> {
   return new Set(days.map((d) => d.dateKey).filter((k) => k !== keep));

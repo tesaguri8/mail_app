@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import {
   CalendarPlus,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
@@ -86,6 +87,7 @@ import {
   shownRows,
   slotAtRow,
   slotSegments,
+  neighborDay,
   stickyDay,
   stickyPush,
   dayTone,
@@ -1536,48 +1538,85 @@ export function MailboxView({
     const folded = listLayout.folded[day];
     const tone = dayTone(d.dateKey);
     const Chevron = folded ? ChevronRight : ChevronDown;
+    const older = neighborDay(listLayout, day, 'older');
+    const newer = neighborDay(listLayout, day, 'newer');
+    // ＜ ＞: 隣の日（メールのある日）の見出しを一番上へ。畳んだ日でも開かない。開閉の押す場所とは別のボタン
+    const navBtn = (to: number | null, Icon: typeof ChevronLeft, key: 'prevDay' | 'nextDay') => {
+      const label =
+        to == null
+          ? t(`mailbox.${key}None`)
+          : t(`mailbox.${key}`, {
+              date: formatDayShort(listLayout.days[to].dateKey, i18n.language, t),
+            });
+      return (
+        <button
+          onClick={() => to != null && jumpToDay(to)}
+          disabled={to == null}
+          title={label}
+          aria-label={label}
+          data-day-nav={key}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-white/45 hover:bg-white/15 hover:text-white disabled:pointer-events-none disabled:opacity-25"
+        >
+          <Icon size={15} strokeWidth={2.5} />
+        </button>
+      );
+    };
     return (
-      <button
-        onClick={() => {
-          // 畳むと下の行が詰まって見ていた位置がずれるので、貼り付けた見出しからはその日の頭へ戻す
-          if (pinned) rowVirtualizer.scrollToIndex(listLayout.heads[day], { align: 'start' });
-          toggleDay(d.dateKey);
-        }}
+      <div
         onContextMenu={(e) => {
           e.preventDefault();
           setDayMenu({ x: e.clientX, y: e.clientY });
         }}
-        aria-expanded={!folded}
-        title={folded ? t('mailbox.unfoldDay') : t('mailbox.foldDay')}
         data-day-heading={d.dateKey}
         data-folded={folded || undefined}
-        className={`flex h-[30px] w-full items-center gap-2 rounded-md px-2 text-left text-[13px] backdrop-blur-md transition-colors ${
+        className={`flex h-[30px] w-full items-center gap-1 rounded-md pr-1 text-[13px] backdrop-blur-md transition-colors ${
           pinned
             ? // 貼り付けた見出しは下の行の上に重なるので、透けないように濃くする
-              'bg-neutral-900/90 shadow-md shadow-black/40 hover:bg-neutral-800/90'
+              'bg-neutral-900/90 shadow-md shadow-black/40'
             : folded
-              ? 'bg-black/65 ring-1 ring-white/15 hover:bg-black/75'
-              : 'bg-black/40 hover:bg-black/55'
+              ? 'bg-black/65 ring-1 ring-white/15'
+              : 'bg-black/40'
         }`}
       >
-        <Chevron
-          size={16}
-          strokeWidth={folded ? 3 : 2.5}
-          // 矢印は日の色（下にぶら下がるメールの線と同じ色で、どの範囲の見出しかが分かる）
-          className={`shrink-0 ${DAY_TONE_TEXT[tone]}`}
-        />
-        <span className="font-semibold text-white">
-          {formatDayHeading(d.dateKey, i18n.language, t)}
-        </span>
-        <span className="text-white/75">{t('mailbox.dayCount', { count: d.count })}</span>
-        {d.unread > 0 && (
-          <span className="font-semibold text-sky-300">
-            {t('mailbox.dayUnread', { unread: d.unread })}
+        <button
+          onClick={() => {
+            // 畳むと下の行が詰まって見ていた位置がずれるので、貼り付けた見出しからはその日の頭へ戻す
+            if (pinned) rowVirtualizer.scrollToIndex(listLayout.heads[day], { align: 'start' });
+            toggleDay(d.dateKey);
+          }}
+          aria-expanded={!folded}
+          title={folded ? t('mailbox.unfoldDay') : t('mailbox.foldDay')}
+          className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-l-md pl-2 text-left hover:bg-white/[0.06]"
+        >
+          <Chevron
+            size={16}
+            strokeWidth={folded ? 3 : 2.5}
+            // 矢印は日の色（下にぶら下がるメールの線と同じ色で、どの範囲の見出しかが分かる）
+            className={`shrink-0 ${DAY_TONE_TEXT[tone]}`}
+          />
+          <span className="shrink-0 font-semibold text-white">
+            {formatDayHeading(d.dateKey, i18n.language, t)}
           </span>
-        )}
-      </button>
+          {/* 狭いときは件数・未読の側を省略する（日付と ＜ ＞ は削らない） */}
+          <span className="min-w-0 truncate">
+            <span className="text-white/75">{t('mailbox.dayCount', { count: d.count })}</span>
+            {d.unread > 0 && (
+              <span className="ml-2 font-semibold text-sky-300">
+                {t('mailbox.dayUnread', { unread: d.unread })}
+              </span>
+            )}
+          </span>
+        </button>
+        {navBtn(older, ChevronLeft, 'prevDay')}
+        {navBtn(newer, ChevronRight, 'nextDay')}
+      </div>
     );
   };
+
+  // ＜ ＞ で日 day の見出しを一番上へ（つまみで飛ぶのと同じ jumpRow。畳んだ日は開かずに見出しのまま）。
+  // まだ読んでいない日なら、止まったところで読む。
+  const jumpToDay = (day: number) =>
+    rowVirtualizer.scrollToIndex(jumpRow(listLayout, listLayout.starts[day]), { align: 'start' });
 
   // 左の縦の線（その日のメールの範囲。見出しの下にぶら下がる形）。メールの行の字下げの中に置き、
   // 最後のメールでなければ、行の間の隙間へ伸ばしてつなぐ。
@@ -2557,4 +2596,25 @@ function formatDayHeading(
     monthShort: new Intl.DateTimeFormat(lang, { month: 'short' }).format(date),
   };
   return t(y === new Date().getFullYear() ? 'mailbox.dayDate' : 'mailbox.dayDateYear', opts);
+}
+
+/** ＜ ＞ のツールチップの日付（例: 「11月5日」「Nov 5」）。今年でなければ年も付ける。 */
+function formatDayShort(
+  dateKey: string,
+  lang: string,
+  t: (key: string, opts?: Record<string, string | number>) => string
+): string {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  if (Number.isNaN(date.getTime())) return dateKey;
+  const opts = {
+    year: y,
+    month: m,
+    day: d,
+    monthShort: new Intl.DateTimeFormat(lang, { month: 'short' }).format(date),
+  };
+  return t(
+    y === new Date().getFullYear() ? 'mailbox.dayDateShort' : 'mailbox.dayDateShortYear',
+    opts
+  );
 }

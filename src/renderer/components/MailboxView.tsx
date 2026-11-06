@@ -152,9 +152,9 @@ const DAY_TONE_TEXT = ['text-sky-300', 'text-amber-300'] as const;
 // 線が見出しの下にぶら下がる形。サイドバーを最も狭くしても差出人・日時が窮屈にならない幅にする。
 const MAIL_INDENT = 14;
 const DAY_BAR_LEFT = 5;
-// 差出人の表示名の色（senderTone）。日の線（水色・琥珀）・未読の印（水色）・グリーンの葉（emerald-400）と
-// 見分けられる色にする。
-const SENDER_TONE_TEXT = { replied: 'text-green-300', known: 'text-violet-300' } as const;
+// 差出人の表示名の色（senderTone）。返信歴ありは未読の印と同じ水色（利用者の要望。2026-11-06）、
+// 知り合いのみは紫。
+const SENDER_TONE_TEXT = { replied: 'text-sky-300', known: 'text-violet-300' } as const;
 // 同期のあとに読み直す「見えている範囲」の上限（件。畳んだ日をまたいで広がりすぎないように）。
 const VISIBLE_RELOAD_CAP = 3 * PAGE_SIZE;
 

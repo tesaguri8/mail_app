@@ -912,6 +912,8 @@
     "dayCount_one": "{{count}} thread",
     "dayCount_other": "{{count}} threads",
     "dayUnread": "{{unread}} unread",
+    "senderReplied": "Someone you have replied to",
+    "senderKnown": "In your contacts",
     "foldDay": "Collapse this day (right-click to collapse or expand all)",
     "unfoldDay": "Expand this day (right-click to collapse or expand all)",
     "foldOthers": "Collapse all except today",

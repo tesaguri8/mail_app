@@ -103,7 +103,7 @@ import { useCollapsedDays } from '../hooks/useCollapsedDays';
 import { Compose, composeKey, type ComposeTarget } from './Compose';
 import { useTabActiveRef } from '../hooks/useTabActive';
 import { FolderIcons } from './FolderIcons';
-import { MAIL_FILTERS, matchesFilters, matchesNoneOfFilters } from './mailFilters';
+import { MAIL_FILTERS, matchesFilters, matchesNoneOfFilters, senderTone } from './mailFilters';
 import { Tooltip } from './Tooltip';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { Dropdown } from './Dropdown';
@@ -146,6 +146,9 @@ const DAY_HEADING_ESTIMATE = 36;
 // 日の色（左の縦の線・畳んだ日の矢印）。dayTone の 0 / 1。どの背景の写真の上でも見える濃さにする。
 const DAY_TONE_BAR = ['bg-sky-400', 'bg-amber-400'] as const;
 const DAY_TONE_TEXT = ['text-sky-300', 'text-amber-300'] as const;
+// 差出人の表示名の色（senderTone）。日の線（水色・琥珀）・未読の印（水色）・グリーンの葉（emerald-400）と
+// 見分けられる色にする。
+const SENDER_TONE_TEXT = { replied: 'text-green-300', known: 'text-violet-300' } as const;
 // 同期のあとに読み直す「見えている範囲」の上限（件。畳んだ日をまたいで広がりすぎないように）。
 const VISIBLE_RELOAD_CAP = 3 * PAGE_SIZE;
 
@@ -1773,6 +1776,8 @@ export function MailboxView({
           const headerName = (outgoing ? m.to_name : m.from_name)?.trim();
           const name = headerName || addr.name || addr.email || (outgoing ? '—' : '(no sender)');
           const showEmail = addr.email && addr.email !== name;
+          // 差出人の色分け（返信歴あり＝緑・知り合いのみ＝紫）。色だけに頼らないよう title でも言う
+          const tone = senderTone(m, outgoing);
           return (
             <>
               {/* 名前＜メール＞＋送信日時（1行） */}
@@ -1780,7 +1785,19 @@ export function MailboxView({
                 <span className="truncate text-sm font-medium">
                   {!m.is_read && <span className="mr-1 text-sky-300">●</span>}
                   {outgoing && <span className="text-white/40">{t('mailbox.to')}: </span>}
-                  {name}
+                  {tone ? (
+                    <span
+                      className={SENDER_TONE_TEXT[tone]}
+                      title={t(
+                        tone === 'replied' ? 'mailbox.senderReplied' : 'mailbox.senderKnown'
+                      )}
+                      data-sender-tone={tone}
+                    >
+                      {name}
+                    </span>
+                  ) : (
+                    name
+                  )}
                   {showEmail && (
                     <span className="font-normal text-white/40"> &lt;{addr.email}&gt;</span>
                   )}

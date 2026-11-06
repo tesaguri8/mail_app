@@ -8,4 +8,8 @@ export type ThreadDayCount = {
 /**
  * 代表メールの日付（端末ローカルの `YYYY-MM-DD`）。日時の無いスレッドは None（一覧の最後）。
  */
-date_key: string | null, count: number, };
+date_key: string | null, count: number, 
+/**
+ * そのうち未読のあるスレッドの数（一覧の見出しに出す）。
+ */
+unread: number, };

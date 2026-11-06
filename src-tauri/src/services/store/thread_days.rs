@@ -11,7 +11,7 @@ use super::Store;
 use crate::models::ThreadDayCount;
 
 impl Store {
-    /// フォルダ内のスレッドを、代表メールの日付（端末ローカル）ごとに数える。
+    /// フォルダ内のスレッドを、代表メールの日付（端末ローカル）ごとに数える（未読のスレッドの数も）。
     ///
     /// 絞り込み（アカウント・フォルダ・迷惑の隔離・代表フラグ）は `list_threads` と同じ。
     /// 並びは一覧と同じ新しい順で、日時の無いスレッド（`date_key` = None）は最後に 1 つにまとめる。
@@ -26,24 +26,30 @@ impl Store {
         // 参照専用接続（一覧の読み取りと同じく、書き込みに待たされない）。
         let conn = self.read_conn.lock().unwrap();
         let acct = if account_id.is_some() {
-            "AND account_id = ?2"
+            "AND r.account_id = ?2"
         } else {
             ""
         };
         // ORDER BY は一覧の並び（date_ts DESC。NULL は最後）に合わせる。
+        // 未読のスレッドは、一覧の未読（`list_threads` の unread_cnt > 0）と同じ判定で数える。
         let sql = format!(
-            "SELECT date(date_ts, 'unixepoch', 'localtime') AS d, count(*)
-             FROM emails
-             WHERE {fp} {acct} AND is_folder_rep = 1
+            "SELECT date(r.date_ts, 'unixepoch', 'localtime') AS d, count(*),
+                    sum(CASE WHEN r.logical_thread_id IS NULL THEN r.is_read = 0
+                             ELSE EXISTS(SELECT 1 FROM emails t INDEXED BY idx_emails_thread_folder
+                                  WHERE t.logical_thread_id = r.logical_thread_id AND {fp_sub} AND t.is_read = 0) END)
+             FROM emails r
+             WHERE {fp} {acct} AND r.is_folder_rep = 1
              GROUP BY d
              ORDER BY d IS NULL, d DESC",
-            fp = folder_predicate(folder, "", "?1"),
+            fp = folder_predicate(folder, "r.", "?1"),
+            fp_sub = folder_predicate(folder, "t.", "?1"),
         );
         let mut stmt = conn.prepare(&sql)?;
         let map = |r: &rusqlite::Row| -> rusqlite::Result<ThreadDayCount> {
             Ok(ThreadDayCount {
                 date_key: r.get(0)?,
                 count: r.get::<_, i64>(1)? as i32,
+                unread: r.get::<_, i64>(2)? as i32,
             })
         };
         match account_id {
@@ -217,5 +223,37 @@ mod tests {
             .thread_day_counts(Some(1), "trash")
             .unwrap()
             .is_empty());
+    }
+
+    /// 未読のスレッドの数は、一覧の未読（unread_count > 0）と日ごとに一致する。
+    #[test]
+    fn unread_per_day_matches_list() {
+        let store = test_store();
+        seed(&store);
+        // 何通かを未読にする（日をまたいで散らす）。
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE emails SET is_read = 0 WHERE folder = 'inbox' AND id % 3 = 0",
+                [],
+            )
+            .unwrap();
+        for account in [Some(1), None] {
+            let days = store.thread_day_counts(account, "inbox").unwrap();
+            let all = store.list_threads(account, "inbox", 1000, 0).unwrap();
+            let mut offset = 0usize;
+            for d in &days {
+                let n = d.count as usize;
+                let expect = all[offset..offset + n]
+                    .iter()
+                    .filter(|r| r.unread_count > 0)
+                    .count();
+                assert_eq!(d.unread as usize, expect, "{:?}", d.date_key);
+                offset += n;
+            }
+            assert!(days.iter().any(|d| d.unread > 0));
+        }
     }
 }

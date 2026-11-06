@@ -797,6 +797,8 @@ pub struct ThreadDayCount {
     /// 代表メールの日付（端末ローカルの `YYYY-MM-DD`）。日時の無いスレッドは None（一覧の最後）。
     pub date_key: Option<String>,
     pub count: i32,
+    /// そのうち未読のあるスレッドの数（一覧の見出しに出す）。
+    pub unread: i32,
 }
 
 /// 添付ファイル（一覧/ダウンロード状態）。

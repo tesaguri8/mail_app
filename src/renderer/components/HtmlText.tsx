@@ -1,6 +1,7 @@
 import { Fragment, useState, type ReactNode } from 'react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { matchDates } from '../utils/dateparse';
+import { ImageActions, type ImageAction } from './ImageActions';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -82,6 +83,8 @@ type RenderCtx = {
   highlightRe: RegExp | null;
   /** 本文中のインライン画像を右クリックしたとき（保存/開く メニュー用。cid を渡す）。 */
   onInlineImageMenu?: (cid: string, x: number, y: number) => void;
+  /** 本文中のインライン画像に重ねたボタンの「保存 / 開く」（cid を渡す）。 */
+  onInlineImageAction?: (cid: string, action: ImageAction) => void;
 };
 
 /**
@@ -147,7 +150,8 @@ function renderNode(
       const url = ctx.inlineImages[cid];
       if (url) {
         const onMenu = ctx.onInlineImageMenu;
-        return (
+        const onAction = ctx.onInlineImageAction;
+        const img = (
           <img
             key={key}
             src={url}
@@ -164,6 +168,15 @@ function renderNode(
             }
             className="my-2 block max-h-[480px] max-w-full rounded-md"
           />
+        );
+        if (!onAction) return img;
+        // 右クリックに気づけないので、同じ操作を画像の右上のボタンにも出す。
+        // 枠は画像の幅に合わせる（ボタンが画像の外へはみ出さないように）。
+        return (
+          <span key={key} className="group/img relative block w-fit max-w-full">
+            {img}
+            <ImageActions name={alt || cid} onAction={(a) => onAction(cid, a)} />
+          </span>
         );
       }
     }
@@ -532,6 +545,7 @@ export function HtmlText({
   renderEmail,
   renderDate,
   onInlineImageMenu,
+  onInlineImageAction,
   highlight,
 }: {
   html: string;
@@ -545,6 +559,8 @@ export function HtmlText({
   renderDate?: (raw: string) => ReactNode;
   /** インライン画像の右クリック（保存/開く メニューを出す）。cid と画面座標を渡す。 */
   onInlineImageMenu?: (cid: string, x: number, y: number) => void;
+  /** インライン画像に重ねたボタンの「保存 / 開く」。cid を渡す。 */
+  onInlineImageAction?: (cid: string, action: ImageAction) => void;
   /** 検索語（複数）。本文中の一致を <mark> でハイライトする。 */
   highlight?: string[];
 }) {
@@ -561,6 +577,7 @@ export function HtmlText({
     renderEmail,
     renderDate,
     onInlineImageMenu,
+    onInlineImageAction,
     highlightRe: buildHighlightRe(highlight),
   };
   const nodes: ReactNode[] = [];

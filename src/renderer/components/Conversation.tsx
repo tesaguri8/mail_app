@@ -54,6 +54,7 @@ import { hasReadableBody, htmlHasContent } from '../utils/mailBody';
 import { MailBody, makeRenderDate } from './MailBody';
 import { AutoLinkText, HtmlText, hasAutoLinkUrl, inlineCidRefs } from './HtmlText';
 import { AttachedImages, isImage } from './AttachedImages';
+import type { ImageAction } from './ImageActions';
 import { PrintMail } from './PrintMail';
 import { UnseenQuotes } from './UnseenQuotes';
 import { ContextMenu, type MenuItem } from './ContextMenu';
@@ -188,6 +189,9 @@ function Bubble({
       toast(t('mailbox.attachmentOpenFailed', { reason: attachmentErrorReason(e, t) }), 'error');
     }
   };
+  // 画像に重ねたボタン（保存 / 開く）。右クリックのメニューと同じ動きにする。
+  const imageAction = (a: AttachmentSummary, action: ImageAction) =>
+    void (action === 'save' ? saveOne(a) : openOne(a));
   const saveAll = async (items: AttachmentSummary[]) => {
     const result = await saveAllAttachments(items.map(attRef), t('activity.downloadingAttachment'));
     if (result === null) return; // フォルダ選択のキャンセル
@@ -766,6 +770,10 @@ function Bubble({
                     const att = inlineAtts[cid];
                     if (att) setImgMenu({ x, y, att });
                   }}
+                  onInlineImageAction={(cid, action) => {
+                    const att = inlineAtts[cid];
+                    if (att) imageAction(att, action);
+                  }}
                 />
               ) : body ? (
                 <AutoLinkText text={body} highlight={highlight} renderDate={renderDate} />
@@ -775,7 +783,7 @@ function Bubble({
                 <span className="text-white/40">{t('mailbox.noBody')}</span>
               ) : null}
 
-              {/* 画像添付をバブルに並べる（保存は右クリック）。本文の有無に関わらず出すので、
+              {/* 画像添付をバブルに並べる（保存・開くは画像の右上のボタンと右クリック）。本文の有無に関わらず出すので、
                   本文のあるメールでも画像が付いていることに気づける。チャットの流れを埋めない
                   ようサムネイル表示にし、クリックで実寸に広げる。
                   除くのは「本文に **実際に表示できた** 埋め込み画像」だけ。cid: で参照されて
@@ -785,6 +793,7 @@ function Bubble({
                 <AttachedImages
                   images={shownImages}
                   onMenu={(att, x, y) => setImgMenu({ x, y, att })}
+                  onAction={imageAction}
                   compact
                 />
               )}

@@ -954,6 +954,8 @@
     "attachmentBusy": "Working…",
     "showImages": "Show {{count}} image(s)",
     "imageUnavailable": "Cannot display image",
+    "imageSave": "Save image",
+    "imageOpen": "Open image",
     "attachmentSaved": "Saved",
     "attachmentSavedN": "Saved {{count}} files",
     "attachmentTimeout": "The server did not respond. Please try again in a moment.",

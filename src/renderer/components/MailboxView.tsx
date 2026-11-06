@@ -416,9 +416,7 @@ export function MailboxView({
   // 表示するフォルダ/グループ（受信箱以外は後続実装）
   const [folder, setFolder] = useState('inbox');
   // 一覧の日の畳み（起動時・選択の切り替えでは全部開いて始める。覚えない。docs/MAIL_LIST_TIMELINE.md §6）。
-  const [collapsed, setCollapsed] = useDayFold(
-    selected == null ? null : `${selected}.${folder}`
-  );
+  const [collapsed, setCollapsed] = useDayFold(selected == null ? null : `${selected}.${folder}`);
   // リスト絞り込みトグル
   const [filters, setFilters] = useState<Set<string>>(new Set());
   // トグル絞り込みの反転（選択条件に「一致しない」ものを表示）。不要メールの一括選択に使う。

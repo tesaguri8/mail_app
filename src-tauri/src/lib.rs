@@ -80,6 +80,7 @@ pub fn run() {
             commands::mail_list,
             commands::thread_list,
             commands::thread_day_counts,
+            commands::thread_day_unread,
             commands::mail_search,
             commands::mail_get,
             commands::thread_view,

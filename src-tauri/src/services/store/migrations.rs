@@ -321,6 +321,12 @@ const MIGRATIONS: &[Migration] = &[
         version: 69,
         sql: include_str!("migrations/0069_quote_guessed_from.sql"),
     },
+    Migration {
+        // 70 は未読のメールだけの部分索引（メール一覧の日の見出しの未読の数を、一覧の表示を
+        // 待たせずに引くため。docs/MAIL_LIST_TIMELINE.md §6）。
+        version: 70,
+        sql: include_str!("migrations/0070_unread_index.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
@@ -455,7 +461,10 @@ mod tests {
                -- 本文列（0001 から存在）。0054(空本文の修復)が動くよう用意する。
                body_plain TEXT, clean_body TEXT,
                -- 並び替え用の日時（0022 から存在）。0065(日時の索引)が動くよう用意する。
-               date_ts INTEGER);
+               date_ts INTEGER,
+               -- 既読・迷惑・アカウント・論理スレッド（0001 から存在）。0070(未読の部分索引)が動くよう用意する。
+               is_read INTEGER DEFAULT 0, is_junk INTEGER DEFAULT 0, account_id INTEGER,
+               logical_thread_id INTEGER);
              ALTER TABLE emails ADD COLUMN reply_to TEXT;
              CREATE TABLE folder_sync (
                account_id INTEGER NOT NULL, folder TEXT NOT NULL,

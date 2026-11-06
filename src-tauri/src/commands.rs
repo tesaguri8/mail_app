@@ -11,7 +11,7 @@ use crate::models::{
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSenderConflict, SpamSettings, SpamVerdict,
     StorageInfo, SureMergePreview, SureMergeResult, SyncListed, SyncProgress,
-    SyncResult, TagSummary, ThreadDayCount, ThreadListItem, ThreadView, UnlinkedOrgName,
+    SyncResult, TagSummary, ThreadDayCount, ThreadDayUnread, ThreadListItem, ThreadView, UnlinkedOrgName,
 };
 use crate::models::{AccountSyncStatus, SyncErrorKind};
 use crate::services::attachment_fetch;
@@ -1067,6 +1067,19 @@ pub fn thread_day_counts(
 ) -> Result<Vec<ThreadDayCount>, String> {
     store
         .thread_day_counts(account_id, &folder)
+        .map_err(|e| e.to_string())
+}
+
+/// フォルダ内の未読のあるスレッドを、代表メールの日付（端末ローカル）ごとに数える（一覧の日の見出し用）。
+/// 一覧の表示を待たせないよう、`thread_day_counts` とは別に後から引く。docs/MAIL_LIST_TIMELINE.md §6。
+#[tauri::command]
+pub fn thread_day_unread(
+    store: State<Store>,
+    account_id: Option<i64>,
+    folder: String,
+) -> Result<Vec<ThreadDayUnread>, String> {
+    store
+        .thread_day_unread(account_id, &folder)
         .map_err(|e| e.to_string())
 }
 

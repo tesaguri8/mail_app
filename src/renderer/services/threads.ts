@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { ThreadView } from '@bindings/ThreadView';
 import type { ThreadListItem } from '@bindings/ThreadListItem';
 import type { ThreadDayCount } from '@bindings/ThreadDayCount';
+import type { ThreadDayUnread } from '@bindings/ThreadDayUnread';
 
 // スレッド単位のメール一覧（代表＝フォルダ内最新＋「N通」件数）。docs/THREADING.md §5。
 // accountId が null なら全アカウント横断。offset でページング。
@@ -46,3 +47,8 @@ export const threadRebuild = (accountId: number) => invoke<void>('thread_rebuild
 // 並びと絞り込みは threadList と同じで、累計がそのまま一覧の offset になる。docs/MAIL_LIST_TIMELINE.md。
 export const threadDayCounts = (accountId: number | null, folder: string) =>
   invoke<ThreadDayCount[]>('thread_day_counts', { accountId: accountId ?? null, folder });
+
+// 日ごとの未読のあるスレッドの数（一覧の日の見出し用・未読のある日だけ）。一覧を出したあとで引く
+// （件数と一緒に待つと一覧の表示が遅れる）。docs/MAIL_LIST_TIMELINE.md §6。
+export const threadDayUnread = (accountId: number | null, folder: string) =>
+  invoke<ThreadDayUnread[]>('thread_day_unread', { accountId: accountId ?? null, folder });

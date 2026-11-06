@@ -3,6 +3,10 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import {
   CalendarPlus,
+  ChevronDown,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Columns2,
   FlipHorizontal2,
   Gem,
@@ -61,23 +65,37 @@ import { MailBody } from './MailBody';
 import { ContactEditor, type EditorRequest } from './ContactEditor';
 import { CalendarPanel, type CalendarPanelInitial } from './CalendarPanel';
 import { Conversation, type ConversationHandlers } from './Conversation';
-import { threadList, threadDayCounts } from '../services/threads';
+import { threadList, threadDayCounts, threadDayUnread } from '../services/threads';
 import {
   PAGE_SIZE,
-  dropFromDays,
+  dayLayout,
+  daysOfRows,
   emptySlots,
   fillSlots,
+  foldAllBut,
+  foldedDayOf,
   indexOfId,
+  jumpRow,
   loadedPrefix,
   loadedRows,
   pagesToLoad,
+  retallyDays,
+  rowAt as layoutRowAt,
+  rowOfSlot,
+  shownRows,
+  slotAtRow,
+  slotSegments,
   toDayCounts,
   totalOf,
+  unreadOf,
   updateLoaded,
+  withUnread,
+  type ListDay,
   type Slots,
 } from './mailListWindow';
 import { TimelineScrubber } from './timeline/TimelineScrubber';
-import type { DayCount } from './timeline/dayCounts';
+import { localDayKey } from './timeline/dayCounts';
+import { useCollapsedDays } from '../hooks/useCollapsedDays';
 import { Compose, composeKey, type ComposeTarget } from './Compose';
 import { useTabActiveRef } from '../hooks/useTabActive';
 import { FolderIcons } from './FolderIcons';
@@ -119,6 +137,10 @@ const ROW_ESTIMATE = 92;
 const ROW_GAP = 4;
 /** スクロールが止まったとみなすまでの待ち（ms）。止まった場所の前後だけを読む。 */
 const RANGE_SETTLE_MS = 80;
+// 日の見出しの行の高さの見積もり（px。描いてから測る）。
+const DAY_HEADING_ESTIMATE = 26;
+// 同期のあとに読み直す「見えている範囲」の上限（件。畳んだ日をまたいで広がりすぎないように）。
+const VISIBLE_RELOAD_CAP = 3 * PAGE_SIZE;
 
 /** 検索結果（メッセージ単位）を、一覧（スレッド単位）と同じ行の形へ写像する（1 通=1 スレッド相当）。 */
 function searchRowToThread(m: MailSummary): ThreadListItem {
@@ -218,7 +240,7 @@ export function MailboxView({
   // （null は未読み込み。日付のつまみで飛んだ先だけを読む。docs/MAIL_LIST_TIMELINE.md）。
   const [slots, setSlots] = useState<Slots>([]);
   // 日ごとのスレッド数（一覧の並び順。累計＝一覧の offset）。日付のつまみの元。
-  const [days, setDays] = useState<DayCount[]>([]);
+  const [days, setDays] = useState<ListDay[]>([]);
   // 読み込んである行（並び順のまま）。選択・操作・会話の解決はここから引く。
   const mails = useMemo(() => loadedRows(slots), [slots]);
   // 最新の枠（同期イベントの購読は再購読しないため、クロージャの古い値を避けて ref で参照する）。
@@ -372,6 +394,10 @@ export function MailboxView({
   }, [compose]);
   // 表示するフォルダ/グループ（受信箱以外は後続実装）
   const [folder, setFolder] = useState('inbox');
+  // 一覧で畳んだ日（アカウント・フォルダの選択ごとに覚える。docs/MAIL_LIST_TIMELINE.md §6）。
+  const [collapsed, setCollapsed] = useCollapsedDays(
+    selected == null ? null : `${selected}.${folder}`
+  );
   // リスト絞り込みトグル
   const [filters, setFilters] = useState<Set<string>>(new Set());
   // トグル絞り込みの反転（選択条件に「一致しない」ものを表示）。不要メールの一括選択に使う。
@@ -639,9 +665,20 @@ export function MailboxView({
     ])
       .then(([counts, rows]) => {
         if (loadTokenRef.current !== token) return;
-        setDays(toDayCounts(counts));
+        // 見出しの未読は、一覧を出したあとで引いて足す（下）。読み直しの間は前の数を出しておく
+        // （フォルダ・アカウントの切り替えでは前の数は別物なので出さない）。
+        setDays((prev) =>
+          reset ? toDayCounts(counts) : withUnread(toDayCounts(counts), unreadOf(prev))
+        );
         setSlots(fillSlots(emptySlots(totalOf(counts)), start, rows));
         if (reset) listRef.current?.scrollTo({ top: 0 });
+        // 未読の数は一覧の表示を待たせない（件数と一緒に待つと、その分だけ一覧が遅れる）。
+        // 投げっぱなし: 読み直しが重なったら、古い結果は token で捨てる。
+        threadDayUnread(queryAccount, folder)
+          .then((unread) => {
+            if (loadTokenRef.current === token) setDays((prev) => withUnread(prev, unread));
+          })
+          .catch(() => undefined);
       })
       .catch(() => undefined);
   };
@@ -694,6 +731,7 @@ export function MailboxView({
     folder,
     selected,
     timelineMode,
+    collapsed,
   ]);
 
   useEffect(() => {
@@ -739,10 +777,12 @@ export function MailboxView({
   // 一覧から外れた行（削除・移動）は枠から抜いて詰め、日ごとの件数も減らす（DB 側でも消えるので、
   // 後ろの offset もそのまま揃う）。
   const updateLists = (fn: (list: ThreadListItem[]) => ThreadListItem[]) => {
-    const { slots: next, removed } = updateLoaded(slotsRef.current, fn);
+    const before = slotsRef.current;
+    const { slots: next, removed } = updateLoaded(before, fn);
     slotsRef.current = next;
     setSlots(next);
-    if (removed.length > 0) setDays((prev) => dropFromDays(prev, removed));
+    // 日ごとの件数（削除・移動）と未読の数（既読・未読の切り替え）を、見出しに合わせて直す
+    setDays((prev) => retallyDays(prev, before, next, removed));
     setSearchResults(fn);
   };
 
@@ -756,7 +796,11 @@ export function MailboxView({
     activeReadRef.current = null;
     const mark = (prev: ThreadListItem[]) =>
       prev.map((m) => (m.id === t.rowId ? { ...m, is_read: true, unread_count: 0 } : m));
-    setSlots((prev) => updateLoaded(prev, mark).slots);
+    const before = slotsRef.current;
+    const next = updateLoaded(before, mark).slots;
+    slotsRef.current = next;
+    setSlots(next);
+    setDays((prev) => retallyDays(prev, before, next, []));
     setSearchResults(mark);
     mailSetRead(t.ids, true).catch(() => undefined);
   }, []);
@@ -1308,22 +1352,43 @@ export function MailboxView({
         : matchesFilters(m, filters);
     return togglePass && matchesDate(m.date, dateFilter) && matchesTags(m.tag_ids, tagFilter);
   };
-  // 検索モードでは FTS 結果を、通常は読み込み済み一覧を対象に、絞り込みを重ねて表示する。
-  // 絞り込み中は先頭から途切れずに読んだ部分だけ（上から順に読み足す）。
-  const visibleMails = (
-    searchMode ? searchResults : timelineMode ? mails : mails.slice(0, loadedPrefix(slots))
-  ).filter(passesFilters);
+  // 検索モードでは FTS 結果を、絞り込み中は読み込み済み一覧を対象に、絞り込みを重ねて表示する。
+  // 絞り込み中は先頭から途切れずに読んだ部分だけ（上から順に読み足す）。つまみのときは枠をそのまま並べる。
+  const filteredRows = timelineMode
+    ? []
+    : (searchMode ? searchResults : mails.slice(0, loadedPrefix(slots))).filter(passesFilters);
 
-  // 一覧の仮想化。つまみのとき（絞り込み無し）は全期間ぶんの枠を並べ、未読み込みの位置は
-  // プレースホルダにする。行の高さは揃わない（本文 1〜2 行・タグ）ので、描いてから測る。
-  const rowCount = timelineMode ? slots.length : visibleMails.length;
-  const rowAt = (i: number): ThreadListItem | null =>
-    (timelineMode ? slots[i] : visibleMails[i]) ?? null;
+  // 日の見出しと畳み（docs/MAIL_LIST_TIMELINE.md §6。畳んだ日は collapsed）。
+  // つまみのときは DB の日ごとの件数、絞り込み中は手元の行を日ごとに数える。検索は関連順なので見出しを置かない。
+  const timelineLayout = useMemo(
+    () => dayLayout(days, collapsed, slots.length),
+    [days, collapsed, slots.length]
+  );
+  const listLayout = timelineMode
+    ? timelineLayout
+    : dayLayout(searchMode ? [] : daysOfRows(filteredRows), collapsed, filteredRows.length);
+  const layoutRef = useRef(listLayout);
+  layoutRef.current = listLayout;
+  // 見えている（開いている日の）読み込み済みの行。矢印キー・範囲選択・全選択はここから引く。
+  const timelineShown = useMemo(() => shownRows(slots, timelineLayout), [slots, timelineLayout]);
+  const visibleMails = timelineMode ? timelineShown : shownRows(filteredRows, listLayout);
+
+  // 一覧の仮想化。行は「日の見出し ＋ 開いている日の枠」。つまみのとき（絞り込み無し）は全期間ぶんの
+  // 枠を並べ、未読み込みの位置はプレースホルダにする。行の高さは揃わない（本文 1〜2 行・タグ）ので、
+  // 描いてから測る。畳んだ日の枠は行の数にも位置にも入らない。
+  const rowCount = listLayout.rows;
+  const slotRow = (slot: number): ThreadListItem | null =>
+    (timelineMode ? slots[slot] : filteredRows[slot]) ?? null;
   const rowVirtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => listRef.current,
-    estimateSize: () => ROW_ESTIMATE,
-    getItemKey: (i) => rowAt(i)?.id ?? `placeholder-${i}`,
+    estimateSize: (i) =>
+      layoutRowAt(layoutRef.current, i).kind === 'day' ? DAY_HEADING_ESTIMATE : ROW_ESTIMATE,
+    getItemKey: (i) => {
+      const r = layoutRowAt(layoutRef.current, i);
+      if (r.kind === 'day') return `day-${layoutRef.current.days[r.day].dateKey}`;
+      return slotRow(r.slot)?.id ?? `placeholder-${r.slot}`;
+    },
     gap: ROW_GAP,
     paddingStart: 8,
     paddingEnd: 8,
@@ -1332,6 +1397,7 @@ export function MailboxView({
 
   // スクロールが止まった位置で、見えている行の前後（上下に 1 画面分ずつ）を読む。
   // つまみで一気に飛んでも、通り過ぎた場所は読まず、止まった場所だけ読む（Photosky §2 と同じ）。
+  // 畳んだ日の枠は読みに行かない（開いたときに、そこで止まった扱いで読む）。
   useEffect(() => {
     const el = listRef.current;
     if (!el || !timelineMode) return;
@@ -1347,9 +1413,13 @@ export function MailboxView({
       const first = Math.min(...shown);
       const last = Math.max(...shown);
       const span = last - first + 1;
-      const range: [number, number] = [Math.max(0, first - span), last + 1 + span];
-      visibleRangeRef.current = range;
-      requestRange(range[0], range[1]);
+      const segments = slotSegments(timelineLayout, first - span, last + 1 + span);
+      if (segments.length === 0) return;
+      // 読み直し（同期のあと）で読む範囲。畳んだ日をまたいで広がりすぎないよう、頭打ちにする
+      const lo = segments[0][0];
+      const hi = Math.min(segments[segments.length - 1][1], lo + VISIBLE_RELOAD_CAP);
+      visibleRangeRef.current = [lo, hi];
+      for (const [s, e] of segments) requestRange(s, e);
     };
     const onScroll = () => {
       if (timer) clearTimeout(timer);
@@ -1363,33 +1433,111 @@ export function MailboxView({
     };
     // requestRange は毎回作り直されるが、中身は ref と selected/folder だけを見る。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rowVirtualizer, timelineMode, slots]);
+  }, [rowVirtualizer, timelineMode, slots, timelineLayout]);
+
+  // 畳んだ日を開いてから寄せる先（開いた並びが描かれてから寄せる）。align は scrollToIndex のもの。
+  const pendingScrollRef = useRef<{ slot: number; align: 'start' | 'auto' } | null>(null);
+  // 枠 slot の行へ寄せる。畳まれた日なら、その日を開いてから寄せる。
+  const scrollToSlot = useCallback(
+    (slot: number, align: 'start' | 'auto') => {
+      const l = layoutRef.current;
+      const day = foldedDayOf(l, slot);
+      if (day) {
+        pendingScrollRef.current = { slot, align };
+        setCollapsed((prev) => {
+          const next = new Set(prev);
+          next.delete(day);
+          return next;
+        });
+        return;
+      }
+      const row = align === 'start' ? jumpRow(l, slot) : rowOfSlot(l, slot);
+      if (row != null) rowVirtualizer.scrollToIndex(row, { align });
+    },
+    [rowVirtualizer, setCollapsed]
+  );
+  useEffect(() => {
+    const p = pendingScrollRef.current;
+    if (!p || foldedDayOf(listLayout, p.slot)) return;
+    pendingScrollRef.current = null;
+    scrollToSlot(p.slot, p.align);
+  }, [listLayout, scrollToSlot]);
 
   // 開いたメッセージをリスト内でフォーカス（スクロール。仮想化しているので、行の番号から寄せる）。
+  // 畳んだ日にあれば（ホームの新着から開いたなど）、その日を開く。
   useEffect(() => {
     if (opened?.id == null) return;
     const i = timelineMode
       ? indexOfId(slotsRef.current, opened.id)
-      : visibleMails.findIndex((m) => m.id === opened.id);
-    if (i >= 0) rowVirtualizer.scrollToIndex(i, { align: 'auto' });
+      : filteredRows.findIndex((m) => m.id === opened.id);
+    if (i >= 0) scrollToSlot(i, 'auto');
     // 開いたときだけ寄せる（一覧の更新のたびに引き戻さない）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opened?.id]);
 
-  // 日付のつまみ: offset 件目（＝枠の番号）の行を一番上へ。読み込んでいなければ、止まったところで読む。
+  // 日付のつまみ: offset 件目（＝枠の番号）の行を一番上へ。日の最初なら見出しを一番上に置く。
+  // 畳んだ日なら開いてから飛ぶ。読み込んでいなければ、止まったところで読む。
   const jumpToOffset = useCallback(
-    (offset: number) => rowVirtualizer.scrollToIndex(offset, { align: 'start' }),
-    [rowVirtualizer]
+    (offset: number) => scrollToSlot(offset, 'start'),
+    [scrollToSlot]
   );
-  // いま一番上に見えている行が何件目か（つまみの印）。
+  // いま一番上に見えている行が何件目か（つまみの印。見出しはその日の最初の枠）。
   const listScrollTop = rowVirtualizer.scrollOffset ?? 0;
-  const viewOffset =
-    rowVirtualizer.getVirtualItems().find((v) => v.end > listScrollTop)?.index ?? null;
+  const topRow = rowVirtualizer.getVirtualItems().find((v) => v.end > listScrollTop)?.index;
+  const viewOffset = topRow == null ? null : slotAtRow(listLayout, topRow);
   // つまみを出すのは、絞り込み無し・日付の分かるスレッドがある・一覧がスクロールできるとき。
+  // 畳んだ日があれば、一覧が画面に収まっていても出す（畳んだ日へ飛べるように）。
   const showScrubber =
     timelineMode &&
     days.length > 0 &&
-    rowVirtualizer.getTotalSize() > (rowVirtualizer.scrollRect?.height ?? Infinity);
+    (rowVirtualizer.getTotalSize() > (rowVirtualizer.scrollRect?.height ?? Infinity) ||
+      listLayout.folded.some(Boolean));
+
+  // 日の見出し: 押すと開閉。右クリックで「今日以外を全部畳む」「全部開く」。
+  const toggleDay = (dateKey: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(dateKey)) next.delete(dateKey);
+      else next.add(dateKey);
+      return next;
+    });
+  const foldOthers = () =>
+    setCollapsed(() => foldAllBut(listLayout.days, localDayKey(new Date().toISOString())));
+  const unfoldAll = () => setCollapsed(() => new Set());
+  const [dayMenu, setDayMenu] = useState<{ x: number; y: number } | null>(null);
+  const dayMenuItems: MenuItem[] = [
+    {
+      key: 'foldOthers',
+      label: t('mailbox.foldOthers'),
+      Icon: ChevronsDownUp,
+      onClick: foldOthers,
+    },
+    { key: 'unfoldAll', label: t('mailbox.unfoldAll'), Icon: ChevronsUpDown, onClick: unfoldAll },
+  ];
+  const renderDayHeading = (d: ListDay, folded: boolean) => {
+    const label = formatDayHeading(d.dateKey, i18n.language, t);
+    const counts =
+      d.unread > 0
+        ? t('mailbox.dayCountUnread', { count: d.count, unread: d.unread })
+        : t('mailbox.dayCount', { count: d.count });
+    return (
+      <button
+        onClick={() => toggleDay(d.dateKey)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setDayMenu({ x: e.clientX, y: e.clientY });
+        }}
+        aria-expanded={!folded}
+        title={folded ? t('mailbox.unfoldDay') : t('mailbox.foldDay')}
+        data-day-heading={d.dateKey}
+        className="flex w-full items-center gap-1.5 rounded-md px-1 pb-0.5 pt-2 text-left text-xs text-white/55 hover:bg-white/[0.04] hover:text-white/85"
+      >
+        {folded ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+        <span className="font-medium text-white/80">{label}</span>
+        <span className="text-white/40">{counts}</span>
+      </button>
+    );
+  };
 
   if (accounts.length === 0) {
     return <div className="p-8 text-white/60">{t('mailbox.addInSettings')}</div>;
@@ -1821,7 +1969,21 @@ export function MailboxView({
           ) : (
             <ul className="relative w-full" style={{ height: rowVirtualizer.getTotalSize() }}>
               {rowVirtualizer.getVirtualItems().map((v) => {
-                const m = rowAt(v.index);
+                const r = layoutRowAt(listLayout, v.index);
+                if (r.kind === 'day') {
+                  return (
+                    <li
+                      key={v.key}
+                      data-index={v.index}
+                      ref={rowVirtualizer.measureElement}
+                      className="absolute left-2 right-2 top-0"
+                      style={{ transform: `translateY(${v.start}px)` }}
+                    >
+                      {renderDayHeading(listLayout.days[r.day], listLayout.folded[r.day])}
+                    </li>
+                  );
+                }
+                const m = slotRow(r.slot);
                 return (
                   <li
                     key={v.key}
@@ -2231,6 +2393,15 @@ export function MailboxView({
         </div>
       )}
 
+      {dayMenu && (
+        <ContextMenu
+          x={dayMenu.x}
+          y={dayMenu.y}
+          items={dayMenuItems}
+          onClose={() => setDayMenu(null)}
+        />
+      )}
+
       {menu && (
         <ContextMenu
           x={menu.x}
@@ -2256,4 +2427,26 @@ export function MailboxView({
       )}
     </div>
   );
+}
+
+/**
+ * 一覧の日の見出しの日付（例: 「11月6日（木）」「Thu, Nov 6」）。今年でなければ年も付ける。
+ * dateKey は端末ローカルの `YYYY-MM-DD`。
+ */
+function formatDayHeading(
+  dateKey: string,
+  lang: string,
+  t: (key: string, opts?: Record<string, string | number>) => string
+): string {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  if (Number.isNaN(date.getTime())) return dateKey;
+  const opts = {
+    year: y,
+    month: m,
+    day: d,
+    weekday: new Intl.DateTimeFormat(lang, { weekday: 'short' }).format(date),
+    monthShort: new Intl.DateTimeFormat(lang, { month: 'short' }).format(date),
+  };
+  return t(y === new Date().getFullYear() ? 'mailbox.dayDate' : 'mailbox.dayDateYear', opts);
 }

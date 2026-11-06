@@ -322,7 +322,7 @@ describe('dayTone / rowBar（左の縦の線）', () => {
     expect(dayTone('2026-11-01')).not.toBe(dayTone('2026-10-31'));
     expect(dayTone('2026-01-01')).not.toBe(dayTone('2025-12-31'));
   });
-  it('線は見出しからその日の最後の行まで。最後の行（畳んだ日は見出し）で切る', () => {
+  it('線はその日のメールの行だけ（見出しには引かない）。最初のメールで始め、最後のメールで切る', () => {
     const days: ListDay[] = [
       { dateKey: '2026-11-06', count: 2, unread: 0 },
       { dateKey: '2026-11-05', count: 3, unread: 0 },
@@ -331,15 +331,16 @@ describe('dayTone / rowBar（左の縦の線）', () => {
     // 行: d0 s0 s1 | d1(畳み) | d2 s5
     const l = dayLayout(days, new Set(['2026-11-05']), 6);
     const bars = Array.from({ length: l.rows }, (_, i) => rowBar(l, i));
-    expect(bars.map((b) => b?.last)).toEqual([false, false, true, true, false, true]);
-    expect(bars.map((b) => b?.tone)).toEqual([
-      dayTone('2026-11-06'),
-      dayTone('2026-11-06'),
-      dayTone('2026-11-06'),
-      dayTone('2026-11-05'),
-      dayTone('2026-11-04'),
-      dayTone('2026-11-04'),
+    expect(bars.map((b) => (b ? `${b.first ? 'F' : '-'}${b.last ? 'L' : '-'}` : null))).toEqual([
+      null,
+      'F-',
+      '-L',
+      null,
+      null,
+      'FL',
     ]);
+    expect(bars[1]?.tone).toBe(dayTone('2026-11-06'));
+    expect(bars[5]?.tone).toBe(dayTone('2026-11-04'));
     expect(rowBar(dayLayout([], new Set(), 3), 0)).toBeNull();
   });
 });

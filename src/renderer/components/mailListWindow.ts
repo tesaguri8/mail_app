@@ -407,14 +407,23 @@ export function dayTone(dateKey: string): 0 | 1 {
 }
 
 /**
- * 行 i の左の縦の線: 色と、その日の最後の行か（最後の行では線を次の行へつながず、日ごとに切る）。
- * 見出しの無い並びなら null（線を引かない）。
+ * 行 i の左の縦の線（その日のメールの範囲。見出しの下にぶら下がる形）: 色と、その日の最初・最後の
+ * メールの行か（最初の行で線を始め、最後の行で切る。間の隙間はつなぐ）。
+ * 見出しの行・見出しの無い並びなら null（線を引かない）。
  */
-export function rowBar(layout: DayLayout, i: number): { tone: 0 | 1; last: boolean } | null {
+export function rowBar(
+  layout: DayLayout,
+  i: number
+): { tone: 0 | 1; first: boolean; last: boolean } | null {
   if (layout.heads.length === 0) return null;
   const d = Math.max(0, lastAtOrBelow(layout.heads, i));
-  const lastRow = layout.heads[d] + (layout.folded[d] ? 0 : layout.days[d].count);
-  return { tone: dayTone(layout.days[d].dateKey), last: i === lastRow };
+  const head = layout.heads[d];
+  if (i === head) return null;
+  return {
+    tone: dayTone(layout.days[d].dateKey),
+    first: i === head + 1,
+    last: i === head + layout.days[d].count,
+  };
 }
 
 /** 「keep 以外を全部畳む」ときの畳む日の集合。 */

@@ -146,6 +146,10 @@ const DAY_HEADING_ESTIMATE = 36;
 // 日の色（左の縦の線・畳んだ日の矢印）。dayTone の 0 / 1。どの背景の写真の上でも見える濃さにする。
 const DAY_TONE_BAR = ['bg-sky-400', 'bg-amber-400'] as const;
 const DAY_TONE_TEXT = ['text-sky-300', 'text-amber-300'] as const;
+// メールの行の字下げ（見出しの左端から px）と、その中の日の線の位置（見出しの左端から px）。
+// 線が見出しの下にぶら下がる形。サイドバーを最も狭くしても差出人・日時が窮屈にならない幅にする。
+const MAIL_INDENT = 14;
+const DAY_BAR_LEFT = 5;
 // 差出人の表示名の色（senderTone）。日の線（水色・琥珀）・未読の印（水色）・グリーンの葉（emerald-400）と
 // 見分けられる色にする。
 const SENDER_TONE_TEXT = { replied: 'text-green-300', known: 'text-violet-300' } as const;
@@ -1525,7 +1529,7 @@ export function MailboxView({
     },
     { key: 'unfoldAll', label: t('mailbox.unfoldAll'), Icon: ChevronsUpDown, onClick: unfoldAll },
   ];
-  // 見出しの帯。畳んだ日は帯を濃くし、矢印を日の色で太く出す（一目で畳まれていると分かるように）。
+  // 見出しの帯。畳んだ日は帯を濃くし、矢印を太く出す（一目で畳まれていると分かるように）。
   // pinned は一覧の上に貼り付けた見出し（押して畳んだら、その日の見出しの位置へ戻す）。
   const renderDayHeading = (day: number, pinned = false) => {
     const d = listLayout.days[day];
@@ -1559,7 +1563,8 @@ export function MailboxView({
         <Chevron
           size={16}
           strokeWidth={folded ? 3 : 2.5}
-          className={`shrink-0 ${folded ? DAY_TONE_TEXT[tone] : 'text-white/85'}`}
+          // 矢印は日の色（下にぶら下がるメールの線と同じ色で、どの範囲の見出しかが分かる）
+          className={`shrink-0 ${DAY_TONE_TEXT[tone]}`}
         />
         <span className="font-semibold text-white">
           {formatDayHeading(d.dateKey, i18n.language, t)}
@@ -1574,14 +1579,18 @@ export function MailboxView({
     );
   };
 
-  // 左の縦の線（その日の見出しから最後の行まで。日ごとに切る）。最後の行でなければ、行の間の隙間へ伸ばす。
-  const renderDayBar = (bar: { tone: 0 | 1; last: boolean }, first: boolean) => (
+  // 左の縦の線（その日のメールの範囲。見出しの下にぶら下がる形）。メールの行の字下げの中に置き、
+  // 最後のメールでなければ、行の間の隙間へ伸ばしてつなぐ。
+  const renderDayBar = (bar: { tone: 0 | 1; first: boolean; last: boolean }) => (
     <span
       aria-hidden
-      className={`absolute -left-3 top-0 w-[3px] ${DAY_TONE_BAR[bar.tone]} ${
-        first ? 'rounded-t-full' : ''
+      className={`absolute top-0 w-[3px] ${DAY_TONE_BAR[bar.tone]} ${
+        bar.first ? 'rounded-t-full' : ''
       } ${bar.last ? 'bottom-0 rounded-b-full' : ''}`}
-      style={bar.last ? undefined : { bottom: -ROW_GAP }}
+      style={{
+        left: DAY_BAR_LEFT - MAIL_INDENT,
+        bottom: bar.last ? undefined : -ROW_GAP,
+      }}
     />
   );
 
@@ -2049,22 +2058,21 @@ export function MailboxView({
                 {rowVirtualizer.getVirtualItems().map((v) => {
                   const r = layoutRowAt(listLayout, v.index);
                   const bar = rowBar(listLayout, v.index);
-                  // 日の線があるときは、線の分だけ行を右へ寄せる
-                  const liCls = `absolute ${bar ? 'left-4' : 'left-2'} right-2 top-0`;
                   if (r.kind === 'day') {
                     return (
                       <li
                         key={v.key}
                         data-index={v.index}
                         ref={rowVirtualizer.measureElement}
-                        className={`${liCls} pt-1.5`}
+                        className="absolute left-2 right-2 top-0 pt-1.5"
                         style={{ transform: `translateY(${v.start}px)` }}
                       >
-                        {bar && renderDayBar(bar, true)}
                         {renderDayHeading(r.day)}
                       </li>
                     );
                   }
+                  // 日の見出しがある並びでは、メールの行を見出しより字下げし、その中に日の線を置く
+                  const liCls = `absolute right-2 top-0 ${bar ? '' : 'left-2'}`;
                   const m = slotRow(r.slot);
                   return (
                     <li
@@ -2072,9 +2080,12 @@ export function MailboxView({
                       data-index={v.index}
                       ref={rowVirtualizer.measureElement}
                       className={liCls}
-                      style={{ transform: `translateY(${v.start}px)` }}
+                      style={{
+                        transform: `translateY(${v.start}px)`,
+                        left: bar ? 8 + MAIL_INDENT : undefined,
+                      }}
                     >
-                      {bar && renderDayBar(bar, false)}
+                      {bar && renderDayBar(bar)}
                       {m ? (
                         renderRow(m)
                       ) : (
@@ -2100,17 +2111,13 @@ export function MailboxView({
           {showPinned && pinnedDay != null && (
             <div
               ref={pinnedRef}
-              className="absolute left-4 top-0 z-10 pt-1.5"
+              className="absolute left-2 top-0 z-10 pt-1.5"
               style={{
                 right: 8 + listScrollbarW,
                 transform: `translateY(${pinnedPush}px)`,
               }}
               data-pinned-day={listLayout.days[pinnedDay].dateKey}
             >
-              {renderDayBar(
-                { tone: dayTone(listLayout.days[pinnedDay].dateKey), last: true },
-                true
-              )}
               {renderDayHeading(pinnedDay, true)}
             </div>
           )}

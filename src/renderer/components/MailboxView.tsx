@@ -106,7 +106,7 @@ import {
 } from './mailListWindow';
 import { TimelineScrubber } from './timeline/TimelineScrubber';
 import { localDayKey } from './timeline/dayCounts';
-import { useCollapsedDays } from '../hooks/useCollapsedDays';
+import { useDayFold } from '../hooks/useDayFold';
 import { Compose, composeKey, type ComposeTarget } from './Compose';
 import { useTabActiveRef } from '../hooks/useTabActive';
 import { FolderIcons } from './FolderIcons';
@@ -415,8 +415,8 @@ export function MailboxView({
   }, [compose]);
   // 表示するフォルダ/グループ（受信箱以外は後続実装）
   const [folder, setFolder] = useState('inbox');
-  // 一覧で畳んだ日（アカウント・フォルダの選択ごとに覚える。docs/MAIL_LIST_TIMELINE.md §6）。
-  const [collapsed, setCollapsed] = useCollapsedDays(
+  // 一覧の日の畳み（起動時・選択の切り替えでは全部開いて始める。覚えない。docs/MAIL_LIST_TIMELINE.md §6）。
+  const [collapsed, setCollapsed] = useDayFold(
     selected == null ? null : `${selected}.${folder}`
   );
   // リスト絞り込みトグル

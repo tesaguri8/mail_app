@@ -374,6 +374,49 @@ export function foldedDayOf(layout: DayLayout, slot: number): string | null {
   return d >= 0 && layout.folded[d] ? layout.days[d].dateKey : null;
 }
 
+/**
+ * 一覧の上に貼り付ける見出しの日（スクロール中も、いま見ている日が分かるように。設計の §6.2）。
+ * topRow は一番上に見えている行。その行の属する日が開いていれば、その日の番号。畳んだ日（見出しだけ）・
+ * 見出しが無い並びなら null。
+ */
+export function stickyDay(layout: DayLayout, topRow: number): number | null {
+  if (layout.heads.length === 0 || topRow < 0 || topRow >= layout.rows) return null;
+  const d = Math.max(0, lastAtOrBelow(layout.heads, topRow));
+  return layout.folded[d] ? null : d;
+}
+
+/**
+ * 貼り付けた見出しを上へ押し出す量（px・0 以下）。次の日の見出しが下から来て、貼り付けた見出しに
+ * 重なり始めたら、その分だけ上へずらす（入れ替わりが滑らかに見える）。
+ * nextStart は次の日の見出しの上端（スクロール域の中身の先頭からの px。無ければ null）。
+ */
+export function stickyPush(nextStart: number | null, scrollTop: number, height: number): number {
+  if (nextStart === null) return 0;
+  return Math.min(0, nextStart - scrollTop - height);
+}
+
+/**
+ * 日の色（左の縦の線と見出しのアクセント。0 / 1 の 2 色を交互に）。日付を通し番号（1970-01-01 からの
+ * 日数）にしたときの偶数・奇数で決めるので、スクロール・読み込み・畳みで入れ替わらない。
+ * 一覧で隣り合う日が同じ偶奇になる（間の日にメールが無い）こともあるので、線は日ごとに切る（`rowBar`）。
+ */
+export function dayTone(dateKey: string): 0 | 1 {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  const n = Math.floor(Date.UTC(y, m - 1, d) / 86_400_000);
+  return Number.isFinite(n) && Math.abs(n) % 2 === 1 ? 1 : 0;
+}
+
+/**
+ * 行 i の左の縦の線: 色と、その日の最後の行か（最後の行では線を次の行へつながず、日ごとに切る）。
+ * 見出しの無い並びなら null（線を引かない）。
+ */
+export function rowBar(layout: DayLayout, i: number): { tone: 0 | 1; last: boolean } | null {
+  if (layout.heads.length === 0) return null;
+  const d = Math.max(0, lastAtOrBelow(layout.heads, i));
+  const lastRow = layout.heads[d] + (layout.folded[d] ? 0 : layout.days[d].count);
+  return { tone: dayTone(layout.days[d].dateKey), last: i === lastRow };
+}
+
 /** 「keep 以外を全部畳む」ときの畳む日の集合。 */
 export function foldAllBut(days: readonly DayCount[], keep: string | null): Set<string> {
   return new Set(days.map((d) => d.dateKey).filter((k) => k !== keep));

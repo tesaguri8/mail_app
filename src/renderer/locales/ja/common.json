@@ -910,7 +910,7 @@
     "dayDate": "{{month}}月{{day}}日（{{weekday}}）",
     "dayDateYear": "{{year}}年{{month}}月{{day}}日（{{weekday}}）",
     "dayCount": "{{count}} 件",
-    "dayCountUnread": "{{count}} 件・未読 {{unread}}",
+    "dayUnread": "未読 {{unread}}",
     "foldDay": "この日を畳む（右クリックで、まとめて畳む・開く）",
     "unfoldDay": "この日を開く（右クリックで、まとめて畳む・開く）",
     "foldOthers": "今日以外を全部畳む",

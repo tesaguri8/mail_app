@@ -81,10 +81,14 @@ import {
   pagesToLoad,
   retallyDays,
   rowAt as layoutRowAt,
+  rowBar,
   rowOfSlot,
   shownRows,
   slotAtRow,
   slotSegments,
+  stickyDay,
+  stickyPush,
+  dayTone,
   toDayCounts,
   totalOf,
   unreadOf,
@@ -137,8 +141,11 @@ const ROW_ESTIMATE = 92;
 const ROW_GAP = 4;
 /** スクロールが止まったとみなすまでの待ち（ms）。止まった場所の前後だけを読む。 */
 const RANGE_SETTLE_MS = 80;
-// 日の見出しの行の高さの見積もり（px。描いてから測る）。
-const DAY_HEADING_ESTIMATE = 26;
+// 日の見出しの行の高さの見積もり（px。描いてから測る）。上の余白 6px ＋ 帯 30px。
+const DAY_HEADING_ESTIMATE = 36;
+// 日の色（左の縦の線・畳んだ日の矢印）。dayTone の 0 / 1。どの背景の写真の上でも見える濃さにする。
+const DAY_TONE_BAR = ['bg-sky-400', 'bg-amber-400'] as const;
+const DAY_TONE_TEXT = ['text-sky-300', 'text-amber-300'] as const;
 // 同期のあとに読み直す「見えている範囲」の上限（件。畳んだ日をまたいで広がりすぎないように）。
 const VISIBLE_RELOAD_CAP = 3 * PAGE_SIZE;
 
@@ -1505,6 +1512,7 @@ export function MailboxView({
     setCollapsed(() => foldAllBut(listLayout.days, localDayKey(new Date().toISOString())));
   const unfoldAll = () => setCollapsed(() => new Set());
   const [dayMenu, setDayMenu] = useState<{ x: number; y: number } | null>(null);
+  const pinnedRef = useRef<HTMLDivElement>(null);
   const dayMenuItems: MenuItem[] = [
     {
       key: 'foldOthers',
@@ -1514,15 +1522,20 @@ export function MailboxView({
     },
     { key: 'unfoldAll', label: t('mailbox.unfoldAll'), Icon: ChevronsUpDown, onClick: unfoldAll },
   ];
-  const renderDayHeading = (d: ListDay, folded: boolean) => {
-    const label = formatDayHeading(d.dateKey, i18n.language, t);
-    const counts =
-      d.unread > 0
-        ? t('mailbox.dayCountUnread', { count: d.count, unread: d.unread })
-        : t('mailbox.dayCount', { count: d.count });
+  // 見出しの帯。畳んだ日は帯を濃くし、矢印を日の色で太く出す（一目で畳まれていると分かるように）。
+  // pinned は一覧の上に貼り付けた見出し（押して畳んだら、その日の見出しの位置へ戻す）。
+  const renderDayHeading = (day: number, pinned = false) => {
+    const d = listLayout.days[day];
+    const folded = listLayout.folded[day];
+    const tone = dayTone(d.dateKey);
+    const Chevron = folded ? ChevronRight : ChevronDown;
     return (
       <button
-        onClick={() => toggleDay(d.dateKey)}
+        onClick={() => {
+          // 畳むと下の行が詰まって見ていた位置がずれるので、貼り付けた見出しからはその日の頭へ戻す
+          if (pinned) rowVirtualizer.scrollToIndex(listLayout.heads[day], { align: 'start' });
+          toggleDay(d.dateKey);
+        }}
         onContextMenu={(e) => {
           e.preventDefault();
           setDayMenu({ x: e.clientX, y: e.clientY });
@@ -1530,14 +1543,65 @@ export function MailboxView({
         aria-expanded={!folded}
         title={folded ? t('mailbox.unfoldDay') : t('mailbox.foldDay')}
         data-day-heading={d.dateKey}
-        className="flex w-full items-center gap-1.5 rounded-md px-1 pb-0.5 pt-2 text-left text-xs text-white/55 hover:bg-white/[0.04] hover:text-white/85"
+        data-folded={folded || undefined}
+        className={`flex h-[30px] w-full items-center gap-2 rounded-md px-2 text-left text-[13px] backdrop-blur-md transition-colors ${
+          pinned
+            ? // 貼り付けた見出しは下の行の上に重なるので、透けないように濃くする
+              'bg-neutral-900/90 shadow-md shadow-black/40 hover:bg-neutral-800/90'
+            : folded
+              ? 'bg-black/65 ring-1 ring-white/15 hover:bg-black/75'
+              : 'bg-black/40 hover:bg-black/55'
+        }`}
       >
-        {folded ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-        <span className="font-medium text-white/80">{label}</span>
-        <span className="text-white/40">{counts}</span>
+        <Chevron
+          size={16}
+          strokeWidth={folded ? 3 : 2.5}
+          className={`shrink-0 ${folded ? DAY_TONE_TEXT[tone] : 'text-white/85'}`}
+        />
+        <span className="font-semibold text-white">
+          {formatDayHeading(d.dateKey, i18n.language, t)}
+        </span>
+        <span className="text-white/75">{t('mailbox.dayCount', { count: d.count })}</span>
+        {d.unread > 0 && (
+          <span className="font-semibold text-sky-300">
+            {t('mailbox.dayUnread', { unread: d.unread })}
+          </span>
+        )}
       </button>
     );
   };
+
+  // 左の縦の線（その日の見出しから最後の行まで。日ごとに切る）。最後の行でなければ、行の間の隙間へ伸ばす。
+  const renderDayBar = (bar: { tone: 0 | 1; last: boolean }, first: boolean) => (
+    <span
+      aria-hidden
+      className={`absolute -left-3 top-0 w-[3px] ${DAY_TONE_BAR[bar.tone]} ${
+        first ? 'rounded-t-full' : ''
+      } ${bar.last ? 'bottom-0 rounded-b-full' : ''}`}
+      style={bar.last ? undefined : { bottom: -ROW_GAP }}
+    />
+  );
+
+  // 一覧の上に貼り付ける見出し（スクロール中も、いま見ている日が分かるように。設計の §6.2）。
+  // 仮想スクロールの行は transform で並べているので position: sticky は効かない。一覧の上に
+  // 重ねて 1 つ描き、次の日の見出しが下から来たら押し上げて入れ替える。
+  const pinnedDay = topRow == null ? null : stickyDay(listLayout, topRow);
+  const headStart = (day: number) =>
+    rowVirtualizer.measurementsCache[listLayout.heads[day]]?.start ?? null;
+  const pinnedStart = pinnedDay == null ? null : headStart(pinnedDay);
+  const showPinned = pinnedDay != null && pinnedStart != null && pinnedStart < listScrollTop;
+  const pinnedPush =
+    pinnedDay == null
+      ? 0
+      : stickyPush(
+          pinnedDay + 1 < listLayout.heads.length ? headStart(pinnedDay + 1) : null,
+          listScrollTop,
+          pinnedRef.current?.offsetHeight ?? DAY_HEADING_ESTIMATE
+        );
+  // 一覧のスクロールバーの幅（貼り付けた見出しを、行と同じ幅にそろえる）。
+  const listScrollbarW = listRef.current
+    ? listRef.current.offsetWidth - listRef.current.clientWidth
+    : 0;
 
   if (accounts.length === 0) {
     return <div className="p-8 text-white/60">{t('mailbox.addInSettings')}</div>;
@@ -1951,66 +2015,86 @@ export function MailboxView({
         {showScrubber && (
           <TimelineScrubber days={days} viewOffset={viewOffset} onJump={jumpToOffset} />
         )}
-        <div
-          ref={listRef}
-          className="h-full min-w-0 flex-1 overflow-y-auto"
-          onScroll={onListScroll}
-        >
-          {rowCount === 0 ? (
-            <div className="p-2">
-              <div className="px-2 py-3 text-sm text-white/50">
-                {searchMode
-                  ? searching
-                    ? t('search.searching')
-                    : t('search.noResults')
-                  : t('mailbox.empty')}
+        <div className="relative h-full min-w-0 flex-1">
+          <div ref={listRef} className="h-full overflow-y-auto" onScroll={onListScroll}>
+            {rowCount === 0 ? (
+              <div className="p-2">
+                <div className="px-2 py-3 text-sm text-white/50">
+                  {searchMode
+                    ? searching
+                      ? t('search.searching')
+                      : t('search.noResults')
+                    : t('mailbox.empty')}
+                </div>
               </div>
-            </div>
-          ) : (
-            <ul className="relative w-full" style={{ height: rowVirtualizer.getTotalSize() }}>
-              {rowVirtualizer.getVirtualItems().map((v) => {
-                const r = layoutRowAt(listLayout, v.index);
-                if (r.kind === 'day') {
+            ) : (
+              <ul className="relative w-full" style={{ height: rowVirtualizer.getTotalSize() }}>
+                {rowVirtualizer.getVirtualItems().map((v) => {
+                  const r = layoutRowAt(listLayout, v.index);
+                  const bar = rowBar(listLayout, v.index);
+                  // 日の線があるときは、線の分だけ行を右へ寄せる
+                  const liCls = `absolute ${bar ? 'left-4' : 'left-2'} right-2 top-0`;
+                  if (r.kind === 'day') {
+                    return (
+                      <li
+                        key={v.key}
+                        data-index={v.index}
+                        ref={rowVirtualizer.measureElement}
+                        className={`${liCls} pt-1.5`}
+                        style={{ transform: `translateY(${v.start}px)` }}
+                      >
+                        {bar && renderDayBar(bar, true)}
+                        {renderDayHeading(r.day)}
+                      </li>
+                    );
+                  }
+                  const m = slotRow(r.slot);
                   return (
                     <li
                       key={v.key}
                       data-index={v.index}
                       ref={rowVirtualizer.measureElement}
-                      className="absolute left-2 right-2 top-0"
+                      className={liCls}
                       style={{ transform: `translateY(${v.start}px)` }}
                     >
-                      {renderDayHeading(listLayout.days[r.day], listLayout.folded[r.day])}
+                      {bar && renderDayBar(bar, false)}
+                      {m ? (
+                        renderRow(m)
+                      ) : (
+                        // まだ読み込んでいない位置（止まったところで読む）。高さは見積もりのまま。
+                        <div
+                          className="rounded-md bg-white/[0.03]"
+                          style={{ height: ROW_ESTIMATE }}
+                          aria-hidden
+                        />
+                      )}
                     </li>
                   );
-                }
-                const m = slotRow(r.slot);
-                return (
-                  <li
-                    key={v.key}
-                    data-index={v.index}
-                    ref={rowVirtualizer.measureElement}
-                    className="absolute left-2 right-2 top-0"
-                    style={{ transform: `translateY(${v.start}px)` }}
-                  >
-                    {m ? (
-                      renderRow(m)
-                    ) : (
-                      // まだ読み込んでいない位置（止まったところで読む）。高さは見積もりのまま。
-                      <div
-                        className="rounded-md bg-white/[0.03]"
-                        style={{ height: ROW_ESTIMATE }}
-                        aria-hidden
-                      />
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          {/* 続きあり: スクロールで追加読み込み。表示中/全スレッド数を出す（あとどれくらいか分かる）。 */}
-          {!searchMode && !timelineMode && hasMore && visibleMails.length > 0 && (
-            <div className="px-2 py-3 text-center text-xs text-white/35">
-              {t('mailbox.loadedOf', { shown: loadedPrefix(slots), total: slots.length })}
+                })}
+              </ul>
+            )}
+            {/* 続きあり: スクロールで追加読み込み。表示中/全スレッド数を出す（あとどれくらいか分かる）。 */}
+            {!searchMode && !timelineMode && hasMore && visibleMails.length > 0 && (
+              <div className="px-2 py-3 text-center text-xs text-white/35">
+                {t('mailbox.loadedOf', { shown: loadedPrefix(slots), total: slots.length })}
+              </div>
+            )}
+          </div>
+          {showPinned && pinnedDay != null && (
+            <div
+              ref={pinnedRef}
+              className="absolute left-4 top-0 z-10 pt-1.5"
+              style={{
+                right: 8 + listScrollbarW,
+                transform: `translateY(${pinnedPush}px)`,
+              }}
+              data-pinned-day={listLayout.days[pinnedDay].dateKey}
+            >
+              {renderDayBar(
+                { tone: dayTone(listLayout.days[pinnedDay].dateKey), last: true },
+                true
+              )}
+              {renderDayHeading(pinnedDay, true)}
             </div>
           )}
         </div>

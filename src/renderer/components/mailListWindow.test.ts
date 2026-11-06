@@ -18,6 +18,10 @@ import {
   shownRows,
   slotAtRow,
   slotSegments,
+  stickyDay,
+  dayTone,
+  rowBar,
+  stickyPush,
   toDayCounts,
   totalOf,
   updateLoaded,
@@ -285,5 +289,57 @@ describe('dayLayout（日の見出しと畳み）', () => {
     }
     expect(dayLayout([], new Set(), 4).rows).toBe(4);
     expect(dayLayout(days, new Set(), 5).rows).toBe(5);
+  });
+});
+
+describe('stickyDay / stickyPush（貼り付ける見出し）', () => {
+  const days: ListDay[] = [
+    { dateKey: '2026-11-06', count: 2, unread: 0 },
+    { dateKey: '2026-11-05', count: 3, unread: 0 },
+    { dateKey: '2026-11-04', count: 1, unread: 0 },
+  ];
+  it('一番上の行が属する、開いている日を貼り付ける', () => {
+    // 行: d0 s0 s1 | d1(畳み) | d2 s5
+    const l = dayLayout(days, new Set(['2026-11-05']), 6);
+    expect([0, 1, 2, 3, 4, 5].map((i) => stickyDay(l, i))).toEqual([0, 0, 0, null, 2, 2]);
+    expect(stickyDay(l, 99)).toBeNull();
+    expect(stickyDay(dayLayout([], new Set(), 3), 1)).toBeNull();
+  });
+  it('次の日の見出しが重なり始めたら、その分だけ上へ押し出す', () => {
+    // 見出しの高さ 30px・スクロール 1000px
+    expect(stickyPush(1100, 1000, 30)).toBe(0); // まだ遠い
+    expect(stickyPush(1030, 1000, 30)).toBe(0); // ちょうど接する
+    expect(stickyPush(1010, 1000, 30)).toBe(-20); // 20px 重なった
+    expect(stickyPush(null, 1000, 30)).toBe(0);
+  });
+});
+
+describe('dayTone / rowBar（左の縦の線）', () => {
+  it('色は日付の通し番号の偶奇で決まり、続いた日は交互になる', () => {
+    expect(dayTone('2026-11-06')).not.toBe(dayTone('2026-11-05'));
+    expect(dayTone('2026-11-06')).toBe(dayTone('2026-11-04'));
+    // 月・年の境目でも交互
+    expect(dayTone('2026-11-01')).not.toBe(dayTone('2026-10-31'));
+    expect(dayTone('2026-01-01')).not.toBe(dayTone('2025-12-31'));
+  });
+  it('線は見出しからその日の最後の行まで。最後の行（畳んだ日は見出し）で切る', () => {
+    const days: ListDay[] = [
+      { dateKey: '2026-11-06', count: 2, unread: 0 },
+      { dateKey: '2026-11-05', count: 3, unread: 0 },
+      { dateKey: '2026-11-04', count: 1, unread: 0 },
+    ];
+    // 行: d0 s0 s1 | d1(畳み) | d2 s5
+    const l = dayLayout(days, new Set(['2026-11-05']), 6);
+    const bars = Array.from({ length: l.rows }, (_, i) => rowBar(l, i));
+    expect(bars.map((b) => b?.last)).toEqual([false, false, true, true, false, true]);
+    expect(bars.map((b) => b?.tone)).toEqual([
+      dayTone('2026-11-06'),
+      dayTone('2026-11-06'),
+      dayTone('2026-11-06'),
+      dayTone('2026-11-05'),
+      dayTone('2026-11-04'),
+      dayTone('2026-11-04'),
+    ]);
+    expect(rowBar(dayLayout([], new Set(), 3), 0)).toBeNull();
   });
 });

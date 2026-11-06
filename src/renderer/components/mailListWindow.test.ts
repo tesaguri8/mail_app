@@ -21,6 +21,8 @@ import {
   toDayCounts,
   totalOf,
   updateLoaded,
+  unreadOf,
+  withUnread,
   type ListDay,
 } from './mailListWindow';
 
@@ -49,22 +51,42 @@ const row = (id: number): ThreadListItem => ({
   email_ids: [id],
 });
 
-describe('toDayCounts', () => {
-  it('日時の無いスレッドを直前の日に数え、合計を保つ', () => {
+describe('toDayCounts / withUnread', () => {
+  it('日時の無いスレッドを直前の日に数え、合計を保つ（未読はあとから入るので 0）', () => {
     const rows = [
-      { date_key: '2026-10-02', count: 3, unread: 1 },
-      { date_key: '2026-10-01', count: 2, unread: 0 },
-      { date_key: null, count: 4, unread: 2 },
+      { date_key: '2026-10-02', count: 3 },
+      { date_key: '2026-10-01', count: 2 },
+      { date_key: null, count: 4 },
     ];
     expect(toDayCounts(rows)).toEqual([
-      { dateKey: '2026-10-02', count: 3, unread: 1 },
-      { dateKey: '2026-10-01', count: 6, unread: 2 },
+      { dateKey: '2026-10-02', count: 3, unread: 0 },
+      { dateKey: '2026-10-01', count: 6, unread: 0 },
     ]);
     expect(totalOf(rows)).toBe(9);
   });
   it('日の分かるスレッドが無ければ空', () => {
-    expect(toDayCounts([{ date_key: null, count: 4, unread: 0 }])).toEqual([]);
+    expect(toDayCounts([{ date_key: null, count: 4 }])).toEqual([]);
     expect(toDayCounts([])).toEqual([]);
+  });
+  it('あとから引いた未読を日に入れる（載っていない日は 0・日時の無い分は最後の日）', () => {
+    const days = toDayCounts([
+      { date_key: '2026-10-03', count: 3 },
+      { date_key: '2026-10-02', count: 2 },
+      { date_key: '2026-10-01', count: 2 },
+      { date_key: null, count: 2 },
+    ]);
+    const unread = [
+      { date_key: '2026-10-03', unread: 2 },
+      { date_key: '2026-10-01', unread: 1 },
+      { date_key: null, unread: 1 },
+    ];
+    const got = withUnread(days, unread);
+    expect(got.map((d) => d.unread)).toEqual([2, 0, 2]);
+    // 読み直しの間は前の数を引き継ぐ（unreadOf → withUnread）
+    expect(withUnread(days, unreadOf(got)).map((d) => d.unread)).toEqual([2, 0, 2]);
+    // 件数を超えない
+    expect(withUnread(days, [{ date_key: '2026-10-02', unread: 9 }])[1].unread).toBe(2);
+    expect(withUnread([], unread)).toEqual([]);
   });
 });
 

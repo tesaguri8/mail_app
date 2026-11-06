@@ -9,13 +9,14 @@
  * 仮想スクロールの行数・位置から外れる（`dayLayout`。設計の §6）。
  */
 import type { ThreadDayCount } from '@bindings/ThreadDayCount';
+import type { ThreadDayUnread } from '@bindings/ThreadDayUnread';
 import type { ThreadListItem } from '@bindings/ThreadListItem';
 import { localDayKey, type DayCount } from './timeline/dayCounts';
 
 /** 一覧の枠。null はまだ読み込んでいない位置（高さだけのプレースホルダを出す）。 */
 export type Slots = readonly (ThreadListItem | null)[];
 
-/** 一覧の 1 日（つまみの日ごとの件数に、未読のあるスレッドの数を足したもの）。 */
+/** 一覧の 1 日（つまみの日ごとの件数に、未読のあるスレッドの数を足したもの。未読はあとから入る）。 */
 export interface ListDay extends DayCount {
   unread: number;
 }
@@ -31,23 +32,38 @@ export const PAGE_SIZE = 100;
 export function toDayCounts(rows: readonly ThreadDayCount[]): ListDay[] {
   const days: ListDay[] = [];
   let undated = 0;
-  let undatedUnread = 0;
   for (const r of rows) {
-    if (r.date_key === null) {
-      undated += r.count;
-      undatedUnread += r.unread;
-    } else days.push({ dateKey: r.date_key, count: r.count, unread: r.unread });
+    if (r.date_key === null) undated += r.count;
+    else days.push({ dateKey: r.date_key, count: r.count, unread: 0 });
   }
   if (days.length === 0) return [];
   if (undated > 0) {
     const last = days[days.length - 1];
-    days[days.length - 1] = {
-      ...last,
-      count: last.count + undated,
-      unread: last.unread + undatedUnread,
-    };
+    days[days.length - 1] = { ...last, count: last.count + undated };
   }
   return days;
+}
+
+/**
+ * 日ごとの件数に、あとから引いた未読の数（`thread_day_unread`。未読のある日だけ）を入れる。
+ * 載っていない日は 0。日時の無いスレッドの未読は、件数と同じく最後の日に足す。
+ */
+export function withUnread(days: readonly ListDay[], rows: readonly ThreadDayUnread[]): ListDay[] {
+  if (days.length === 0) return [];
+  const byDay = new Map<string, number>();
+  let undated = 0;
+  for (const r of rows) {
+    if (r.date_key === null) undated += r.unread;
+    else byDay.set(r.date_key, r.unread);
+  }
+  const out = days.map((d) => ({ ...d, unread: byDay.get(d.dateKey) ?? 0 }));
+  out[out.length - 1].unread += undated;
+  return out.map((d) => ({ ...d, unread: Math.min(d.count, d.unread) }));
+}
+
+/** 日ごとの未読を、`withUnread` に渡せる形にする（読み直しの間、前の数を出しておくのに使う）。 */
+export function unreadOf(days: readonly ListDay[]): ThreadDayUnread[] {
+  return days.filter((d) => d.unread > 0).map((d) => ({ date_key: d.dateKey, unread: d.unread }));
 }
 
 /**

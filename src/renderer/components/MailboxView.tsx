@@ -65,7 +65,7 @@ import { MailBody } from './MailBody';
 import { ContactEditor, type EditorRequest } from './ContactEditor';
 import { CalendarPanel, type CalendarPanelInitial } from './CalendarPanel';
 import { Conversation, type ConversationHandlers } from './Conversation';
-import { threadList, threadDayCounts } from '../services/threads';
+import { threadList, threadDayCounts, threadDayUnread } from '../services/threads';
 import {
   PAGE_SIZE,
   dayLayout,
@@ -87,7 +87,9 @@ import {
   slotSegments,
   toDayCounts,
   totalOf,
+  unreadOf,
   updateLoaded,
+  withUnread,
   type ListDay,
   type Slots,
 } from './mailListWindow';
@@ -663,9 +665,20 @@ export function MailboxView({
     ])
       .then(([counts, rows]) => {
         if (loadTokenRef.current !== token) return;
-        setDays(toDayCounts(counts));
+        // 見出しの未読は、一覧を出したあとで引いて足す（下）。読み直しの間は前の数を出しておく
+        // （フォルダ・アカウントの切り替えでは前の数は別物なので出さない）。
+        setDays((prev) =>
+          reset ? toDayCounts(counts) : withUnread(toDayCounts(counts), unreadOf(prev))
+        );
         setSlots(fillSlots(emptySlots(totalOf(counts)), start, rows));
         if (reset) listRef.current?.scrollTo({ top: 0 });
+        // 未読の数は一覧の表示を待たせない（件数と一緒に待つと、その分だけ一覧が遅れる）。
+        // 投げっぱなし: 読み直しが重なったら、古い結果は token で捨てる。
+        threadDayUnread(queryAccount, folder)
+          .then((unread) => {
+            if (loadTokenRef.current === token) setDays((prev) => withUnread(prev, unread));
+          })
+          .catch(() => undefined);
       })
       .catch(() => undefined);
   };

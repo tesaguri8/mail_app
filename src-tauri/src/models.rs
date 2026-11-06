@@ -797,7 +797,15 @@ pub struct ThreadDayCount {
     /// 代表メールの日付（端末ローカルの `YYYY-MM-DD`）。日時の無いスレッドは None（一覧の最後）。
     pub date_key: Option<String>,
     pub count: i32,
-    /// そのうち未読のあるスレッドの数（一覧の見出しに出す）。
+}
+
+/// スレッド一覧の、日ごとの未読のあるスレッドの数（一覧の日の見出し用）。docs/MAIL_LIST_TIMELINE.md §6。
+/// 未読のある日だけを返す（並びは新しい順）。件数（`ThreadDayCount`）とは別に、一覧を出したあとで引く。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ThreadDayUnread {
+    /// 代表メールの日付（端末ローカルの `YYYY-MM-DD`）。日時の無いスレッドは None。
+    pub date_key: Option<String>,
     pub unread: i32,
 }
 

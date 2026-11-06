@@ -8,10 +8,10 @@ use rusqlite::params;
 
 use super::emails::folder_predicate;
 use super::Store;
-use crate::models::ThreadDayCount;
+use crate::models::{ThreadDayCount, ThreadDayUnread};
 
 impl Store {
-    /// フォルダ内のスレッドを、代表メールの日付（端末ローカル）ごとに数える（未読のスレッドの数も）。
+    /// フォルダ内のスレッドを、代表メールの日付（端末ローカル）ごとに数える。
     ///
     /// 絞り込み（アカウント・フォルダ・迷惑の隔離・代表フラグ）は `list_threads` と同じ。
     /// 並びは一覧と同じ新しい順で、日時の無いスレッド（`date_key` = None）は最後に 1 つにまとめる。
@@ -26,40 +26,90 @@ impl Store {
         // 参照専用接続（一覧の読み取りと同じく、書き込みに待たされない）。
         let conn = self.read_conn.lock().unwrap();
         let acct = if account_id.is_some() {
-            "AND r.account_id = ?2"
+            "AND account_id = ?2"
         } else {
             ""
         };
         // ORDER BY は一覧の並び（date_ts DESC。NULL は最後）に合わせる。
-        // 未読のスレッドは、一覧の未読（`list_threads` の unread_cnt > 0）と同じ判定で数える。
         let sql = format!(
-            "SELECT date(r.date_ts, 'unixepoch', 'localtime') AS d, count(*),
-                    sum(CASE WHEN r.logical_thread_id IS NULL THEN r.is_read = 0
-                             ELSE EXISTS(SELECT 1 FROM emails t INDEXED BY idx_emails_thread_folder
-                                  WHERE t.logical_thread_id = r.logical_thread_id AND {fp_sub} AND t.is_read = 0) END)
-             FROM emails r
-             WHERE {fp} {acct} AND r.is_folder_rep = 1
+            "SELECT date(date_ts, 'unixepoch', 'localtime') AS d, count(*)
+             FROM emails
+             WHERE {fp} {acct} AND is_folder_rep = 1
              GROUP BY d
              ORDER BY d IS NULL, d DESC",
-            fp = folder_predicate(folder, "r.", "?1"),
-            fp_sub = folder_predicate(folder, "t.", "?1"),
+            fp = folder_predicate(folder, "", "?1"),
         );
         let mut stmt = conn.prepare(&sql)?;
         let map = |r: &rusqlite::Row| -> rusqlite::Result<ThreadDayCount> {
             Ok(ThreadDayCount {
                 date_key: r.get(0)?,
                 count: r.get::<_, i64>(1)? as i32,
-                unread: r.get::<_, i64>(2)? as i32,
             })
         };
-        match account_id {
-            Some(a) => stmt
-                .query_map(params![folder, a], map)?
-                .collect::<rusqlite::Result<_>>(),
-            None => stmt
-                .query_map(params![folder], map)?
-                .collect::<rusqlite::Result<_>>(),
-        }
+        query_by_account(&mut stmt, folder, account_id, map)
+    }
+
+    /// フォルダ内の未読のあるスレッドを、代表メールの日付（端末ローカル）ごとに数える（未読のある日だけ）。
+    ///
+    /// 未読の判定は一覧の未読（`list_threads` の `unread_cnt > 0`: そのフォルダのスレッドのメールに
+    /// 未読が 1 通でもある）と同じ。代表の行ごとに未読を探すと全スレッドぶん引くことになり遅い
+    /// （`[実測]` vaio の約 2.8 万スレッドで件数だけの 4〜5 倍）ので、**未読のメールから逆に引く**:
+    /// 未読だけの部分索引（`idx_emails_unread`）で未読のスレッドを集め、その代表の日付で数える。
+    pub fn thread_day_unread(
+        &self,
+        account_id: Option<i64>,
+        folder: &str,
+    ) -> rusqlite::Result<Vec<ThreadDayUnread>> {
+        let conn = self.read_conn.lock().unwrap();
+        let (acct_t, acct) = if account_id.is_some() {
+            ("AND t.account_id = ?2", "AND account_id = ?2")
+        } else {
+            ("", "")
+        };
+        // 論理スレッドのある未読 → そのフォルダの代表。論理スレッドの無い行は、その行が代表で未読なら数える。
+        let sql = format!(
+            "SELECT date(r.date_ts, 'unixepoch', 'localtime') AS d, count(*)
+             FROM emails r
+             WHERE r.id IN (
+                 SELECT r2.id FROM emails t
+                 JOIN emails r2 INDEXED BY idx_emails_thread_folder
+                   ON r2.logical_thread_id = t.logical_thread_id AND {fp_r2} AND r2.is_folder_rep = 1
+                 WHERE {fp_t} {acct_t} AND t.is_read = 0 AND t.logical_thread_id IS NOT NULL
+                 UNION
+                 SELECT id FROM emails
+                 WHERE {fp} {acct} AND is_read = 0 AND logical_thread_id IS NULL AND is_folder_rep = 1
+             )
+             GROUP BY d
+             ORDER BY d IS NULL, d DESC",
+            fp = folder_predicate(folder, "", "?1"),
+            fp_t = folder_predicate(folder, "t.", "?1"),
+            fp_r2 = folder_predicate(folder, "r2.", "?1"),
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let map = |r: &rusqlite::Row| -> rusqlite::Result<ThreadDayUnread> {
+            Ok(ThreadDayUnread {
+                date_key: r.get(0)?,
+                unread: r.get::<_, i64>(1)? as i32,
+            })
+        };
+        query_by_account(&mut stmt, folder, account_id, map)
+    }
+}
+
+/// `?1` = フォルダ・`?2` = アカウント（あれば）で問い合わせを流す。
+fn query_by_account<T>(
+    stmt: &mut rusqlite::Statement<'_>,
+    folder: &str,
+    account_id: Option<i64>,
+    map: impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+) -> rusqlite::Result<Vec<T>> {
+    match account_id {
+        Some(a) => stmt
+            .query_map(params![folder, a], map)?
+            .collect::<rusqlite::Result<_>>(),
+        None => stmt
+            .query_map(params![folder], map)?
+            .collect::<rusqlite::Result<_>>(),
     }
 }
 
@@ -225,35 +275,97 @@ mod tests {
             .is_empty());
     }
 
-    /// 未読のスレッドの数は、一覧の未読（unread_count > 0）と日ごとに一致する。
+    /// 未読のあるスレッドの数は、一覧の未読（unread_count > 0）と日ごとに一致する。
+    /// 論理スレッドの途中のメール（代表でない行）だけが未読の場合も数える。
     #[test]
     fn unread_per_day_matches_list() {
         let store = test_store();
         seed(&store);
-        // 何通かを未読にする（日をまたいで散らす）。
-        store
-            .conn
-            .lock()
-            .unwrap()
-            .execute(
+        {
+            let conn = store.conn.lock().unwrap();
+            // 何通かを未読にする（日をまたいで散らす）。
+            conn.execute(
                 "UPDATE emails SET is_read = 0 WHERE folder = 'inbox' AND id % 3 = 0",
                 [],
             )
             .unwrap();
+            // 返信を 1 通足して元のメールと同じスレッドにし（代表は新しい返信へ移る）、元のメールだけを未読にする。
+            let reply = mail(
+                1,
+                "reply1@example.invalid",
+                Some(1_790_000_000 + 3600),
+                "inbox",
+            );
+            insert_email(&conn, &reply).unwrap();
+            conn.execute_batch(
+                "UPDATE emails SET logical_thread_id =
+                     (SELECT logical_thread_id FROM emails WHERE message_id = 'm1@example.invalid')
+                 WHERE message_id = 'reply1@example.invalid';
+                 UPDATE emails SET is_folder_rep = 0, is_read = 0 WHERE message_id = 'm1@example.invalid';
+                 UPDATE emails SET is_folder_rep = 1, is_read = 1 WHERE message_id = 'reply1@example.invalid';",
+            )
+            .unwrap();
+        }
+        // 元のメールは返信と同じスレッドに入り、代表ではなくなっている（代表でない行だけが未読）。
+        let (rep, read): (i64, i64) = store
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT o.is_folder_rep, r.is_read FROM emails o JOIN emails r
+                   ON r.logical_thread_id = o.logical_thread_id AND r.is_folder_rep = 1
+                 WHERE o.message_id = 'm1@example.invalid' AND r.folder = 'inbox'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((rep, read), (0, 1));
         for account in [Some(1), None] {
             let days = store.thread_day_counts(account, "inbox").unwrap();
+            let unread = store.thread_day_unread(account, "inbox").unwrap();
             let all = store.list_threads(account, "inbox", 1000, 0).unwrap();
             let mut offset = 0usize;
+            let mut expect = Vec::new();
             for d in &days {
                 let n = d.count as usize;
-                let expect = all[offset..offset + n]
+                let k = all[offset..offset + n]
                     .iter()
                     .filter(|r| r.unread_count > 0)
                     .count();
-                assert_eq!(d.unread as usize, expect, "{:?}", d.date_key);
+                if k > 0 {
+                    expect.push((d.date_key.clone(), k as i32));
+                }
                 offset += n;
             }
-            assert!(days.iter().any(|d| d.unread > 0));
+            let got: Vec<_> = unread
+                .iter()
+                .map(|u| (u.date_key.clone(), u.unread))
+                .collect();
+            assert_eq!(got, expect);
+            assert!(!got.is_empty());
         }
+    }
+
+    /// 未読の数え上げは、未読だけの部分索引から引く（代表の行を全部なめない）。
+    #[test]
+    fn unread_query_uses_partial_index() {
+        let store = test_store();
+        let conn = store.read_conn.lock().unwrap();
+        let plan: Vec<String> = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT 1 FROM emails t
+                 WHERE t.folder = 'inbox' AND t.is_junk = 0 AND t.is_read = 0
+                   AND t.logical_thread_id IS NOT NULL",
+            )
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|p| p.contains("idx_emails_unread")),
+            "{plan:?}"
+        );
     }
 }

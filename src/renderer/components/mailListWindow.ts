@@ -256,6 +256,49 @@ function dayIndexOf(starts: readonly number[], i: number): number {
 // ---- 日の見出しと畳み（設計: docs/MAIL_LIST_TIMELINE.md §6） ----
 
 /**
+ * 日の畳み: 既定（allFolded）と、それと逆にした日（flipped）。新しく来た日は既定に従う
+ * （全部畳んだあとに届いた日も畳まれ、全部開いたあとなら開く）。
+ */
+export interface FoldState {
+  allFolded: boolean;
+  flipped: ReadonlySet<string>;
+}
+
+/** 全部開いた状態。 */
+export const ALL_OPEN: FoldState = { allFolded: false, flipped: new Set() };
+
+/** 全部畳んだ状態。 */
+export const ALL_FOLDED: FoldState = { allFolded: true, flipped: new Set() };
+
+/** その日が畳まれているか。 */
+export function isFolded(fold: FoldState, dateKey: string): boolean {
+  return fold.allFolded !== fold.flipped.has(dateKey);
+}
+
+/** その日の開閉を入れ替えた状態。 */
+export function toggleFold(fold: FoldState, dateKey: string): FoldState {
+  const flipped = new Set(fold.flipped);
+  if (flipped.has(dateKey)) flipped.delete(dateKey);
+  else flipped.add(dateKey);
+  return { allFolded: fold.allFolded, flipped };
+}
+
+/** その日を開いた状態（開いていればそのまま）。 */
+export function unfoldDay(fold: FoldState, dateKey: string): FoldState {
+  return isFolded(fold, dateKey) ? toggleFold(fold, dateKey) : fold;
+}
+
+/** 「keep 以外を全部畳む」状態（keep が null なら全部畳む）。 */
+export function foldAllBut(keep: string | null): FoldState {
+  return { allFolded: true, flipped: new Set(keep === null ? [] : [keep]) };
+}
+
+/** 開いている日が 1 日でもあるか（一つのボタンで「全部畳む」と「全部開く」を切り替える判断）。 */
+export function anyDayOpen(layout: DayLayout): boolean {
+  return layout.folded.some((f) => !f);
+}
+
+/**
  * 一覧の行の並び。各日の頭に見出しの行を 1 つ置き、開いている日だけ、その日の枠を並べる。
  * 日が無い（日の分かるスレッドが無い・検索中）か、日ごとの件数の合計が枠の数と合わないときは、
  * 見出しを置かずに枠をそのまま並べる（行 i ＝ 枠 i）。
@@ -276,17 +319,13 @@ export interface DayLayout {
 export type ListRow = { kind: 'day'; day: number } | { kind: 'slot'; slot: number };
 
 /** 日ごとの件数と畳んだ日から、行の並びを作る。total は枠の数。 */
-export function dayLayout(
-  days: readonly ListDay[],
-  collapsed: ReadonlySet<string>,
-  total: number
-): DayLayout {
+export function dayLayout(days: readonly ListDay[], fold: FoldState, total: number): DayLayout {
   const sum = days.reduce((n, d) => n + d.count, 0);
   if (days.length === 0 || sum !== total) {
     return { days: [], starts: [], heads: [], folded: [], rows: Math.max(0, total) };
   }
   const starts = startsOf(days);
-  const folded = days.map((d) => collapsed.has(d.dateKey));
+  const folded = days.map((d) => isFolded(fold, d.dateKey));
   let row = 0;
   const heads = days.map((d, i) => {
     const h = row;
@@ -434,11 +473,6 @@ export function rowBar(
 export function neighborDay(layout: DayLayout, day: number, dir: 'older' | 'newer'): number | null {
   const next = dir === 'older' ? day + 1 : day - 1;
   return next >= 0 && next < layout.days.length ? next : null;
-}
-
-/** 「keep 以外を全部畳む」ときの畳む日の集合。 */
-export function foldAllBut(days: readonly DayCount[], keep: string | null): Set<string> {
-  return new Set(days.map((d) => d.dateKey).filter((k) => k !== keep));
 }
 
 /** 読み込んである行のうち、開いている日の行だけ（並び順のまま。矢印キー・範囲選択の対象）。 */

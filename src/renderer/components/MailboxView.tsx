@@ -73,7 +73,12 @@ import {
   daysOfRows,
   emptySlots,
   fillSlots,
+  ALL_FOLDED,
+  ALL_OPEN,
+  anyDayOpen,
   foldAllBut,
+  toggleFold,
+  unfoldDay,
   foldedDayOf,
   indexOfId,
   jumpRow,
@@ -1460,11 +1465,7 @@ export function MailboxView({
       const day = foldedDayOf(l, slot);
       if (day) {
         pendingScrollRef.current = { slot, align };
-        setCollapsed((prev) => {
-          const next = new Set(prev);
-          next.delete(day);
-          return next;
-        });
+        setCollapsed((prev) => unfoldDay(prev, day));
         return;
       }
       const row = align === 'start' ? jumpRow(l, slot) : rowOfSlot(l, slot);
@@ -1510,16 +1511,13 @@ export function MailboxView({
       listLayout.folded.some(Boolean));
 
   // 日の見出し: 押すと開閉。右クリックで「今日以外を全部畳む」「全部開く」。
-  const toggleDay = (dateKey: string) =>
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(dateKey)) next.delete(dateKey);
-      else next.add(dateKey);
-      return next;
-    });
-  const foldOthers = () =>
-    setCollapsed(() => foldAllBut(listLayout.days, localDayKey(new Date().toISOString())));
-  const unfoldAll = () => setCollapsed(() => new Set());
+  const toggleDay = (dateKey: string) => setCollapsed((prev) => toggleFold(prev, dateKey));
+  const foldOthers = () => setCollapsed(() => foldAllBut(localDayKey(new Date().toISOString())));
+  const unfoldAll = () => setCollapsed(() => ALL_OPEN);
+  // サイドバーの上の 1 つのボタン: 開いた日が 1 日でもあれば「全部畳む」、全部畳んでいれば「全部開く」。
+  // 見出しの無い並び（検索中）では押せない。
+  const anyOpen = anyDayOpen(listLayout);
+  const toggleAllDays = () => setCollapsed(() => (anyOpen ? ALL_FOLDED : ALL_OPEN));
   const [dayMenu, setDayMenu] = useState<{ x: number; y: number } | null>(null);
   const pinnedRef = useRef<HTMLDivElement>(null);
   const dayMenuItems: MenuItem[] = [
@@ -1954,6 +1952,17 @@ export function MailboxView({
         <FolderIcons value={folder} onChange={setFolder} />
         {/* 迷惑登録の矛盾（住所録/グリーンなのに迷惑）を知らせる情報アイコン。矛盾が無ければ非表示。 */}
         <SpamConflictAlert onResolved={() => loadMails({ keepScroll: true })} />
+        <Tooltip label={anyOpen ? t('mailbox.foldAll') : t('mailbox.unfoldAll')}>
+          <button
+            onClick={toggleAllDays}
+            disabled={listLayout.heads.length === 0}
+            aria-label={anyOpen ? t('mailbox.foldAll') : t('mailbox.unfoldAll')}
+            data-fold-all={anyOpen ? 'fold' : 'unfold'}
+            className={`${iconBtn} shrink-0 border-l border-white/10 pl-1`}
+          >
+            {anyOpen ? <ChevronsDownUp size={15} /> : <ChevronsUpDown size={15} />}
+          </button>
+        </Tooltip>
       </div>
       {/* 絞り込みツールバー: 一覧を絞る操作はリスト直上に置く（トグル/期間/タグ）。アイコンは中央寄せ */}
       <div className="flex shrink-0 flex-wrap items-center justify-center gap-1 border-b border-white/10 px-2 py-1">

@@ -58,6 +58,7 @@ import type { ImageAction } from './ImageActions';
 import { PrintMail } from './PrintMail';
 import { UnseenQuotes } from './UnseenQuotes';
 import { ContextMenu, type MenuItem } from './ContextMenu';
+import { keepMatch, sameThreadView, scrollAfterRefresh } from './conversationRefresh';
 import type { CalendarPanelInitial } from './CalendarPanel';
 import { TimelineScrubber } from './timeline/TimelineScrubber';
 import { scrollTopForFraction, startFractions, type DayCount } from './timeline/dayCounts';
@@ -983,6 +984,7 @@ export function Conversation({
   folder,
   handlers,
   query,
+  refreshKey,
 }: {
   openedId: number;
   /** 閲覧中のフォルダ。trash/spam を見ているとき以外は、それらのメールを会話から隠す。 */
@@ -990,6 +992,8 @@ export function Conversation({
   handlers: ConversationHandlers;
   /** 検索中の語句。会話内で一致をハイライトし、上下ボタンで移動できるようにする。 */
   query?: string;
+  /** 同期で新しいメールが入るたびに変わる合図。変わったら会話を裏で読み直す（送った返信を出す）。 */
+  refreshKey?: number;
 }) {
   const { t } = useTranslation();
   const [view, setView] = useState<ThreadView | null>(null);
@@ -1007,6 +1011,10 @@ export function Conversation({
   // 展開/折りたたみで版面が伸縮しても、基準にしたバブルの表示位置を保つためのアンカー。
   // toggleExpand の直前に控え、expandedIds 変化後の useLayoutEffect で同じ位置へ戻す。
   const expandAnchor = useRef<{ id: number; top: number } | null>(null);
+  // 裏の読み直し（refresh）で差し替えたときのスクロールの扱い。下のスクロールの効果が 1 回だけ読む。
+  const refreshScroll = useRef<'follow' | 'keep' | null>(null);
+  // 裏の読み直しで差し替えたら、検索の一致は今の位置のまま数え直す（最初の一致へ飛ばさない）。
+  const keepMatchOnce = useRef(false);
 
   // 検索語（空白区切り・全半角）。会話内ハイライトと <>移動に使う。
   const terms = useMemo(
@@ -1020,6 +1028,8 @@ export function Conversation({
   const termsKey = terms.join('');
   // 検索一致の現在位置（1 始まり）と総数。
   const [match, setMatch] = useState({ idx: 0, total: 0 });
+  const matchRef = useRef(match);
+  matchRef.current = match;
   const matchEls = useCallback(
     () =>
       Array.from(
@@ -1075,6 +1085,31 @@ export function Conversation({
   const [fetchingIds, setFetchingIds] = useState<Set<number>>(new Set());
   const openedRef = useRef(openedId);
   openedRef.current = openedId;
+
+  // 同期で新しいメールが入ったら、開いている会話を裏で読み直す（docs/SYNC.md §5-3）。
+  // 読み込み中の表示は出さず、変化があったときだけ差し替える。展開しているバブル・スクロール・
+  // 検索の位置は保つ（下端にいたときだけ、増えた最後のバブルへ追う）。失敗したら今の表示のまま。
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const refresh = useCallback(async () => {
+    const forId = openedId;
+    try {
+      const v = await threadView(forId);
+      if (openedRef.current !== forId || sameThreadView(viewRef.current, v)) return;
+      const el = scrollRef.current;
+      refreshScroll.current = el ? scrollAfterRefresh(el) : 'keep';
+      keepMatchOnce.current = true;
+      setView(v);
+    } catch {
+      /* 裏の読み直しの失敗は、今の表示のまま（次の合図でまた読む） */
+    }
+  }, [openedId]);
+  const lastRefreshKey = useRef(refreshKey);
+  useEffect(() => {
+    if (lastRefreshKey.current === refreshKey) return;
+    lastRefreshKey.current = refreshKey;
+    void refresh();
+  }, [refreshKey, refresh]);
   useEffect(() => {
     if (!view) return;
     const missing = view.messages
@@ -1124,6 +1159,10 @@ export function Conversation({
   // に収まって全体が見え、画面より長いバブルは先頭から読める（検索語があるときは下の効果で最初
   // の一致へ移動する）。
   useLayoutEffect(() => {
+    const how = refreshScroll.current;
+    refreshScroll.current = null;
+    // 裏の読み直しで途中を読んでいたなら、その場に留まる（スクロール量は DOM がそのまま保つ）。
+    if (how === 'keep') return;
     if (!view || terms.length > 0) return;
     const el = scrollRef.current;
     if (!el) return;
@@ -1139,13 +1178,20 @@ export function Conversation({
 
   // 会話の描画後に検索一致を数え、最初の一致へ移動する（展開・語句変更にも追従）。
   useEffect(() => {
+    const keep = keepMatchOnce.current;
+    keepMatchOnce.current = false;
     if (!view || terms.length === 0) {
       setMatch({ idx: 0, total: 0 });
       return;
     }
     const id = window.setTimeout(() => {
       const total = matchEls().length;
-      if (total > 0) {
+      if (keep) {
+        // 裏の読み直し: 見ていた一致の番号を保ち、印だけ付け直す（スクロールしない）。
+        const m = keepMatch(matchRef.current.idx, total);
+        matchEls().forEach((e, k) => e.classList.toggle('search-hl-active', k === m.idx - 1));
+        setMatch(m);
+      } else if (total > 0) {
         setMatch({ idx: 1, total });
         applyActive(0);
       } else {

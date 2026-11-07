@@ -1090,6 +1090,16 @@ pub struct SyncListed {
     pub count: i32,
 }
 
+/// 送った直後の送信済み（Sent）だけの同期が終わったこと（Tauri イベント "sync:sent" のペイロード）。
+/// 取り込み後の加工（スレッド割当）まで済んでいるので、画面は一覧と開いている会話を読み直せばよい（docs/SYNC.md §5-3）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct SentSynced {
+    pub account_id: i32,
+    /// 新しく取り込んだ件数（0 なら読み直さなくてよい）。
+    pub stored: i32,
+}
+
 /// データ保存先（mail.db と添付キャッシュのフォルダ）と使用量。
 /// バイト数は f64（TS の number）で大きな値も安全に渡す。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

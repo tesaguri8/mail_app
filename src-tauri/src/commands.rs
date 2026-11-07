@@ -13,7 +13,7 @@ use crate::models::{
     StorageInfo, SureMergePreview, SureMergeResult, SyncListed, SyncProgress,
     SyncResult, TagSummary, ThreadDayCount, ThreadDayUnread, ThreadListItem, ThreadView, UnlinkedOrgName,
 };
-use crate::models::{AccountSyncStatus, SyncErrorKind};
+use crate::models::{AccountSyncStatus, SentSynced, SyncErrorKind};
 use crate::services::attachment_fetch;
 use crate::services::autoconfig;
 use crate::services::checksum::simple_checksum;
@@ -26,6 +26,7 @@ use crate::services::google;
 use crate::services::imap_sync;
 use crate::services::media;
 use crate::services::postal;
+use crate::services::sent_refresh;
 use crate::services::smtp;
 use crate::services::spam;
 use crate::services::store::{NewAccount, NewAttachment, NewServerAccount, PurgeRef, Store};
@@ -328,23 +329,31 @@ pub fn signature_delete(store: State<Store>, id: i64) -> Result<(), String> {
     store.delete_signature(id).map_err(|e| e.to_string())
 }
 
-/// IMAP に接続して INBOX を同期し、新着を DB に保存（PoC）。
+/// IMAP に接続して受信箱＋標準フォルダを同期し、新着を DB に保存する。
 /// ブロッキング処理は spawn_blocking に載せ、UI を止めない。
 #[tauri::command]
-pub async fn mail_sync(
-    app: AppHandle,
-    store: State<'_, Store>,
-    control: State<'_, SyncControl>,
-    pool: State<'_, ImapPool>,
-    board: State<'_, SyncStatusBoard>,
+pub async fn mail_sync(app: AppHandle, account_id: i64) -> Result<SyncResult, String> {
+    run_account_sync(&app, account_id, imap_sync::SyncScope::All).await
+}
+
+/// アカウントのメールを `scope` の範囲で同期する（定期・手動の同期と、送った直後の送信済みだけの
+/// 同期で共有）。同じアカウントの同期は重ねず（`SyncControl`）、接続はプールを使い回し、
+/// 接続状況は "sync:status" で知らせる。取り込み後の加工（スレッド割当）まで済ませて返す。
+async fn run_account_sync(
+    app: &AppHandle,
     account_id: i64,
+    scope: imap_sync::SyncScope,
 ) -> Result<SyncResult, String> {
+    let store = app.state::<Store>();
+    let control = app.state::<SyncControl>();
+    let pool = app.state::<ImapPool>();
+    let board = app.state::<SyncStatusBoard>();
     let (email, login_user, host, port) = store
         .get_account_imap(account_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "アカウントが見つかりません".to_string())?;
     // 資格情報は email をキーに保存（アカウント識別子）。ログインは login_user を使う。
-    let password = account_password(&app, &board, account_id, &host, &email)?;
+    let password = account_password(app, &board, account_id, &host, &email)?;
     let db_path = store.path();
     // このアカウントが既に同期中なら二重実行しない（自動同期と手動/再取り込みの衝突で
     // 進捗が上下してブレるのを防ぐ）。取得 0 件のスキップ結果を返す。
@@ -357,7 +366,7 @@ pub async fn mail_sync(
     };
 
     // 接続状況の印を「同期中」にする（アカウント選択。"sync:status"）。
-    emit_sync_status(&app, board.begin(account_id, &now_rfc3339()));
+    emit_sync_status(app, board.begin(account_id, &now_rfc3339()));
     // 進捗を "sync:progress" イベントで UI に通知する（フォルダ / 取得済み / 予定）。
     let app_ev = app.clone();
     let cancel_task = cancel.clone();
@@ -397,6 +406,7 @@ pub async fn mail_sync(
             &listed,
             &cancel_task,
             &session_slot,
+            scope,
         );
         // 取り込み後のローカル加工（スレッド割当・代表フラグ）は「このブロッキングスレッド上で」
         // 実行する。async ランタイム上で同期的に走らせると、その間 Tauri の IPC 配送が止まり、
@@ -413,8 +423,8 @@ pub async fn mail_sync(
     // JoinError（タスクパニック）でも同期枠を必ず解放してから伝播する
     // （解放漏れは以後の同期が全てスキップされる原因になるため）。
     control.end(account_id);
-    let result = finish_sync_status(&app, &board, account_id, &host, result)?;
-    if result.is_ok() {
+    let result = finish_sync_status(app, &board, account_id, &host, result)?;
+    if result.is_ok() && scope == imap_sync::SyncScope::All {
         // 保持ポリシーを適用（古い添付の削除・本文の要約保存・容量保険）。best-effort。
         let _ = store.apply_retention(account_id);
     }
@@ -689,29 +699,72 @@ pub async fn mail_send(
     // 送信成功後、送信控えを IMAP の Sent フォルダへ保存する（best-effort）。
     // 失敗しても送信自体は成功しているので、警告ログにとどめてエラーにはしない。
     // ただし Gmail 等はサーバーが送信時に自動で控えを保存するため、APPEND すると二重に
-    // なる。該当プロバイダでは APPEND をスキップし、サーバー保存分を次回同期で取り込む。
+    // なる。該当プロバイダでは APPEND をスキップし、サーバー保存分を取り込む。
     //
     // Sent への保存は本文をもう一度アップロードするので、添付つきの大きなメールでは
     // 送信の完了体感が大きく遅くなる。ここでは待たずにバックグラウンドで走らせ、SMTP が
-    // 受理した時点で送信完了とする（次回同期でも Sent は取り込まれる）。
+    // 受理した時点で送信完了とする。保存（またはサーバーの保存）のあと Sent だけを同期し、
+    // 自分の返信・転送を次の定期同期を待たずに会話へ出す（docs/SYNC.md §5-3）。
     if let Ok(Some((_email, login, host, port))) = store.get_account_imap(input.account_id as i64) {
-        if imap_sync::server_saves_sent_copy(&host) {
-            log::info!("Sent への APPEND をスキップ（サーバーが自動保存: {host}）");
-        } else {
-            tauri::async_runtime::spawn(async move {
+        let account_id = input.account_id as i64;
+        let server_saves = imap_sync::server_saves_sent_copy(&host);
+        // fire-and-forget: 送信は完了している。控えの保存と取り込みの失敗はログに残すだけ。
+        tauri::async_runtime::spawn(async move {
+            if server_saves {
+                log::info!("Sent への APPEND をスキップ（サーバーが自動保存: {host}）");
+            } else {
                 let res = tauri::async_runtime::spawn_blocking(move || {
                     imap_sync::append_to_sent(&host, port, &login, &password, &raw)
                 })
                 .await;
                 match res {
                     Ok(Ok(())) => {}
-                    Ok(Err(e)) => log::warn!("送信は成功、Sent への保存に失敗: {e}"),
-                    Err(e) => log::warn!("Sent 保存タスクに失敗: {e}"),
+                    Ok(Err(e)) => {
+                        log::warn!("送信は成功、Sent への保存に失敗: {e}");
+                        return; // 控えが無いので取りに行かない（次の定期同期に任せる）
+                    }
+                    Err(e) => {
+                        log::warn!("Sent 保存タスクに失敗: {e}");
+                        return;
+                    }
                 }
-            });
-        }
+            }
+            refresh_sent_after_send(&app, account_id, server_saves).await;
+        });
     }
     Ok(())
+}
+
+/// 送った直後に、そのアカウントの送信済み（Sent）だけを同期し、終わったら "sync:sent" で知らせる
+/// （画面は一覧と開いている会話を読み直す）。同じアカウントの同期が走っていれば終わるのを待ち、
+/// 待ちきれなければ諦める（走っていた同期か次の定期同期が取り込む）。失敗はログに残すだけ。
+async fn refresh_sent_after_send(app: &AppHandle, account_id: i64, server_saves: bool) {
+    tokio::time::sleep(sent_refresh::wait_before_sync(server_saves)).await;
+    let control = app.state::<SyncControl>();
+    let free = sent_refresh::wait_until_free(
+        || control.is_running(account_id),
+        sent_refresh::BUSY_WAIT_MAX,
+        sent_refresh::BUSY_POLL,
+    )
+    .await;
+    if !free {
+        log::info!(
+            "送った直後の Sent の同期を見送り（アカウント {account_id} の同期が続いている）"
+        );
+        return;
+    }
+    match run_account_sync(app, account_id, imap_sync::SyncScope::SentOnly).await {
+        Ok(r) => {
+            let _ = app.emit(
+                "sync:sent",
+                SentSynced {
+                    account_id: i32::try_from(account_id).unwrap_or(i32::MAX),
+                    stored: r.stored,
+                },
+            );
+        }
+        Err(e) => log::warn!("送った直後の Sent の同期に失敗（アカウント {account_id}）: {e}"),
+    }
 }
 
 /// 添付の合計サイズ上限（多くの SMTP サーバーの制限に合わせて 25MB）。
@@ -3522,6 +3575,7 @@ pub async fn mail_resync(
             &listed,
             &cancel_task,
             &session_slot,
+            imap_sync::SyncScope::All,
         )
     })
     .await;

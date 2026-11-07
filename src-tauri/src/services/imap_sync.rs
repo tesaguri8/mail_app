@@ -200,6 +200,31 @@ const SYNC_FOLDERS: &[FolderSpec] = &[
     },
 ];
 
+/// 1 回の同期で回す範囲。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncScope {
+    /// 受信箱＋標準フォルダの全部（定期・手動の同期）。新着のあと、古い側の索引と本文の補完も少しずつ進める。
+    All,
+    /// 送信済み（Sent）だけの新着。送った直後に、控えを待たずに会話へ出すための軽い同期
+    /// （下書きの片付け・古い側の索引・本文の補完はしない。それらは次の定期同期に任せる）。
+    SentOnly,
+}
+
+/// 見つかったフォルダ（IMAP 名・ローカルタグ）を、同期の範囲で絞る。
+/// `SentOnly` で送信済みフォルダが見つかっていなければ空（何も同期しない）。
+fn scope_folders(
+    folders: Vec<(String, &'static str)>,
+    scope: SyncScope,
+) -> Vec<(String, &'static str)> {
+    match scope {
+        SyncScope::All => folders,
+        SyncScope::SentOnly => folders
+            .into_iter()
+            .filter(|(_, tag)| *tag == "sent")
+            .collect(),
+    }
+}
+
 /// フォルダ一覧から該当メールボックス名を判定する。
 /// 1) 特殊用途属性（\Sent 等。RFC 6154 SPECIAL-USE。システム属性以外は Custom で来る）。
 /// 2) よくある名前（末端名 or フルネームで大小無視の一致）。
@@ -280,6 +305,7 @@ fn run_sync(
     progress: &dyn Fn(&str, i32, i32),
     listed: &dyn Fn(&str, i32),
     cancel: &AtomicBool,
+    scope: SyncScope,
 ) -> Result<(), String> {
     // 同期対象フォルダ（受信箱＋存在する標準フォルダ）を一覧する。
     // ※ names はセッションを借用するので、必要な名前を owned で取り出してから drop する。
@@ -294,6 +320,23 @@ fn run_sync(
             drop(names);
         }
         Err(e) => log::warn!("フォルダ一覧の取得に失敗（受信箱のみ同期）: {e}"),
+    }
+    let folders = scope_folders(folders, scope);
+    if scope == SyncScope::SentOnly {
+        // 送った直後の軽い同期: 送信済みの新着だけを取り込んで終える（Pass 1 のみ）。
+        let cancelled = || is_cancelled(cancel);
+        return for_each_folder(
+            session,
+            &folders,
+            &cancelled,
+            reconnect,
+            |s, (mbox, tag)| {
+                sync_folder(
+                    s, conn, account_id, mbox, tag, window, result, progress, listed, cancel,
+                )
+            },
+            |(mbox, tag), e| log::warn!("フォルダ '{mbox}' ({tag}) の同期に失敗: {e}"),
+        );
     }
 
     // Pass 0: 破棄済み下書き（墓標）のうち、サーバー側コピーの削除が済んでいないものを片付ける。
@@ -370,7 +413,8 @@ fn run_sync(
     )
 }
 
-/// IMAP に接続し、受信箱＋標準フォルダを同期する。接続は `slot` で使い回す（プール）。
+/// IMAP に接続し、受信箱＋標準フォルダ（`scope` が `SentOnly` なら送信済みだけ）を同期する。
+/// 接続は `slot` で使い回す（プール）。
 /// 生きたセッションがあれば NOOP で確認して再利用し、無ければ張り直す。成功時はログアウトせず
 /// セッションを slot に残す（次回の同期が接続＋ログインをやり直さない＝スムーズ）。失敗時は
 /// セッションを捨てて次回張り直す。
@@ -386,6 +430,7 @@ pub fn sync_account(
     listed: &dyn Fn(&str, i32),
     cancel: &AtomicBool,
     slot: &Mutex<Option<ImapSession>>,
+    scope: SyncScope,
 ) -> Result<SyncResult, SyncError> {
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
     // busy_timeout: WAL でも書き込みロックは 1 つ。UI/ローカル加工/他アカウント同期と競合した
@@ -422,6 +467,7 @@ pub fn sync_account(
         progress,
         listed,
         cancel,
+        scope,
     ) {
         Ok(()) => Ok(result), // セッションは slot に残して使い回す（ログアウトしない）。
         Err(e) => {
@@ -1875,6 +1921,38 @@ pub fn fetch_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 見つかったフォルダの並び（受信箱＋標準フォルダ）。
+    fn found() -> Vec<(String, &'static str)> {
+        vec![
+            ("INBOX".to_string(), "inbox"),
+            ("INBOX.Sent".to_string(), "sent"),
+            ("INBOX.Drafts".to_string(), "drafts"),
+            ("INBOX.Trash".to_string(), "trash"),
+        ]
+    }
+
+    /// 定期・手動の同期は、見つかったフォルダを全部回す。
+    #[test]
+    fn scope_all_keeps_every_folder() {
+        assert_eq!(scope_folders(found(), SyncScope::All), found());
+    }
+
+    /// 送った直後の同期は、送信済みフォルダ（サーバー上の名前のまま）だけを回す。
+    #[test]
+    fn scope_sent_only_keeps_just_the_sent_folder() {
+        assert_eq!(
+            scope_folders(found(), SyncScope::SentOnly),
+            vec![("INBOX.Sent".to_string(), "sent")]
+        );
+    }
+
+    /// 送信済みフォルダが見つからないサーバーでは、送った直後の同期は何も回さない（受信箱も触らない）。
+    #[test]
+    fn scope_sent_only_without_a_sent_folder_is_empty() {
+        let no_sent: Vec<_> = found().into_iter().filter(|(_, t)| *t != "sent").collect();
+        assert!(scope_folders(no_sent, SyncScope::SentOnly).is_empty());
+    }
 
     /// 試験用の接続（何本目に張った接続か）。
     struct FakeSession(u32);

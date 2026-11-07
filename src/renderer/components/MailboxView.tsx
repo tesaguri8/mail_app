@@ -109,6 +109,7 @@ import {
   type Slots,
 } from './mailListWindow';
 import { TimelineScrubber } from './timeline/TimelineScrubber';
+import { shouldRefreshOnSync } from './conversationRefresh';
 import { localDayKey } from './timeline/dayCounts';
 import { useDayFold } from '../hooks/useDayFold';
 import { Compose, composeKey, type ComposeTarget } from './Compose';
@@ -291,6 +292,8 @@ export function MailboxView({
   slotsRef.current = slots;
   const [opened, setOpened] = useState<MailDetail | null>(null);
   const [syncing, setSyncing] = useState(false);
+  // 同期で新しいメールが入るたびに 1 進める合図。開いている会話がこれを見て裏で読み直す（docs/SYNC.md §5-3）。
+  const [syncTick, setSyncTick] = useState(0);
   const [progress, setProgress] = useState<SyncProgress | null>(null);
   const [status, setStatus] = useState('');
   const [layout, setLayout] = useState<'side' | 'top'>('side');
@@ -852,14 +855,17 @@ export function MailboxView({
   // 画面を離れる（アンマウント）ときも、開いていた未読スレッドを既読化する。
   useEffect(() => () => flushActiveRead(), [flushActiveRead]);
 
-  // 自動同期の完了で一覧を再読み込み（手動同期中は onSync 側が再読込するのでスキップ）。
+  // 自動同期（と送った直後の Sent の同期）の完了で一覧を再読み込み（手動同期中は onSync 側が
+  // 再読込するのでスキップ）。開いている会話は、手動同期中でも読み直す（syncTick）。
   useEffect(() => {
     const onSynced = (e: Event) => {
-      if (syncing || selected == null) return;
+      if (selected == null) return;
       // 新着が保存された時だけ一覧を更新（読み込み済みの位置は保持）。新着ゼロなら
       // 再取得しない＝スクロール中に先頭ページ（最新＝2026）へ巻き戻る「ループ」を防ぐ。
-      const stored = (e as CustomEvent<{ stored?: number }>).detail?.stored ?? 0;
-      if (stored > 0) loadMails({ keepScroll: true });
+      const stored = (e as CustomEvent<{ stored?: number }>).detail?.stored;
+      if (!shouldRefreshOnSync(stored)) return;
+      setSyncTick((n) => n + 1);
+      if (!syncing) loadMails({ keepScroll: true });
     };
     window.addEventListener(MAIL_SYNCED_EVENT, onSynced);
     return () => window.removeEventListener(MAIL_SYNCED_EVENT, onSynced);
@@ -993,6 +999,7 @@ export function MailboxView({
       setStatus(t('mailbox.result', { fetched, stored }));
       // 手動同期後も読み込み済みの位置を保つ（先頭ページへ巻き戻さない）。
       await loadMails({ keepScroll: true });
+      if (shouldRefreshOnSync(stored)) setSyncTick((n) => n + 1);
     } catch (e) {
       setStatus('✕ ' + String(e));
     } finally {
@@ -2332,6 +2339,7 @@ export function MailboxView({
       folder={folder}
       handlers={conversationHandlers}
       query={query.trim() ? query : undefined}
+      refreshKey={syncTick}
     />
   ) : (
     <div className="flex h-full items-center justify-center text-sm text-white/40">

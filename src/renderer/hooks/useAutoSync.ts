@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import type { AccountSummary } from '@bindings/AccountSummary';
+import type { SentSynced } from '@bindings/SentSynced';
 import type { SyncProgress } from '@bindings/SyncProgress';
 import { mailSync } from '../services/mail';
 import { googleAccounts, googleSync } from '../services/google';
@@ -205,6 +206,18 @@ export function useAutoSync(accounts: AccountSummary[]): () => void {
     }, intervalSec * 1000);
     return () => clearInterval(h);
   }, [intervalSec, syncNow]);
+
+  // 送った直後に Rust が Sent だけを同期し終えたら（"sync:sent"）、自動同期の完了と同じ合図を出す
+  // （一覧と開いている会話が読み直し、送った返信・転送が出る。docs/SYNC.md §5-3）。
+  useEffect(() => {
+    if (!isTauri) return;
+    const unlisten = listen<SentSynced>('sync:sent', (e) => {
+      const { stored } = e.payload;
+      if (stored > 0)
+        window.dispatchEvent(new CustomEvent(MAIL_SYNCED_EVENT, { detail: { stored } }));
+    });
+    return () => void unlisten.then((off) => off());
+  }, []);
 
   // 連絡先・組織を変えたら、まとめ待ちのあと ② 連絡先の流れだけを回す（変更したら即送る）。
   // 自動同期をオフ（0）にしていても送る（オフは定期の取りに行きを止める設定で、変更を手元に

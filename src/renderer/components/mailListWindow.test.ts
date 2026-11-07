@@ -325,12 +325,33 @@ describe('stickyDay / stickyPush（貼り付ける見出し）', () => {
 });
 
 describe('dayTone / rowBar（左の縦の線）', () => {
-  it('色は日付の通し番号の偶奇で決まり、続いた日は交互になる', () => {
-    expect(dayTone('2026-11-06')).not.toBe(dayTone('2026-11-05'));
-    expect(dayTone('2026-11-06')).toBe(dayTone('2026-11-04'));
-    // 月・年の境目でも交互
-    expect(dayTone('2026-11-01')).not.toBe(dayTone('2026-10-31'));
-    expect(dayTone('2026-01-01')).not.toBe(dayTone('2025-12-31'));
+  it('色は曜日で決まる（0=日曜〜6=土曜。Date.getDay と同じ）', () => {
+    // 1970-01-01 は木曜（通し番号 0 のずれを直してあること）
+    expect(dayTone('1970-01-01')).toBe(4);
+    expect(dayTone('1969-12-28')).toBe(0); // 通し番号が負でも曜日になる
+    expect(dayTone('2026-11-01')).toBe(0); // 日曜
+    expect(dayTone('2026-11-06')).toBe(5); // 金曜
+    expect(dayTone('2026-11-07')).toBe(6); // 土曜
+    // 1 週間分が全部違い、7 日後は同じ色。月・年の境目でも曜日どおり
+    const week = [
+      '2026-11-01',
+      '2026-11-02',
+      '2026-11-03',
+      '2026-11-04',
+      '2026-11-05',
+      '2026-11-06',
+      '2026-11-07',
+    ];
+    expect(week.map(dayTone)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(dayTone('2026-11-08')).toBe(dayTone('2026-11-01'));
+    expect(dayTone('2026-10-31')).toBe(6);
+    expect(dayTone('2025-12-31')).toBe(3);
+    expect(dayTone('2026-01-01')).toBe(4);
+    // 端末の曜日と一致する（任意の日で確かめる）
+    for (const k of ['2000-02-29', '2024-03-10', '2031-07-15']) {
+      expect(dayTone(k)).toBe(new Date(`${k}T00:00`).getDay());
+    }
+    expect(dayTone('bad')).toBe(0);
   });
   it('線はその日のメールの行だけ（見出しには引かない）。最初のメールで始め、最後のメールで切る', () => {
     const days: ListDay[] = [

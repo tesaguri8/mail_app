@@ -448,15 +448,21 @@ export function stickyPush(nextStart: number | null, scrollTop: number, height: 
   return Math.min(0, nextStart - scrollTop - height);
 }
 
+/** 曜日（0=日曜〜6=土曜。`Date.getDay()` と同じ並び）。日の色の添字に使う。 */
+export type DayTone = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+
 /**
- * 日の色（左の縦の線と見出しのアクセント。0 / 1 の 2 色を交互に）。日付を通し番号（1970-01-01 からの
- * 日数）にしたときの偶数・奇数で決めるので、スクロール・読み込み・畳みで入れ替わらない。
- * 一覧で隣り合う日が同じ偶奇になる（間の日にメールが無い）こともあるので、線は日ごとに切る（`rowBar`）。
+ * 日の色（左の縦の線と見出しのアクセント）: その日の曜日（0=日曜〜6=土曜）。7 色を曜日ごとに当てる。
+ * 日付だけで決まるので、スクロール・読み込み・畳みで入れ替わらない。端末の時差にも左右されないよう、
+ * 日付を UTC の通し番号（1970-01-01 からの日数）にして 7 で割った余りから求める。1970-01-01 は木曜（4）なので 4 足す。
+ * 間の日にメールが無いと隣り合う日が同じ曜日になることもある（ちょうど 1 週間空いたとき）ので、線は日ごとに切る（`rowBar`）。
+ * 読めない日付は 0（日曜の色）。
  */
-export function dayTone(dateKey: string): 0 | 1 {
+export function dayTone(dateKey: string): DayTone {
   const [y, m, d] = dateKey.split('-').map(Number);
   const n = Math.floor(Date.UTC(y, m - 1, d) / 86_400_000);
-  return Number.isFinite(n) && Math.abs(n) % 2 === 1 ? 1 : 0;
+  if (!Number.isFinite(n)) return 0;
+  return ((((n + 4) % 7) + 7) % 7) as DayTone;
 }
 
 /**
@@ -467,7 +473,7 @@ export function dayTone(dateKey: string): 0 | 1 {
 export function rowBar(
   layout: DayLayout,
   i: number
-): { tone: 0 | 1; first: boolean; last: boolean } | null {
+): { tone: DayTone; first: boolean; last: boolean } | null {
   if (layout.heads.length === 0) return null;
   const d = Math.max(0, lastAtOrBelow(layout.heads, i));
   const head = layout.heads[d];

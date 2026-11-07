@@ -104,6 +104,7 @@ import {
   unreadOf,
   updateLoaded,
   withUnread,
+  type DayTone,
   type ListDay,
   type Slots,
 } from './mailListWindow';
@@ -153,9 +154,27 @@ const ROW_GAP = 4;
 const RANGE_SETTLE_MS = 80;
 // 日の見出しの行の高さの見積もり（px。描いてから測る）。上の余白 6px ＋ 帯 30px。
 const DAY_HEADING_ESTIMATE = 36;
-// 日の色（左の縦の線・畳んだ日の矢印）。dayTone の 0 / 1。どの背景の写真の上でも見える濃さにする。
-const DAY_TONE_BAR = ['bg-sky-400', 'bg-amber-400'] as const;
-const DAY_TONE_TEXT = ['text-sky-300', 'text-amber-300'] as const;
+// 日の色（左の縦の線・見出しの矢印）。dayTone の曜日（0=日曜〜6=土曜）で引く。どの背景の写真の上でも
+// 見える濃さにし、隣どうしの曜日ははっきり違う色相にする。日曜の赤・土曜の青はカレンダーの曜日の色に揃える。
+// 水色（sky）は未読の点と差出人の色なので使わない。
+const DAY_TONE_BAR = [
+  'bg-red-400',
+  'bg-yellow-400',
+  'bg-emerald-400',
+  'bg-violet-400',
+  'bg-orange-400',
+  'bg-pink-400',
+  'bg-blue-400',
+] as const satisfies Record<DayTone, string>;
+const DAY_TONE_TEXT = [
+  'text-red-300',
+  'text-yellow-300',
+  'text-emerald-300',
+  'text-violet-300',
+  'text-orange-300',
+  'text-pink-300',
+  'text-blue-300',
+] as const satisfies Record<DayTone, string>;
 // メールの行の字下げ（見出しの左端から px）と、その中の日の線の位置（見出しの左端から px）。
 // 線が見出しの下にぶら下がる形。サイドバーを最も狭くしても差出人・日時が窮屈にならない幅にする。
 const MAIL_INDENT = 14;
@@ -1645,7 +1664,7 @@ export function MailboxView({
 
   // 左の縦の線（その日のメールの範囲。見出しの下にぶら下がる形）。メールの行の字下げの中に置き、
   // 最後のメールでなければ、行の間の隙間へ伸ばしてつなぐ。
-  const renderDayBar = (bar: { tone: 0 | 1; first: boolean; last: boolean }) => (
+  const renderDayBar = (bar: { tone: DayTone; first: boolean; last: boolean }) => (
     <span
       aria-hidden
       className={`absolute top-0 w-[3px] ${DAY_TONE_BAR[bar.tone]} ${

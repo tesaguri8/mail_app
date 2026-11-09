@@ -12,7 +12,8 @@
     "range_2": "2 days",
     "range_3": "3 days",
     "range_7": "7 days",
-    "tomorrow": "Tomorrow"
+    "tomorrow": "Tomorrow",
+    "none": "None"
   },
   "titlebar": {
     "alwaysOnTop": "Always on top",

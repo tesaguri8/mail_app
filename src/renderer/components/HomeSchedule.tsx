@@ -7,7 +7,8 @@ import { expandEvents } from '../utils/recurrence';
 import { isHoliday } from '../utils/holidays';
 import { CALENDAR_SYNCED_EVENT } from '../hooks/useAutoSync';
 import { useOnTabActivated, useTabActive } from '../hooks/useTabActive';
-import { ymd, addDays, dayOf } from './CalendarView';
+import { ymd, addDays } from './CalendarView';
+import { scheduleGroups, type ScheduleGroup } from './scheduleGroups';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -25,23 +26,6 @@ const RANGE_KEY = 'rondine.home.scheduleDays';
 /** 時刻部分（HH:MM）を取り出す。日付のみなら空。 */
 const timeOf = (iso: string) => (iso.length > 10 ? iso.slice(11, 16) : '');
 
-/** 予定が日付 d（'YYYY-MM-DD'）に掛かるか（開始日〜終了日、終日は最終日を含む）。 */
-function coversDay(e: EventSummary, d: string): boolean {
-  const start = dayOf(e.start_at);
-  const end = e.end_at ? dayOf(e.end_at) : start;
-  return start <= d && d <= end;
-}
-
-/** その日の予定を、終日→開始時刻順に並べて返す。 */
-function eventsOn(events: EventSummary[], d: string): EventSummary[] {
-  return events
-    .filter((e) => coversDay(e, d))
-    .sort((a, b) => {
-      if (a.all_day !== b.all_day) return a.all_day ? -1 : 1;
-      return a.start_at.localeCompare(b.start_at);
-    });
-}
-
 /** 日付の文字色（日曜/祝日=赤・土曜=青・平日=既定）。 */
 function dayTone(ds: string): string {
   const dow = new Date(`${ds}T00:00`).getDay();
@@ -54,6 +38,7 @@ function dayTone(ds: string): string {
  * ホーム右カラム：メールアカウント下に出す「本日の日程」。
  * 本日 / 2日 / 3日 / 7日 で表示範囲を切り替え（既定は本日）、期間に掛かる予定を
  * カレンダーと同じ展開（繰り返し含む）で一覧する。クリックでカレンダー画面へ。
+ * 今日に予定が無いときは、今日の下に「なし」と出す（明日の予定を今日のものと見誤らせない）。
  */
 export function HomeSchedule({ onOpenCalendar }: { onOpenCalendar?: () => void }) {
   const { t, i18n } = useTranslation();
@@ -107,13 +92,8 @@ export function HomeSchedule({ onOpenCalendar }: { onOpenCalendar?: () => void }
   // 他のタブから戻ったら読み直す（カレンダーで予定を足した・消した等）。
   useOnTabActivated(reload);
 
-  // 期間内の各日を、予定のある日だけ抽出（本日のみのときは日ヘッダを出さない）。
-  const groups = useMemo(() => {
-    const start = new Date(`${todayStr}T00:00`);
-    return Array.from({ length: range }, (_, i) => ymd(addDays(start, i)))
-      .map((day) => ({ day, list: eventsOn(events, day) }))
-      .filter((g) => g.list.length > 0);
-  }, [events, range, todayStr]);
+  // 今日は必ず、明日以降は予定のある日だけ（本日のみのときは日ヘッダを出さない）。
+  const groups = useMemo(() => scheduleGroups(events, todayStr, range), [events, range, todayStr]);
 
   const dayLabel = (ds: string): string => {
     if (ds === todayStr) return t('cal.today');
@@ -167,7 +147,10 @@ export function HomeSchedule({ onOpenCalendar }: { onOpenCalendar?: () => void }
   );
 
   /** 1 グループ（1 日）の本文。本日は現在時刻の位置に nowLine を差し込む。 */
-  const groupBody = (g: { day: string; list: EventSummary[] }) => {
+  const groupBody = (g: ScheduleGroup) => {
+    // 予定の無い日（今日だけ）は「なし」。予定行の時刻欄と同じ字下げ・控えめな色で。
+    if (g.list.length === 0)
+      return <p className="pl-2.5 text-xs text-white/45">{t('home.none')}</p>;
     if (g.day !== todayStr) return g.list.map((e) => row(e, g.day));
     // 現在より後に始まる最初の時刻指定予定の直前に「今」ラインを置く。
     const idx = g.list.findIndex((e) => !e.all_day && e.start_at > nowIso);
@@ -207,22 +190,18 @@ export function HomeSchedule({ onOpenCalendar }: { onOpenCalendar?: () => void }
         </div>
       </div>
 
-      {groups.length === 0 ? (
-        <p className="text-xs text-white/45">{t('cal.noEvents')}</p>
-      ) : (
-        <div className="max-h-52 space-y-2.5 overflow-y-auto pr-1">
-          {groups.map((g) => (
-            <div key={g.day}>
-              {range > 1 && (
-                <div className={`mb-1 pl-2.5 text-[11px] font-medium ${dayTone(g.day)}`}>
-                  {dayLabel(g.day)}
-                </div>
-              )}
-              <div className="space-y-1">{groupBody(g)}</div>
-            </div>
-          ))}
-        </div>
-      )}
+      <div className="max-h-52 space-y-2.5 overflow-y-auto pr-1">
+        {groups.map((g) => (
+          <div key={g.day}>
+            {range > 1 && (
+              <div className={`mb-1 pl-2.5 text-[11px] font-medium ${dayTone(g.day)}`}>
+                {dayLabel(g.day)}
+              </div>
+            )}
+            <div className="space-y-1">{groupBody(g)}</div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "compose",
+  "description": "作成画面の別ウィンドウ（compose-<連番>）。作成と元メールの表示に要るものだけ",
+  "windows": ["compose-*"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "dialog:allow-ask",
+    "opener:default",
+    "clipboard-manager:allow-read-text"
+  ]
+}

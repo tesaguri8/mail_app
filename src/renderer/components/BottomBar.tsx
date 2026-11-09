@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { Image, RefreshCw, Type } from 'lucide-react';
-import { BAR_MAX } from '../App';
+import { BAR_MAX } from '../config/appearance';
 import { useActivities } from '../stores/activity';
 import { contactCountLabel, type ContactCount } from '../stores/contactCount';
 

@@ -13,10 +13,11 @@ use crate::models::{
     StorageInfo, SureMergePreview, SureMergeResult, SyncListed, SyncProgress,
     SyncResult, TagSummary, ThreadDayCount, ThreadDayUnread, ThreadListItem, ThreadView, UnlinkedOrgName,
 };
-use crate::models::{AccountSyncStatus, SentSynced, SyncErrorKind};
+use crate::models::{AccountSyncStatus, ComposeHandoff, SentSynced, SyncErrorKind};
 use crate::services::attachment_fetch;
 use crate::services::autoconfig;
 use crate::services::checksum::simple_checksum;
+use crate::services::compose_window;
 use crate::services::contact_export;
 use crate::services::datadir;
 use crate::services::dataver;
@@ -35,7 +36,7 @@ use crate::services::vcard;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 /// 実行中の同期のキャンセルフラグを account_id ごとに管理する（中断ボタン用）。
 #[derive(Default)]
@@ -1527,6 +1528,33 @@ pub async fn mail_draft_discard(
         spawn_draft_remote_delete(&app, target);
     }
     Ok(())
+}
+
+/// 作成画面を別ウィンドウで開く（書きかけの内容を預けて `compose-<連番>` を開く）。
+/// 開いたウィンドウの label を返す（docs/COMPOSE.md §別ウィンドウ）。
+/// Windows では同期コマンドの中でウィンドウを作るとデッドロックするので async にする。
+#[tauri::command]
+pub async fn compose_window_open(
+    app: AppHandle,
+    handoff: ComposeHandoff,
+) -> Result<String, String> {
+    compose_window::open(&app, handoff).map_err(|e| e.to_string())
+}
+
+/// 呼んだ作成ウィンドウに預けてある書きかけの内容（無ければ null）。
+#[tauri::command]
+pub fn compose_window_handoff(window: WebviewWindow) -> Result<Option<ComposeHandoff>, String> {
+    compose_window::handoff_for(&window).map_err(|e| e.to_string())
+}
+
+/// 呼んだ作成ウィンドウの預かりを今の内容で置き換える（下書きを保存するたびに呼ぶ。
+/// 再読み込みしても、最後に保存した内容から続けられるように）。
+#[tauri::command]
+pub fn compose_window_save_state(
+    window: WebviewWindow,
+    handoff: ComposeHandoff,
+) -> Result<(), String> {
+    compose_window::save_state(&window, handoff).map_err(|e| e.to_string())
 }
 
 /// タグ一覧（使用件数つき）。

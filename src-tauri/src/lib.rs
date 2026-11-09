@@ -2,6 +2,7 @@ mod commands;
 pub mod models;
 pub mod services;
 
+use services::compose_window;
 use services::datadir;
 use services::store::Store;
 use tauri::Manager;
@@ -48,7 +49,19 @@ pub fn run() {
             app.manage(crate::services::sync_status::SyncStatusBoard::default());
             // 添付ごとの取得の順番待ち（同じ添付を二重に取らない）。
             app.manage(crate::services::attachment_fetch::AttachmentFetches::default());
+            // 作成ウィンドウへ渡す書きかけの内容（label ごと。docs/COMPOSE.md §別ウィンドウ）。
+            app.manage(compose_window::ComposeWindows::default());
             Ok(())
+        })
+        // 作成ウィンドウが閉じたら、預けていた内容を捨てる。
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                if compose_window::is_compose_label(window.label()) {
+                    window
+                        .state::<compose_window::ComposeWindows>()
+                        .release(window.label());
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
@@ -118,6 +131,9 @@ pub fn run() {
             commands::mail_get_draft,
             commands::mail_draft_sync_remote,
             commands::mail_draft_discard,
+            commands::compose_window_open,
+            commands::compose_window_handoff,
+            commands::compose_window_save_state,
             commands::tag_list,
             commands::tag_create,
             commands::tag_update,

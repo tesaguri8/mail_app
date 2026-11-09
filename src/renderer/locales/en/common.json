@@ -241,7 +241,10 @@
     "unsavedCancel": "Keep editing",
     "quoteAppendNote": "The original message on the right will be quoted below your text when sent.",
     "makeQuote": "Make into quote",
-    "draft": "Edit draft"
+    "draft": "Edit draft",
+    "popOut": "Open in a new window",
+    "windowMissing": "The message being written could not be found. Please close this window.",
+    "windowLoading": "Loading…"
   },
   "ctx": {
     "searchSender": "Search this sender's mail",

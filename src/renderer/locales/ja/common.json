@@ -241,7 +241,10 @@
     "unsavedCancel": "編集に戻る",
     "quoteAppendNote": "送信時に、右の元メールを引用として本文の下に付けます。",
     "makeQuote": "引用文にする",
-    "draft": "下書きの編集"
+    "draft": "下書きの編集",
+    "popOut": "別ウィンドウで開く",
+    "windowMissing": "作成中の内容が見つかりませんでした。このウィンドウを閉じてください。",
+    "windowLoading": "読み込み中…"
   },
   "ctx": {
     "searchSender": "この差出人のメールを検索",

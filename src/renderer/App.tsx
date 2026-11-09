@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { TitleBar, type AppView } from './components/TitleBar';
 import { BottomBar } from './components/BottomBar';
 import { Home } from './components/Home';
@@ -16,21 +16,20 @@ import { SyncProvider } from './components/SyncProvider';
 import type { AccountSummary } from '@bindings/AccountSummary';
 // 背景写真プール（同梱サンプル）。docs/UI_UX_DESIGN.md 背景写真システム
 import { BACKGROUNDS, getBackgroundIndex, setBackgroundIndex } from './config/backgrounds';
+import {
+  appearanceStyle,
+  backdropCss,
+  panelTintCss,
+  readDim,
+  readInk,
+  writeDim,
+  writeInk,
+} from './config/appearance';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 /** 起動から連絡先一覧を先読みするまでの待ち（ms）。 */
 const CONTACTS_PREFETCH_DELAY_MS = 3000;
-
-/** 背景の濃さ・文字色スライダーの共通最大値（85%）。 */
-export const BAR_MAX = 0.85;
-
-/** 文字色（インク）の白→黒スライダー(0〜0.85)を実際の色に。0=白, 0.85=黒。
- * これを Tailwind の --color-white に流し込み、UI 全体を白⇄黒でトーン反転させる。 */
-function inkColor(ink: number): string {
-  const l = Math.round(255 * (1 - Math.min(ink, BAR_MAX) / BAR_MAX));
-  return `rgb(${l}, ${l}, ${l})`;
-}
 
 export default function App() {
   const [view, setView] = useState<AppView>('home');
@@ -41,15 +40,11 @@ export default function App() {
   // メール画面で現在表示中のアカウント選択（'all'=全て）。フッターの件数表示に使う。
   const [mailSel, setMailSel] = useState<number | 'all' | null>(null);
   // 背景のかぶせ（暗さ）。写真によって文字が見づらい時に上げる。
-  const [dim, setDim] = useState<number>(() => Number(localStorage.getItem('rondine.dim') ?? 0));
-  useEffect(() => {
-    localStorage.setItem('rondine.dim', String(dim));
-  }, [dim]);
+  const [dim, setDim] = useState<number>(readDim);
+  useEffect(() => writeDim(dim), [dim]);
   // 文字色（インク）。0=白, 0.85=黒。UI 全体を白⇄黒でトーン反転させて明るい写真でも読める。
-  const [ink, setInk] = useState<number>(() => Number(localStorage.getItem('rondine.ink') ?? 0));
-  useEffect(() => {
-    localStorage.setItem('rondine.ink', String(ink));
-  }, [ink]);
+  const [ink, setInk] = useState<number>(readInk);
+  useEffect(() => writeInk(ink), [ink]);
   // ボトムバーのスライダーがどちらを操作するか（背景の濃さ / 文字色）。
   const [barMode, setBarMode] = useState<'backdrop' | 'ink'>(() =>
     localStorage.getItem('rondine.barMode') === 'ink' ? 'ink' : 'backdrop'
@@ -68,12 +63,9 @@ export default function App() {
   const backgroundUrl = BACKGROUNDS[bgIndex] ?? BACKGROUNDS[0] ?? '';
   // 背景（かぶせグラデ＋写真）。会話の固定見出しラベル等が「同じ背景を同じ位置で」貼って
   // 透明に見せられるよう、同じ文字列を CSS 変数 --app-backdrop としても配る（bg-fixed で位置合わせ）。
-  const backdrop = `linear-gradient(160deg, rgba(10,14,28,${(0.35 + dim * 0.6).toFixed(2)}) 0%, rgba(6,9,20,${(0.55 + dim * 0.5).toFixed(2)}) 100%), url(${backgroundUrl})`;
-  // 各画面の面（パネル）に敷く土台。写真の上に文字が直接乗ると、明るい写真では沈むため、
-  // 背景よりわずかに濃い面を敷いて内容を浮かせる。濃さはスライダー(dim)に追随させ、
-  // 0% でも最低 5% は残す（利用者提案 2026-09-01「スライダー指定＋5%」）。
-  // ホームは全面ビジュアルが意匠なので敷かない。
-  const panelTint = `rgba(6, 9, 20, ${Math.min(dim + 0.05, 1).toFixed(2)})`;
+  const backdrop = backdropCss(dim, backgroundUrl);
+  // 各画面の面（パネル）に敷く土台（config/appearance）。ホームは全面ビジュアルが意匠なので敷かない。
+  const panelTint = panelTintCss(dim);
 
   const refreshAccounts = useCallback(() => {
     if (!isTauri) return;
@@ -150,17 +142,7 @@ export default function App() {
     <SyncProvider>
       <div
         className="flex h-full flex-col overflow-hidden bg-cover bg-center text-white"
-        style={
-          {
-            // 背景オーバーレイ: 既定でも白文字が読める最低限の暗さを土台にし、スライダー(dim)で
-            // さらに濃くする。0% でも明るい写真＋白文字が真っ白にならないようにする。
-            backgroundImage: backdrop,
-            // 固定見出しラベルが同じ背景を貼れるよう、同じ文字列を配る（bg-fixed で位置を合わせる）。
-            '--app-backdrop': backdrop,
-            // 文字色スライダー: Tailwind の白を差し替えて UI 全体を白⇄黒でトーン反転。
-            '--color-white': inkColor(ink),
-          } as CSSProperties
-        }
+        style={appearanceStyle(backdrop, ink)}
       >
         <TitleBar onNavigate={navigate} onCycleBackground={cycleBackground} />
 

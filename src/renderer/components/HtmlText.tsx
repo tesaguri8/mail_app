@@ -1,9 +1,7 @@
 import { Fragment, useState, type ReactNode } from 'react';
-import { openUrl } from '@tauri-apps/plugin-opener';
 import { matchDates } from '../utils/dateparse';
 import { ImageActions, type ImageAction } from './ImageActions';
-
-const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+import { BodyLink } from './LinkGuard';
 
 /** http(s)/mailto のみ許可。javascript: などは無効化する。 */
 function safeHref(href: string | null): string | null {
@@ -22,11 +20,6 @@ function remoteSrc(src: string): string | null {
   if (/^https?:\/\//i.test(v)) return v;
   if (v.startsWith('//')) return `https:${v}`;
   return null;
-}
-
-function openExternal(url: string) {
-  if (isTauri) openUrl(url).catch(() => undefined);
-  else window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 // テキストとして改行・段落を作るブロック要素
@@ -221,21 +214,16 @@ function renderNode(
   if (tag === 'a') {
     const href = safeHref(el.getAttribute('href'));
     if (!href) return <Fragment key={key}>{children}</Fragment>;
+    // 開くか止めるかは差出人の信頼で決まる（LinkGuard。docs/MAIL_SECURITY.md §2.1）。
+    // 開くリンクは下線なしの水色。
     return (
-      <a
+      <BodyLink
         key={key}
         href={href}
-        onClick={(e) => {
-          e.preventDefault();
-          // バブル等でリンククリックが親の展開トグルへ伝播しないよう止める。
-          e.stopPropagation();
-          openExternal(href);
-        }}
-        // リンクは下線なしの水色
         className="cursor-pointer text-sky-400 no-underline hover:text-sky-300"
       >
         {children}
-      </a>
+      </BodyLink>
     );
   }
 
@@ -360,6 +348,7 @@ function stripTrailingPunct(url: string): [string, string] {
  * プレーン本文（AutoLinkText）と HTML 本文のテキストノード（HtmlText）で共有し、生の
  * URL/メールの見た目とクリック挙動（外部ブラウザで開く）を揃える。
  * - URL: 水色リンク。クリックで外部ブラウザ（親要素へは伝播させない＝バブルを開かない）。
+ *   差出人が信頼できなければ左クリックでは開かず、右クリックのメニューから開く（LinkGuard）。
  * - メール: renderEmail があればそれで描画（＋登録/新規作成の導線）、無ければ素のテキスト。
  * - 検索語（re）は一致部分を <mark> でハイライトする。
  */
@@ -408,19 +397,9 @@ function linkifyToNodes(
     const [core, trail] = stripTrailingPunct(match);
     const href = core.startsWith('www.') ? `https://${core}` : core;
     nodes.push(
-      <a
-        key={key++}
-        href={href}
-        onClick={(e) => {
-          e.preventDefault();
-          // クリックが親（バブルの展開トグル等）へ伝播しないよう止める。
-          e.stopPropagation();
-          openExternal(href);
-        }}
-        className={LINK_CLASS}
-      >
+      <BodyLink key={key++} href={href} className={LINK_CLASS}>
         {core}
-      </a>,
+      </BodyLink>,
     );
     if (trail) pushText(trail);
   }

@@ -27,6 +27,7 @@ pub mod parser;
 pub mod postal;
 pub mod quotes;
 pub mod selfmark;
+pub mod sender_auth;
 pub mod sent_refresh;
 pub mod smtp;
 pub mod spam;

@@ -1471,8 +1471,11 @@ impl Store {
         let conn = self.read_conn.lock().unwrap();
         let detail = conn
             .query_row(
-                "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id, from_name, to_name, account_id, cc_addresses, reply_to, COALESCE(body_state,'present'), COALESCE(verified_self,0)
-                 FROM emails WHERE id = ?1",
+                &format!(
+                    "SELECT id, subject, from_address, to_addresses, date, clean_body, body_plain, body_html, body_html_z, has_attachments, body_compacted, message_id, from_name, to_name, account_id, cc_addresses, reply_to, COALESCE(body_state,'present'), COALESCE(verified_self,0), auth_result, ({own}) = 'out'
+                 FROM emails e WHERE id = ?1",
+                    own = super::threads::OWN_MAIL_SQL
+                ),
                 params![id],
                 |r| {
                     // HTML 本文は圧縮列(body_html_z)を優先し展開。無ければ旧 TEXT 列を使う。
@@ -1500,8 +1503,15 @@ impl Store {
                         body_compacted: r.get::<_, i64>(10)? != 0,
                         body_state: r.get::<_, String>(17)?,
                         verified_self: r.get::<_, i64>(18)? != 0,
+                        is_own: r.get::<_, i64>(20)? != 0,
+                        spoof_suspect: crate::services::sender_auth::spoof_suspected(
+                            r.get::<_, Option<String>>(19)?.as_deref(),
+                        ),
+                        // 差出人の目印は下でまとめて付与する。
                         is_green: false,
                         is_vip: false,
+                        is_known: false,
+                        is_replied: false,
                     })
                 },
             )
@@ -1509,13 +1519,13 @@ impl Store {
         let Some(mut d) = detail else {
             return Ok(None);
         };
-        // グリーン判定（本人 or 認定ドメイン）と VIP（お気に入り連絡先）判定。
+        // 差出人の目印（グリーン・VIP・住所録・返信歴）。会話のバブルと同じ基準（docs/MAIL_SECURITY.md §2.1）。
         let green_set = super::greendomain::green_domain_set(&conn)?;
-        d.is_green =
-            super::greendomain::address_is_green(&conn, &green_set, d.from_address.as_deref())?;
-        if let Some(from) = d.from_address.as_deref() {
-            d.is_vip = super::greendomain::address_is_vip(&conn, from)?;
-        }
+        let f = super::greendomain::sender_flags(&conn, &green_set, d.from_address.as_deref())?;
+        d.is_green = f.is_green;
+        d.is_vip = f.is_vip;
+        d.is_known = f.is_known;
+        d.is_replied = f.is_replied;
         // ヘッダの表示名が無ければ住所録から補完する（既存メール・表示名なしメール向け）。
         if d.from_name.is_none() {
             d.from_name = contact_name_for(&conn, d.from_address.as_deref())?;

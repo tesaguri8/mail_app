@@ -339,11 +339,20 @@ pub fn assign_thread(conn: &Connection, email_id: i64) -> rusqlite::Result<Optio
     Ok(Some(tid))
 }
 
+/// 自分が送ったメールか（'out'）／相手からか（'in'）を決める SQL 式（emails の別名は `e`）。
+/// 送信済み・下書きフォルダにあるか、差出人がそのアカウント自身なら 'out'。会話の右寄せと、
+/// 全文表示で本文のリンクを開いてよいか（docs/MAIL_SECURITY.md §2.1）を同じ基準で決める。
+pub(crate) const OWN_MAIL_SQL: &str = "CASE WHEN e.folder IN ('sent','drafts') THEN 'out'
+     WHEN EXISTS(SELECT 1 FROM accounts a
+                 WHERE a.id = e.account_id
+                   AND lower(a.email) = lower(e.from_address)) THEN 'out'
+     ELSE 'in' END";
+
 /// ThreadMessage をクエリ行から組み立てる。
 /// 列順: 0:id 1:account_id 2:message_id 3:from_address 4:from_name 5:to_addresses
 /// 6:subject 7:date 8:direction 9:clean_body 10:body_plain 11:body_html 12:body_html_z
 /// 13:has_attachments 14:has_quotes 15:is_read 16:folder 17:thread_assignment 18:is_flagged
-/// 19:verified_self 20:is_reply 21:body_state
+/// 19:verified_self 20:is_reply 21:body_state 22:auth_result
 fn map_thread_message(r: &rusqlite::Row) -> rusqlite::Result<ThreadMessage> {
     let html_z: Option<Vec<u8>> = r.get(12)?;
     let body_html = match html_z {
@@ -369,9 +378,14 @@ fn map_thread_message(r: &rusqlite::Row) -> rusqlite::Result<ThreadMessage> {
         is_read: r.get::<_, i64>(15)? != 0,
         is_starred: r.get::<_, i64>(18)? != 0,
         verified_self: r.get::<_, i64>(19)? != 0,
-        // グリーン／VIP は差出人アドレス基準で load_thread_view 側でまとめて付与する。
+        // グリーン／VIP／住所録／返信歴は差出人アドレス基準で load_thread_view 側でまとめて付与する。
         is_green: false,
         is_vip: false,
+        is_known: false,
+        is_replied: false,
+        spoof_suspect: crate::services::sender_auth::spoof_suspected(
+            r.get::<_, Option<String>>(22)?.as_deref(),
+        ),
         folder: r.get(16)?,
         thread_assignment: r.get(17)?,
         body_state: r.get(21)?,
@@ -481,11 +495,7 @@ impl Store {
         let sql = format!(
             "SELECT e.id, e.account_id, e.message_id, e.from_address, e.from_name,
                           e.to_addresses, e.subject, e.date,
-                          CASE WHEN e.folder IN ('sent','drafts') THEN 'out'
-                               WHEN EXISTS(SELECT 1 FROM accounts a
-                                           WHERE a.id = e.account_id
-                                             AND lower(a.email) = lower(e.from_address)) THEN 'out'
-                               ELSE 'in' END AS direction,
+                          {OWN_MAIL_SQL} AS direction,
                           e.clean_body, e.body_plain, e.body_html, e.body_html_z,
                           e.has_attachments,
                           (length(COALESCE(e.body_plain,'')) > length(COALESCE(e.clean_body,''))) AS has_quotes,
@@ -493,7 +503,7 @@ impl Store {
                           COALESCE(e.verified_self,0),
                           (EXISTS(SELECT 1 FROM message_quotes q WHERE q.email_id = e.id)
                            OR COALESCE(TRIM(e.in_reply_to),'') <> '') AS is_reply,
-                          COALESCE(e.body_state,'present')
+                          COALESCE(e.body_state,'present'), e.auth_result
                    FROM emails e
                    WHERE e.logical_thread_id = ?1
                      AND e.folder <> 'drafts'
@@ -511,16 +521,15 @@ impl Store {
                 m.from_name = contact_name_for(conn, m.from_address.as_deref())?;
             }
         }
-        // グリーン／VIP バッジ（差出人ドメインがグリーン集合 or 住所録本人／お気に入り）を付与する。
-        // 折りたたみバブルのラベルに一覧・詳細と同じ基準でバッジを出すため（スレッドは少数）。
+        // 差出人の目印（グリーン・VIP・住所録・返信歴）を付与する。折りたたみバブルのバッジと、
+        // 本文のリンクを開いてよいかの判定を、全文表示と同じ基準にするため（スレッドは少数）。
         let green_set = super::greendomain::green_domain_set(conn)?;
         for m in messages.iter_mut() {
-            let addr = m.from_address.as_deref();
-            m.is_green = super::greendomain::address_is_green(conn, &green_set, addr)?;
-            m.is_vip = match addr.map(str::trim).filter(|s| !s.is_empty()) {
-                Some(a) => super::greendomain::address_is_vip(conn, a)?,
-                None => false,
-            };
+            let f = super::greendomain::sender_flags(conn, &green_set, m.from_address.as_deref())?;
+            m.is_green = f.is_green;
+            m.is_vip = f.is_vip;
+            m.is_known = f.is_known;
+            m.is_replied = f.is_replied;
         }
         // ② 内容照合による引用剥がし（形式非依存。docs/THREADING.md §2 優先3）。
         // 同スレッドの「より古いメールの先頭行」をアンカーに、ヒューリスティックで取り切れなかった

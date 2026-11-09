@@ -646,6 +646,15 @@ pub struct MailDetail {
     pub is_vip: bool,
     /// 「本物の自分から」検証済み（X-Rondine-Self が HMAC 一致）。バッジ用。docs/SPAM.md。
     pub verified_self: bool,
+    /// 差出人が住所録に登録済みか。本文のリンクを開いてよいかの判定に使う（docs/MAIL_SECURITY.md §2.1）。
+    pub is_known: bool,
+    /// 差出人に自分から送ったことがある（返信歴あり）か。リンクの判定用（同上）。
+    pub is_replied: bool,
+    /// 自分が送ったメール（送信済み・下書き、または差出人が自分のアカウント）か。リンクの判定用（同上）。
+    pub is_own: bool,
+    /// 認証結果（SPF/DKIM/DMARC）から、なりすましの疑いがあるか。警告と、リンクを止める判定に使う
+    /// （docs/MAIL_SECURITY.md §2.1）。
+    pub spoof_suspect: bool,
 }
 
 /// 論理スレッド（アプリが再構築する会話単位。ヘッダスレッドとは独立）。docs/THREADING.md。
@@ -703,6 +712,13 @@ pub struct ThreadMessage {
     pub is_green: bool,
     /// 差出人が住所録のお気に入り（VIP）か。折りたたみバブルの VIP バッジ用。
     pub is_vip: bool,
+    /// 差出人が住所録に登録済みか。本文のリンクを開いてよいかの判定に使う（docs/MAIL_SECURITY.md §2.1）。
+    pub is_known: bool,
+    /// 差出人に自分から送ったことがある（返信歴あり）か。リンクの判定用（同上）。
+    pub is_replied: bool,
+    /// 認証結果（SPF/DKIM/DMARC）から、なりすましの疑いがあるか。警告と、リンクを止める判定に使う
+    /// （docs/MAIL_SECURITY.md §2.1）。
+    pub spoof_suspect: bool,
     /// 「本物の自分から」検証済み（X-Rondine-Self が HMAC 一致）。バッジ用。docs/SPAM.md。
     pub verified_self: bool,
     /// 保存フォルダ（'inbox' | 'sent' | ...）。

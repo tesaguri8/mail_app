@@ -98,6 +98,16 @@ pub fn ensure_built(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// 差出人に自分から送ったことがある（返信歴あり）か。アドレスは小文字化して完全一致で当てる。
+pub(crate) fn address_is_replied(conn: &Connection, address: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sent_addresses WHERE address = lower(?1))",
+        params![address.trim()],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|v| v != 0)
+}
+
 impl Store {
     /// 送信直後に宛先を索引へ加える（送信控えの同期を待たずにフィルタへ反映するため）。
     /// 引数は Compose の宛先（"名前 <a@b>" 形式もそのまま渡してよい）。

@@ -381,7 +381,19 @@ On Mon, 30 Jun 2026 10:00:00 +0900, 山田太郎 <yamada@example.com> wrote:
 
 - **形式の多様性**: plain の `>` 引用、HTML の `<blockquote>`、インライン返信（行間差し込み）、トップ/ボトムポスト。
 - **属性行の言語差**: 日本語（`〜さんは（書）きました`, `差出人:` `送信日時:`, `-----元のメッセージ-----`）／英語（`On … wrote:`, `From: … Sent: …`, `-----Original Message-----`）の**パターン辞書**を用意。
-- **署名・定型句**: `-- ` 区切り、`Sent from my iPhone`, 会社署名ブロック等の除去。
+- **署名・定型句**: `-- ` 区切り、`Sent from my iPhone`, 会社署名ブロック等の除去（`services/quotes/signature.rs`。
+  clean_body だけから落とし、原文 body_plain は残す）。
+  - 区切りは `--` / `-- ` / `□□□` だけの行（行内の `□□□` も）、携帯・クライアントの定型、記号の罫線（`===…` / `___…`。
+    下が 10 行以下のときだけ）。
+  - **区切りの下（引用の手前まで）に会議の招待やファイル共有のリンクがあれば、その区切りでは切らない**
+    （区切り行も含めて本文に残す。PARSE_VERSION v16）。書き手が `--` の下に Zoom の招待文を貼ることがあり、
+    落とすとバブルから入口が消えるため。ホストは定数 `KEEP_LINK_HOSTS` の 1 か所で持ち、サブドメインも含めて
+    末尾で比べる（会議: zoom.us・zoom.com・teams.microsoft.com・teams.live.com・meet.google.com・webex.com／
+    共有: drive.google.com・docs.google.com・dropbox.com・1drv.ms・onedrive.live.com・sharepoint.com・box.com・
+    wetransfer.com・we.tl・gigafile.nu・firestorage.jp・datadeliver.net・icloud.com）。
+  - **YouTube・SNS・会社のホームページは入れない**（署名の宣伝として普通に入り、入れると署名が残り続ける。
+    実測では `--` の下の URL の大半がこれらで、当たるのは zoom.us の数件だけだった）。
+  - 携帯の定型（`Sent from my …` 等）は、下にリンクがあっても切る。
 - **参考にする考え方**: Mailgun **talon**、GitHub **email_reply_parser** の手法。Rust で移植・自作。
 - **時刻のゆらぎ**: タイムゾーン差・秒丸め → 突合は許容幅（例: ±数分）で行う。
 

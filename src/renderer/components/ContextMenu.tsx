@@ -60,7 +60,9 @@ export function ContextMenu({
       className="fixed z-50 min-w-44 overflow-hidden rounded-md border border-white/15 bg-neutral-900/95 py-1 text-sm shadow-xl backdrop-blur"
     >
       {header && (
-        <div className="border-b border-white/10 px-3 py-1.5 text-xs text-white/45">{header}</div>
+        <div className="max-w-md break-all border-b border-white/10 px-3 py-1.5 text-xs text-white/45">
+          {header}
+        </div>
       )}
       {items.map((it) => (
         <button

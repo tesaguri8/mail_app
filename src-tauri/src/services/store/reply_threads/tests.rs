@@ -271,3 +271,60 @@ fn ずれてしまった返信は手がかりを足して再構築すると親�
     assert_eq!(thread_of(&store, sent), thread_of(&store, parent));
     assert_eq!(thread_of(&store, inbox), thread_of(&store, parent));
 }
+
+/// 本文のリンクを開いてよいかの材料（返信歴・自分のメール・なりすましの疑い）が、会話のバブルと
+/// 全文表示の両方に同じように届く（docs/MAIL_SECURITY.md §2.1）。
+#[test]
+fn link_trust_flags_reach_thread_and_detail() {
+    let store = test_store();
+    // 相手からの 1 通（DMARC 失敗＝なりすましの疑い）。まだ一度も送ったことがない相手。
+    let mut first = mk(
+        Some("p@example.invalid"),
+        "inbox",
+        "you@example.invalid",
+        "me@example.invalid",
+        1,
+        None,
+        None,
+    );
+    first.auth_result = Some("mx.example.invalid; spf=pass; dkim=pass; dmarc=fail".into());
+    let parent = put(&store, &first);
+    let d = store.get_email(parent).unwrap().unwrap();
+    assert!(d.spoof_suspect && !d.is_own && !d.is_replied && !d.is_known);
+
+    // 自分の返信の控え（送信済み）。送ったので相手は「返信歴あり」になる。
+    let reply = put(
+        &store,
+        &mk(
+            Some("r@example.invalid"),
+            "sent",
+            "me@example.invalid",
+            "you@example.invalid",
+            2,
+            Some("p@example.invalid"),
+            Some("p@example.invalid"),
+        ),
+    );
+    store
+        .record_sent_recipients(&["you@example.invalid".to_string()], &[])
+        .unwrap();
+    let d = store.get_email(reply).unwrap().unwrap();
+    assert!(d.is_own && !d.spoof_suspect);
+
+    let view = store.thread_view(parent).unwrap().unwrap();
+    let theirs = view
+        .messages
+        .iter()
+        .find(|m| i64::from(m.id) == parent)
+        .unwrap();
+    assert!(theirs.spoof_suspect && theirs.is_replied && !theirs.is_known);
+    let mine = view
+        .messages
+        .iter()
+        .find(|m| i64::from(m.id) == reply)
+        .unwrap();
+    assert_eq!(mine.direction, "out");
+    assert!(!mine.spoof_suspect);
+    let d = store.get_email(parent).unwrap().unwrap();
+    assert!(d.is_replied);
+}

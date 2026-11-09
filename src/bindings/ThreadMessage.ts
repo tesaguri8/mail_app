@@ -52,6 +52,19 @@ is_green: boolean,
  */
 is_vip: boolean, 
 /**
+ * 差出人が住所録に登録済みか。本文のリンクを開いてよいかの判定に使う（docs/MAIL_SECURITY.md §2.1）。
+ */
+is_known: boolean, 
+/**
+ * 差出人に自分から送ったことがある（返信歴あり）か。リンクの判定用（同上）。
+ */
+is_replied: boolean, 
+/**
+ * 認証結果（SPF/DKIM/DMARC）から、なりすましの疑いがあるか。警告と、リンクを止める判定に使う
+ * （docs/MAIL_SECURITY.md §2.1）。
+ */
+spoof_suspect: boolean, 
+/**
  * 「本物の自分から」検証済み（X-Rondine-Self が HMAC 一致）。バッジ用。docs/SPAM.md。
  */
 verified_self: boolean, 

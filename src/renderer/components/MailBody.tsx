@@ -20,6 +20,7 @@ import {
   RefreshCw,
   Reply,
   ReplyAll,
+  ShieldAlert,
   Star,
   Tag,
   ThumbsDown,
@@ -37,6 +38,8 @@ import { greenDomainAdd, greenDomainWarn } from '../services/green';
 import { contactLookupEmail } from '../services/contacts';
 import { mailLoadRemote, senderRemoteAllowed, senderSetRemotePolicy } from '../services/mail';
 import { AutoLinkText, HtmlText, inlineCidRefs, remoteImageUrls } from './HtmlText';
+import { LinkGuard } from './LinkGuard';
+import { linkTrust } from './linkTrust';
 import { AttachedImages, isImage } from './AttachedImages';
 import { PrintMail } from './PrintMail';
 import { attachmentImage } from '../utils/imageCache';
@@ -388,6 +391,8 @@ export function MailBody({
   // 表示に使う本文（再取得済みがあればそれ、無ければ props の detail）。
   const d = refreshed ?? detail;
   const isGreen = greenOverride ?? d.is_green;
+  // 本文のリンクを左クリックで開いてよいか（会話のバブルと同じ判定。docs/MAIL_SECURITY.md §2.1）。
+  const trust = linkTrust({ ...d, is_green: isGreen, own: d.is_own });
   const senderDomain = (d.from_address ?? '').includes('@')
     ? (d.from_address ?? '').split('@').pop()?.trim().toLowerCase() || ''
     : '';
@@ -1073,6 +1078,13 @@ export function MailBody({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
+        {/* なりすましの疑い（SPF/DKIM/DMARC の認証に落ちた）。リンクは右クリックからだけ開ける。 */}
+        {d.spoof_suspect && (
+          <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-[11px] leading-snug text-amber-100/80">
+            <ShieldAlert size={14} className="mt-px shrink-0 text-amber-300" />
+            <span className="flex-1">{t('link.spoofBanner')}</span>
+          </div>
+        )}
         {!hasReadableBody(d) && !refreshed && (
           <div className="mb-3 flex items-center gap-2 rounded-md border border-sky-300/25 bg-sky-300/10 px-3 py-2 text-[11px] leading-snug text-sky-100/80">
             <RefreshCw size={12} className={refetching ? 'animate-spin' : ''} />
@@ -1102,57 +1114,59 @@ export function MailBody({
             </button>
           </div>
         )}
-        {hasHtml ? (
-          <HtmlText
-            html={html}
-            inlineImages={inlineImages}
-            remoteImages={remoteShown ? remoteImages : {}}
-            remoteDefaultExpanded={remoteExpandDefault}
-            highlight={highlight}
-            renderDate={renderDate}
-            onInlineImageMenu={(cid, x, y) => {
-              const att = attachments.find((a) => a.kind === 'inline' && a.content_id === cid);
-              if (att) setInlineMenu({ x, y, att });
-            }}
-            onInlineImageAction={(cid, action) => {
-              const att = attachments.find((a) => a.kind === 'inline' && a.content_id === cid);
-              if (att) void (action === 'save' ? handleSave(att) : handleOpen(att));
-            }}
-            renderEmail={
-              onAddContact
-                ? (email) => (
-                    <EmailAdd
-                      email={email}
-                      onAdd={onAddContact}
-                      onEdit={onEditContact}
-                      onCompose={onComposeTo}
-                    />
-                  )
-                : undefined
-            }
-          />
-        ) : body.trim() ? (
-          <AutoLinkText
-            text={body}
-            className="text-sm leading-relaxed text-white/90"
-            highlight={highlight}
-            renderDate={renderDate}
-            renderEmail={
-              onAddContact
-                ? (email) => (
-                    <EmailAdd
-                      email={email}
-                      onAdd={onAddContact}
-                      onEdit={onEditContact}
-                      onCompose={onComposeTo}
-                    />
-                  )
-                : undefined
-            }
-          />
-        ) : (
-          <p className="text-sm text-white/40">{t('mailbox.noBody')}</p>
-        )}
+        <LinkGuard trust={trust}>
+          {hasHtml ? (
+            <HtmlText
+              html={html}
+              inlineImages={inlineImages}
+              remoteImages={remoteShown ? remoteImages : {}}
+              remoteDefaultExpanded={remoteExpandDefault}
+              highlight={highlight}
+              renderDate={renderDate}
+              onInlineImageMenu={(cid, x, y) => {
+                const att = attachments.find((a) => a.kind === 'inline' && a.content_id === cid);
+                if (att) setInlineMenu({ x, y, att });
+              }}
+              onInlineImageAction={(cid, action) => {
+                const att = attachments.find((a) => a.kind === 'inline' && a.content_id === cid);
+                if (att) void (action === 'save' ? handleSave(att) : handleOpen(att));
+              }}
+              renderEmail={
+                onAddContact
+                  ? (email) => (
+                      <EmailAdd
+                        email={email}
+                        onAdd={onAddContact}
+                        onEdit={onEditContact}
+                        onCompose={onComposeTo}
+                      />
+                    )
+                  : undefined
+              }
+            />
+          ) : body.trim() ? (
+            <AutoLinkText
+              text={body}
+              className="text-sm leading-relaxed text-white/90"
+              highlight={highlight}
+              renderDate={renderDate}
+              renderEmail={
+                onAddContact
+                  ? (email) => (
+                      <EmailAdd
+                        email={email}
+                        onAdd={onAddContact}
+                        onEdit={onEditContact}
+                        onCompose={onComposeTo}
+                      />
+                    )
+                  : undefined
+              }
+            />
+          ) : (
+            <p className="text-sm text-white/40">{t('mailbox.noBody')}</p>
+          )}
+        </LinkGuard>
 
         {/* 本文に埋め込むつもりで送られた画像（本文からは参照されていないもの）を本文の下へ。
             設定「本文埋め込み画像を表示」がオフのときは出さない。 */}

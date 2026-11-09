@@ -1067,5 +1067,12 @@
   "bottombar": {
     "backdrop": "Background dim",
     "textColor": "Text color (white→black)"
+  },
+  "link": {
+    "guardedHint": "Right-click to open",
+    "open": "Open link",
+    "copy": "Copy link",
+    "spoofSuspect": "Possible spoofing (sender authentication failed)",
+    "spoofBanner": "This message failed sender authentication (SPF / DKIM / DMARC). It may be spoofed, so links in the body can only be opened from the right-click menu."
   }
 }

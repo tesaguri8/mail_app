@@ -208,6 +208,39 @@ pub(crate) fn address_is_green(
     address_is_known(conn, addr)
 }
 
+/// 差出人の信頼にかかわる目印一式（バッジと、本文のリンクを開いてよいかの判定に使う。
+/// docs/MAIL_SECURITY.md §2.1）。会話のバブルと全文表示で同じ基準にするため 1 か所で求める。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SenderFlags {
+    /// 本人一致 or ドメインがグリーン集合。
+    pub is_green: bool,
+    /// 住所録に登録済み。
+    pub is_known: bool,
+    /// 住所録のお気に入り（VIP）。
+    pub is_vip: bool,
+    /// 自分から送ったことがある（返信歴あり）。
+    pub is_replied: bool,
+}
+
+/// 差出人アドレスの目印をまとめて求める。アドレスが無ければ全部 false。
+pub(crate) fn sender_flags(
+    conn: &Connection,
+    green_set: &HashSet<String>,
+    address: Option<&str>,
+) -> rusqlite::Result<SenderFlags> {
+    let Some(addr) = address.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(SenderFlags::default());
+    };
+    let is_known = address_is_known(conn, addr)?;
+    let domain_green = domain_of(addr).is_some_and(|d| green_set.contains(&d));
+    Ok(SenderFlags {
+        is_green: domain_green || is_known,
+        is_known,
+        is_vip: address_is_vip(conn, addr)?,
+        is_replied: super::sent_addresses::address_is_replied(conn, addr)?,
+    })
+}
+
 impl Store {
     /// グリーン／警告ドメインの一覧（管理タブ用）。住所録由来の自動グリーンも含める。
     pub fn list_green_domains(&self) -> rusqlite::Result<Vec<GreenDomainEntry>> {
@@ -403,6 +436,32 @@ mod tests {
         assert!(list.iter().any(|e| e.domain == "acme.co.jp" && e.kind == "green" && e.auto));
         assert!(list.iter().any(|e| e.domain == "spam.example.com" && e.kind == "warning"));
         assert!(!list.iter().any(|e| e.domain == "gmail.com"));
+    }
+
+    /// 差出人の目印は、住所録・グリーンのドメイン・返信歴をそれぞれ別に立てる
+    /// （本文のリンクを開いてよいかの判定に使う。docs/MAIL_SECURITY.md §2.1）。
+    #[test]
+    fn sender_flags_reports_known_green_and_replied() {
+        let s = store();
+        s.upsert_contact(&person("会社の人", &["taro@acme.invalid"]))
+            .unwrap();
+        s.record_sent_recipients(&["Hanako <Hanako@Other.invalid>".to_string()], &[])
+            .unwrap();
+        let conn = s.conn.lock().unwrap();
+        let set = green_domain_set(&conn).unwrap();
+        let f = |a: Option<&str>| sender_flags(&conn, &set, a).unwrap();
+
+        let taro = f(Some("taro@acme.invalid"));
+        assert!(taro.is_known && taro.is_green && !taro.is_replied);
+        // 同じ会社の別の人: ドメインでグリーンだが住所録にはいない。
+        let info = f(Some("info@acme.invalid"));
+        assert!(info.is_green && !info.is_known);
+        // 送ったことがある相手（大文字小文字は問わない）。
+        let hanako = f(Some("hanako@other.invalid"));
+        assert!(hanako.is_replied && !hanako.is_known && !hanako.is_green);
+        // 知らない相手・アドレス無しは何も立たない。
+        assert_eq!(f(Some("x@unknown.invalid")), SenderFlags::default());
+        assert_eq!(f(None), SenderFlags::default());
     }
 
     #[test]

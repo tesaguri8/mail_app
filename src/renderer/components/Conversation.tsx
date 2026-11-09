@@ -20,6 +20,7 @@ import {
   Reply,
   ReplyAll,
   Scissors,
+  ShieldAlert,
   Star,
   StarOff,
   Tag,
@@ -59,6 +60,8 @@ import { PrintMail } from './PrintMail';
 import { UnseenQuotes } from './UnseenQuotes';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { keepMatch, sameThreadView, scrollAfterRefresh } from './conversationRefresh';
+import { LinkGuard } from './LinkGuard';
+import { linkTrust } from './linkTrust';
 import type { CalendarPanelInitial } from './CalendarPanel';
 import { TimelineScrubber } from './timeline/TimelineScrubber';
 import { scrollTopForFraction, startFractions, type DayCount } from './timeline/dayCounts';
@@ -266,6 +269,9 @@ function Bubble({
   const [greenOverride, setGreenOverride] = useState<boolean | null>(null);
   useEffect(() => setGreenOverride(null), [m.id, m.is_green]);
   const isGreen = greenOverride ?? m.is_green;
+  // 本文のリンクを左クリックで開いてよいか（グリーン・住所録・返信歴・自分のメール。
+  // なりすましの疑いがあれば止める。docs/MAIL_SECURITY.md §2.1）。
+  const trust = linkTrust({ ...m, is_green: isGreen, own: out });
   const senderDomain =
     !out && (m.from_address ?? '').includes('@')
       ? (m.from_address ?? '').split('@').pop()?.trim().toLowerCase() || ''
@@ -556,12 +562,14 @@ function Bubble({
             バブルの上に古い順で出す（会話全体を上から下へ時間どおりにする）。
             引用の表示中・全文の表示中は、本文に同じ内容があるので出さない。 */}
         {!expanded && !showQuotes && m.unseen_quotes.length > 0 && (
-          <UnseenQuotes
-            quotes={m.unseen_quotes}
-            out={out}
-            highlight={highlight}
-            renderDate={renderDate}
-          />
+          <LinkGuard trust={trust}>
+            <UnseenQuotes
+              quotes={m.unseen_quotes}
+              out={out}
+              highlight={highlight}
+              renderDate={renderDate}
+            />
+          </LinkGuard>
         )}
 
         {/* バブル本体。id（スクロールの基準）と日付のつまみの目印は、上の枠を含めずここに付ける
@@ -594,6 +602,12 @@ function Bubble({
                 : undefined
             }
           >
+            {/* なりすましの疑い（認証に落ちた）。本文のリンクも止まっている（docs/MAIL_SECURITY.md §2.1）。 */}
+            {m.spoof_suspect && (
+              <span title={t('link.spoofSuspect')} className="inline-flex shrink-0 text-amber-300">
+                <ShieldAlert size={11} aria-label={t('link.spoofSuspect')} />
+              </span>
+            )}
             {m.verified_self && (
               <span
                 title={t('mailbox.verifiedSelf')}
@@ -761,28 +775,30 @@ function Bubble({
                   </button>
                 </div>
               )}
-              {renderHtml ? (
-                <HtmlText
-                  html={m.body_html as string}
-                  inlineImages={inlineImages}
-                  highlight={highlight}
-                  renderDate={renderDate}
-                  onInlineImageMenu={(cid, x, y) => {
-                    const att = inlineAtts[cid];
-                    if (att) setImgMenu({ x, y, att });
-                  }}
-                  onInlineImageAction={(cid, action) => {
-                    const att = inlineAtts[cid];
-                    if (att) imageAction(att, action);
-                  }}
-                />
-              ) : body ? (
-                <AutoLinkText text={body} highlight={highlight} renderDate={renderDate} />
-              ) : fetchingBody ? (
-                <span className="text-white/40">{t('mailbox.fetchingBody')}</span>
-              ) : bubbleImages.length === 0 ? (
-                <span className="text-white/40">{t('mailbox.noBody')}</span>
-              ) : null}
+              <LinkGuard trust={trust}>
+                {renderHtml ? (
+                  <HtmlText
+                    html={m.body_html as string}
+                    inlineImages={inlineImages}
+                    highlight={highlight}
+                    renderDate={renderDate}
+                    onInlineImageMenu={(cid, x, y) => {
+                      const att = inlineAtts[cid];
+                      if (att) setImgMenu({ x, y, att });
+                    }}
+                    onInlineImageAction={(cid, action) => {
+                      const att = inlineAtts[cid];
+                      if (att) imageAction(att, action);
+                    }}
+                  />
+                ) : body ? (
+                  <AutoLinkText text={body} highlight={highlight} renderDate={renderDate} />
+                ) : fetchingBody ? (
+                  <span className="text-white/40">{t('mailbox.fetchingBody')}</span>
+                ) : bubbleImages.length === 0 ? (
+                  <span className="text-white/40">{t('mailbox.noBody')}</span>
+                ) : null}
+              </LinkGuard>
 
               {/* 画像添付をバブルに並べる（保存・開くは画像の右上のボタンと右クリック）。本文の有無に関わらず出すので、
                   本文のあるメールでも画像が付いていることに気づける。チャットの流れを埋めない

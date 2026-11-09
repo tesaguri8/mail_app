@@ -87,71 +87,281 @@ fn has_keep_link(tail: &[&str]) -> bool {
         .any(|line| url_hosts(line).any(|h| is_keep_link_host(&h)))
 }
 
-/// 記号だけの区切り線か（"=====…" / "_____…"）。10 文字以上に限定（"──" 等の box 文字は対象外）。
-fn is_symbol_rule_line(bare: &str) -> bool {
-    bare.chars().count() >= 10
-        && (bare.chars().all(|c| c == '=') || bare.chars().all(|c| c == '_'))
+/// 署名のまとまりとみなす最大の実質行数（区切り行・空行を除く）。これを超えるまとまりは
+/// 本文の段落・ニュースレターの節とみなして隠さない（誤爆の保険）。
+const MAX_SIG_LINES: usize = 12;
+
+/// 署名とみなさなかった区切りの下（次の区切りの手前まで）が、この行数以下なら 1 つ上の区切りへ進む
+/// （署名の下に付いた注意書き・© の行・閉じの罫線）。超えたら本文の節とみなして打ち切る
+/// （実測: 上の見出しの URL を印とみなし、その下のニュースレターの節ごと隠す誤爆が出ていた）。
+const NOTICE_MAX_LINES: usize = 2;
+
+/// 罫線に使う記号のうち、3 個並べば罫線とみなすもの（全角・罫線素片・飾りの記号）。
+/// 本文の中でこれだけを 3 個以上並べた行は、まず区切りか飾りの線になる。
+const RULE_CHARS: &[char] = &[
+    '─', '━', '═', '―', '┄', '┅', '┈', '┉', '＝', '＊', '＿', '－', 'ー', '～', '〜', '■', '□',
+    '◆', '◇', '●', '○', '★', '☆',
+];
+
+/// 罫線に使う記号のうち、本文の書き方（Markdown の見出しの下線 "===" / "---"、区切りの "***"、
+/// 間を置く「・・・」）とも紛れるもの。5 個以上並んだときだけ罫線とみなす。
+const WEAK_RULE_CHARS: &[char] = &['-', '=', '_', '*', '~', '・', '･'];
+
+/// 飾りの罫線の中ほどに入っていても、罫線とみなさない語（転送・元のメッセージの区切りは引用の扱い）。
+const NOT_RULE_WORDS: &[&str] = &[
+    "message",
+    "forward",
+    "original",
+    "メッセージ",
+    "転送",
+    "引用",
+];
+
+/// 記号の並び（空白は無視）が罫線の長さに届いているか。行全体に使えば「記号だけの罫線の行か」
+/// （"━━━━" / "────" / "-----" / "＊＊＊" / "ーーー" / "=====" 等）。全角・罫線素片を含めば 3 個、
+/// 紛れやすい半角の記号だけなら 5 個。並びが空・罫線の記号以外を含めば false。
+fn is_rule_run(run: &str) -> bool {
+    let syms: Vec<char> = run.chars().filter(|c| !c.is_whitespace()).collect();
+    if syms.is_empty()
+        || !syms
+            .iter()
+            .all(|c| RULE_CHARS.contains(c) || WEAK_RULE_CHARS.contains(c))
+    {
+        return false;
+    }
+    let need = if syms.iter().any(|c| RULE_CHARS.contains(c)) {
+        3
+    } else {
+        5
+    };
+    syms.len() >= need
 }
 
-/// clean_body（引用除去後の新規本文）から署名以降を落とす。原文 body_plain は温存し、
-/// 全文表示（body_plain）ではこれまで通り署名も見られる。表示・保存の派生テキスト専用。
-/// 保守的方針:
-/// - 明確なマーカー（"--" / "□□□" / 携帯定型）はその行以降を落とす。
-/// - 記号区切り "===" は、以降の実質行が MAX_SIG_LINES 以下（＝末尾の署名/フッタらしい）ときだけ落とす。
-///   newsletter の途中に入る本文区切り（以降に本文が続く）は落とさない。
-/// - 本文が空になる切り方は採用しない（署名の無いメール・誤爆時は元のまま返す）。
-/// - "--" / "□□□" / "===" の下に会議の招待・ファイル共有のリンク（KEEP_LINK_HOSTS）があれば、
-///   その区切りでは切らない（区切り行も含めて本文に残す）。携帯定型は対象外（いつも切る）。
-pub(super) fn strip_signature(clean: &str) -> String {
-    // 署名本体とみなす最大の実質行数。これを超えて本文が続く記号区切りは「本文の区切り」とみなす。
-    const MAX_SIG_LINES: usize = 10;
-    let lines: Vec<&str> = clean.lines().collect();
-    for (i, line) in lines.iter().enumerate() {
-        let bare = line.trim();
-        // (a) 明確な署名区切り。その行以降を落とす。
-        let keeps_links = || has_keep_link(&lines[i + 1..]);
-        let cut = if is_dash_or_box_delimiter(line) {
-            if keeps_links() {
-                continue;
-            }
-            Some(lines[..i].join("\n"))
-        } else if is_client_footer_line(bare) {
-            Some(lines[..i].join("\n"))
-        } else if is_symbol_rule_line(bare) {
-            // (b) 記号区切り: 以降が短いとき（末尾の署名/フッタ）だけ落とす。長ければ本文の区切り。
-            let tail = lines[i + 1..].iter().filter(|l| !l.trim().is_empty()).count();
-            if tail <= MAX_SIG_LINES && !keeps_links() {
-                Some(lines[..i].join("\n"))
-            } else {
-                continue;
-            }
-        } else if let Some(pos) = line
-            .find("□□□")
-            .filter(|&pos| !has_keep_link(&[&line[pos..]]) && !keeps_links())
-        {
-            // (c) 行内の "□□□"（改行が失われた Apple Mail 系対策）。手前の本文までを残す。
-            let head = line[..pos].trim_end();
-            let mut s = lines[..i].join("\n");
-            if !head.is_empty() {
-                if !s.is_empty() {
-                    s.push('\n');
-                }
-                s.push_str(head);
-            }
-            Some(s)
-        } else {
-            None
-        };
-        if let Some(result) = cut {
-            let trimmed = result.trim_end().to_string();
-            // 本文が全部消えるならこの切り方は不採用（誤爆保険）。
-            if trimmed.trim().is_empty() && !clean.trim().is_empty() {
-                return clean.trim_end().to_string();
-            }
-            return trimmed;
+/// 両端を罫線で挟んだ飾りの行か（"━━━ 株式会社サンプル ━━━"）。署名の頭や尻によく使われる。
+/// 中ほどは短い文字だけ（40 文字まで・URL を含まない）。転送の区切りの語を含むものは除く。
+fn is_decorated_rule_line(bare: &str) -> bool {
+    let is_sym = |c: char| RULE_CHARS.contains(&c) || WEAK_RULE_CHARS.contains(&c);
+    let head_len: usize = bare
+        .chars()
+        .take_while(|&c| is_sym(c) || c.is_whitespace())
+        .map(char::len_utf8)
+        .sum();
+    let tail_len: usize = bare
+        .chars()
+        .rev()
+        .take_while(|&c| is_sym(c) || c.is_whitespace())
+        .map(char::len_utf8)
+        .sum();
+    if head_len + tail_len >= bare.len() {
+        return false;
+    }
+    let middle = bare[head_len..bare.len() - tail_len].trim();
+    let lower = middle.to_lowercase();
+    is_rule_run(&bare[..head_len])
+        && is_rule_run(&bare[bare.len() - tail_len..])
+        && middle.chars().count() <= 40
+        && !lower.contains("://")
+        && !NOT_RULE_WORDS.iter().any(|w| lower.contains(w))
+}
+
+/// 署名の区切りの候補 1 つ。`col` は行の中で署名が始まる位置（行全体なら 0。行内の "□□□" 用）。
+/// `strong` は書き手が署名の印として置く区切り（"--" / "-- " / "□□□"）。
+#[derive(Debug, Clone, Copy)]
+struct Delimiter {
+    line: usize,
+    col: usize,
+    strong: bool,
+}
+
+/// 行全体が区切りか（"--" / "-- " / "□□□" だけの行 / 罫線 / 飾りの罫線）。
+fn is_whole_line_delimiter(line: &str) -> bool {
+    let bare = line.trim();
+    is_dash_or_box_delimiter(line) || is_rule_run(bare) || is_decorated_rule_line(bare)
+}
+
+/// 1 行が区切りの候補なら、署名が始まる位置（行内の列）と強さを返す。
+fn delimiter_of(line: &str) -> Option<(usize, bool)> {
+    if is_dash_or_box_delimiter(line) {
+        Some((0, true))
+    } else if is_whole_line_delimiter(line) {
+        Some((0, false))
+    } else {
+        // 行内の "□□□"（改行が失われた Apple Mail 系）。手前の本文は残す。
+        line.find("□□□").map(|pos| (pos, true))
+    }
+}
+
+/// 区切り `d` から下（まとまり）の行。行内の区切りなら、その行は区切りから後ろだけ。
+fn block_lines<'a>(lines: &[&'a str], d: Delimiter) -> Vec<&'a str> {
+    std::iter::once(&lines[d.line][d.col..])
+        .chain(lines[d.line + 1..].iter().copied())
+        .collect()
+}
+
+/// まとまりの実質の行数（空行と、行全体が区切りの行は数えない）。区切り `d` から末尾まで。
+/// 行内の "□□□" の後ろに文字が続く（"□□□伊佐日和…"）なら、その行も 1 行と数える。
+fn substantive_lines(lines: &[&str], d: Delimiter) -> usize {
+    substantive_lines_until(lines, d, lines.len())
+}
+
+/// 区切り `d` から `end` 行目の手前までの実質の行数（数え方は substantive_lines と同じ）。
+fn substantive_lines_until(lines: &[&str], d: Delimiter, end: usize) -> usize {
+    let first = &lines[d.line][d.col..];
+    let first_counts = !is_whole_line_delimiter(first)
+        && !first.trim_start().trim_start_matches('□').trim().is_empty();
+    usize::from(first_counts)
+        + lines[d.line + 1..end]
+            .iter()
+            .filter(|l| !l.trim().is_empty() && !is_whole_line_delimiter(l))
+            .count()
+}
+
+/// 区切り `d` から下を隠してよいか（誤爆の保険）。実質の行が多すぎる・残すべきリンクがある・
+/// 隠すと本文が空になる、のどれかなら隠さない。
+fn hideable(lines: &[&str], d: Delimiter) -> bool {
+    substantive_lines(lines, d) <= MAX_SIG_LINES
+        && !has_keep_link(&block_lines(lines, d))
+        && !head_of(lines, d).trim().is_empty()
+}
+
+/// 区切り `d` より上（残す本文）。
+fn head_of(lines: &[&str], d: Delimiter) -> String {
+    let mut s = lines[..d.line].join("\n");
+    let head = lines[d.line][..d.col].trim_end();
+    if !head.is_empty() {
+        if !s.is_empty() {
+            s.push('\n');
+        }
+        s.push_str(head);
+    }
+    s
+}
+
+/// 署名らしさの印のうち、そのまま含まれていればよい語（全角・日本語・記号）。
+/// 印の無いまとまり（通知メールの本文の段落・お客様の声・注意書きだけ）を署名と取り違えないため、
+/// 隠すのは連絡先や組織名の印があるまとまりだけにする（実測: 印の無いまとまりに誤爆が集まっていた）。
+const SIGNATURE_MARKERS: &[&str] = &[
+    "ＴＥＬ",
+    "電話",
+    "ＦＡＸ",
+    "〒",
+    "http://",
+    "https://",
+    "www.",
+    "株式会社",
+    "有限会社",
+    "合同会社",
+    "(株)",
+    "（株）",
+    "携帯",
+    "住所",
+    "Inc.",
+    "Co., Ltd",
+    "Co.,Ltd",
+    "LLC",
+];
+
+/// 署名らしさの印のうち、英字の語として現れたときだけ数えるもの（大文字小文字は問わない）。
+/// "hotel" の "tel" や "faxed" のような語の一部では数えない。
+const SIGNATURE_WORDS: &[&str] = &["tel", "fax", "mobile", "email", "e-mail"];
+
+/// 行に `word` が英字の語として含まれるか（前後が英字でない）。
+fn has_ascii_word(lower: &str, word: &str) -> bool {
+    lower.match_indices(word).any(|(i, _)| {
+        let before = lower[..i].chars().next_back();
+        let after = lower[i + word.len()..].chars().next();
+        !before.is_some_and(|c| c.is_ascii_alphabetic())
+            && !after.is_some_and(|c| c.is_ascii_alphabetic())
+    })
+}
+
+/// 行にメールアドレス（x@y.z）が含まれるか。
+fn has_email_address(line: &str) -> bool {
+    line.split(|c: char| c.is_whitespace() || "<>()（）:：,;".contains(c))
+        .filter_map(|tok| tok.split_once('@'))
+        .any(|(local, domain)| {
+            !local.is_empty()
+                && domain
+                    .split_once('.')
+                    .is_some_and(|(h, t)| !h.is_empty() && !t.is_empty())
+        })
+}
+
+/// まとまりに署名らしさの印（連絡先・組織名）があるか。
+fn has_signature_marker(block: &[&str]) -> bool {
+    block.iter().any(|line| {
+        let lower = line.to_lowercase();
+        SIGNATURE_MARKERS.iter().any(|m| line.contains(m))
+            || SIGNATURE_WORDS.iter().any(|w| has_ascii_word(&lower, w))
+            || has_email_address(line)
+    })
+}
+
+/// 署名として隠すまとまりの始まり（無ければ None）。純関数。
+/// 区切りを下から順に見ていく:
+/// - 実質の行が MAX_SIG_LINES を超えたら、そこで打ち切る（それより上は本文）。
+/// - 隠せて（残すべきリンクが無い・本文が空にならない）、まとまりに署名らしさの印があるか、
+///   強い区切り（"--" / "-- " / "□□□"。書き手が置く署名の印）なら、そこから下を隠す。
+/// - そうでなければ、その区切りの下（次の区切りの手前まで）の実質の行が NOTICE_MAX_LINES 以下のときだけ
+///   1 つ上へ進む（閉じの罫線や、署名の下に付いた注意書き・© の行も、上の署名と一緒に隠れる）。
+///   超えたら打ち切る。
+/// - 決まった区切りのすぐ上の区切りが強い区切り（"--" 等）で、そこから下でも隠せるなら、そこまで広げる
+///   （"--" の下に罫線で囲んだ署名を置く書き方）。
+///
+/// 途中の区切りは本文の見出し・段落の区切りとして残る。
+fn signature_start(lines: &[&str]) -> Option<Delimiter> {
+    let delims: Vec<Delimiter> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(line, l)| {
+            delimiter_of(l).map(|(col, strong)| Delimiter { line, col, strong })
+        })
+        .collect();
+    let mut found = None;
+    for (i, &d) in delims.iter().enumerate().rev() {
+        if substantive_lines(lines, d) > MAX_SIG_LINES {
+            break;
+        }
+        if hideable(lines, d) && (d.strong || has_signature_marker(&block_lines(lines, d))) {
+            found = Some((i, d));
+            break;
+        }
+        let next = delims.get(i + 1).map_or(lines.len(), |n| n.line);
+        if substantive_lines_until(lines, d, next) > NOTICE_MAX_LINES {
+            break;
         }
     }
-    clean.trim_end().to_string()
+    let (i, start) = found?;
+    let widened = i
+        .checked_sub(1)
+        .map(|j| delims[j])
+        .filter(|d| d.strong && !start.strong && hideable(lines, *d));
+    Some(widened.unwrap_or(start))
+}
+
+/// clean_body（引用除去後の新規本文）から署名を落とす。原文 body_plain は温存し、
+/// 全文表示（body_plain）ではこれまで通り署名も見られる。表示・保存の派生テキスト専用。純関数。
+/// 方針（docs/THREADING.md §7）:
+/// - 携帯・クライアントの定型（"Sent from my …" / "iPhoneから送信"）は、どこにあってもその行から下を落とす。
+/// - 区切りの候補（"--" / "-- " / "□□□" / 記号だけの罫線 / 両端を罫線で挟んだ飾りの行）を全部拾い、
+///   下から見て、署名らしさの印（連絡先・組織名）がある末尾のまとまりを署名として落とす（signature_start）。
+///   途中の区切りは本文として残す。
+/// - まとまりの実質の行が MAX_SIG_LINES を超える・会議の招待やファイル共有のリンク（KEEP_LINK_HOSTS）
+///   がある・落とすと本文が空になる、のどれかなら落とさない。
+pub(super) fn strip_signature(clean: &str) -> String {
+    let all: Vec<&str> = clean.lines().collect();
+    // 携帯の定型より下は、どこにあっても落とす（定型より上に本文があるときだけ）。
+    let end = all
+        .iter()
+        .position(|l| is_client_footer_line(l.trim()))
+        .filter(|&i| all[..i].iter().any(|l| !l.trim().is_empty()))
+        .unwrap_or(all.len());
+    let lines = &all[..end];
+    let kept = match signature_start(lines) {
+        Some(d) => head_of(lines, d),
+        None => lines.join("\n"),
+    };
+    kept.trim_end().to_string()
 }
 
 #[cfg(test)]
@@ -170,7 +380,10 @@ sngDESIGN Inc.\n\
 Dec 26, 2025, 17:25 +0900, 伊佐　日和 <isa@matsudamariko.com>:\n\n\
 > よろしくお願いします";
         let s = split_reply(body);
-        assert_eq!(s.clean, "松田様、伊佐様\n\n江島邸の件、承知しました。\n\n末松");
+        assert_eq!(
+            s.clean,
+            "松田様、伊佐様\n\n江島邸の件、承知しました。\n\n末松"
+        );
     }
 
     #[test]
@@ -262,6 +475,217 @@ https://us02web.zoom.us/j/81234567890?pwd=abcdef.1\n\
     fn client_footer_still_cuts_even_with_link() {
         let body = "了解です。\nSent from my iPhone\nhttps://zoom.us/j/1";
         assert_eq!(strip_signature(body), "了解です。");
+    }
+
+    /// 罫線（━）で上下を挟んだ日本の会社の署名は隠れる。
+    #[test]
+    fn hides_heavy_rule_enclosed_company_signature() {
+        let body = "山田様\n\nお見積りを添付いたします。\nご確認ください。\n\n\
+━━━━━━━━━━━━━━━━━━━━\n\
+株式会社サンプル 営業部\n\
+佐藤 一郎\n\
+〒100-0001 東京都千代田区千代田1-1\n\
+TEL: 03-0000-0000 / FAX: 03-0000-0001\n\
+https://www.sample.invalid/\n\
+━━━━━━━━━━━━━━━━━━━━";
+        assert_eq!(
+            strip_signature(body),
+            "山田様\n\nお見積りを添付いたします。\nご確認ください。"
+        );
+    }
+
+    /// 細い罫線（─）で挟んだ署名も、両端を罫線で飾った見出し（"━━ 社名 ━━"）で始まる署名も隠れる。
+    #[test]
+    fn hides_light_rule_and_decorated_rule_signatures() {
+        let light = "承知しました。\n─────────────\n佐藤 一郎\nTEL 090-0000-0000\n─────────────";
+        assert_eq!(strip_signature(light), "承知しました。");
+        let decorated =
+            "承知しました。\n\n━━━ 株式会社サンプル ━━━\n佐藤 一郎\nsato@sample.invalid\n━━━━━━━━━━━━━━";
+        assert_eq!(strip_signature(decorated), "承知しました。");
+    }
+
+    /// 署名らしさの印: 英字の語は語として現れたときだけ数える（"hotel" の "tel" は数えない）。
+    #[test]
+    fn signature_markers() {
+        assert!(has_signature_marker(&["TEL:03-0000-0000"]));
+        assert!(has_signature_marker(&["Tel.090"]));
+        assert!(has_signature_marker(&["〒100-0001"]));
+        assert!(has_signature_marker(&["（株）サンプル"]));
+        assert!(has_signature_marker(&["E-mail: a@b.invalid"]));
+        assert!(has_signature_marker(&["連絡先 <a@b.invalid>"]));
+        assert!(has_signature_marker(&["www.sample.invalid"]));
+        assert!(!has_signature_marker(&[
+            "We loved the hotel and the staff."
+        ]));
+        assert!(!has_signature_marker(&["@mention だけ", "a@b"]));
+    }
+
+    /// 「-----」の下の名前・電話・URL だけの署名は隠れる（閉じの罫線が無くても）。
+    #[test]
+    fn hides_ascii_dash_rule_signature() {
+        let body = "ありがとうございます。\n明日伺います。\n\n-----\nTaro Yamada\n+81-90-0000-0000\nhttps://yamada.invalid";
+        assert_eq!(
+            strip_signature(body),
+            "ありがとうございます。\n明日伺います。"
+        );
+    }
+
+    /// 本文の途中の罫線（見出し・段落の区切り）は残し、末尾のまとまりだけを隠す。
+    #[test]
+    fn keeps_rules_in_the_middle_and_hides_only_the_last_block() {
+        let head = "皆さま\n\n来週の定例の議題です。\n────────────\n■ 議題\n1. 進捗\n2. 予算\n────────────\n以上、よろしくお願いします。\n山田";
+        let body = format!(
+            "{head}\n\n＊＊＊＊＊＊＊＊＊＊\n山田 太郎\n株式会社サンプル\n＊＊＊＊＊＊＊＊＊＊"
+        );
+        assert_eq!(strip_signature(&body), head);
+    }
+
+    /// 末尾のまとまりの実質の行が 13 行以上なら、署名ではなく本文の節とみなして残す。
+    #[test]
+    fn keeps_a_long_last_block() {
+        let lines: Vec<String> = (1..=13).map(|n| format!("{n}. 項目の説明")).collect();
+        let body = format!("本日の報告です。\n━━━━━━━━━━\n{}", lines.join("\n"));
+        assert_eq!(strip_signature(&body), body);
+        // 印のある 12 行までなら署名として隠す。
+        let twelve = format!(
+            "本日の報告です。\n━━━━━━━━━━\n{}\nTEL 03-0000-0000",
+            lines[..11].join("\n")
+        );
+        assert_eq!(strip_signature(&twelve), "本日の報告です。");
+    }
+
+    /// 罫線だけで本文が無いメールは空にしない。
+    #[test]
+    fn rule_only_body_is_not_emptied() {
+        let body = "━━━━━━━━━━\n━━━━━━━━━━";
+        assert_eq!(strip_signature(body), body);
+        let sig_only = "──────────\n山田 太郎\nTEL 03-0000-0000";
+        assert_eq!(strip_signature(sig_only), sig_only);
+    }
+
+    /// 「--」の下に罫線で囲んだ署名を置く書き方は、「--」から下をまとめて隠す。
+    #[test]
+    fn dashes_above_enclosed_signature_widen_the_block() {
+        let body = "了解です。\n\n--\n━━━━━━━━━━\n山田 太郎\n株式会社サンプル\n━━━━━━━━━━";
+        assert_eq!(strip_signature(body), "了解です。");
+    }
+
+    /// 「--」が途中にあっても、その下が長ければ本文として残し、末尾のまとまりだけを隠す。
+    #[test]
+    fn dashes_in_the_middle_are_kept_when_the_rest_is_long() {
+        let middle: Vec<String> = (1..=14).map(|n| format!("本文の {n} 行目")).collect();
+        let head = format!("前置き\n--\n{}", middle.join("\n"));
+        let body = format!("{head}\n─────────\n山田\nTEL 03-0000-0000\n─────────");
+        assert_eq!(strip_signature(&body), head);
+    }
+
+    /// 紛れやすい短い記号の並び（"---" / "***" / "・・・"）は罫線とみなさない。
+    #[test]
+    fn short_weak_runs_are_not_rules() {
+        for body in [
+            "本文\n---\n追伸です",
+            "本文\n***\n追伸です",
+            "えーと\n・・・\nよろしくお願いします",
+        ] {
+            assert_eq!(strip_signature(body), body);
+        }
+        // 全角の記号は 3 個で罫線（"＊＊＊" / "ーーー"）。
+        assert_eq!(
+            strip_signature("本文です\n＊＊＊\n山田 tel.03-0000-0000"),
+            "本文です"
+        );
+        assert_eq!(
+            strip_signature("本文です\nーーー\n山田\nyamada@example.invalid"),
+            "本文です"
+        );
+    }
+
+    /// 転送・元のメッセージの区切りの語を含む飾りの行は、署名の区切りにしない。
+    #[test]
+    fn forwarded_separator_is_not_a_signature_rule() {
+        let body = "参考まで。\n---------- Forwarded message ---------\nFrom: a@example.invalid";
+        assert_eq!(strip_signature(body), body);
+    }
+
+    /// 携帯の定型は、どこにあってもその行から下を落とす。定型の上の署名のまとまりも隠す。
+    #[test]
+    fn client_footer_cuts_anywhere_then_last_block() {
+        assert_eq!(
+            strip_signature("本文です\nSent from my iPhone\n━━━━━━\n山田"),
+            "本文です"
+        );
+        assert_eq!(
+            strip_signature("本文です\n━━━━━━\n山田\nTEL 03-0000-0000\niPhoneから送信"),
+            "本文です"
+        );
+    }
+
+    /// 末尾の罫線だけ（下に何も無い）なら、印が無いので落とさない。
+    #[test]
+    fn trailing_rule_alone_is_kept() {
+        assert_eq!(
+            strip_signature("本文です\n=========="),
+            "本文です\n=========="
+        );
+    }
+
+    /// 罫線で挟んだ件名と URL の下に続く本文の段落は、印が無ければ隠さない（通知メールの形）。
+    /// 段落が 3 行以上なら上の URL まで遡らない（NOTICE_MAX_LINES）。長い段落は MAX_SIG_LINES で打ち切る。
+    #[test]
+    fn short_body_paragraph_below_a_ruled_headline_is_kept() {
+        let body = "新しいお知らせがあります。\n==========\n【お知らせ】年末年始の営業について\n\
+https://notice.example.invalid/n/123\n==========\n\
+12 月 29 日から 1 月 3 日まではお休みをいただきます。\n\
+期間中のお問い合わせは、休み明けに順次お返事します。\n\
+よろしくお願いいたします。";
+        assert_eq!(strip_signature(body), body);
+        // ニュースレターの「▼見出し / 価格 / URL」の下に続く節も残る。
+        let news = "今月のおすすめです。\n\n━━━━━━━━━━\n▼冬の特別プラン\n1 泊 12,000 円\n\
+https://inn.example.invalid/plan/winter\n━━━━━━━━━━\n\
+暖炉のあるラウンジで、地元のワインをお楽しみください。\n\
+夕食は地元の野菜を使ったコースです。\n\
+お部屋は数に限りがあります。";
+        assert_eq!(strip_signature(news), news);
+    }
+
+    /// 段落が長くても（MAX_SIG_LINES を超える）、上の URL まで遡らない。
+    #[test]
+    fn body_paragraph_below_a_ruled_headline_is_kept() {
+        let para: Vec<String> = (1..=13)
+            .map(|n| format!("お知らせの本文 {n} 行目です。"))
+            .collect();
+        let body = format!(
+            "新しいお知らせがあります。\n==========\n【お知らせ】年末年始の営業について\n\
+https://notice.example.invalid/n/123\n==========\n{}",
+            para.join("\n")
+        );
+        assert_eq!(strip_signature(&body), body);
+    }
+
+    /// 署名の下に罫線と注意書き 1 行があるときは、署名から下を全部隠す。
+    #[test]
+    fn hides_signature_together_with_the_notice_below_it() {
+        let body = "資料をお送りします。\n\n\
+──────────────\n\
+株式会社サンプル 佐藤 一郎\n\
+FAX: 03-0000-0001\n\
+sato@sample.invalid\n\
+●○●○●○●○●○\n\
+※ このメールは BCC でお送りしています。";
+        assert_eq!(strip_signature(body), "資料をお送りします。");
+    }
+
+    /// 印の無い 10 行の段落（お客様の声など）は、罫線の下でも隠さない。
+    #[test]
+    fn markerless_paragraph_below_a_rule_is_kept() {
+        let voices: Vec<String> = (1..=10)
+            .map(|n| format!("Customer voice {n}: lovely stay, will come again."))
+            .collect();
+        let body = format!(
+            "Thank you for staying with us.\n★★★★★\n{}",
+            voices.join("\n")
+        );
+        assert_eq!(strip_signature(&body), body);
     }
 
     #[test]

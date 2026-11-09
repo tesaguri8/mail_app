@@ -3,6 +3,7 @@ pub mod attachment_fetch;
 pub mod attachname;
 pub mod autoconfig;
 pub mod bodyfetch;
+pub mod compose_window;
 pub mod bodystructure;
 pub mod checksum;
 pub mod compress;

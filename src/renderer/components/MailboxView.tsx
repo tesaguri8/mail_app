@@ -58,6 +58,7 @@ import {
 } from '../services/mail';
 import { recipientSuggest } from '../services/recipients';
 import { MAIL_SYNCED_EVENT } from '../hooks/useAutoSync';
+import { COMPOSE_WINDOW_DONE_EVENT } from '../services/composeWindow';
 import type { SyncListed } from '@bindings/SyncListed';
 import { RecipientSuggestList } from './RecipientSuggestList';
 import { mailAddTag, mailRemoveTag, tagCreate, tagList } from '../services/tags';
@@ -536,7 +537,8 @@ export function MailboxView({
   // Ctrl+S（Mac は Cmd+S）でサイドバー（一覧ペイン）の表示を切替。ブラウザの保存は抑止。
   // 作成中は受け付けない。Compose で「保存」のつもりで Ctrl+S を押すと、画面に出ていない
   // サイドバーの開閉だけが変わり、送信・下書き保存のあと一覧が閉じたままになるため
-  // （利用者報告 2026-09-25。下書きは自動保存なので Compose 側に Ctrl+S の処理は無い）。
+  // （利用者報告 2026-09-25）。作成中の Ctrl+S は Compose 側が下書きの保存として受ける。
+  // 作成の別ウィンドウのキー入力は、このウィンドウには届かない。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (compose || !tabActive.current) return;
@@ -891,6 +893,15 @@ export function MailboxView({
       if (timer != null) window.clearTimeout(timer);
       void unlisten.then((off) => off());
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, folder]);
+
+  // 作成の別ウィンドウが下書きを保存・送信・破棄して閉じたら、一覧を読み直す（ペインの onClose と
+  // 同じ。下書きフォルダを表示中でも見えるように）。送った分は "sync:sent" でも届く。
+  useEffect(() => {
+    if (selected == null) return;
+    const unlisten = listen(COMPOSE_WINDOW_DONE_EVENT, () => void loadMails({ keepScroll: true }));
+    return () => void unlisten.then((off) => off());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, folder]);
 
@@ -2352,7 +2363,8 @@ export function MailboxView({
   const composeSource: MailDetail | null =
     compose && 'source' in compose ? (compose.source ?? null) : null;
 
-  // メール作成はページとして表示（別ウィンドウにしない）。
+  // メール作成は既定でページ（ペイン）として表示する。作成画面の「別ウィンドウで開く」で
+  // 書きかけごと別ウィンドウへ移すと、onClose でこのペインは閉じる（docs/COMPOSE.md §別ウィンドウ）。
   const composeEl = compose ? (
     <Compose
       // 開く対象が変わったら作り直す（下書きへの差し替えで、前の対象の本文が残らないように）。

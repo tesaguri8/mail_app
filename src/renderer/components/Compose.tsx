@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   Clipboard,
   ClipboardType,
   Copy,
+  ExternalLink,
+  Minus,
   Paperclip,
   Quote,
   Save,
   Scissors,
   Send,
+  Square,
   Trash2,
   X,
 } from 'lucide-react';
+import type { ComposeHandoff } from '@bindings/ComposeHandoff';
 import type { AccountSummary } from '@bindings/AccountSummary';
 import type { MailDetail } from '@bindings/MailDetail';
 import type { DraftContent } from '@bindings/DraftContent';
@@ -30,6 +35,7 @@ import {
   mailSend,
 } from '../services/mail';
 import { withActivity } from '../stores/activity';
+import { composeWindowOpen, composeWindowSaveState } from '../services/composeWindow';
 import { signatureList } from '../services/signatures';
 import {
   getComposeAutoSave,
@@ -135,6 +141,23 @@ function fromDraftAttachments(items: DraftAttachment[]): Attach[] {
   }));
 }
 
+/** 作成画面の入力のうち、別ウィンドウへ預けるもの。 */
+type ComposeFields = Omit<ComposeHandoff, 'mode' | 'source_id'>;
+
+/**
+ * 別ウィンドウへ預ける内容を組み立てる。元メールは id だけを持つ（返信下書きは、読み込めた
+ * 元メールか、下書きが覚えている元メールの id）。
+ */
+function toHandoff(target: ComposeTarget, fields: ComposeFields): ComposeHandoff {
+  const sourceId =
+    target.mode === 'new'
+      ? null
+      : target.mode === 'draft'
+        ? (target.source?.id ?? target.draft.source_id)
+        : target.source.id;
+  return { mode: target.mode, source_id: sourceId, ...fields };
+}
+
 function withPrefix(subject: string | null, prefix: 'Re' | 'Fwd'): string {
   const s = (subject ?? '').trim();
   const re = new RegExp(`^${prefix}:`, 'i');
@@ -208,26 +231,36 @@ function committed(list: string): string {
 }
 
 /**
- * メール作成ページ（新規／返信／全員返信／転送）。別ウィンドウにせず、メール画面内の
- * 全面ペインとして表示する（返信/転送は左=下書き・右=元メールの2分割）。
+ * メール作成ページ（新規／返信／全員返信／転送／下書きの再編集）。既定ではメール画面内の
+ * 全面ペインとして表示し（返信/転送は左=下書き・右=元メールの2分割）、上部の「別ウィンドウで
+ * 開く」で書きかけごと別ウィンドウへ移せる（docs/COMPOSE.md §別ウィンドウ）。
+ * 別ウィンドウ側では `windowed` を立て、見出しをウィンドウのタイトル部として使う
+ * （ドラッグで移動・最小化・最大化・閉じる）。
  * プレーン本文で作成し、送信時にバックエンドで plain+HTML を同梱する。
  */
 export function Compose({
   accounts,
   defaultAccountId,
   target,
+  resume,
+  windowed = false,
   onClose,
   onSent,
 }: {
   accounts: AccountSummary[];
   defaultAccountId: number | null;
   target: ComposeTarget;
+  /** 別ウィンドウへ移したときの書きかけの内容。あれば初期値の代わりにこれから始める。 */
+  resume?: ComposeHandoff;
+  /** 別ウィンドウで表示している（見出しがタイトル部になり、「別ウィンドウで開く」は出さない）。 */
+  windowed?: boolean;
   onClose: () => void;
   /** 送信に成功した（onClose の直前に呼ぶ）。下書き保存・破棄では呼ばない。 */
   onSent?: () => void;
 }) {
   const { t, i18n } = useTranslation();
   // このタブ（メール）が表示中か（隠れている間は Esc を受けない。KeepAlivePanel）。
+  // 別ウィンドウには KeepAlivePanel が無いので常に true（ウィンドウ自体がキー入力の単位）。
   const tabActive = useTabActiveRef();
 
   // 元メールから初期値（宛先・件名・In-Reply-To、および送信時に本文末へ足す「引用/転送」部分）を
@@ -317,25 +350,34 @@ export function Compose({
     };
   }, [target, t, i18n.language, accounts]);
 
+  // 別ウィンドウへ移した書きかけ（resume）があれば、入力の初期値はすべてそこから取る。
   const [accountId, setAccountId] = useState<number | null>(
-    // 下書きの再編集は保存時のアカウントを使う。
-    target.mode === 'draft'
-      ? target.draft.account_id
-      : (defaultAccountId ?? accounts[0]?.id ?? null)
+    resume
+      ? resume.account_id
+      : // 下書きの再編集は保存時のアカウントを使う。
+        target.mode === 'draft'
+        ? target.draft.account_id
+        : (defaultAccountId ?? accounts[0]?.id ?? null)
   );
-  const [to, setTo] = useState(init.to);
-  const [cc, setCc] = useState(init.cc);
-  const [bcc, setBcc] = useState(init.bcc);
-  const [showCc, setShowCc] = useState(Boolean(init.cc || init.bcc));
-  const [subject, setSubject] = useState(init.subject);
+  const [to, setTo] = useState(resume?.to ?? init.to);
+  const [cc, setCc] = useState(resume?.cc ?? init.cc);
+  const [bcc, setBcc] = useState(resume?.bcc ?? init.bcc);
+  const [showCc, setShowCc] = useState(Boolean(cc || bcc));
+  const [subject, setSubject] = useState(resume?.subject ?? init.subject);
   // 下書きの再編集は保存済み本文（署名・引用込み）をそのまま編集する。それ以外は空から。
-  const [body, setBody] = useState(target.mode === 'draft' ? target.draft.body : '');
+  const [body, setBody] = useState(
+    resume?.body ?? (target.mode === 'draft' ? target.draft.body : '')
+  );
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   // 添付ファイル（picker 選択 or ドロップ or 転送で引き継いだ元メールの添付）。
   // 送信時にローカルパスへ解決して Rust へ渡す（下書きの再編集では保存済みの添付を復元）。
   const [attachments, setAttachments] = useState<Attach[]>(
-    target.mode === 'draft' ? fromDraftAttachments(target.draft.attachments) : [],
+    resume
+      ? fromDraftAttachments(resume.attachments)
+      : target.mode === 'draft'
+        ? fromDraftAttachments(target.draft.attachments)
+        : [],
   );
   // OS からファイルをドラッグ中か（ドロップ領域のハイライト用）。
   const [dragOver, setDragOver] = useState(false);
@@ -361,9 +403,9 @@ export function Compose({
   // 署名（差出人ごとに使い回せる本文）。一覧を読み込み、ドロップダウンで切り替える。
   // 既定はアカウントの signature_id。切替時は本文中の署名ブロックだけを置換する。
   const [signatures, setSignatures] = useState<SignatureSummary[]>([]);
-  const [sigId, setSigId] = useState<number | null>(null);
+  const [sigId, setSigId] = useState<number | null>(resume?.signature_id ?? null);
   // 現在 body に埋め込んでいる署名ブロック（"\n\n<署名>"。未挿入は ''）。切替時の除去に使う。
-  const sigBlockRef = useRef('');
+  const sigBlockRef = useRef(resume?.signature_block ?? '');
 
   useEffect(() => {
     signatureList()
@@ -404,7 +446,11 @@ export function Compose({
   // 同じアカウントで再適用すると、本文の署名まわりを編集していた場合に旧ブロックの
   // 剥がしに失敗して署名が二重に付くため、アカウント単位で一度だけ適用する
   // （切替時のみ付け替え。手動のドロップダウン変更は従来どおり剥がして差し替える）。
-  const autoSigAccountRef = useRef<number | null | undefined>(undefined);
+  // 別ウィンドウへ移した書きかけは、移す前に署名を適用済み（本文に入っている）なので、
+  // そのアカウントでは適用済みとして始める。
+  const autoSigAccountRef = useRef<number | null | undefined>(
+    resume ? resume.account_id : undefined
+  );
   useEffect(() => {
     if (signatures.length === 0 || target.mode === 'draft') return;
     if (autoSigAccountRef.current === accountId) return;
@@ -424,12 +470,14 @@ export function Compose({
   // 下書きの自動保存。ユーザーが何か書き込んだら（dirty）ローカルの drafts へ保存する。
   // 署名の自動挿入や返信の引用だけでは保存しない（実際に書いたものだけ残す）。
   // 再編集中はその下書きの id で上書き更新する。
-  const draftIdRef = useRef<number | null>(target.mode === 'draft' ? target.draft.id : null);
-  const dirtyRef = useRef(false);
-  const [dirty, setDirty] = useState(false);
+  const draftIdRef = useRef<number | null>(
+    resume ? resume.draft_id : target.mode === 'draft' ? target.draft.id : null
+  );
+  const dirtyRef = useRef(resume?.dirty ?? false);
+  const [dirty, setDirty] = useState(resume?.dirty ?? false);
   const [saved, setSaved] = useState(false);
   // 未保存の変更（最後の保存以降に編集があるか）。閉じる確認と保存ボタンの活性に使う。
-  const [unsaved, setUnsaved] = useState(false);
+  const [unsaved, setUnsaved] = useState(resume?.unsaved ?? false);
   // 閉じる確認ダイアログ（未保存の変更があるとき表示）。
   const [confirmClose, setConfirmClose] = useState(false);
   // 下書きの自動保存を使うか（設定・既定オン）。開いた時点の値を採用する。
@@ -510,6 +558,9 @@ export function Compose({
 
   // 送信中フラグ（ref）。送信直前に立て、保留中の自動保存が送信後に下書きを作らないようにする。
   const sendingRef = useRef(false);
+  // 別ウィンドウへ移している途中か。立っている間はこのペインで自動保存しない（ウィンドウが開くのを
+  // 待つ間に保留中の自動保存が走ると、預けた内容に無い下書きができ、移した先でもう 1 通作る）。
+  const poppingOutRef = useRef(false);
   // 明示的に閉じた（保存/破棄/送信/通常クローズ）か。アンマウント時の確定保存を抑止し、
   // 破棄済みの下書きを復活させないために使う。
   const closedRef = useRef(false);
@@ -541,9 +592,9 @@ export function Compose({
   // APPEND する）。入力のたびに APPEND すると、書いている間ずっとサーバー上に下書きの
   // 入れ替え（削除→APPEND）が走り、送信時の後片付けと競合してゴミが残りやすくなるため。
   // 何も書いていない新規は下書きを作らない（空の下書きがフォルダに溜まるのを防ぐ）。
-  const saveDraft = useCallback(
+  const saveDraftCore = useCallback(
     async (syncNow = false) => {
-      if (accountId == null || sendingRef.current) return;
+      if (accountId == null || sendingRef.current || poppingOutRef.current) return;
       if (draftIdRef.current == null && !hasContent()) return;
       try {
         const id = await mailSaveDraft({
@@ -561,6 +612,26 @@ export function Compose({
         draftIdRef.current = id;
         setSaved(true);
         setUnsaved(false);
+        // 別ウィンドウでは、Rust の預かりも保存した内容に置き換える（再読み込みしても、この
+        // 下書きの id から続ける。古い預かりから始めると、閉じたときに下書きをもう 1 通作る）。
+        if (windowed) {
+          void composeWindowSaveState(
+            toHandoff(target, {
+              draft_id: id,
+              account_id: accountId,
+              to,
+              cc,
+              bcc,
+              subject,
+              body,
+              attachments: toDraftAttachments(attachments),
+              signature_id: sigId,
+              signature_block: sigBlockRef.current,
+              dirty: true,
+              unsaved: false,
+            })
+          ).catch(() => undefined);
+        }
         if (syncNow) {
           void syncRemote(id); // 明示保存: 即サーバー同期（自動保存はローカルのみ）
         }
@@ -579,7 +650,26 @@ export function Compose({
       hasContent,
       syncRemote,
       attachments,
+      windowed,
+      target,
+      body,
+      sigId,
     ]
+  );
+  // 保存の途中か（別ウィンドウへ移す前に、作りかけの下書きの id を待つのに使う。待たないと
+  // 移した先でもう 1 通作ってしまう）。
+  const saveInflightRef = useRef<Promise<void> | null>(null);
+  const saveDraft = useCallback(
+    async (syncNow = false) => {
+      const run = saveDraftCore(syncNow);
+      saveInflightRef.current = run;
+      try {
+        await run;
+      } finally {
+        if (saveInflightRef.current === run) saveInflightRef.current = null;
+      }
+    },
+    [saveDraftCore]
   );
 
   // 入力のたびにデバウンス（1s）して自動保存（ローカル）。dirty になって初めて走る。
@@ -593,6 +683,20 @@ export function Compose({
   // 最新の saveDraft を参照する箱（アンマウント時の確定保存に使う。ref なので常に最新を指す）。
   const saveDraftRef = useRef(saveDraft);
   saveDraftRef.current = saveDraft;
+  // Ctrl+S（Mac は Cmd+S）で下書きを今すぐ保存する（保存ボタンと同じ。サーバー Drafts へも同期）。
+  // WebView の既定の「ページを保存」は止める。メイン画面のペインでは、作成中はメール画面の
+  // Ctrl+S（一覧サイドバーの開閉）が受け付けないので、ここだけが効く。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!tabActive.current) return;
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        void saveDraftRef.current(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tabActive]);
   // 明示的に閉じる。アンマウント時の確定保存フラグを立ててから親へ通知する。
   const close = useCallback(() => {
     closedRef.current = true;
@@ -650,6 +754,75 @@ export function Compose({
     setConfirmClose(false);
     close();
   };
+  // 別ウィンドウを閉じる（タイトル部の × と、OS の閉じる操作）。自動保存が有効なら確認せずに
+  // 保存して閉じる（× で閉じても書きかけは下書きに残る）。自動保存がオフなら、ペインと同じく
+  // 未保存の変更があれば確認ダイアログを出す。
+  const closeWindow = () => {
+    if (sendingRef.current) return;
+    if (autoSave && unsaved && (hasContent() || draftIdRef.current != null)) {
+      void saveAndClose();
+      return;
+    }
+    closeGuarded();
+  };
+  const closeWindowRef = useRef(closeWindow);
+  closeWindowRef.current = closeWindow;
+  // OS の閉じる操作（Alt+F4・タスクバー）も、いったん止めて上と同じ手順で閉じる。
+  // 閉じるときは呼び出し側が destroy する（destroy はこの合図を出さない）。
+  useEffect(() => {
+    if (!windowed) return;
+    let alive = true;
+    let off: (() => void) | null = null;
+    getCurrentWindow()
+      .onCloseRequested((e) => {
+        e.preventDefault();
+        closeWindowRef.current();
+      })
+      .then((u) => {
+        if (alive) off = u;
+        else u();
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+      off?.();
+    };
+  }, [windowed]);
+
+  // 書きかけごと別ウィンドウへ移す。作りかけの下書きの保存を待ってから内容を Rust に預け、
+  // ウィンドウが開けたらこのペインは閉じる（移した分は向こうで続きから書ける）。
+  const [poppingOut, setPoppingOut] = useState(false);
+  const popOut = async () => {
+    if (sendingRef.current || poppingOutRef.current) return;
+    poppingOutRef.current = true;
+    setPoppingOut(true);
+    // 既に走っている保存は待つ（下書きの id を預ける内容に入れる）。
+    await saveInflightRef.current;
+    try {
+      await composeWindowOpen(
+        toHandoff(target, {
+          draft_id: draftIdRef.current,
+          account_id: accountId,
+          to,
+          cc,
+          bcc,
+          subject,
+          body,
+          attachments: toDraftAttachments(attachments),
+          signature_id: sigId,
+          signature_block: sigBlockRef.current,
+          dirty: dirtyRef.current,
+          unsaved,
+        })
+      );
+      close();
+    } catch (e) {
+      setError(String(e));
+      poppingOutRef.current = false;
+      setPoppingOut(false);
+    }
+  };
+
   // 確認ダイアログ表示中は Esc で「編集に戻る」（キャンセル）。
   useEffect(() => {
     if (!confirmClose) return;
@@ -680,8 +853,9 @@ export function Compose({
   //   送信側の MIME 組み立ての拡張が要るため後続。
   // この時点では本体を取りに行かず、送信/下書き保存の直前にローカルへ用意する（開いただけで
   // 大きな添付をサーバーから取らないため）。
+  // 別ウィンドウへ移した書きかけは、移す前の添付欄（外した添付を含めて）をそのまま使う。
   useEffect(() => {
-    if (target.mode !== 'forward') return;
+    if (target.mode !== 'forward' || resume) return;
     let alive = true;
     mailAttachments(target.source.id)
       .then((list) => {
@@ -852,8 +1026,17 @@ export function Compose({
           </div>
         </div>
       )}
-      <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
-        <h2 className="text-sm font-semibold">{t(`compose.${target.mode}`)}</h2>
+      {/* 見出し。別ウィンドウでは、ここがタイトル部（ドラッグで移動・ダブルクリックで最大化）。
+          data-tauri-drag-region は付けた要素の上だけで効くので、見出しの文字にも付ける。 */}
+      <div
+        data-tauri-drag-region={windowed || undefined}
+        className={`flex items-center justify-between border-b border-white/10 px-4 py-2.5 ${
+          windowed ? 'select-none' : ''
+        }`}
+      >
+        <h2 data-tauri-drag-region={windowed || undefined} className="text-sm font-semibold">
+          {t(`compose.${target.mode}`)}
+        </h2>
         <div className="flex items-center gap-1">
           {/* 下書きを今すぐ保存＋サーバーの Drafts へも同期（本文等があるときに有効）。 */}
           <button
@@ -877,11 +1060,50 @@ export function Compose({
           >
             <Trash2 size={16} />
           </button>
+          {windowed ? (
+            <>
+              <button
+                type="button"
+                onClick={() => void getCurrentWindow().minimize()}
+                title={t('titlebar.minimize')}
+                aria-label={t('titlebar.minimize')}
+                className="ml-2 flex h-7 w-7 items-center justify-center rounded-md text-white/55 hover:bg-white/10 hover:text-white/85"
+              >
+                <Minus size={16} />
+              </button>
+              <button
+                type="button"
+                onClick={() => void getCurrentWindow().toggleMaximize()}
+                title={t('titlebar.maximize')}
+                aria-label={t('titlebar.maximize')}
+                className="flex h-7 w-7 items-center justify-center rounded-md text-white/55 hover:bg-white/10 hover:text-white/85"
+              >
+                <Square size={14} />
+              </button>
+            </>
+          ) : (
+            // 書きかけごと別ウィンドウへ移す（ペインは閉じて、作成前の画面に戻る）。
+            <button
+              type="button"
+              onClick={() => void popOut()}
+              disabled={sending || poppingOut}
+              title={t('compose.popOut')}
+              aria-label={t('compose.popOut')}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-white/55 hover:bg-white/10 hover:text-white/85 disabled:opacity-40"
+            >
+              <ExternalLink size={16} />
+            </button>
+          )}
           <button
-            onClick={closeGuarded}
+            onClick={windowed ? closeWindow : closeGuarded}
             disabled={sending}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-white/55 hover:bg-white/10 hover:text-white/85 disabled:opacity-40"
-            aria-label={t('account.cancel')}
+            className={`flex h-7 w-7 items-center justify-center rounded-md text-white/55 disabled:opacity-40 ${
+              windowed
+                ? 'hover:bg-red-500/70 hover:text-white'
+                : 'hover:bg-white/10 hover:text-white/85'
+            }`}
+            title={windowed ? t('titlebar.close') : undefined}
+            aria-label={windowed ? t('titlebar.close') : t('account.cancel')}
           >
             <X size={16} />
           </button>

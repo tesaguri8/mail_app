@@ -1055,6 +1055,49 @@ pub struct DraftContent {
     pub attachments: Vec<DraftAttachment>,
 }
 
+/// 作成画面のモード（フロントの `ComposeTarget['mode']` と同じ綴り）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub enum ComposeMode {
+    New,
+    Reply,
+    ReplyAll,
+    Forward,
+    Draft,
+}
+
+/// 作成画面を別ウィンドウへ移すときの、書きかけの内容（docs/COMPOSE.md §別ウィンドウ）。
+/// メインの作成画面が Rust へ預け、新しいウィンドウが自分の label で受け取る
+/// （URL に載せない。元メールと下書きは id だけを持ち、新しいウィンドウが読み直す）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ComposeHandoff {
+    pub mode: ComposeMode,
+    /// 返信・転送の元メール、または返信下書きの元メールの emails.id（無ければ None）。
+    pub source_id: Option<i32>,
+    /// 保存済みの下書きの emails.id（自動保存済み、または下書きの再編集。無ければ None）。
+    pub draft_id: Option<i32>,
+    /// 送信アカウント。
+    pub account_id: Option<i32>,
+    /// 宛先（作成画面の入力表記のまま。カンマ区切り）。
+    pub to: String,
+    pub cc: String,
+    pub bcc: String,
+    pub subject: String,
+    /// 編集欄の本文（署名込み。返信の引用は含まない＝送信時に元メールから付け直す）。
+    pub body: String,
+    pub attachments: Vec<DraftAttachment>,
+    /// 選んでいる署名（None=署名なし）。
+    pub signature_id: Option<i32>,
+    /// 本文に埋め込んである署名のまとまり（署名の切り替えで剥がすのに使う。未挿入は空）。
+    pub signature_block: String,
+    /// 利用者が何か書き込んだか（自動保存を走らせるか）。
+    pub dirty: bool,
+    /// 最後の保存より後に変更があるか。
+    pub unsaved: bool,
+}
+
 /// 添付の取得の段（画面の表示に使う）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]

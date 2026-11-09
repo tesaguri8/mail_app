@@ -91,6 +91,11 @@ fn has_keep_link(tail: &[&str]) -> bool {
 /// 本文の段落・ニュースレターの節とみなして隠さない（誤爆の保険）。
 const MAX_SIG_LINES: usize = 12;
 
+/// 署名とみなさなかった区切りの下（次の区切りの手前まで）が、この行数以下なら 1 つ上の区切りへ進む
+/// （署名の下に付いた注意書き・© の行・閉じの罫線）。超えたら本文の節とみなして打ち切る
+/// （実測: 上の見出しの URL を印とみなし、その下のニュースレターの節ごと隠す誤爆が出ていた）。
+const NOTICE_MAX_LINES: usize = 2;
+
 /// 罫線に使う記号のうち、3 個並べば罫線とみなすもの（全角・罫線素片・飾りの記号）。
 /// 本文の中でこれだけを 3 個以上並べた行は、まず区切りか飾りの線になる。
 const RULE_CHARS: &[char] = &[
@@ -193,14 +198,19 @@ fn block_lines<'a>(lines: &[&'a str], d: Delimiter) -> Vec<&'a str> {
         .collect()
 }
 
-/// まとまりの実質の行数（空行と、行全体が区切りの行は数えない）。
+/// まとまりの実質の行数（空行と、行全体が区切りの行は数えない）。区切り `d` から末尾まで。
 /// 行内の "□□□" の後ろに文字が続く（"□□□伊佐日和…"）なら、その行も 1 行と数える。
 fn substantive_lines(lines: &[&str], d: Delimiter) -> usize {
+    substantive_lines_until(lines, d, lines.len())
+}
+
+/// 区切り `d` から `end` 行目の手前までの実質の行数（数え方は substantive_lines と同じ）。
+fn substantive_lines_until(lines: &[&str], d: Delimiter, end: usize) -> usize {
     let first = &lines[d.line][d.col..];
     let first_counts = !is_whole_line_delimiter(first)
         && !first.trim_start().trim_start_matches('□').trim().is_empty();
     usize::from(first_counts)
-        + lines[d.line + 1..]
+        + lines[d.line + 1..end]
             .iter()
             .filter(|l| !l.trim().is_empty() && !is_whole_line_delimiter(l))
             .count()
@@ -290,10 +300,11 @@ fn has_signature_marker(block: &[&str]) -> bool {
 /// 署名として隠すまとまりの始まり（無ければ None）。純関数。
 /// 区切りを下から順に見ていく:
 /// - 実質の行が MAX_SIG_LINES を超えたら、そこで打ち切る（それより上は本文）。
-/// - 隠せない（残すべきリンクがある・本文が空になる）なら、1 つ上へ。
-/// - まとまりに署名らしさの印があるか、強い区切り（"--" / "-- " / "□□□"。書き手が置く署名の印）なら、
-///   そこから下を隠す。どちらでもなければ 1 つ上へ
-///   （閉じの罫線や、署名の下に付いた注意書き・© の行も、上の署名と一緒に隠れる）。
+/// - 隠せて（残すべきリンクが無い・本文が空にならない）、まとまりに署名らしさの印があるか、
+///   強い区切り（"--" / "-- " / "□□□"。書き手が置く署名の印）なら、そこから下を隠す。
+/// - そうでなければ、その区切りの下（次の区切りの手前まで）の実質の行が NOTICE_MAX_LINES 以下のときだけ
+///   1 つ上へ進む（閉じの罫線や、署名の下に付いた注意書き・© の行も、上の署名と一緒に隠れる）。
+///   超えたら打ち切る。
 /// - 決まった区切りのすぐ上の区切りが強い区切り（"--" 等）で、そこから下でも隠せるなら、そこまで広げる
 ///   （"--" の下に罫線で囲んだ署名を置く書き方）。
 ///
@@ -306,15 +317,20 @@ fn signature_start(lines: &[&str]) -> Option<Delimiter> {
             delimiter_of(l).map(|(col, strong)| Delimiter { line, col, strong })
         })
         .collect();
-    let found = delims
-        .iter()
-        .enumerate()
-        .rev()
-        .take_while(|(_, d)| substantive_lines(lines, **d) <= MAX_SIG_LINES)
-        .find(|(_, d)| {
-            hideable(lines, **d) && (d.strong || has_signature_marker(&block_lines(lines, **d)))
-        })
-        .map(|(i, d)| (i, *d));
+    let mut found = None;
+    for (i, &d) in delims.iter().enumerate().rev() {
+        if substantive_lines(lines, d) > MAX_SIG_LINES {
+            break;
+        }
+        if hideable(lines, d) && (d.strong || has_signature_marker(&block_lines(lines, d))) {
+            found = Some((i, d));
+            break;
+        }
+        let next = delims.get(i + 1).map_or(lines.len(), |n| n.line);
+        if substantive_lines_until(lines, d, next) > NOTICE_MAX_LINES {
+            break;
+        }
+    }
     let (i, start) = found?;
     let widened = i
         .checked_sub(1)
@@ -613,8 +629,26 @@ https://www.sample.invalid/\n\
         );
     }
 
-    /// 罫線で挟んだ件名と URL の下に続く本文の段落（印が無い・長い）は隠さない（通知メールの形）。
-    /// 段落の実質の行が MAX_SIG_LINES を超えると、そこで打ち切って上の URL まで遡らない。
+    /// 罫線で挟んだ件名と URL の下に続く本文の段落は、印が無ければ隠さない（通知メールの形）。
+    /// 段落が 3 行以上なら上の URL まで遡らない（NOTICE_MAX_LINES）。長い段落は MAX_SIG_LINES で打ち切る。
+    #[test]
+    fn short_body_paragraph_below_a_ruled_headline_is_kept() {
+        let body = "新しいお知らせがあります。\n==========\n【お知らせ】年末年始の営業について\n\
+https://notice.example.invalid/n/123\n==========\n\
+12 月 29 日から 1 月 3 日まではお休みをいただきます。\n\
+期間中のお問い合わせは、休み明けに順次お返事します。\n\
+よろしくお願いいたします。";
+        assert_eq!(strip_signature(body), body);
+        // ニュースレターの「▼見出し / 価格 / URL」の下に続く節も残る。
+        let news = "今月のおすすめです。\n\n━━━━━━━━━━\n▼冬の特別プラン\n1 泊 12,000 円\n\
+https://inn.example.invalid/plan/winter\n━━━━━━━━━━\n\
+暖炉のあるラウンジで、地元のワインをお楽しみください。\n\
+夕食は地元の野菜を使ったコースです。\n\
+お部屋は数に限りがあります。";
+        assert_eq!(strip_signature(news), news);
+    }
+
+    /// 段落が長くても（MAX_SIG_LINES を超える）、上の URL まで遡らない。
     #[test]
     fn body_paragraph_below_a_ruled_headline_is_kept() {
         let para: Vec<String> = (1..=13)

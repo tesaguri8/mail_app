@@ -12,7 +12,8 @@
     "range_2": "2日",
     "range_3": "3日",
     "range_7": "7日",
-    "tomorrow": "明日"
+    "tomorrow": "明日",
+    "none": "なし"
   },
   "titlebar": {
     "alwaysOnTop": "最前面に固定",

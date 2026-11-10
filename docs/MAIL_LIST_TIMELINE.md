@@ -22,18 +22,20 @@
 
 | 段 | 何をするか | どこ |
 |---|---|---|
-| ① 日ごとの件数 | `thread_list` と**同じ絞り込み・並び**で、代表メールの日付（端末ローカル）ごとにスレッドを数える。1 本の `GROUP BY` | コマンド `thread_day_counts` → `store/thread_days.rs` |
+| ① 日ごとの件数 | `thread_list` と**同じ絞り込み・並び**で、会話の最後のやり取りの日付（端末ローカル）ごとにスレッドを数える。1 本の `GROUP BY` | コマンド `thread_day_counts` → `store/thread_days.rs` |
 | ② 全期間ぶんの枠 | 件数の合計だけ枠（`slots`）を作る。読み込んだ位置だけ行が入り、残りは**高さだけのプレースホルダ** | `mailListWindow.ts`（`emptySlots` / `fillSlots`） |
 | ③ 仮想化 | `@tanstack/react-virtual`（Photosky と同じ 3.13 系）。**行の高さは描いてから測る**（`measureElement`）。見積もりは 92px | `MailboxView.tsx` の `rowVirtualizer` |
 | ④ 飛ぶ | つまみの offset ＝ 枠の番号。`scrollToIndex(offset, { align: 'start' })` | `jumpToOffset` |
 | ⑤ 飛んだ先だけ読む | スクロールが止まったら（80ms）、見えている行の前後 1 画面分を **100 件単位のページ**に分け、未読み込みの位置を含むページだけ `OFFSET` で読む。引っ張っている間は読まない | `pagesToLoad` → `requestRange` |
 
 - **累計を OFFSET と一致させる決め**:
-  - 日付キーは**並びの式（`date_ts DESC, id DESC`）の先頭**を日付にしたもの（`date(date_ts, 'unixepoch', 'localtime')`）。
+  - 日付キーは**並びの式の先頭**を日付にしたもの。並びは会話の最後のやり取り
+    （`max(date_ts, coalesce(thread_sent_ts, date_ts)) DESC, id DESC`。自分の返信を含む。[THREADING.md](THREADING.md) §5.1）で、
+    日付キーは `date(<その式>, 'unixepoch', 'localtime')`（どちらも `thread_activity.rs` の `activity_ts` で作る）。
     同じ日のスレッドは一覧の中で必ず連続し、累計がそのまま `OFFSET` になる（Rust の試験 `day_offsets_match_list_paging`。
     UTC・New York・Kolkata の時間帯でも通ることを確かめた）
   - 同じ時刻のスレッドは `id DESC` で順序が決まっている（以前から）。ページの境目で入れ替わらない
-  - **日時の無いスレッドは最後**（`date_ts` が NULL。SQLite の DESC で最後に来る）。つまみでは直前の日に数える（`toDayCounts`）
+  - **日時の無いスレッドは最後**（`date_ts` が NULL なら並びの式も NULL。SQLite の DESC で最後に来る）。つまみでは直前の日に数える（`toDayCounts`）
   - ローカル日付は SQLite の `'localtime'`（Rust のプロセスの時間帯＝WebView と同じ機械の設定）
 - **一覧の更新との整合**:
   - 削除・移動で一覧から外した行は、**枠から抜いて詰め**、日ごとの件数も減らす（`updateLoaded` / `dropFromDays`）。

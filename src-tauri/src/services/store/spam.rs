@@ -253,8 +253,22 @@ impl Store {
         let tx = conn.transaction()?;
         {
             let mut stmt = tx.prepare("UPDATE emails SET is_junk = ?1 WHERE id = ?2")?;
+            let mut thread_of = tx.prepare(
+                "SELECT logical_thread_id FROM emails WHERE id = ?1 AND logical_thread_id IS NOT NULL",
+            )?;
+            let mut threads = HashSet::new();
             for id in ids {
                 stmt.execute(params![value as i64, id])?;
+                if let Some(t) = thread_of
+                    .query_row(params![id], |r| r.get::<_, i64>(0))
+                    .optional()?
+                {
+                    threads.insert(t);
+                }
+            }
+            // 自分の送信を隔離・復帰したら、その会話の並び（最後のやり取り）が変わる。
+            for t in threads {
+                super::thread_activity::refresh_thread_sent_ts(&tx, t)?;
             }
         }
         tx.commit()

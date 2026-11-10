@@ -412,6 +412,7 @@ pub fn maintain_folder_rep_on_insert(conn: &Connection, email_id: i64) -> rusqli
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
+    super::thread_activity::note_thread_sent(conn, email_id, tid, &folder)?;
     if let Some((pid, pts)) = prev {
         if (dts, email_id) > (pts, pid) {
             // 自分が新しい → 旧代表を降格（自分は既定 1 のまま）。
@@ -453,7 +454,8 @@ pub fn recompute_reps_for_thread(conn: &Connection, thread_id: i64) -> rusqlite:
             params![thread_id, folder],
         )?;
     }
-    Ok(())
+    // 自分の送信が出入りしていれば、会話の並び（最後のやり取り）も変わる。
+    super::thread_activity::refresh_thread_sent_ts(conn, thread_id)
 }
 
 /// 下書きの添付を保存し直す（毎回入れ替え。作成画面の添付欄がそのまま正）。
@@ -656,7 +658,7 @@ fn backfill_existing(conn: &Connection, e: &NewEmail) -> rusqlite::Result<bool> 
     // （ここでは再割当しない＝取り込みは保存に徹する）。manual は動かさない。
     if header_backfilled {
         let n = conn.execute(
-            "UPDATE emails SET logical_thread_id = NULL, thread_id = NULL
+            "UPDATE emails SET logical_thread_id = NULL, thread_id = NULL, thread_sent_ts = NULL
              WHERE id = ?1 AND COALESCE(thread_assignment,'auto') <> 'manual'",
             params![id],
         )?;
@@ -957,6 +959,10 @@ impl Store {
     /// スレッド単位のメール一覧（代表＝フォルダ内最新）。docs/THREADING.md §5。
     /// 論理スレッド未割当の旧データは 1 通ずつ（負値の擬似 gkey）で扱う。
     /// message_count は全フォルダ横断のスレッド総件数、unread_count は当フォルダの未読。
+    ///
+    /// 並びは会話の「最後のやり取り」（そのフォルダの最新と、同じ会話の自分の送信の
+    /// 新しい方。[`super::thread_activity::activity_ts`]）。行の時刻（`date`）も最後のやり取りの時刻にする（一覧の日付の見出しと揃う）。
+    /// 差出人・冒頭・未読などは今までどおりフォルダ内の代表から出す。
     pub fn list_threads(
         &self,
         account_id: Option<i64>,
@@ -977,14 +983,21 @@ impl Store {
         //   （代表フラグ全件＝数千件）へ評価され得るため、必ず先に件数を絞る。
         let sql = format!(
             "WITH page AS MATERIALIZED (
-                SELECT id, date_ts FROM emails
+                SELECT id, {act} AS act_ts FROM emails
                 WHERE {fp_page} {acct} AND is_folder_rep = 1
-                ORDER BY date_ts DESC, id DESC
+                ORDER BY {act} DESC, id DESC
                 LIMIT ?2 OFFSET ?3
              )
              SELECT r.id, COALESCE(r.logical_thread_id, -r.id) AS gkey, r.account_id,
                     COALESCE(lt.title, r.subject) AS subject,
-                    r.from_address, r.from_name, r.to_addresses, r.to_name, r.date,
+                    r.from_address, r.from_name, r.to_addresses, r.to_name,
+                    -- 自分の返信の方が新しければ、その返信の時刻を出す（日時の文字列は送信の行から）。
+                    CASE WHEN r.thread_sent_ts > r.date_ts THEN
+                         COALESCE((SELECT s.date FROM emails s INDEXED BY idx_emails_thread_folder
+                                   WHERE s.logical_thread_id = r.logical_thread_id AND s.folder = 'sent'
+                                     AND s.is_junk = 0
+                                   ORDER BY s.date_ts DESC, s.id DESC LIMIT 1), r.date)
+                         ELSE r.date END AS last_date,
                     substr(COALESCE(r.clean_body, r.body_plain, ''), 1, 140) AS preview,
                     -- スター/ブックマークはスレッド全体で集約（どれか1通に付いていれば会話に表示）。
                     -- 代表メールは再構築で入れ替わるため、代表のフラグだけ見ると印が消えて見える。
@@ -1010,7 +1023,8 @@ impl Store {
                     {replied}
              FROM page JOIN emails r ON r.id = page.id
              LEFT JOIN logical_threads lt ON lt.id = r.logical_thread_id
-             ORDER BY page.date_ts DESC, page.id DESC",
+             ORDER BY page.act_ts DESC, page.id DESC",
+            act = super::thread_activity::activity_ts(""),
             known_vip = known_vip_cols("r.from_address"),
             replied = replied_col("r.from_address"),
             fp_page = folder_predicate(folder, "", "?1"),

@@ -327,6 +327,12 @@ const MIGRATIONS: &[Migration] = &[
         version: 70,
         sql: include_str!("migrations/0070_unread_index.sql"),
     },
+    Migration {
+        // 71 は一覧の並びを「会話の最後のやり取り」（自分の返信を含む）にする列と式索引
+        // （docs/THREADING.md §5）。既存データは SQL で埋める。
+        version: 71,
+        sql: include_str!("migrations/0071_thread_sent_ts.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
@@ -410,6 +416,57 @@ mod tests {
         assert_eq!(hit, 1);
     }
 
+    /// 0071 は既存の会話に「自分が最後に送った時刻」を埋める（利用者に再構築を要らせない）。
+    /// 送信済みの、迷惑でない送信だけを数え、下書きの行には付けない。
+    #[test]
+    fn migration_0071_fills_thread_sent_ts() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_until(&conn, 70).unwrap();
+        conn.execute_batch(
+            "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1,'me@example.invalid','i','s');
+             INSERT INTO logical_threads (id) VALUES (10), (20);
+             INSERT INTO emails (id, account_id, canonical_key, folder, date_ts, logical_thread_id, is_junk) VALUES
+               (1, 1, 'k1', 'inbox', 100, 10, 0),
+               (2, 1, 'k2', 'sent', 300, 10, 0),
+               (3, 1, 'k3', 'sent', 900, 10, 1),
+               (4, 1, 'k4', 'drafts', 950, 10, 0),
+               (5, 1, 'k5', 'trash', 990, 10, 0),
+               (6, 1, 'k6', 'inbox', 200, 20, 0),
+               (7, 1, 'k7', 'inbox', 400, NULL, 0);",
+        )
+        .unwrap();
+        run(&conn).unwrap();
+        let got: Vec<(i64, Option<i64>)> = conn
+            .prepare("SELECT id, thread_sent_ts FROM emails ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        // 会話 10 の自分の送信は 300（迷惑の 900・下書き・ゴミ箱は数えない）。下書きの行には付けない。
+        assert_eq!(
+            got,
+            [
+                (1, Some(300)),
+                (2, Some(300)),
+                (3, Some(300)),
+                (4, None),
+                (5, Some(300)),
+                (6, None),
+                (7, None)
+            ]
+        );
+        // 旧い代表の日時順の索引は、並びの式索引に置き換わる。
+        let idx: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_emails_folder_rep%'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(idx, ["idx_emails_folder_rep_activity"]);
+    }
+
     #[test]
     fn migrations_are_idempotent() {
         let conn = Connection::open_in_memory().unwrap();
@@ -464,7 +521,9 @@ mod tests {
                date_ts INTEGER,
                -- 既読・迷惑・アカウント・論理スレッド（0001 から存在）。0070(未読の部分索引)が動くよう用意する。
                is_read INTEGER DEFAULT 0, is_junk INTEGER DEFAULT 0, account_id INTEGER,
-               logical_thread_id INTEGER);
+               logical_thread_id INTEGER,
+               -- 代表フラグ（0032 から存在）。0071(並びの式索引)が動くよう用意する。
+               is_folder_rep INTEGER DEFAULT 1);
              ALTER TABLE emails ADD COLUMN reply_to TEXT;
              CREATE TABLE folder_sync (
                account_id INTEGER NOT NULL, folder TEXT NOT NULL,

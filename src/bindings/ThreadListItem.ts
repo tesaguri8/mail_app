@@ -18,7 +18,7 @@ id: number, account_id: number,
  */
 subject: string | null, from_address: string | null, from_name: string | null, to_addresses: string | null, to_name: string | null, 
 /**
- * 代表メールの日時。
+ * 会話の最後のやり取りの日時（そのフォルダの最新か、同じ会話の自分の送信の新しい方。docs/THREADING.md §5）。
  */
 date: string | null, preview: string, 
 /**

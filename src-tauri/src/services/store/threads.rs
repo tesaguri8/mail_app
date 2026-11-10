@@ -455,7 +455,11 @@ impl Store {
             None => {
                 let conn = self.conn.lock().unwrap();
                 match assign_thread(&conn, email_id)? {
-                    Some(t) => t,
+                    Some(t) => {
+                        // 取り込み後の加工（process_pending）と同じく、代表と並びの鍵も整える。
+                        super::emails::maintain_folder_rep_on_insert(&conn, email_id)?;
+                        t
+                    }
                     None => return Ok(None),
                 }
             }
@@ -946,7 +950,7 @@ impl UnionFind {
 fn rebuild_threads_conn(conn: &Connection, account_id: i64) -> rusqlite::Result<()> {
     // auto メールの割当を一旦外す。
     conn.execute(
-        "UPDATE emails SET logical_thread_id = NULL, thread_id = NULL
+        "UPDATE emails SET logical_thread_id = NULL, thread_id = NULL, thread_sent_ts = NULL
          WHERE account_id = ?1 AND COALESCE(thread_assignment,'auto') <> 'manual'",
         params![account_id],
     )?;
@@ -1114,7 +1118,8 @@ fn rebuild_threads_conn(conn: &Connection, account_id: i64) -> rusqlite::Result<
             ) WHERE rn = 1)",
         params![account_id],
     )?;
-    Ok(())
+    // 会話の並び（最後のやり取り）の元になる「自分が最後に送った時刻」も付け直す。
+    super::thread_activity::refresh_thread_sent_ts_for_account(conn, account_id)
 }
 
 /// 取り込み後のローカル加工（接続版・テスト用）: 未割当（NULL）の auto メールに、古い順で

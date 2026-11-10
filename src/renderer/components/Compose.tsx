@@ -54,6 +54,7 @@ import { FlySwallow, type FlySwallowHandle } from './FlySwallow';
 import { useTabActiveRef } from '../hooks/useTabActive';
 import swallowUrl from '../assets/swallow.png';
 import { formatSize } from '../utils/fileSize';
+import { composeZoomProps } from './BodyZoom';
 
 /** 作成モード。返信/転送は元メール（source）を伴う。draft は保存済み下書きの再編集。
  * new は任意で宛先(to)を初期設定できる（アドレスのクリックから「このアドレスへ新規」）。 */
@@ -1273,6 +1274,7 @@ export function Compose({
             「貼り付け」「引用として貼り付け」を出す（相手の文面を引きながら書けるように）。 */}
         <textarea
           ref={bodyRef}
+          {...composeZoomProps}
           className="min-h-[10rem] w-full flex-1 resize-none rounded-md bg-white/10 px-3 py-2 text-sm leading-relaxed outline-none placeholder:text-white/30 focus:bg-white/15"
           value={body}
           onChange={(e) => {

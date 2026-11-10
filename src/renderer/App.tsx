@@ -16,6 +16,7 @@ import { SyncProvider } from './components/SyncProvider';
 import type { AccountSummary } from '@bindings/AccountSummary';
 // 背景写真プール（同梱サンプル）。docs/UI_UX_DESIGN.md 背景写真システム
 import { BACKGROUNDS, getBackgroundIndex, setBackgroundIndex } from './config/backgrounds';
+import { BodyZoomLayer } from './components/BodyZoom';
 import {
   appearanceStyle,
   backdropCss,
@@ -145,6 +146,7 @@ export default function App() {
         style={appearanceStyle(backdrop, ink)}
       >
         <TitleBar onNavigate={navigate} onCycleBackground={cycleBackground} />
+        <BodyZoomLayer />
 
         <main
           className="relative min-h-0 flex-1 overflow-hidden"

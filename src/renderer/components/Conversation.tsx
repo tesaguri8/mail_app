@@ -66,6 +66,7 @@ import type { CalendarPanelInitial } from './CalendarPanel';
 import { TimelineScrubber } from './timeline/TimelineScrubber';
 import { scrollTopForFraction, startFractions, type DayCount } from './timeline/dayCounts';
 import { markAttrs, readMarks, summarizeMarks, type MarkBadge } from './timeline/marks';
+import { ZoomArea } from './BodyZoom';
 
 /** 全文展開時、本文カードの先頭を表示域の上端から少しだけ下げて置くための余白（px）。 */
 const EXPAND_TOP_GAP = 8;
@@ -562,14 +563,16 @@ function Bubble({
             バブルの上に古い順で出す（会話全体を上から下へ時間どおりにする）。
             引用の表示中・全文の表示中は、本文に同じ内容があるので出さない。 */}
         {!expanded && !showQuotes && m.unseen_quotes.length > 0 && (
-          <LinkGuard trust={trust}>
-            <UnseenQuotes
-              quotes={m.unseen_quotes}
-              out={out}
-              highlight={highlight}
-              renderDate={renderDate}
-            />
-          </LinkGuard>
+          <ZoomArea field="bubble">
+            <LinkGuard trust={trust}>
+              <UnseenQuotes
+                quotes={m.unseen_quotes}
+                out={out}
+                highlight={highlight}
+                renderDate={renderDate}
+              />
+            </LinkGuard>
+          </ZoomArea>
         )}
 
         {/* バブル本体。id（スクロールの基準）と日付のつまみの目印は、上の枠を含めずここに付ける
@@ -775,30 +778,32 @@ function Bubble({
                   </button>
                 </div>
               )}
-              <LinkGuard trust={trust}>
-                {renderHtml ? (
-                  <HtmlText
-                    html={m.body_html as string}
-                    inlineImages={inlineImages}
-                    highlight={highlight}
-                    renderDate={renderDate}
-                    onInlineImageMenu={(cid, x, y) => {
-                      const att = inlineAtts[cid];
-                      if (att) setImgMenu({ x, y, att });
-                    }}
-                    onInlineImageAction={(cid, action) => {
-                      const att = inlineAtts[cid];
-                      if (att) imageAction(att, action);
-                    }}
-                  />
-                ) : body ? (
-                  <AutoLinkText text={body} highlight={highlight} renderDate={renderDate} />
-                ) : fetchingBody ? (
-                  <span className="text-white/40">{t('mailbox.fetchingBody')}</span>
-                ) : bubbleImages.length === 0 ? (
-                  <span className="text-white/40">{t('mailbox.noBody')}</span>
-                ) : null}
-              </LinkGuard>
+              <ZoomArea field="bubble">
+                <LinkGuard trust={trust}>
+                  {renderHtml ? (
+                    <HtmlText
+                      html={m.body_html as string}
+                      inlineImages={inlineImages}
+                      highlight={highlight}
+                      renderDate={renderDate}
+                      onInlineImageMenu={(cid, x, y) => {
+                        const att = inlineAtts[cid];
+                        if (att) setImgMenu({ x, y, att });
+                      }}
+                      onInlineImageAction={(cid, action) => {
+                        const att = inlineAtts[cid];
+                        if (att) imageAction(att, action);
+                      }}
+                    />
+                  ) : body ? (
+                    <AutoLinkText text={body} highlight={highlight} renderDate={renderDate} />
+                  ) : fetchingBody ? (
+                    <span className="text-white/40">{t('mailbox.fetchingBody')}</span>
+                  ) : bubbleImages.length === 0 ? (
+                    <span className="text-white/40">{t('mailbox.noBody')}</span>
+                  ) : null}
+                </LinkGuard>
+              </ZoomArea>
 
               {/* 画像添付をバブルに並べる（保存・開くは画像の右上のボタンと右クリック）。本文の有無に関わらず出すので、
                   本文のあるメールでも画像が付いていることに気づける。チャットの流れを埋めない

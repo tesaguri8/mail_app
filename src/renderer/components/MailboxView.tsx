@@ -2506,7 +2506,7 @@ export function MailboxView({
           >
             <div className="min-h-0 overflow-hidden">{composeEl}</div>
             <div className="flex min-h-0 flex-col overflow-hidden border-l border-white/10">
-              <MailBody detail={composeSource} />
+              <MailBody detail={composeSource} zoomField="source" />
             </div>
           </div>
         ) : (

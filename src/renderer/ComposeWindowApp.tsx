@@ -14,6 +14,7 @@ import { accountList } from './services/accounts';
 import { COMPOSE_WINDOW_DONE_EVENT, composeWindowHandoff } from './services/composeWindow';
 import { mailGet, mailGetDraft } from './services/mail';
 import { BACKGROUNDS, getBackgroundIndex } from './config/backgrounds';
+import { BodyZoomLayer } from './components/BodyZoom';
 import {
   appearanceStyle,
   backdropCss,
@@ -107,6 +108,7 @@ export default function ComposeWindowApp() {
         className="flex h-full flex-col overflow-hidden bg-cover bg-center text-white"
         style={appearanceStyle(backdrop, ink)}
       >
+        <BodyZoomLayer />
         <main
           className="relative min-h-0 flex-1 overflow-hidden"
           style={{ backgroundColor: panelTintCss(dim) }}
@@ -164,7 +166,7 @@ function ComposeWindowBody({ loaded }: { loaded: Extract<Loaded, { kind: 'ready'
     >
       <div className="min-h-0 overflow-hidden">{compose}</div>
       <div className="flex min-h-0 flex-col overflow-hidden border-l border-white/10">
-        <MailBody detail={source} />
+        <MailBody detail={source} zoomField="source" />
       </div>
     </div>
   );

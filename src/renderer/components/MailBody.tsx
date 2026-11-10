@@ -39,6 +39,7 @@ import { contactLookupEmail } from '../services/contacts';
 import { mailLoadRemote, senderRemoteAllowed, senderSetRemotePolicy } from '../services/mail';
 import { AutoLinkText, HtmlText, inlineCidRefs, remoteImageUrls } from './HtmlText';
 import { LinkGuard } from './LinkGuard';
+import { ZoomArea } from './BodyZoom';
 import { linkTrust } from './linkTrust';
 import { AttachedImages, isImage } from './AttachedImages';
 import { PrintMail } from './PrintMail';
@@ -345,6 +346,7 @@ export function MailBody({
   onGreenChange,
   highlight,
   onCollapse,
+  zoomField = 'bubble',
 }: {
   detail: MailDetail;
   /** このメールに付いているタグ（ヘッダの宛先の下に表示）。 */
@@ -378,6 +380,8 @@ export function MailBody({
   highlight?: string[];
   /** ヘッダに「とじる（畳む）」ボタンを出す。会話バブルの展開解除に使う。 */
   onCollapse?: () => void;
+  /** 本文の拡大・縮小の欄（作成画面の右の元メールは 'source'。既定は会話のバブル）。 */
+  zoomField?: 'source' | 'bubble';
 }) {
   const { t } = useTranslation();
   const toast = useToast();
@@ -1114,59 +1118,61 @@ export function MailBody({
             </button>
           </div>
         )}
-        <LinkGuard trust={trust}>
-          {hasHtml ? (
-            <HtmlText
-              html={html}
-              inlineImages={inlineImages}
-              remoteImages={remoteShown ? remoteImages : {}}
-              remoteDefaultExpanded={remoteExpandDefault}
-              highlight={highlight}
-              renderDate={renderDate}
-              onInlineImageMenu={(cid, x, y) => {
-                const att = attachments.find((a) => a.kind === 'inline' && a.content_id === cid);
-                if (att) setInlineMenu({ x, y, att });
-              }}
-              onInlineImageAction={(cid, action) => {
-                const att = attachments.find((a) => a.kind === 'inline' && a.content_id === cid);
-                if (att) void (action === 'save' ? handleSave(att) : handleOpen(att));
-              }}
-              renderEmail={
-                onAddContact
-                  ? (email) => (
-                      <EmailAdd
-                        email={email}
-                        onAdd={onAddContact}
-                        onEdit={onEditContact}
-                        onCompose={onComposeTo}
-                      />
-                    )
-                  : undefined
-              }
-            />
-          ) : body.trim() ? (
-            <AutoLinkText
-              text={body}
-              className="text-sm leading-relaxed text-white/90"
-              highlight={highlight}
-              renderDate={renderDate}
-              renderEmail={
-                onAddContact
-                  ? (email) => (
-                      <EmailAdd
-                        email={email}
-                        onAdd={onAddContact}
-                        onEdit={onEditContact}
-                        onCompose={onComposeTo}
-                      />
-                    )
-                  : undefined
-              }
-            />
-          ) : (
-            <p className="text-sm text-white/40">{t('mailbox.noBody')}</p>
-          )}
-        </LinkGuard>
+        <ZoomArea field={zoomField}>
+          <LinkGuard trust={trust}>
+            {hasHtml ? (
+              <HtmlText
+                html={html}
+                inlineImages={inlineImages}
+                remoteImages={remoteShown ? remoteImages : {}}
+                remoteDefaultExpanded={remoteExpandDefault}
+                highlight={highlight}
+                renderDate={renderDate}
+                onInlineImageMenu={(cid, x, y) => {
+                  const att = attachments.find((a) => a.kind === 'inline' && a.content_id === cid);
+                  if (att) setInlineMenu({ x, y, att });
+                }}
+                onInlineImageAction={(cid, action) => {
+                  const att = attachments.find((a) => a.kind === 'inline' && a.content_id === cid);
+                  if (att) void (action === 'save' ? handleSave(att) : handleOpen(att));
+                }}
+                renderEmail={
+                  onAddContact
+                    ? (email) => (
+                        <EmailAdd
+                          email={email}
+                          onAdd={onAddContact}
+                          onEdit={onEditContact}
+                          onCompose={onComposeTo}
+                        />
+                      )
+                    : undefined
+                }
+              />
+            ) : body.trim() ? (
+              <AutoLinkText
+                text={body}
+                className="text-sm leading-relaxed text-white/90"
+                highlight={highlight}
+                renderDate={renderDate}
+                renderEmail={
+                  onAddContact
+                    ? (email) => (
+                        <EmailAdd
+                          email={email}
+                          onAdd={onAddContact}
+                          onEdit={onEditContact}
+                          onCompose={onComposeTo}
+                        />
+                      )
+                    : undefined
+                }
+              />
+            ) : (
+              <p className="text-sm text-white/40">{t('mailbox.noBody')}</p>
+            )}
+          </LinkGuard>
+        </ZoomArea>
 
         {/* 本文に埋め込むつもりで送られた画像（本文からは参照されていないもの）を本文の下へ。
             設定「本文埋め込み画像を表示」がオフのときは出さない。 */}

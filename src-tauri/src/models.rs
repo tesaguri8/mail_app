@@ -1227,6 +1227,9 @@ pub struct AccountSyncStatus {
     pub last_success_at: Option<String>,
     /// 最後に同期を試みた時刻（RFC 3339）。
     pub last_attempt_at: Option<String>,
+    /// 失敗が続いて自動の接続を控えているとき、次に自動で試す時刻（RFC 3339）。同じサーバーの
+    /// アカウントで共有する（`services/imap_conn/gate.rs`）。控えていなければ None。
+    pub next_retry_at: Option<String>,
 }
 
 /// 再構築で実行する処理。データ形式バージョンの比較で決まる（services/dataver.rs）。

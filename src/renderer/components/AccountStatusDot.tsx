@@ -20,8 +20,21 @@ export function formatSyncTime(iso: string, now: Date = new Date(), locale?: str
 }
 
 /**
+ * 次に自動で試すまでの説明（「次の自動の試行まで約 4 分」）。失敗が続いてサーバーへの自動の接続を
+ * 控えているときだけ（`next_retry_at`。docs/SYNC.md §5-4）。控えていない・過ぎていれば空。
+ */
+export function retryLabel(t: TFunction, nextRetryAt: string | null, now: Date = new Date()) {
+  if (!nextRetryAt) return '';
+  const ms = new Date(nextRetryAt).getTime() - now.getTime();
+  if (!Number.isFinite(ms) || ms <= 0) return '';
+  if (ms < 60_000) return t('mailbox.syncStatus.retrySoon');
+  return t('mailbox.syncStatus.retryIn', { minutes: Math.ceil(ms / 60_000) });
+}
+
+/**
  * 接続状況の説明（ツールチップと、失敗のときの補足の行）。状態が無ければ「まだ同期していない」。
- * 失敗のときは種類と、最後に成功した時刻（この起動で成功していなければ、その旨）を出す。
+ * 失敗のときは種類と、最後に成功した時刻（この起動で成功していなければ、その旨）、
+ * 自動の接続を控えていれば次に試すまでの時間を出す。
  */
 export function accountStatusLabel(
   t: TFunction,
@@ -44,7 +57,7 @@ export function accountStatusLabel(
         time: formatSyncTime(status.last_success_at, now, locale),
       })
     : t('mailbox.syncStatus.noSuccess');
-  return `${kind}${since}`;
+  return `${kind}${since}${retryLabel(t, status.next_retry_at, now)}`;
 }
 
 /** 印の色（正常は緑・同期中は水色で点滅・失敗は赤・まだ同期していないは灰）。 */

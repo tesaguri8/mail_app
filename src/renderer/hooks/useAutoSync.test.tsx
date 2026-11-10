@@ -122,6 +122,17 @@ describe('useAutoSync', () => {
     expect(mocks.mailSync).toHaveBeenCalledTimes(4);
   });
 
+  it('メールが全部失敗しても巡回は止めない（つながらないサーバーの休みは Rust 側の門が持つ）', async () => {
+    mocks.mailSync.mockRejectedValue(new Error('接続を控えています'));
+    await mount();
+    await advance(60_000);
+    // 以前は全滅で 5 分止め、カレンダーの同期まで止まっていた。
+    expect(mocks.mailSync).toHaveBeenCalledTimes(3);
+    expect(mocks.googleSync.mock.calls.filter((c) => c[1].calendar)).toHaveLength(3);
+    mocks.mailSync.mockReset();
+    mocks.mailSync.mockResolvedValue({ stored: 0 });
+  });
+
   it('連絡先の送信が長くても、メール・カレンダーの巡回は塞がれない', async () => {
     // 連絡先の同期だけ終わらない（数千件の送信中）。
     let finish = () => undefined as void;

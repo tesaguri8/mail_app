@@ -29,14 +29,15 @@ export const CONTACTS_SYNCED_EVENT = 'rondine:contacts-synced';
  * - 流れは 2 本: ① メール → Google カレンダー、② Google の連絡先。連絡先の送信（数千件の
  *   更新など）が長くても、メール・カレンダーの巡回を塞がない。
  * - 連絡先・組織を変えたら（`utils/localChange` の合図）、まとめ待ちのあと ② だけを回す
- *   （メールのサーバーは叩かないので、メールのクールダウン中でも送る）。
+ *   （メールのサーバーは叩かない）。
  * - 戻り値 syncNow で任意タイミングの即時同期も呼べる（ボタン押下時用。両方の流れを回す）。
  * - 多重実行は流れごとにガードし、回っている間の依頼は終わってからすぐ回し直す。① が 1 巡
  *   完了するごとに MAIL_SYNCED_EVENT を発火する。
+ * - つながらないサーバーへの休みは Rust 側の門が持つ（サーバーごとに 1 分から倍々・上限 30 分。
+ *   docs/SYNC.md §5-4）。ここからの同期は自動の扱いなので、休みの間は張らずにすぐ失敗で戻る。
+ *   以前ここに持っていた「全アカウントが失敗したら 5 分止める」は、成功するアカウントが 1 つでも
+ *   あると効かず、つながらないサーバーへ 30 秒ごとに張り続けていた（2026-11-11 vaio）。
  */
-/** 全アカウントの同期が失敗（接続不可等）した後、自動再試行を止める時間（ミリ秒）。
- *  遮断中のサーバーへ叩き続けて遮断を延長させないための安全弁。手動同期には効かない。 */
-const AUTOSYNC_COOLDOWN_MS = 5 * 60 * 1000;
 
 export function useAutoSync(accounts: AccountSummary[]): () => void {
   const { t } = useTranslation();
@@ -51,8 +52,6 @@ export function useAutoSync(accounts: AccountSummary[]): () => void {
   // ② 連絡先の流れ（① とは別に回す）。
   const contactsBusy = useRef(false);
   const contactsAgain = useRef(false);
-  // 直近の一括失敗でクールダウン中なら、この時刻まで自動（定期）同期を止める。
-  const cooldownUntil = useRef(0);
   // フッター表示のアカウント名解決用に最新の一覧を保持（syncNow を作り直さずに参照する）。
   const accountsRef = useRef(accounts);
   accountsRef.current = accounts;
@@ -129,7 +128,6 @@ export function useAutoSync(accounts: AccountSummary[]): () => void {
             )
           : null;
       let synced = false;
-      let failed = false;
       let stored = 0; // この巡回で新規保存されたメール総数（新着有無の判定に使う）。
       try {
         for (const id of ids) {
@@ -143,8 +141,7 @@ export function useAutoSync(accounts: AccountSummary[]): () => void {
             synced = true;
             stored += r?.stored ?? 0;
           } catch {
-            // アカウント単位の失敗は無視して次へ（ただし全滅ならクールダウン）。
-            failed = true;
+            // アカウント単位の失敗は無視して次へ（つながらないサーバーの休みは Rust 側の門が持つ）。
           }
         }
         // Google カレンダーも同じ間隔で同期する（メールの成否とは独立）。変化があればカレンダー
@@ -170,9 +167,6 @@ export function useAutoSync(accounts: AccountSummary[]): () => void {
         if (act != null) activityStop(act);
         busy.current = false;
       }
-      // メールが1件も成功せず全滅＝接続不可の可能性大 → しばらく自動再試行を止める（手動は可）。
-      // カレンダーの成否はクールダウンの判定には含めない。
-      cooldownUntil.current = failed && !synced ? Date.now() + AUTOSYNC_COOLDOWN_MS : 0;
       // 新着件数を載せて通知（購読側は新着ゼロなら一覧の再取得を省ける）。
       if (synced) window.dispatchEvent(new CustomEvent(MAIL_SYNCED_EVENT, { detail: { stored } }));
       if (again.current) {
@@ -191,19 +185,16 @@ export function useAutoSync(accounts: AccountSummary[]): () => void {
     return () => window.removeEventListener(PREFS_EVENT, onPrefs);
   }, []);
 
-  // 起動直後（アカウント一覧が変わったときも）に即同期。クールダウン中（直近の接続失敗後）は
-  // 自動では叩かない（手動同期は別途可）。
+  // 起動直後（アカウント一覧が変わったときも）に即同期。
   useEffect(() => {
-    if (Date.now() >= cooldownUntil.current) syncNow();
+    syncNow();
   }, [syncNow]);
 
-  // 設定間隔で定期同期（0=オフ）。どの画面にいても動く。直近の一括失敗でクールダウン中は
-  // 定期同期をスキップして、遮断中のサーバーを叩き続けないようにする（手動同期は別途可）。
+  // 設定間隔で定期同期（0=オフ）。どの画面にいても動く。つながらないサーバーは Rust 側の門が
+  // 休ませる（張らずにすぐ戻る）ので、ここでは止めない（カレンダー・連絡先は回り続ける）。
   useEffect(() => {
     if (intervalSec <= 0) return;
-    const h = setInterval(() => {
-      if (Date.now() >= cooldownUntil.current) syncNow();
-    }, intervalSec * 1000);
+    const h = setInterval(syncNow, intervalSec * 1000);
     return () => clearInterval(h);
   }, [intervalSec, syncNow]);
 

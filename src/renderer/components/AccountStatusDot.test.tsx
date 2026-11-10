@@ -8,6 +8,7 @@ import {
   AccountStatusDot,
   accountStatusLabel,
   formatSyncTime,
+  retryLabel,
   worstStatus,
 } from './AccountStatusDot';
 import { Dropdown } from './Dropdown';
@@ -37,12 +38,17 @@ const status = (over: Partial<AccountSyncStatus>): AccountSyncStatus => ({
   error: null,
   last_success_at: null,
   last_attempt_at: null,
+  next_retry_at: null,
   ...over,
 });
 
 /** 試験用の t: キーと差し込みの値を、そのまま見える形にする。 */
 const t = ((key: string, opts?: Record<string, unknown>) =>
-  opts && 'time' in opts ? `${key}[${String(opts.time)}]` : key) as unknown as TFunction;
+  opts && 'time' in opts
+    ? `${key}[${String(opts.time)}]`
+    : opts && 'minutes' in opts
+      ? `${key}[${String(opts.minutes)}]`
+      : key) as unknown as TFunction;
 
 const NOW = new Date(2026, 9, 28, 9, 0);
 const AT_0223 = new Date(2026, 9, 28, 2, 23).toISOString();
@@ -70,6 +76,18 @@ describe('接続状況の文言', () => {
     );
     const auth = status({ phase: 'failed', error_kind: 'auth' });
     expect(accountStatusLabel(t, auth)).toBe('mailbox.syncStatus.authmailbox.syncStatus.noSuccess');
+  });
+
+  it('自動の接続を控えているときは、次に自動で試すまでの分を出す（切り上げ）', () => {
+    const at = (ms: number) => new Date(NOW.getTime() + ms).toISOString();
+    const held = status({ phase: 'failed', error_kind: 'unreachable', next_retry_at: at(170_000) });
+    expect(accountStatusLabel(t, held, NOW)).toBe(
+      'mailbox.syncStatus.unreachablemailbox.syncStatus.noSuccessmailbox.syncStatus.retryIn[3]'
+    );
+    expect(retryLabel(t, at(30_000), NOW)).toBe('mailbox.syncStatus.retrySoon');
+    // 過ぎた・控えていないなら出さない。
+    expect(retryLabel(t, at(-1000), NOW)).toBe('');
+    expect(retryLabel(t, null, NOW)).toBe('');
   });
 
   it('今日の時刻は時刻だけ、ほかの日は月日つき', () => {

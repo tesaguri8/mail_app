@@ -1003,7 +1003,7 @@ export function MailboxView({
       let fetched = 0;
       let stored = 0;
       for (const id of ids) {
-        const r = await mailSync(id);
+        const r = await mailSync(id, true);
         fetched += r.fetched;
         stored += r.stored;
       }

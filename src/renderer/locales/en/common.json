@@ -907,7 +907,9 @@
       "auth": "Login failed (check the password)",
       "other": "Sync failed",
       "lastSuccess": " (last success {{time}})",
-      "noSuccess": " (no successful sync since startup)"
+      "noSuccess": " (no successful sync since startup)",
+      "retryIn": " · Repeated failures: next automatic try in about {{minutes}} min",
+      "retrySoon": " · Next automatic try shortly"
     },
     "allAccounts": "All accounts",
     "loadedOf": "Showing {{shown}} / {{total}} (scroll for more)",

@@ -19,7 +19,14 @@ fn a_silent_server_times_out_instead_of_hanging() {
         total: None,
     };
     let started = std::time::Instant::now();
-    let r = connect_login_with("127.0.0.1", port, "u@example.invalid", "x", timeouts);
+    let r = connect_login_with(
+        "127.0.0.1",
+        port,
+        "u@example.invalid",
+        "x",
+        timeouts,
+        Urgency::Manual,
+    );
     let took = started.elapsed();
     done.send(()).unwrap();
     server.join().unwrap();
@@ -54,6 +61,7 @@ fn a_closed_connection_is_not_a_timeout() {
             io: std::time::Duration::from_secs(2),
             total: None,
         },
+        Urgency::Manual,
     );
     assert!(r.is_err());
     assert!(!matches!(r, Err(ImapError::Timeout)));
@@ -165,6 +173,7 @@ fn a_refused_connection_is_a_connect_error() {
             io: Duration::from_secs(2),
             total: None,
         },
+        Urgency::Manual,
     );
     assert!(matches!(r, Err(ImapError::Connect(_))), "{:?}", r.err());
 }

@@ -783,7 +783,7 @@ pub struct ThreadListItem {
     pub from_name: Option<String>,
     pub to_addresses: Option<String>,
     pub to_name: Option<String>,
-    /// 代表メールの日時。
+    /// 会話の最後のやり取りの日時（そのフォルダの最新か、同じ会話の自分の送信の新しい方。docs/THREADING.md §5）。
     pub date: Option<String>,
     pub preview: String,
     /// スレッド（フォルダ内）に未読が無いか。一覧の未読ドット判定に使う。

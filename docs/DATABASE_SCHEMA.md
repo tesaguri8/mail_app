@@ -99,6 +99,7 @@ CREATE TABLE emails (
     bcc_addresses TEXT,                    -- 0030: 下書きの手入力 Bcc（受信では NULL）
     references_ids TEXT,                   -- 0031: References（祖先 Message-ID 連鎖）
     is_folder_rep INTEGER DEFAULT 1,       -- 0032: (論理スレッド,フォルダ) の代表フラグ
+    thread_sent_ts INTEGER,                -- 0071: 会話で自分が最後に送った時刻（送信済み・迷惑以外。下書きの行は NULL）。一覧の並び＝max(date_ts, coalesce(thread_sent_ts, date_ts))（THREADING.md §5.1）
     trashed_at TEXT,                       -- 0036: ゴミ箱へ移した時刻
     prev_folder TEXT,                      -- 0036: 復元先（ゴミ箱移動前の folder）
     reply_to TEXT,                         -- 0037: 受信メールの Reply-To（返信先指定）
@@ -592,7 +593,7 @@ CREATE INDEX idx_emails_message_id     ON emails(message_id);                   
 CREATE INDEX idx_emails_thread_key     ON emails(thread_id);                         -- 0031
 CREATE INDEX idx_emails_list           ON emails(account_id, folder, date_ts DESC, id DESC);  -- 0022（一覧）
 CREATE INDEX idx_emails_folder_date    ON emails(folder, date_ts DESC, id DESC);     -- 0024（全アカウント横断）
-CREATE INDEX idx_emails_folder_rep     ON emails(folder, date_ts) WHERE is_folder_rep = 1;   -- 0032（スレッド代表）
+CREATE INDEX idx_emails_folder_rep_activity ON emails(folder, max(date_ts, coalesce(thread_sent_ts, date_ts))) WHERE is_folder_rep = 1;   -- 0071（スレッド代表・最後のやり取り順。0032 の idx_emails_folder_rep を置き換え）
 CREATE INDEX idx_emails_thread_folder  ON emails(logical_thread_id, folder);         -- 0033
 CREATE INDEX idx_emails_trashed_at     ON emails(trashed_at) WHERE trashed_at IS NOT NULL;   -- 0036
 CREATE UNIQUE INDEX idx_threads_root   ON logical_threads(account_id, root_key);     -- 0031

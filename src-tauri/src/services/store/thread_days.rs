@@ -1,17 +1,18 @@
 //! スレッド一覧の、日ごとのスレッド数（メール一覧の日付のつまみ）。docs/MAIL_LIST_TIMELINE.md。
 //!
-//! 一覧（`list_threads`）は `ORDER BY date_ts DESC, id DESC` で並ぶ。日付のキーはその並びの式の先頭
-//! （`date_ts` を端末ローカルの日付にしたもの）から取るので、同じ日のスレッドは一覧の中で連続し、
+//! 一覧（`list_threads`）は会話の最後のやり取り（[`activity_ts`]）の新しい順に並ぶ。日付のキーは
+//! その並びの式（を端末ローカルの日付にしたもの）から取るので、同じ日のスレッドは一覧の中で連続し、
 //! **日ごとの件数の累計が、そのまま一覧の `OFFSET` になる**（試験 `day_offsets_match_list_paging`）。
 
 use rusqlite::params;
 
 use super::emails::folder_predicate;
+use super::thread_activity::activity_ts;
 use super::Store;
 use crate::models::{ThreadDayCount, ThreadDayUnread};
 
 impl Store {
-    /// フォルダ内のスレッドを、代表メールの日付（端末ローカル）ごとに数える。
+    /// フォルダ内のスレッドを、会話の最後のやり取りの日付（端末ローカル）ごとに数える。
     ///
     /// 絞り込み（アカウント・フォルダ・迷惑の隔離・代表フラグ）は `list_threads` と同じ。
     /// 並びは一覧と同じ新しい順で、日時の無いスレッド（`date_key` = None）は最後に 1 つにまとめる。
@@ -30,13 +31,14 @@ impl Store {
         } else {
             ""
         };
-        // ORDER BY は一覧の並び（date_ts DESC。NULL は最後）に合わせる。
+        // ORDER BY は一覧の並び（最後のやり取りの新しい順。NULL は最後）に合わせる。
         let sql = format!(
-            "SELECT date(date_ts, 'unixepoch', 'localtime') AS d, count(*)
+            "SELECT date({act}, 'unixepoch', 'localtime') AS d, count(*)
              FROM emails
              WHERE {fp} {acct} AND is_folder_rep = 1
              GROUP BY d
              ORDER BY d IS NULL, d DESC",
+            act = activity_ts(""),
             fp = folder_predicate(folder, "", "?1"),
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -49,12 +51,12 @@ impl Store {
         query_by_account(&mut stmt, folder, account_id, map)
     }
 
-    /// フォルダ内の未読のあるスレッドを、代表メールの日付（端末ローカル）ごとに数える（未読のある日だけ）。
+    /// フォルダ内の未読のあるスレッドを、会話の最後のやり取りの日付（端末ローカル）ごとに数える（未読のある日だけ）。
     ///
     /// 未読の判定は一覧の未読（`list_threads` の `unread_cnt > 0`: そのフォルダのスレッドのメールに
     /// 未読が 1 通でもある）と同じ。代表の行ごとに未読を探すと全スレッドぶん引くことになり遅い
     /// （`[実測]` vaio の約 2.8 万スレッドで件数だけの 4〜5 倍）ので、**未読のメールから逆に引く**:
-    /// 未読だけの部分索引（`idx_emails_unread`）で未読のスレッドを集め、その代表の日付で数える。
+    /// 未読だけの部分索引（`idx_emails_unread`）で未読のスレッドを集め、その代表の最後のやり取りの日付で数える。
     pub fn thread_day_unread(
         &self,
         account_id: Option<i64>,
@@ -68,7 +70,7 @@ impl Store {
         };
         // 論理スレッドのある未読 → そのフォルダの代表。論理スレッドの無い行は、その行が代表で未読なら数える。
         let sql = format!(
-            "SELECT date(r.date_ts, 'unixepoch', 'localtime') AS d, count(*)
+            "SELECT date({act}, 'unixepoch', 'localtime') AS d, count(*)
              FROM emails r
              WHERE r.id IN (
                  SELECT r2.id FROM emails t
@@ -84,6 +86,7 @@ impl Store {
             fp = folder_predicate(folder, "", "?1"),
             fp_t = folder_predicate(folder, "t.", "?1"),
             fp_r2 = folder_predicate(folder, "r2.", "?1"),
+            act = activity_ts("r."),
         );
         let mut stmt = conn.prepare(&sql)?;
         let map = |r: &rusqlite::Row| -> rusqlite::Result<ThreadDayUnread> {
@@ -206,14 +209,17 @@ mod tests {
         }
     }
 
-    /// 代表メールの日付を、数えたときと同じ式で引く。
+    /// 代表の最後のやり取りの日付を、数えたときと同じ式で引く。
     fn day_of(store: &Store, id: i32) -> Option<String> {
         store
             .conn
             .lock()
             .unwrap()
             .query_row(
-                "SELECT date(date_ts, 'unixepoch', 'localtime') FROM emails WHERE id = ?1",
+                &format!(
+                    "SELECT date({}, 'unixepoch', 'localtime') FROM emails WHERE id = ?1",
+                    activity_ts("")
+                ),
                 params![id],
                 |r| r.get(0),
             )

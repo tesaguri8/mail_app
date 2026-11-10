@@ -6,10 +6,16 @@
 //! - TCP の接続の上限（[`ImapTimeouts::connect`]）
 //! - 読み書き 1 回ごとの上限（[`ImapTimeouts::io`]）— 黙ったサーバー
 //! - 全体の締め切り（[`ImapTimeouts::total`]）— 少しずつ送り続けるサーバー
+//!
+//! 新しく張る接続は、ホスト単位の門（[`gate`]。失敗の後退・直列化・回数の記録）を通す。
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
+
+pub mod gate;
+
+pub use gate::{HostGate, Urgency};
 
 /// IMAP のセッション（接続の使い回し／プール用にも使う）。
 pub type ImapSession = imap::Session<native_tls::TlsStream<GuardedStream>>;
@@ -65,6 +71,12 @@ pub enum ImapError {
     /// 応答の中身が想定と違った（メッセージ・パートが無い等）。
     #[error("{0}")]
     Other(String),
+    /// 失敗が続いているので、このホストへの接続を控えている（張っていない。中身は次の試行までの残り）。
+    #[error("つながらない状態が続いているため、接続を控えています（次の試行まであと {} 秒）", .0.as_secs())]
+    Backoff(Duration),
+    /// 同じホストへ先に張っている接続が終わらず、順番が来なかった（張っていない）。
+    #[error("同じサーバーへの接続が混み合っています")]
+    Busy,
 }
 
 /// 読み書きの時間切れか（Unix は WouldBlock、Windows は TimedOut で返る）。
@@ -164,11 +176,20 @@ impl Write for GuardedStream {
 }
 
 /// IMAP サーバーへ TCP でつながるかだけを確かめる（ログインしない。接続の点の軽い確認用。
-/// 何度打っても連続ログインとみなされない）。
+/// 連続ログインとはみなされないが、接続の試行には数えられうるので門を通す（自動の扱い）。
+/// つながっても、ホストの後退は解かない（ログインできるかは分からないため）。
 ///
 /// # Errors
-/// 名前解決・接続に失敗したとき。上限を過ぎたら [`ImapError::Timeout`]。
+/// 後退中なら [`ImapError::Backoff`]。名前解決・接続に失敗したとき。上限を過ぎたら [`ImapError::Timeout`]。
 pub fn reach(host: &str, port: u16, timeout: Duration) -> Result<(), ImapError> {
+    let ticket = HostGate::global().enter(host, port, Urgency::Auto)?;
+    let result = dial(host, port, timeout);
+    ticket.finish_reach(&result);
+    result
+}
+
+/// TCP でつながるかだけを試す（門を通らない。[`reach`] の中身）。
+fn dial(host: &str, port: u16, timeout: Duration) -> Result<(), ImapError> {
     let addr = format!("{host}:{port}")
         .to_socket_addrs()
         .map_err(|e| ImapError::Resolve(e.to_string()))?
@@ -185,15 +206,12 @@ pub fn reach(host: &str, port: u16, timeout: Duration) -> Result<(), ImapError> 
         })
 }
 
-/// 上限付きで IMAP に接続し、挨拶まで読んだクライアントを返す（ログインはまだ）。
+/// 上限付きで IMAP に接続し、挨拶まで読んだクライアントを返す（ログインはまだ。門を通らないので、
+/// 外からは [`connect_login_with`] を使う）。
 ///
 /// # Errors
 /// 名前解決・接続・TLS・挨拶のいずれかに失敗したとき。上限を過ぎたら [`ImapError::Timeout`]。
-pub fn connect_client(
-    host: &str,
-    port: u16,
-    timeouts: ImapTimeouts,
-) -> Result<ImapClient, ImapError> {
+fn connect_client(host: &str, port: u16, timeouts: ImapTimeouts) -> Result<ImapClient, ImapError> {
     let deadline = timeouts.total.map(|t| Instant::now() + t);
     let tls = native_tls::TlsConnector::builder()
         .build()
@@ -225,8 +243,11 @@ pub fn connect_client(
 }
 
 /// 上限付きで IMAP に接続＋ログインし、Session を返す（[`ImapTimeouts`] で上限を差し替えられる）。
+/// ホスト単位の門（[`HostGate::global`]）を通す: 後退中の自動の接続は張らずに断り、
+/// 同じホストへは 1 本ずつ張り、結果を後退の状態とログに残す。
 ///
 /// # Errors
+/// 後退中なら [`ImapError::Backoff`]、順番が来なければ [`ImapError::Busy`]。
 /// 名前解決・接続・TLS・挨拶・ログインのいずれかに失敗したとき。上限を過ぎたら [`ImapError::Timeout`]。
 pub fn connect_login_with(
     host: &str,
@@ -234,11 +255,37 @@ pub fn connect_login_with(
     user: &str,
     password: &str,
     timeouts: ImapTimeouts,
+    urgency: Urgency,
 ) -> Result<ImapSession, ImapError> {
-    let client = connect_client(host, port, timeouts)?;
-    client
-        .login(user, password)
-        .map_err(|(e, _)| login_error(e))
+    connect_login_via(
+        HostGate::global(),
+        host,
+        port,
+        user,
+        password,
+        timeouts,
+        urgency,
+    )
+}
+
+/// [`connect_login_with`] の中身（門を指定できる。試験で時計を進めた門を渡す）。
+fn connect_login_via(
+    gate: &HostGate,
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    timeouts: ImapTimeouts,
+    urgency: Urgency,
+) -> Result<ImapSession, ImapError> {
+    let ticket = gate.enter(host, port, urgency)?;
+    let result = connect_client(host, port, timeouts).and_then(|client| {
+        client
+            .login(user, password)
+            .map_err(|(e, _)| login_error(e))
+    });
+    ticket.finish(&result);
+    result
 }
 
 /// ログインの失敗を分ける。サーバーが応答したうえで断った（NO / BAD）なら [`ImapError::Login`]、
@@ -259,8 +306,9 @@ pub fn connect_login(
     port: u16,
     user: &str,
     password: &str,
+    urgency: Urgency,
 ) -> Result<ImapSession, String> {
-    connect_login_with(host, port, user, password, ImapTimeouts::DEFAULT)
+    connect_login_with(host, port, user, password, ImapTimeouts::DEFAULT, urgency)
         .map_err(|e| e.to_string())
 }
 

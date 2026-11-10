@@ -79,7 +79,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         unlisten = u;
       });
 
-      const call = kind === 'resync' ? mailResync(accountId) : mailSync(accountId);
+      const call = kind === 'resync' ? mailResync(accountId) : mailSync(accountId, true);
       call
         .then((r) => {
           if (cancelledRef.current) {

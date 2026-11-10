@@ -16,7 +16,10 @@ import type { HomeUnreadCounts } from '@bindings/HomeUnreadCounts';
 import type { AccountSyncStatus } from '@bindings/AccountSyncStatus';
 
 // Tauri v2 は camelCase の引数キーを snake_case の Rust 引数へ自動変換する。
-export const mailSync = (accountId: number) => invoke<SyncResult>('mail_sync', { accountId });
+// `manual` は利用者が押した同期。失敗が続いて接続を控えているサーバーにも 1 回だけすぐ試す
+// （自動の同期は、控えている間は張らずに見送られる。docs/SYNC.md §5-4）。
+export const mailSync = (accountId: number, manual = false) =>
+  invoke<SyncResult>('mail_sync', { accountId, manual });
 
 // アカウントごとのメールの同期の最後の結果（この起動の分だけ。以後は "sync:status" イベントで届く）。
 export const accountSyncStatuses = () => invoke<AccountSyncStatus[]>('account_sync_statuses');

@@ -11,7 +11,9 @@
 
 use crate::models::{AttachmentProgress, AttachmentStage};
 use crate::services::checksum::simple_checksum;
-use crate::services::imap_conn::{connect_client, ImapError, ImapSession, ImapTimeouts};
+use crate::services::imap_conn::{
+    connect_login_with, ImapError, ImapSession, ImapTimeouts, Urgency,
+};
 use crate::services::imap_sync::{combine_mime_part, imap_mailbox_for_tag, parse_section_path};
 use crate::services::parser;
 use crate::services::store::Store;
@@ -326,19 +328,22 @@ fn open_session(
 ) -> Result<ImapSession, AttachmentError> {
     progress.set_stage(AttachmentStage::Connecting);
     let t0 = Instant::now();
-    let client = connect_client(t.host, t.port, timeouts)?;
-    let connected = t0.elapsed();
-    let mut session = client
-        .login(t.user, t.password)
-        .map_err(|(e, _)| ImapError::from(e))?;
+    // 添付は開いた・保存したときに取るので手動の扱い（後退中でも 1 回は試す）。
+    let mut session = connect_login_with(
+        t.host,
+        t.port,
+        t.user,
+        t.password,
+        timeouts,
+        Urgency::Manual,
+    )?;
     let logged_in = t0.elapsed();
     let mailbox = imap_mailbox_for_tag(&mut session, t.folder).map_err(ImapError::Other)?;
     session.select(&mailbox).map_err(ImapError::from)?;
     log::info!(
-        "添付 {}: 接続 {}ms / ログイン {}ms / 選択 {}ms（{mailbox}）",
+        "添付 {}: 接続とログイン {}ms / 選択 {}ms（{mailbox}）",
         t.attachment_id,
-        connected.as_millis(),
-        (logged_in - connected).as_millis(),
+        logged_in.as_millis(),
         (t0.elapsed() - logged_in).as_millis()
     );
     progress.set_stage(AttachmentStage::Fetching);

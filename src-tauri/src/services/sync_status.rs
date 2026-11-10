@@ -26,6 +26,8 @@ pub fn classify_connect(e: &ImapError) -> SyncErrorKind {
             SyncErrorKind::Unreachable
         }
         ImapError::Login(_) => SyncErrorKind::Auth,
+        // 後退中・順番待ちで張らなかった。つながらない状態が続いている側に数える。
+        ImapError::Backoff(_) | ImapError::Busy => SyncErrorKind::Unreachable,
         ImapError::Tls(_) | ImapError::Imap(_) | ImapError::Other(_) => SyncErrorKind::Other,
     }
 }
@@ -52,6 +54,7 @@ impl SyncStatusBoard {
             error: None,
             last_success_at: None,
             last_attempt_at: None,
+            next_retry_at: None,
         });
         f(status);
         status.clone()
@@ -151,6 +154,29 @@ impl SyncStatusBoard {
                 s.last_attempt_at = Some(now.to_string());
             }),
             Err(e) => self.fail(account_id, host, classify_connect(e), &e.to_string(), now),
+        })
+    }
+
+    /// 次に自動で試す時刻を書き込む（後退中でなければ None で消す）。
+    pub fn note_retry(&self, account_id: i64, next_retry_at: Option<String>) -> AccountSyncStatus {
+        self.update(account_id, |s| s.next_retry_at = next_retry_at)
+    }
+
+    /// 後退中なので、自動の同期を張らずに見送った。失敗の種類と文言、次に試す時刻を出す
+    /// （ログには書かない。見送るたびに書くとログが埋まる。張った結果は門がログに残す）。
+    pub fn hold(
+        &self,
+        account_id: i64,
+        kind: SyncErrorKind,
+        message: &str,
+        next_retry_at: Option<String>,
+    ) -> AccountSyncStatus {
+        let message: String = message.chars().take(MESSAGE_CHARS).collect();
+        self.update(account_id, |s| {
+            s.phase = SyncPhase::Failed;
+            s.error_kind = Some(kind);
+            s.error = Some(message);
+            s.next_retry_at = next_retry_at;
         })
     }
 

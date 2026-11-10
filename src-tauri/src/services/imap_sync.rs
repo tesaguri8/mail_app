@@ -99,8 +99,12 @@ fn since_date(days: i64) -> String {
 }
 
 pub use super::imap_conn::{
-    connect_login, connect_login_with, ImapError, ImapSession, ImapTimeouts,
+    connect_login, connect_login_with, ImapError, ImapSession, ImapTimeouts, Urgency,
 };
+
+/// 1 回の同期で、フォルダの失敗のあとに張り直してよい回数。毎回失敗するフォルダがあっても、
+/// 同期のたびに何本も張り直さない（接続の試行が増えると、サーバーに制限されうる）。
+const MAX_RECONNECTS_PER_SYNC: usize = 2;
 
 /// メールの同期の失敗。サーバーにつながる段（接続・TLS・ログイン）の失敗は型のまま持ち、
 /// 画面の接続状況の印で「つながらない／ログインできない」を分ける（`services::sync_status`）。
@@ -127,6 +131,7 @@ fn ensure_live_session(
     port: u16,
     user: &str,
     password: &str,
+    urgency: Urgency,
 ) -> Result<(), ImapError> {
     if let Some(s) = guard.as_mut() {
         if s.noop().is_ok() {
@@ -140,6 +145,7 @@ fn ensure_live_session(
         user,
         password,
         ImapTimeouts::DEFAULT,
+        urgency,
     )?);
     Ok(())
 }
@@ -259,12 +265,29 @@ fn detect_mailbox<'a>(
 /// 実際に IMAP ログインを試す（認証の確認）。成功なら Ok。タイムアウトつき。
 pub fn test_login(host: &str, port: u16, user: &str, password: &str) -> Result<(), String> {
     log::info!("IMAP login test: host={host} port={port} user={user}");
-    let mut session = connect_login(host, port, user, password).inspect_err(|e| {
-        log::warn!("IMAP login test failed for user={user}: {e}");
-    })?;
+    let mut session =
+        connect_login(host, port, user, password, Urgency::Manual).inspect_err(|e| {
+            log::warn!("IMAP login test failed for user={user}: {e}");
+        })?;
     log::info!("IMAP login OK: user={user}");
     let _ = session.logout();
     Ok(())
+}
+
+/// 張り直しを `max` 回までに抑える（`count` はこの同期で張り直した回数）。超えたら張らずに
+/// エラーを返し、同期を打ち切らせる（毎回失敗するフォルダがあっても、同期のたびに何本も張らない）。
+fn limited_reconnect<S>(
+    count: &std::cell::Cell<usize>,
+    max: usize,
+    reconnect: impl FnOnce() -> Result<S, String>,
+) -> Result<S, String> {
+    if count.get() >= max {
+        return Err(format!(
+            "フォルダの失敗が続いたため、この同期を打ち切りました（張り直しは 1 回の同期で {max} 回まで）"
+        ));
+    }
+    count.set(count.get() + 1);
+    reconnect()
 }
 
 /// フォルダごとの処理を順に流す。失敗したフォルダがあれば、その接続は捨てて張り直してから
@@ -431,6 +454,7 @@ pub fn sync_account(
     cancel: &AtomicBool,
     slot: &Mutex<Option<ImapSession>>,
     scope: SyncScope,
+    urgency: Urgency,
 ) -> Result<SyncResult, SyncError> {
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
     // busy_timeout: WAL でも書き込みロックは 1 つ。UI/ローカル加工/他アカウント同期と競合した
@@ -448,7 +472,8 @@ pub fn sync_account(
 
     let mut guard = slot.lock().unwrap();
     // 生きたセッションを用意（再利用 or 張り直し）。
-    ensure_live_session(&mut guard, host, port, user, password).map_err(SyncError::Connect)?;
+    ensure_live_session(&mut guard, host, port, user, password, urgency)
+        .map_err(SyncError::Connect)?;
     let session = guard.as_mut().unwrap();
 
     let mut result = SyncResult {
@@ -456,7 +481,12 @@ pub fn sync_account(
         stored: 0,
         backfilled: 0,
     };
-    let reconnect = || connect_login(host, port, user, password);
+    let reconnects = std::cell::Cell::new(0usize);
+    let reconnect = || {
+        limited_reconnect(&reconnects, MAX_RECONNECTS_PER_SYNC, || {
+            connect_login(host, port, user, password, urgency)
+        })
+    };
     match run_sync(
         session,
         &reconnect,
@@ -497,7 +527,8 @@ pub fn rederive_account_attachments(
     let _ = conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
 
     let mut guard = slot.lock().unwrap();
-    ensure_live_session(&mut guard, host, port, user, password).map_err(|e| e.to_string())?;
+    ensure_live_session(&mut guard, host, port, user, password, Urgency::Manual)
+        .map_err(|e| e.to_string())?;
     let session = guard.as_mut().unwrap();
 
     let mut updated = 0u32;
@@ -1100,7 +1131,7 @@ fn fetch_body_parts(
 
 /// 保険用: メッセージ全体（BODY[]）を取り直す。section 組み直しで本文が取れなかったときだけ使う。
 fn fetch_full_raw(session: &mut ImapSession, uid: i64) -> Option<Vec<u8>> {
-    let fetches = session.uid_fetch(uid.to_string(), "(BODY.PEEK[])").ok()?;
+    let fetches = session.uid_fetch(uid.to_string(), "(BODY[])").ok()?;
     fetches
         .iter()
         .next()
@@ -1568,7 +1599,7 @@ pub fn append_to_sent(
     raw: &[u8],
 ) -> Result<(), String> {
     use imap::types::Flag;
-    let mut session = connect_login(host, port, user, password)?;
+    let mut session = connect_login(host, port, user, password, Urgency::Manual)?;
 
     let names = session
         .list(Some(""), Some("*"))
@@ -1646,7 +1677,7 @@ pub fn upsert_draft(
     message_id_inner: &str,
 ) -> Result<(), String> {
     use imap::types::Flag;
-    let mut session = connect_login(host, port, user, password)?;
+    let mut session = connect_login(host, port, user, password, Urgency::Manual)?;
 
     let drafts = find_drafts_mailbox(&mut session)?;
     // 旧版を消してから新版を APPEND（IMAP は上書き不可のため）。
@@ -1667,7 +1698,7 @@ pub fn delete_draft_remote(
     password: &str,
     message_id_inner: &str,
 ) -> Result<(), String> {
-    let mut session = connect_login(host, port, user, password)?;
+    let mut session = connect_login(host, port, user, password, Urgency::Manual)?;
     let drafts = find_drafts_mailbox(&mut session)?;
     session.select(&drafts).map_err(|e| e.to_string())?;
     let r = expunge_draft_by_message_id(&mut session, message_id_inner);
@@ -1744,7 +1775,7 @@ pub fn purge_emails_remote(
     if items.is_empty() {
         return Ok(());
     }
-    let mut session = connect_login(host, port, user, password)?;
+    let mut session = connect_login(host, port, user, password, Urgency::Manual)?;
 
     // フォルダ名を解決: source タグ→サーバー名でグループ化。Trash 名も引く。
     // （names はセッションを借用しないが、owned に取り出してから以降の操作に進む。）
@@ -1880,7 +1911,10 @@ pub(crate) fn imap_mailbox_for_tag(session: &mut ImapSession, tag: &str) -> Resu
 /// 指定 UID のメッセージ全体を再取得して解析する（本文の全文キャッシュ復元用）。
 /// 要約保存('evicted')・メタのみ('absent')の本文をサーバーから取り直すときに使う。
 /// `folder` はローカルタグ（inbox/sent/…）。正しい IMAP メールボックスを select する。
+/// 接続は `slot`（アカウントごとの、画面からの取得用の使い回し）を使う。会話を開いて本文の無い
+/// メールを何通も取るときも、ログインは 1 回で済む（以前は 1 通ごとに張ってログアウトしていた）。
 pub fn fetch_message(
+    slot: &Mutex<Option<ImapSession>>,
     host: &str,
     port: u16,
     user: &str,
@@ -1891,31 +1925,57 @@ pub fn fetch_message(
     // 段階ごとの所要時間をログに残す。開いたメールの本文がなかなか出ないとき、
     // 接続・ログイン・選択・取得のどこで待っているかを実機のログで見分けるため（2026-10-07）。
     let started = std::time::Instant::now();
-    let mut session = connect_login(host, port, user, password)?;
+    let mut guard = slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    ensure_live_session(&mut guard, host, port, user, password, Urgency::Manual)
+        .map_err(|e| e.to_string())?;
     let logged_in = started.elapsed();
-    let mailbox = imap_mailbox_for_tag(&mut session, folder)?;
+    let Some(session) = guard.as_mut() else {
+        return Err("接続を用意できませんでした".to_string());
+    };
+    let fetched = fetch_raw(session, folder, uid);
+    let raw = match fetched {
+        Ok((raw, selected)) => {
+            log::info!(
+                "fetch_message uid={uid} {folder}: 接続とログイン {}ms / 選択 {}ms / 取得 {}ms（{} バイト）",
+                logged_in.as_millis(),
+                selected.saturating_sub(logged_in).as_millis(),
+                started.elapsed().saturating_sub(selected).as_millis(),
+                raw.len()
+            );
+            raw
+        }
+        Err(e) => {
+            // 途中で失敗した接続は、読み残しで次の命令を読み違えないよう捨てる（次は張り直す）。
+            *guard = None;
+            return Err(e);
+        }
+    };
+    drop(guard);
+    parser::parse_message(&raw).ok_or_else(|| "メッセージを解析できませんでした".to_string())
+}
+
+/// 使い回しの接続でフォルダを選び、1 通の全体を取る（取れた中身と、選び終えた時点の経過時間）。
+fn fetch_raw(
+    session: &mut ImapSession,
+    folder: &str,
+    uid: u32,
+) -> Result<(Vec<u8>, std::time::Duration), String> {
+    let started = std::time::Instant::now();
+    let mailbox = imap_mailbox_for_tag(session, folder)?;
     session.select(&mailbox).map_err(|e| e.to_string())?;
     let selected = started.elapsed();
-
     let msgs = session
-        .uid_fetch(uid.to_string(), "(BODY[])")
+        .uid_fetch(uid.to_string(), "(BODY.PEEK[])")
         .map_err(|e| e.to_string())?;
     let raw = msgs
         .iter()
         .next()
         .and_then(|m| m.body())
+        .map(<[u8]>::to_vec)
         .ok_or_else(|| "メッセージが見つかりませんでした".to_string())?;
-    log::info!(
-        "fetch_message uid={uid} {folder}: 接続とログイン {}ms / 選択 {}ms / 取得 {}ms（{} バイト）",
-        logged_in.as_millis(),
-        (selected - logged_in).as_millis(),
-        (started.elapsed() - selected).as_millis(),
-        raw.len()
-    );
-    let parsed =
-        parser::parse_message(raw).ok_or_else(|| "メッセージを解析できませんでした".to_string())?;
-    let _ = session.logout();
-    Ok(parsed)
+    Ok((raw, selected))
 }
 
 #[cfg(test)]
@@ -2010,6 +2070,38 @@ mod tests {
         );
         assert!(r.is_err());
         assert_eq!(seen, vec!["INBOX"]);
+    }
+
+    /// 毎回失敗するフォルダがあっても、1 回の同期で張り直すのは上限まで（そこで打ち切る）。
+    #[test]
+    fn reconnects_are_capped_per_sync() {
+        let opened = std::cell::Cell::new(1);
+        let count = std::cell::Cell::new(0);
+        let reconnect = || {
+            limited_reconnect(&count, MAX_RECONNECTS_PER_SYNC, || {
+                opened.set(opened.get() + 1);
+                Ok(FakeSession(opened.get()))
+            })
+        };
+        let mut session = FakeSession(1);
+        let folders = [
+            "INBOX",
+            "INBOX.Sent",
+            "INBOX.Drafts",
+            "INBOX.Trash",
+            "INBOX.Junk",
+        ];
+        let r = for_each_folder(
+            &mut session,
+            &folders,
+            &|| false,
+            &reconnect,
+            |_, _| Err("os error 10060".to_string()),
+            |_, _| {},
+        );
+        assert!(r.is_err());
+        // 以前はフォルダの数だけ（5 本）張り直していた。
+        assert_eq!(opened.get() - 1, MAX_RECONNECTS_PER_SYNC as u32);
     }
 
     #[test]

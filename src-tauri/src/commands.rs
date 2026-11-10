@@ -24,7 +24,9 @@ use crate::services::dataver;
 use crate::services::eml_parts;
 use crate::services::gcsv;
 use crate::services::google;
+use crate::services::imap_conn::HostGate;
 use crate::services::imap_sync;
+use crate::services::imap_sync::ImapError;
 use crate::services::media;
 use crate::services::postal;
 use crate::services::sent_refresh;
@@ -79,24 +81,51 @@ pub fn mail_sync_cancel(control: State<SyncControl>, account_id: i64) -> bool {
     control.request_cancel(account_id)
 }
 
-/// アカウントごとに 1 本の IMAP セッションを保持して使い回す接続プール。
-/// 毎回の接続＋ログインを避けて体感を滑らかにする（Thunderbird 等と同じ持続接続方針）。
+/// アカウントの接続スロット（1 本の IMAP セッションを入れておく）。
+type SessionSlot = Arc<Mutex<Option<imap_sync::ImapSession>>>;
+
+/// アカウントごとに IMAP セッションを保持して使い回す接続プール。
+/// 毎回の接続＋ログインを避けて体感を滑らかにし、サーバーに連続ログインとみなされないようにする
+/// （Thunderbird 等と同じ持続接続方針）。同期用と、画面からの本文の取得用の 2 本を分けて持つ
+/// （本文の取得が、長い同期の終わりを待たないように）。
 #[derive(Default)]
-pub struct ImapPool(Mutex<HashMap<i64, Arc<Mutex<Option<imap_sync::ImapSession>>>>>);
+pub struct ImapPool {
+    sync: Mutex<HashMap<i64, SessionSlot>>,
+    fetch: Mutex<HashMap<i64, SessionSlot>>,
+}
 
 impl ImapPool {
-    /// アカウントの接続スロット（無ければ作る）を返す。
-    fn slot(&self, account_id: i64) -> Arc<Mutex<Option<imap_sync::ImapSession>>> {
-        self.0
-            .lock()
-            .unwrap()
+    /// 毒されたロックも中身をそのまま使う（スロットの表だけなので続けてよい）。
+    fn entry(map: &Mutex<HashMap<i64, SessionSlot>>, account_id: i64) -> SessionSlot {
+        map.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .entry(account_id)
             .or_default()
             .clone()
     }
+    /// アカウントの同期用の接続スロット（無ければ作る）を返す。
+    fn slot(&self, account_id: i64) -> SessionSlot {
+        Self::entry(&self.sync, account_id)
+    }
+    /// アカウントの、画面からの本文の取得用の接続スロット（無ければ作る）を返す。
+    fn fetch_slot(&self, account_id: i64) -> SessionSlot {
+        Self::entry(&self.fetch, account_id)
+    }
+    /// アカウントの同期用の接続を持っているか（生きているかは確かめない）。同期中で確かめられない
+    /// ときは持っている側に倒す（同期の入口で、門の手前の見送りをしないだけ）。
+    fn has_sync_session(&self, account_id: i64) -> bool {
+        match self.slot(account_id).try_lock() {
+            Ok(guard) => guard.is_some(),
+            Err(_) => true,
+        }
+    }
     /// アカウントの接続を破棄する（アカウント削除時など）。
     fn evict(&self, account_id: i64) {
-        self.0.lock().unwrap().remove(&account_id);
+        for map in [&self.sync, &self.fetch] {
+            map.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&account_id);
+        }
     }
 }
 
@@ -332,9 +361,20 @@ pub fn signature_delete(store: State<Store>, id: i64) -> Result<(), String> {
 
 /// IMAP に接続して受信箱＋標準フォルダを同期し、新着を DB に保存する。
 /// ブロッキング処理は spawn_blocking に載せ、UI を止めない。
+/// `manual` は利用者が押した同期（同期のボタン）。真なら、失敗が続いて接続を控えているサーバーにも
+/// 1 回だけすぐ試す。偽・無しは自動の同期で、控えている間は張らずに見送る（`imap_conn::gate`）。
 #[tauri::command]
-pub async fn mail_sync(app: AppHandle, account_id: i64) -> Result<SyncResult, String> {
-    run_account_sync(&app, account_id, imap_sync::SyncScope::All).await
+pub async fn mail_sync(
+    app: AppHandle,
+    account_id: i64,
+    manual: Option<bool>,
+) -> Result<SyncResult, String> {
+    let urgency = if manual.unwrap_or(false) {
+        imap_sync::Urgency::Manual
+    } else {
+        imap_sync::Urgency::Auto
+    };
+    run_account_sync(&app, account_id, imap_sync::SyncScope::All, urgency).await
 }
 
 /// アカウントのメールを `scope` の範囲で同期する（定期・手動の同期と、送った直後の送信済みだけの
@@ -344,6 +384,7 @@ async fn run_account_sync(
     app: &AppHandle,
     account_id: i64,
     scope: imap_sync::SyncScope,
+    urgency: imap_sync::Urgency,
 ) -> Result<SyncResult, String> {
     let store = app.state::<Store>();
     let control = app.state::<SyncControl>();
@@ -354,6 +395,14 @@ async fn run_account_sync(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "アカウントが見つかりません".to_string())?;
     // 資格情報は email をキーに保存（アカウント識別子）。ログインは login_user を使う。
+    // 失敗が続いて、このサーバーへの自動の接続を控えている間は、張らずに見送る（同じサーバーの
+    // アカウントで共有）。使い回しの接続を持っているアカウントは、その接続で続ける
+    // （新しく張るわけではない。死んでいて張り直しが要るときは、門が断る）。
+    if urgency == imap_sync::Urgency::Auto && !pool.has_sync_session(account_id) {
+        if let Some(retry_in) = hold_for_backoff(app, &board, account_id, &host, port) {
+            return Err(ImapError::Backoff(retry_in).to_string());
+        }
+    }
     let password = account_password(app, &board, account_id, &host, &email)?;
     let db_path = store.path();
     // このアカウントが既に同期中なら二重実行しない（自動同期と手動/再取り込みの衝突で
@@ -408,6 +457,7 @@ async fn run_account_sync(
             &cancel_task,
             &session_slot,
             scope,
+            urgency,
         );
         // 取り込み後のローカル加工（スレッド割当・代表フラグ）は「このブロッキングスレッド上で」
         // 実行する。async ランタイム上で同期的に走らせると、その間 Tauri の IPC 配送が止まり、
@@ -424,7 +474,7 @@ async fn run_account_sync(
     // JoinError（タスクパニック）でも同期枠を必ず解放してから伝播する
     // （解放漏れは以後の同期が全てスキップされる原因になるため）。
     control.end(account_id);
-    let result = finish_sync_status(app, &board, account_id, &host, result)?;
+    let result = finish_sync_status(app, &board, account_id, &host, port, result)?;
     if result.is_ok() && scope == imap_sync::SyncScope::All {
         // 保持ポリシーを適用（古い添付の削除・本文の要約保存・容量保険）。best-effort。
         let _ = store.apply_retention(account_id);
@@ -435,6 +485,46 @@ async fn run_account_sync(
 /// いまの時刻（RFC 3339・端末の時差つき）。接続状況の記録に使う。
 fn now_rfc3339() -> String {
     chrono::Local::now().to_rfc3339()
+}
+
+/// いまから `retry_in` 後の時刻（RFC 3339）。次に自動で試す時刻の表示に使う。
+fn retry_at_rfc3339(retry_in: std::time::Duration) -> String {
+    let later = chrono::Duration::from_std(retry_in).unwrap_or_else(|_| chrono::Duration::zero());
+    (chrono::Local::now() + later).to_rfc3339()
+}
+
+/// そのサーバーへの自動の接続を控えていれば、接続状況を「失敗（前回の種類）・次に試す時刻」にして
+/// 知らせ、次の試行までの残りを返す（控えていなければ None で、何もしない）。ログには書かない
+/// （見送るたびに書くと埋まる。張った結果は門がログに残す）。
+fn hold_for_backoff(
+    app: &AppHandle,
+    board: &SyncStatusBoard,
+    account_id: i64,
+    host: &str,
+    port: u16,
+) -> Option<std::time::Duration> {
+    let b = HostGate::global().backoff(host, port)?;
+    let kind = if b.login_refused {
+        SyncErrorKind::Auth
+    } else {
+        SyncErrorKind::Unreachable
+    };
+    let at = Some(retry_at_rfc3339(b.retry_in));
+    emit_sync_status(app, board.hold(account_id, kind, &b.last_error, at));
+    Some(b.retry_in)
+}
+
+/// 接続状況に、そのサーバーの次に自動で試す時刻を書き込む（後退中でなければ消す）。
+fn with_retry(
+    board: &SyncStatusBoard,
+    account_id: i64,
+    host: &str,
+    port: u16,
+) -> AccountSyncStatus {
+    let at = HostGate::global()
+        .backoff(host, port)
+        .map(|b| retry_at_rfc3339(b.retry_in));
+    board.note_retry(account_id, at)
 }
 
 /// 接続状況を "sync:status" イベントで画面に知らせる（アカウント選択の印）。
@@ -475,23 +565,39 @@ fn finish_sync_status<T>(
     board: &SyncStatusBoard,
     account_id: i64,
     host: &str,
+    port: u16,
     joined: Result<Result<T, imap_sync::SyncError>, tauri::Error>,
 ) -> Result<Result<T, imap_sync::SyncError>, String> {
     let now = now_rfc3339();
-    match joined {
+    let out = match joined {
+        // 門が断った（張っていない）: 失敗のログは書かず、前回の種類と次に試す時刻を出す。
+        Ok(Err(imap_sync::SyncError::Connect(ImapError::Backoff(retry_in)))) => {
+            let e = ImapError::Backoff(retry_in);
+            if hold_for_backoff(app, board, account_id, host, port).is_none() {
+                // 断った直後に控えが明けた（ほぼ起きない）。ふつうの失敗として記録する。
+                let status = board.fail(
+                    account_id,
+                    host,
+                    SyncErrorKind::Unreachable,
+                    &e.to_string(),
+                    &now,
+                );
+                emit_sync_status(app, status);
+            }
+            return Ok(Err(imap_sync::SyncError::Connect(e)));
+        }
         Ok(result) => {
-            emit_sync_status(app, board.finish(account_id, host, &result, &now));
+            board.finish(account_id, host, &result, &now);
             Ok(result)
         }
         Err(e) => {
             let message = e.to_string();
-            emit_sync_status(
-                app,
-                board.fail(account_id, host, SyncErrorKind::Other, &message, &now),
-            );
+            board.fail(account_id, host, SyncErrorKind::Other, &message, &now);
             Err(message)
         }
-    }
+    };
+    emit_sync_status(app, with_retry(board, account_id, host, port));
+    out
 }
 
 /// すべてのアカウントのメールの同期の最後の結果（アカウント選択の接続状況の印。この起動の分だけ）。
@@ -754,7 +860,14 @@ async fn refresh_sent_after_send(app: &AppHandle, account_id: i64, server_saves:
         );
         return;
     }
-    match run_account_sync(app, account_id, imap_sync::SyncScope::SentOnly).await {
+    match run_account_sync(
+        app,
+        account_id,
+        imap_sync::SyncScope::SentOnly,
+        imap_sync::Urgency::Auto,
+    )
+    .await
+    {
         Ok(r) => {
             let _ = app.emit(
                 "sync:sent",
@@ -3165,6 +3278,7 @@ pub fn rebuild_plan(store: State<Store>, account_id: i64) -> Result<RebuildPlan,
 pub async fn mail_refetch(
     app: AppHandle,
     store: State<'_, Store>,
+    pool: State<'_, ImapPool>,
     id: i64,
 ) -> Result<MailDetail, String> {
     // 所要時間のログ（DB の鍵待ちと IMAP のどちらで待つかを見分ける。段階の内訳は fetch_message）。
@@ -3187,8 +3301,18 @@ pub async fn mail_refetch(
         .map_err(|e| format!("資格情報を取得できません: {e}"))?;
 
     let looked_up = started.elapsed();
+    // 本文の取得用の使い回しの接続（会話を開いて何通も取るときも、ログインは 1 回）。
+    let slot = pool.fetch_slot(account_id);
     let parsed = tauri::async_runtime::spawn_blocking(move || {
-        imap_sync::fetch_message(&host, port, &login_user, &password, &folder, uid as u32)
+        imap_sync::fetch_message(
+            &slot,
+            &host,
+            port,
+            &login_user,
+            &password,
+            &folder,
+            uid as u32,
+        )
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -3604,11 +3728,12 @@ pub async fn mail_resync(
             &cancel_task,
             &session_slot,
             imap_sync::SyncScope::All,
+            imap_sync::Urgency::Manual,
         )
     })
     .await;
     control.end(account_id);
-    let result = finish_sync_status(&app, &board, account_id, &host, out)?;
+    let result = finish_sync_status(&app, &board, account_id, &host, port, out)?;
     if result.is_ok() {
         // フル再取得後は、保存済み本文からローカルで全面再加工（clean_body・スレッド・代表フラグ）。
         // 接続は閉じており、サーバーとは無関係。
@@ -3771,6 +3896,7 @@ pub async fn account_check(
             &login,
             &password,
             imap_sync::ImapTimeouts::DEFAULT,
+            imap_sync::Urgency::Manual,
         )?;
         let _ = session.logout();
         Ok::<(), imap_sync::ImapError>(())
@@ -3779,7 +3905,8 @@ pub async fn account_check(
     let now = now_rfc3339();
     match joined {
         Ok(result) => {
-            emit_sync_status(&app, board.finish_check(account_id, &host, &result, &now));
+            board.finish_check(account_id, &host, &result, &now);
+            emit_sync_status(&app, with_retry(&board, account_id, &host, port));
             result.map_err(|e| e.to_string())
         }
         Err(e) => {

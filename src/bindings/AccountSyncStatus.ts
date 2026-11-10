@@ -22,4 +22,9 @@ last_success_at: string | null,
 /**
  * 最後に同期を試みた時刻（RFC 3339）。
  */
-last_attempt_at: string | null, };
+last_attempt_at: string | null, 
+/**
+ * 失敗が続いて自動の接続を控えているとき、次に自動で試す時刻（RFC 3339）。同じサーバーの
+ * アカウントで共有する（`services/imap_conn/gate.rs`）。控えていなければ None。
+ */
+next_retry_at: string | null, };

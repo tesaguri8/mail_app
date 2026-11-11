@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import type { UnseenQuote } from '@bindings/UnseenQuote';
-import { arrangeRuns, oldestFirst, UnseenQuotes } from './UnseenQuotes';
+import { arrangeRuns, oldestFirst, UnseenQuotes, visibleUnseenQuotes } from './UnseenQuotes';
 import { markAttrs, readMarks } from './timeline/marks';
 import { formatDateTime, parseQuotedDate } from '../utils/datetime';
 
@@ -262,5 +262,18 @@ describe('arrangeRuns（会話の別のメールから移ってきた枠を、�
     expect(headings[0].querySelector('svg')).toBeNull();
     expect(headings[1].querySelector('svg')).not.toBeNull();
     expect(headings[0].textContent).toBe('thread.unseenCarriedHeading');
+  });
+});
+
+describe('visibleUnseenQuotes（引用・全文の表示中の枠）', () => {
+  const own = { ...quote('自分の枠'), quoted_in: 7 };
+  const carried = { ...quote('移ってきた枠'), quoted_in: 9 };
+
+  it('ふだんは全部出す', () => {
+    expect(visibleUnseenQuotes([own, carried], 7, false)).toEqual([own, carried]);
+  });
+
+  it('引用・全文の表示中は、本文に無い移ってきた枠だけ残す', () => {
+    expect(visibleUnseenQuotes([own, carried], 7, true)).toEqual([carried]);
   });
 });

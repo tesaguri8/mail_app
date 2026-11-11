@@ -86,6 +86,18 @@ export function arrangeRuns(quotes: readonly UnseenQuote[], messageId: number): 
 }
 
 /**
+ * バブルの上に出す枠。引用の表示中・全文の表示中（`bodyShown`）は、このバブルが含んでいた枠は本文に同じ内容が
+ * あるので外し、会話の別のメールから移ってきた枠（このバブルの本文には無い）だけを残す。
+ */
+export function visibleUnseenQuotes(
+  quotes: readonly UnseenQuote[],
+  messageId: number,
+  bodyShown: boolean
+): UnseenQuote[] {
+  return bodyShown ? quotes.filter((q) => q.quoted_in !== messageId) : [...quotes];
+}
+
+/**
  * このメールに含まれていた、手元に無いメール（転送・Outlook の「元のメッセージ」で初めて届いた内容）。
  * 「引用を表示」に畳むと見落とすので、1 通ずつ小さなバブルで出す（docs/THREADING.md §5）。
  * 手元にある引用は、いままでどおり親のバブルの「引用を表示」に畳む。

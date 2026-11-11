@@ -57,7 +57,7 @@ import { AutoLinkText, HtmlText, hasAutoLinkUrl, inlineCidRefs } from './HtmlTex
 import { AttachedImages, isImage } from './AttachedImages';
 import type { ImageAction } from './ImageActions';
 import { PrintMail } from './PrintMail';
-import { UnseenQuotes } from './UnseenQuotes';
+import { UnseenQuotes, visibleUnseenQuotes } from './UnseenQuotes';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { keepMatch, sameThreadView, scrollAfterRefresh } from './conversationRefresh';
 import { LinkGuard } from './LinkGuard';
@@ -540,6 +540,8 @@ function Bubble({
     },
   ];
 
+  const visibleUnseen = visibleUnseenQuotes(m.unseen_quotes, m.id, expanded || showQuotes);
+
   return (
     <div className={`flex ${out ? 'justify-end' : 'justify-start'}`}>
       {/* 全文表示中は幅いっぱいだが、右端に少し余白（pr-6）を残す。ここは会話スクロールの
@@ -559,14 +561,15 @@ function Bubble({
           setMenu({ x: e.clientX, y: e.clientY });
         }}
       >
-        {/* このメールで初めて届いた、手元に無いメール（転送・「元のメッセージ」）。畳まずに、
-            バブルの上に古い順で出す（会話全体を上から下へ時間どおりにする）。
-            引用の表示中・全文の表示中は、本文に同じ内容があるので出さない。 */}
-        {!expanded && !showQuotes && m.unseen_quotes.length > 0 && (
+        {/* 手元に無いメールの枠（転送・「元のメッセージ」で初めて届いた内容）。畳まずに、バブルの上に古い順で
+            出す（会話全体を上から下へ時間どおりにする）。このメールが含んでいた枠は、引用の表示中・全文の表示中は
+            本文に同じ内容があるので出さない。会話の別のメールから日時の位置へ移ってきた枠は、このメールの本文には
+            無いので、いつも出す（docs/THREADING.md §5）。 */}
+        {visibleUnseen.length > 0 && (
           <ZoomArea field="bubble">
             <LinkGuard trust={trust}>
               <UnseenQuotes
-                quotes={m.unseen_quotes}
+                quotes={visibleUnseen}
                 messageId={m.id}
                 out={out}
                 highlight={highlight}

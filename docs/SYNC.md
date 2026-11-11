@@ -262,7 +262,11 @@
   （`ImapPool::fetch_slot`）を使い回す。同期用（`ImapPool::slot`）とは別にしているので、長い同期を待たない。
   以前は本文の無いメール 1 通ごとに接続してログアウトしており、10 通の会話を開くと 10 回続けてログインしていた。
 - **ログの大きさ**: `tauri-plugin-log` を **5MB × 5 世代**にした（既定は 40KB・1 世代で、数分で入れ替わり、
-  経緯を追えなかった。vaio の `Rondine.log` は 4〜18KB だった）。
+  経緯を追えなかった。vaio の `Rondine.log` は 4〜18KB だった）。設定は `services/applog.rs`。
+  **残す水準は INFO 以上**（自分のクレート `rondine_lib` は常に INFO を通す）。reqwest の TRACE・keyring の DEBUG などは
+  落とす（全部入れると接続の行が埋もれ、回転も早まる）。起動のたびに **版・pid・ログの置き場**を 1 行残すので、
+  どの版が書いたログか・同じファイルに別のプロセスが書いていないかを読み分けられる。
+  門の行がファイルまで届くことは `gate/tests.rs` の `every_connection_leaves_an_info_line_that_the_log_file_keeps` が見る。
 - **計測**（raytrek・`gate/tests.rs` の `an_unreachable_host_is_tried_a_few_times_an_hour_not_every_round`。時計を進めて
   1 時間の自動同期を再現し、つながらない接続は閉じたポートへ本物の接続を張って失敗させる）: 同じサーバーの 2 アカウントが
   つながらず、別のアカウントは成功する場合、そのサーバーへ張ろうとした回数は **門なし 176 回 → 門あり 6 回**。

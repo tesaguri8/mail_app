@@ -1,4 +1,5 @@
 pub mod addr;
+pub mod applog;
 pub mod attachment_fetch;
 pub mod attachname;
 pub mod autoconfig;

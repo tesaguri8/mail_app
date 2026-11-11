@@ -568,8 +568,8 @@ impl Store {
                     super::quote_match::unseen_quotes(conn, i64::from(m.id), body, &known)?;
             }
         }
-        // 返信が同じ元メールを引用し続けても、同じ枠は会話の中で 1 回だけ（最初に引用したメールの上）。
-        super::unseen_dedupe::drop_repeated_unseen_quotes(&mut messages);
+        // 同じ枠は会話の中で 1 回だけにし、日時のある枠は自分の日時の位置（その後の最初のメールの上）へ移す。
+        super::unseen_frames::arrange(&mut messages);
         // 集計はメッセージから算出（保存値に依存しない）。
         let message_count = messages.len() as i32;
         let unread_count = messages.iter().filter(|m| !m.is_read).count() as i32;
@@ -1574,6 +1574,8 @@ Subject: 図面\n\
             "{}",
             q.body
         );
+        // 含んでいたのは最初の返信（9/24 13:22）で、自分の日時（10:33）でもその上に置かれる。
+        assert_eq!(i64::from(q.quoted_in), ids[0]);
     }
 
     /// 会話ビューは下書きを常に隠し、ゴミ箱の行は Trash フォルダから開いたときだけ見せる。

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowDown, MailPlus, Sparkles } from 'lucide-react';
 import type { UnseenQuote } from '@bindings/UnseenQuote';
@@ -35,6 +35,56 @@ export function oldestFirst(quotes: readonly UnseenQuote[]): UnseenQuote[] {
     .map((e) => e.q);
 }
 
+/** 枠のまとまり（このバブルが含んでいた枠か、会話の別のメールの引用から日時の位置へ移ってきた枠か）。 */
+export interface UnseenRun {
+  carried: boolean;
+  quotes: UnseenQuote[];
+}
+
+/**
+ * バブルの上に載る枠を、上から古い順のまとまりに分ける（docs/THREADING.md §5）。
+ *
+ * このバブルが含んでいた枠（`quoted_in` がこのバブル）は、いままでどおり {@link oldestFirst} で並べる。
+ * 会話の別のメールの引用から移ってきた枠（サーバー側で、自分の日時以後の最初のメールの上へ移したもの。
+ * どれも日時がある）は、その日時の位置に差し込む。日時の読めない枠は、寄せた先の枠と離さない。
+ * 並んだ順に、同じ種類の続きを 1 つのまとまりにする（見出しをまとまりごとに出すため）。
+ */
+export function arrangeRuns(quotes: readonly UnseenQuote[], messageId: number): UnseenRun[] {
+  const timeOf = (q: UnseenQuote) => (q.date ? (parseQuotedDate(q.date)?.getTime() ?? null) : null);
+  const own = oldestFirst(quotes.filter((q) => q.quoted_in === messageId));
+  const carried = quotes
+    .filter((q) => q.quoted_in !== messageId)
+    .map((q) => ({ q, time: timeOf(q) ?? Number.NEGATIVE_INFINITY }))
+    .sort((a, b) => a.time - b.time);
+  const items: { q: UnseenQuote; carried: boolean }[] = own.map((q) => ({ q, carried: false }));
+  for (const c of carried) {
+    // 自分の枠のうち、この枠より新しい（または推定でいちばん後ろの）最初のもの
+    let k = items.findIndex((it) => {
+      if (it.carried) return false;
+      if (it.q.guessed) return true;
+      const t = timeOf(it.q);
+      return t !== null && t > c.time;
+    });
+    if (k < 0) k = items.length;
+    // 日時の読めない自分の枠は、寄せた先の枠（直後）と離さない
+    while (
+      k > 0 &&
+      !items[k - 1].carried &&
+      !items[k - 1].q.guessed &&
+      timeOf(items[k - 1].q) === null
+    ) {
+      k -= 1;
+    }
+    items.splice(k, 0, { q: c.q, carried: true });
+  }
+  return items.reduce<UnseenRun[]>((runs, it) => {
+    const last = runs[runs.length - 1];
+    if (last && last.carried === it.carried) last.quotes.push(it.q);
+    else runs.push({ carried: it.carried, quotes: [it.q] });
+    return runs;
+  }, []);
+}
+
 /**
  * このメールに含まれていた、手元に無いメール（転送・Outlook の「元のメッセージ」で初めて届いた内容）。
  * 「引用を表示」に畳むと見落とすので、1 通ずつ小さなバブルで出す（docs/THREADING.md §5）。
@@ -44,17 +94,23 @@ export function oldestFirst(quotes: readonly UnseenQuote[]): UnseenQuote[] {
  * （色を変えると、こちらが主役に見えてしまう）。説明の文言は、いちばん上の見出し（何通あるか）と、
  * 封筒のアイコンのツールチップに出す。
  *
+ * 会話の別のメールの引用から、自分の日時の位置へ移ってきた枠（`quoted_in` が違う）も一緒に受け、
+ * {@link arrangeRuns} で日時の位置に差し込み、まとまりごとに見出しを出す。
+ *
  * 親のバブルの**上**に、古い順に並べる（会話全体が上から下へ時間どおりになり、日付のつまみも逆向きに
  * ならない）。どのバブルのものかは、見出しの下向きの矢印・文言と、まとまりの横の点線で示す
  * （点線はバブルの寄せる側に引き、まとまりの下端まで伸ばしてバブルに届かせる）。
  */
 export function UnseenQuotes({
   quotes,
+  messageId,
   out,
   highlight,
   renderDate,
 }: {
   quotes: UnseenQuote[];
+  /** 枠を載せるバブルの id（`ThreadMessage.id`）。これと `quoted_in` が違う枠は、別のメールの引用から来た。 */
+  messageId: number;
   /** 親のバブルが自分の送信か（寄せる側をそろえる）。 */
   out: boolean;
   highlight?: string[];
@@ -67,67 +123,97 @@ export function UnseenQuotes({
         out ? 'items-end border-r pr-2' : 'items-start border-l pl-2'
       }`}
     >
-      <div className="flex items-center gap-1 px-1 text-[10px] text-white/40">
-        <ArrowDown size={10} aria-hidden />
-        {t('thread.unseenQuotesHeading', { count: quotes.length })}
-      </div>
-      {oldestFirst(quotes).map((q, i) => {
-        return (
-          <div
-            key={i}
-            // 日付のつまみに 1 件として載せる（timeline/marks.ts）。添付は外側のメールのもので
-            // この枠のものか分からないので、リンクだけ載せる。日時の無い枠（推定の枠・日付の行が無い
-            // 転送など）は、つまみの札も目印も出さない
-            {...(q.date
-              ? markAttrs({ date: q.date, quote: true, link: hasAutoLinkUrl(q.body) })
-              : {})}
-            className="w-full max-w-[92%] rounded-xl border border-dashed border-white/30 bg-white/10 px-3 py-1.5 text-[13px] leading-relaxed text-white/90"
-          >
-            <div className="mb-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px]">
-              <span
-                className="inline-flex items-center text-white/50"
-                title={t('thread.unseenQuote')}
-                aria-label={t('thread.unseenQuote')}
-                role="img"
-              >
-                <MailPlus size={11} />
-              </span>
-              <span className="text-white/60" title={q.from}>
-                {q.sender}
-              </span>
-              {q.guessed ? (
-                // 差出人の行が無い「>」だけの引用: 差出人は返信の向きから推定、日時は分からない
-                <>
-                  <span
-                    className="inline-flex items-center gap-0.5 rounded-full border border-amber-300/40 px-1.5 text-amber-200/80"
-                    title={
-                      q.guess_depth
-                        ? `${t('thread.quoteGuessedHint')} ${t('thread.quoteGuessedDepth', { n: q.guess_depth })}`
-                        : t('thread.quoteGuessedHint')
-                    }
-                  >
-                    <Sparkles size={9} aria-hidden />
-                    {t('thread.quoteGuessed')}
-                  </span>
-                  <span className="text-white/45">{t('thread.quoteDateUnknown')}</span>
-                </>
-              ) : q.date || q.at ? (
-                // 表記はバブルにそろえ、見出しに書かれていた元の文字列はツールチップに残す
-                // （日時の行はあるが読めなければ、元の文字列のまま）
-                <span className="tabular-nums text-white/45" title={q.at ?? undefined}>
-                  {q.date ? formatQuotedDateTime(q.date, q.at ?? '') : q.at}
-                </span>
-              ) : (
-                // 差出人は読めたのに、見出しに日時の行が無い枠（日付の行が無い転送など）。
-                // 差出人は見出しのままなので「推定」の印は付けない
-                <span className="text-white/45">{t('thread.quoteDateUnknown')}</span>
-              )}
-              {q.subject && <span className="min-w-0 truncate text-white/45">{q.subject}</span>}
-            </div>
-            <AutoLinkText text={q.body} highlight={highlight} renderDate={renderDate} />
+      {arrangeRuns(quotes, messageId).map((run, r) => (
+        <Fragment key={r}>
+          <div className="flex items-center gap-1 px-1 text-[10px] text-white/40">
+            {run.carried ? (
+              // 会話の別のメールの引用から、自分の日時の位置へ移ってきた枠（下のバブルのものではない）
+              t('thread.unseenCarriedHeading')
+            ) : (
+              <>
+                <ArrowDown size={10} aria-hidden />
+                {t('thread.unseenQuotesHeading', { count: run.quotes.length })}
+              </>
+            )}
           </div>
-        );
-      })}
+          {run.quotes.map((q, i) => (
+            <UnseenFrame
+              key={i}
+              q={q}
+              hint={t(run.carried ? 'thread.unseenCarriedHeading' : 'thread.unseenQuote')}
+              highlight={highlight}
+              renderDate={renderDate}
+            />
+          ))}
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+/** 未受信の枠 1 通（`hint` は封筒のアイコンのツールチップ）。 */
+function UnseenFrame({
+  q,
+  hint,
+  highlight,
+  renderDate,
+}: {
+  q: UnseenQuote;
+  hint: string;
+  highlight?: string[];
+  renderDate?: (raw: string) => ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div
+      // 日付のつまみに 1 件として載せる（timeline/marks.ts）。添付は外側のメールのもので
+      // この枠のものか分からないので、リンクだけ載せる。日時の無い枠（推定の枠・日付の行が無い
+      // 転送など）は、つまみの札も目印も出さない
+      {...(q.date ? markAttrs({ date: q.date, quote: true, link: hasAutoLinkUrl(q.body) }) : {})}
+      className="w-full max-w-[92%] rounded-xl border border-dashed border-white/30 bg-white/10 px-3 py-1.5 text-[13px] leading-relaxed text-white/90"
+    >
+      <div className="mb-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px]">
+        <span
+          className="inline-flex items-center text-white/50"
+          title={hint}
+          aria-label={hint}
+          role="img"
+        >
+          <MailPlus size={11} />
+        </span>
+        <span className="text-white/60" title={q.from}>
+          {q.sender}
+        </span>
+        {q.guessed ? (
+          // 差出人の行が無い「>」だけの引用: 差出人は返信の向きから推定、日時は分からない
+          <>
+            <span
+              className="inline-flex items-center gap-0.5 rounded-full border border-amber-300/40 px-1.5 text-amber-200/80"
+              title={
+                q.guess_depth
+                  ? `${t('thread.quoteGuessedHint')} ${t('thread.quoteGuessedDepth', { n: q.guess_depth })}`
+                  : t('thread.quoteGuessedHint')
+              }
+            >
+              <Sparkles size={9} aria-hidden />
+              {t('thread.quoteGuessed')}
+            </span>
+            <span className="text-white/45">{t('thread.quoteDateUnknown')}</span>
+          </>
+        ) : q.date || q.at ? (
+          // 表記はバブルにそろえ、見出しに書かれていた元の文字列はツールチップに残す
+          // （日時の行はあるが読めなければ、元の文字列のまま）
+          <span className="tabular-nums text-white/45" title={q.at ?? undefined}>
+            {q.date ? formatQuotedDateTime(q.date, q.at ?? '') : q.at}
+          </span>
+        ) : (
+          // 差出人は読めたのに、見出しに日時の行が無い枠（日付の行が無い転送など）。
+          // 差出人は見出しのままなので「推定」の印は付けない
+          <span className="text-white/45">{t('thread.quoteDateUnknown')}</span>
+        )}
+        {q.subject && <span className="min-w-0 truncate text-white/45">{q.subject}</span>}
+      </div>
+      <AutoLinkText text={q.body} highlight={highlight} renderDate={renderDate} />
     </div>
   );
 }

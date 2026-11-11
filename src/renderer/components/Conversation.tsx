@@ -567,6 +567,7 @@ function Bubble({
             <LinkGuard trust={trust}>
               <UnseenQuotes
                 quotes={m.unseen_quotes}
+                messageId={m.id}
                 out={out}
                 highlight={highlight}
                 renderDate={renderDate}

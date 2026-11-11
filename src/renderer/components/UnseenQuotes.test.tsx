@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import type { UnseenQuote } from '@bindings/UnseenQuote';
-import { oldestFirst, UnseenQuotes } from './UnseenQuotes';
+import { arrangeRuns, oldestFirst, UnseenQuotes } from './UnseenQuotes';
 import { markAttrs, readMarks } from './timeline/marks';
 import { formatDateTime, parseQuotedDate } from '../utils/datetime';
 
@@ -34,13 +34,14 @@ const quote = (body: string): UnseenQuote => ({
   body,
   guessed: false,
   guess_depth: null,
+  quoted_in: 1,
 });
 
 describe('UnseenQuotes の本文のリンク', () => {
   it('URL は通常のバブルと同じリンクになる（改行が \\r\\r\\n でも末尾に紛れない）', () => {
     const body =
       'データ便（IFCデータ）\r\r\nhttps://deliver.example.invalid/d/abc123\r\r\n\r\r\nよろしくお願いします。';
-    act(() => root.render(<UnseenQuotes quotes={[quote(body)]} out={false} />));
+    act(() => root.render(<UnseenQuotes messageId={1} quotes={[quote(body)]} out={false} />));
     const links = [...container.querySelectorAll('a')];
     expect(links.map((a) => a.getAttribute('href'))).toEqual([
       'https://deliver.example.invalid/d/abc123',
@@ -50,7 +51,7 @@ describe('UnseenQuotes の本文のリンク', () => {
 
   it('<mailto:…> の中の URL でないアドレスにはリンクを張らない（通常のバブルと同じ）', () => {
     const body = 'Email: taro@maeda.invalid <mailto:taro@maeda.invalid>\r\nwww.maeda.invalid';
-    act(() => root.render(<UnseenQuotes quotes={[quote(body)]} out={false} />));
+    act(() => root.render(<UnseenQuotes messageId={1} quotes={[quote(body)]} out={false} />));
     const hrefs = [...container.querySelectorAll('a')].map((a) => a.getAttribute('href'));
     expect(hrefs).toEqual(['https://www.maeda.invalid']);
     expect(container.textContent).toContain('<mailto:taro@maeda.invalid>');
@@ -66,7 +67,7 @@ describe('UnseenQuotes の見出しの日時', () => {
       at: 'Tue, 20 Oct 2026 11:21:08 +0900',
       date: '2026-10-20T11:21:08+09:00',
     };
-    act(() => root.render(<UnseenQuotes quotes={[q]} out={false} />));
+    act(() => root.render(<UnseenQuotes messageId={1} quotes={[q]} out={false} />));
     expect(stamp()?.textContent).toBe(formatDateTime('2026-10-20T11:21:08+09:00'));
     expect(stamp()?.getAttribute('title')).toBe('Tue, 20 Oct 2026 11:21:08 +0900');
   });
@@ -79,7 +80,7 @@ describe('UnseenQuotes の見出しの日時', () => {
       guessed: true,
       guess_depth: 2,
     };
-    act(() => root.render(<UnseenQuotes quotes={[q]} out={false} />));
+    act(() => root.render(<UnseenQuotes messageId={1} quotes={[q]} out={false} />));
     expect(stamp()).toBeNull();
     // ツールチップに、推定の理由と何段目の引用かを出す
     const badge = container.querySelector(
@@ -91,7 +92,7 @@ describe('UnseenQuotes の見出しの日時', () => {
 
   it('差出人は読めたのに日時の行が無い枠は「日時不明」を出し、「推定」の印は付けない', () => {
     const q: UnseenQuote = { ...quote('本文'), at: null, date: null };
-    act(() => root.render(<UnseenQuotes quotes={[q]} out={false} />));
+    act(() => root.render(<UnseenQuotes messageId={1} quotes={[q]} out={false} />));
     expect(stamp()).toBeNull();
     expect(container.querySelector('span[title="thread.quoteGuessedHint"]')).toBeNull();
     expect(container.textContent).not.toContain('thread.quoteGuessed');
@@ -101,7 +102,7 @@ describe('UnseenQuotes の見出しの日時', () => {
 
   it('読んだ日時が無ければ、元の文字列をそのまま出す', () => {
     const q = { ...quote('本文'), at: '2026/10/02 12:10', date: '' };
-    act(() => root.render(<UnseenQuotes quotes={[q]} out={false} />));
+    act(() => root.render(<UnseenQuotes messageId={1} quotes={[q]} out={false} />));
     expect(stamp()?.textContent).toBe('2026/10/02 12:10');
   });
 });
@@ -177,7 +178,9 @@ describe('枠の並び（古い順・親のバブルの上）', () => {
     const undated: UnseenQuote = { ...at('なし', ''), date: null, at: null };
     const guessed: UnseenQuote = { ...undated, subject: '推定', guessed: true };
     act(() =>
-      root.render(<UnseenQuotes quotes={[guessed, inBody[0], undated, inBody[2]]} out={false} />)
+      root.render(
+        <UnseenQuotes messageId={1} quotes={[guessed, inBody[0], undated, inBody[2]]} out={false} />
+      )
     );
     expect(container.querySelectorAll('.rounded-xl')).toHaveLength(4);
     expect(readMarks(container).map((m) => m.date)).toEqual([inBody[2].date, inBody[0].date]);
@@ -187,7 +190,7 @@ describe('枠の並び（古い順・親のバブルの上）', () => {
     act(() =>
       root.render(
         <>
-          <UnseenQuotes quotes={inBody} out={false} />
+          <UnseenQuotes messageId={1} quotes={inBody} out={false} />
           <div {...markAttrs({ date: '2026-10-20T09:00:00+09:00' })} />
         </>
       )
@@ -195,5 +198,69 @@ describe('枠の並び（古い順・親のバブルの上）', () => {
     const times = readMarks(container).map((m) => parseQuotedDate(m.date ?? '')?.getTime() ?? NaN);
     expect(times).toHaveLength(6);
     times.slice(1).forEach((t, i) => expect(t).toBeGreaterThan(times[i]));
+  });
+});
+
+describe('arrangeRuns（会話の別のメールから移ってきた枠を、日時の位置に差し込む）', () => {
+  const at = (date: string | null, quoted_in: number, body = date ?? '日時なし'): UnseenQuote => ({
+    ...quote(body),
+    date,
+    at: date,
+    quoted_in,
+  });
+  const shape = (runs: ReturnType<typeof arrangeRuns>) =>
+    runs.map((r) => [r.carried, r.quotes.map((q) => q.body)]);
+
+  it('このバブルの枠だけなら、いままでどおり 1 つのまとまり', () => {
+    const runs = arrangeRuns([at('2026-10-05T09:00:00', 7), at('2026-10-01T09:00:00', 7)], 7);
+    expect(shape(runs)).toEqual([[false, ['2026-10-01T09:00:00', '2026-10-05T09:00:00']]]);
+  });
+
+  it('移ってきた枠は日時の位置に入り、まとまりが分かれる', () => {
+    const runs = arrangeRuns(
+      [
+        at('2026-10-05T09:00:00', 7),
+        at('2026-10-01T09:00:00', 7),
+        at('2026-10-03T09:00:00', 9),
+        at('2026-09-24T10:33:00', 9),
+      ],
+      7
+    );
+    expect(shape(runs)).toEqual([
+      [true, ['2026-09-24T10:33:00']],
+      [false, ['2026-10-01T09:00:00']],
+      [true, ['2026-10-03T09:00:00']],
+      [false, ['2026-10-05T09:00:00']],
+    ]);
+  });
+
+  it('日時の読めない自分の枠は、寄せた先の枠と離さない。推定の枠はいちばん後ろのまま', () => {
+    const guessed = { ...at(null, 7, '推定'), guessed: true };
+    // 本文の順（新しい順）: 10/5 → 日時なし（10/5 の続き）→ 推定。10/5 より古い移ってきた枠が 1 通。
+    const runs = arrangeRuns(
+      [at('2026-10-05T09:00:00', 7), at(null, 7), guessed, at('2026-10-02T09:00:00', 9)],
+      7
+    );
+    expect(shape(runs)).toEqual([
+      [true, ['2026-10-02T09:00:00']],
+      [false, ['日時なし', '2026-10-05T09:00:00', '推定']],
+    ]);
+  });
+
+  it('見出しはまとまりごとに出し、移ってきた枠には下向きの矢印を付けない', () => {
+    act(() =>
+      root.render(
+        <UnseenQuotes
+          messageId={7}
+          quotes={[at('2026-10-05T09:00:00', 7), at('2026-09-24T10:33:00', 9)]}
+          out={false}
+        />
+      )
+    );
+    const headings = [...container.querySelectorAll('div.text-white\\/40')];
+    expect(headings).toHaveLength(2);
+    expect(headings[0].querySelector('svg')).toBeNull();
+    expect(headings[1].querySelector('svg')).not.toBeNull();
+    expect(headings[0].textContent).toBe('thread.unseenCarriedHeading');
   });
 });

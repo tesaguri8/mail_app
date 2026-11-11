@@ -40,7 +40,7 @@ mod thread_activity;
 mod thread_days;
 mod threads;
 mod tombstones;
-mod unseen_dedupe;
+mod unseen_frames;
 
 pub use accounts::{NewAccount, SmtpAccount};
 pub use calendar_sync::{ApplyOutcome, LocalChange, RecurringInstance, RemoteEvent, SyncedCalendar};

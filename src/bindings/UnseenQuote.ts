@@ -38,4 +38,9 @@ subject: string | null,
 /**
  * 見出しを除いた本文。
  */
-body: string, };
+body: string, 
+/**
+ * この引用を含んでいたメールの id。会話ビューでは、日時のある枠を自分の日時の位置へ移すので、
+ * 枠を載せたバブルと違うことがある（docs/THREADING.md §5）。
+ */
+quoted_in: number, };

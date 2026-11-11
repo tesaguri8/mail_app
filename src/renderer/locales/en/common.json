@@ -1057,6 +1057,7 @@
     "quoteGuessedHint": "This quote has no sender line. The sender was guessed from the reply direction (the recipient for your replies, yourself for replies you received)",
     "quoteDateUnknown": "Date unknown",
     "unseenQuotesHeading": "Quoted in the email below, not in your mailbox: {{count}}",
+    "unseenCarriedHeading": "Unreceived mail found in quotes in this conversation",
     "you": "You",
     "untitled": "(untitled thread)",
     "count": "{{count}}",

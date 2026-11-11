@@ -1056,6 +1056,7 @@
     "quoteGuessedHint": "差出人の行が無い引用です。差出人は、このメールの返信の向き（自分の返信なら宛先の人、届いた返信なら自分）から推定しました",
     "quoteDateUnknown": "日時不明",
     "unseenQuotesHeading": "下のメールに引用されていたメール {{count}} 通（未受信）",
+    "unseenCarriedHeading": "会話の中の引用にあった、未受信のメール",
     "you": "自分",
     "untitled": "（無題のスレッド）",
     "count": "{{count}}通",

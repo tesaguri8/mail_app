@@ -333,6 +333,12 @@ const MIGRATIONS: &[Migration] = &[
         version: 71,
         sql: include_str!("migrations/0071_thread_sent_ts.sql"),
     },
+    Migration {
+        // 72 は送信済みの控えに推定して入れた Message-ID の出所（alpha.34 までの控えには ID が無い。
+        // 相手の返信の In-Reply-To と 1 通だけ合う控えに入れる。docs/THREADING.md §2）。
+        version: 72,
+        sql: include_str!("migrations/0072_inferred_message_ids.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

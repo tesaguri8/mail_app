@@ -120,6 +120,56 @@ pub fn find_quoted_email(
     Ok(best.map(|(_, id)| id))
 }
 
+/// メール `email_id` の引用の見出しが、指定の 1 通（差出人と日時）を指していると読めるか。
+///
+/// 差出人が一致し、日時も読める見出しが 1 つも無ければ None（読めないので判断しない）。
+/// そうした見出しがあれば、そのどれかの日時が許容幅に収まるときだけ Some(true)。深い引用に
+/// 同じ差出人の古いメールが並ぶこともあるので、「どれか 1 つ」で判断する。
+///
+/// # Errors
+/// 問い合わせに失敗したとき。
+pub(crate) fn quotes_point_at(
+    conn: &Connection,
+    email_id: i64,
+    from_address: Option<&str>,
+    from_name: Option<&str>,
+    date: Option<&str>,
+    date_ts: i64,
+) -> rusqlite::Result<Option<bool>> {
+    let target = Candidate {
+        id: 0,
+        from_address: from_address.map(str::to_string),
+        from_name: from_name.map(str::to_string),
+        date: date.map(str::to_string),
+        date_ts,
+    };
+    let mut stmt = conn.prepare_cached(
+        "SELECT quoted_from, quoted_at FROM message_quotes WHERE email_id = ?1 ORDER BY block_order",
+    )?;
+    let blocks = stmt
+        .query_map(params![email_id], |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, Option<String>>(1)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let gaps: Vec<i64> = blocks
+        .iter()
+        .filter_map(|(from, at)| {
+            let (addr, name) = split_sender(from.as_deref()?);
+            if !same_sender(addr.as_deref(), name.as_deref(), &target) {
+                return None;
+            }
+            time_gap(&parse_quoted_time(at.as_deref()?)?, &target)
+        })
+        .collect();
+    if gaps.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(gaps.iter().any(|g| *g <= TOLERANCE_SECS)))
+}
+
 /// まだ結び付いていない引用ブロック（email_id, block_order, quoted_from, quoted_at）を照らし合わせ、
 /// 見つかったものに matched_email_id を入れる。結び付けた数を返す。
 fn match_rows(

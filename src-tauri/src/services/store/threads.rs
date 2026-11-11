@@ -568,6 +568,8 @@ impl Store {
                     super::quote_match::unseen_quotes(conn, i64::from(m.id), body, &known)?;
             }
         }
+        // 同じ枠は会話の中で 1 回だけにし、日時のある枠は自分の日時の位置（その後の最初のメールの上）へ移す。
+        super::unseen_frames::arrange(&mut messages);
         // 集計はメッセージから算出（保存値に依存しない）。
         let message_count = messages.len() as i32;
         let unread_count = messages.iter().filter(|m| !m.is_read).count() as i32;
@@ -1455,6 +1457,125 @@ Subject: 図面\n\
         assert_eq!(q.at.as_deref(), Some("Friday, October 2, 2026 2:50 PM"));
         assert_eq!(q.subject.as_deref(), Some("図面"));
         assert_eq!(q.body, "田中様\n図面を送ります。");
+    }
+
+    /// 返信が同じ手元に無いメールを引用し続けても、未受信の枠は会話の中で 1 回だけ、
+    /// 最初に引用した（いちばん古い）返信に付く（2026-11-11 vaio の症状の形。名前・宛先は作り物）。
+    /// 自分と相手が交互に、直前のメールを丸ごと引用して返す。引用の連なりは 1 段ずつ深くなり、
+    /// いちばん底には毎回、手元に無い最初の 1 通（自分 9/24 10:33）が入る。途中の引用は手元にある。
+    #[test]
+    fn thread_view_shows_a_repeated_unseen_quote_only_once() {
+        let store = test_store();
+        let me = ("末松 太郎", "taro@example.invalid");
+        let them = ("鈴木 次郎", "suzuki@example.invalid");
+        // （差出人, 日時, 引用の見出しの日時, 新しく書いた分）。先頭は手元に無い。
+        let chain = [
+            (
+                me,
+                "2026-09-24T10:33:00+09:00",
+                "Thursday, September 24, 2026 10:33 AM",
+                "鈴木様\nスラブ案の見積りをお送りします。合計は別紙のとおりです。",
+            ),
+            (
+                them,
+                "2026-09-24T13:22:00+09:00",
+                "Thursday, September 24, 2026 1:22 PM",
+                "末松様\n見積りを拝見しました。梁の寸法を確認させてください。",
+            ),
+            (
+                me,
+                "2026-10-05T09:36:00+09:00",
+                "Monday, October 5, 2026 9:36 AM",
+                "鈴木様\n梁の寸法は図面のとおりです。ご確認ください。",
+            ),
+            (
+                them,
+                "2026-10-06T15:10:00+09:00",
+                "Tuesday, October 6, 2026 3:10 PM",
+                "末松様\n承知しました。次は工期の相談をさせてください。",
+            ),
+            (
+                me,
+                "2026-11-07T11:05:00+09:00",
+                "Saturday, November 7, 2026 11:05 AM",
+                "鈴木様\n工期は来月からで進めます。よろしくお願いします。",
+            ),
+        ];
+        let quoted = |k: usize| -> String {
+            let ((name, addr), _, sent, own) = chain[k];
+            let to = if addr == me.1 { them } else { me };
+            format!(
+                "\n\n-----Original Message-----\nFrom: {name} <{addr}>\nSent: {sent}\n\
+                 To: {} <{}>\nSubject: RE: スラブ案の見積り\n\n{own}",
+                to.0, to.1
+            )
+        };
+        let ids: Vec<i64> = {
+            let conn = store.conn.lock().unwrap();
+            (1..chain.len())
+                .map(|k| {
+                    let ((name, addr), date, _, own) = chain[k];
+                    let body: String = std::iter::once(own.to_string())
+                        .chain((0..k).rev().map(quoted))
+                        .collect();
+                    let mid = format!("m{k}@x");
+                    let irt = (k > 1).then(|| format!("m{}@x", k - 1));
+                    let refs = (k > 1).then(|| {
+                        (1..k)
+                            .map(|j| format!("m{j}@x"))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    });
+                    let folder = if addr == me.1 { "sent" } else { "inbox" };
+                    let mut e = mk(
+                        &mid,
+                        "RE: スラブ案の見積り",
+                        addr,
+                        folder,
+                        k as i64,
+                        irt.as_deref(),
+                        refs.as_deref(),
+                    );
+                    e.from_name = Some(name.into());
+                    e.date = Some(date.into());
+                    e.date_ts = Some(
+                        chrono::DateTime::parse_from_rfc3339(date)
+                            .unwrap()
+                            .timestamp(),
+                    );
+                    e.clean_body = Some(crate::services::quotes::split_reply(&body).clean);
+                    e.body_plain = Some(body);
+                    match insert_email(&conn, &e).unwrap() {
+                        crate::services::store::InsertOutcome::Inserted(id) => id,
+                        _ => panic!("insert"),
+                    }
+                })
+                .collect()
+        };
+        store.rebuild_threads(1).unwrap();
+        let view = store.thread_view(ids[3]).unwrap().unwrap();
+        let frames: Vec<(i64, usize)> = view
+            .messages
+            .iter()
+            .map(|m| (i64::from(m.id), m.unseen_quotes.len()))
+            .collect();
+        assert_eq!(
+            frames,
+            ids.iter()
+                .enumerate()
+                .map(|(i, id)| (*id, usize::from(i == 0)))
+                .collect::<Vec<_>>()
+        );
+        let q = &view.messages[0].unseen_quotes[0];
+        assert_eq!(q.sender, "末松 太郎");
+        assert_eq!(q.date.as_deref(), Some("2026-09-24T10:33:00"));
+        assert!(
+            q.body.contains("スラブ案の見積りをお送りします"),
+            "{}",
+            q.body
+        );
+        // 含んでいたのは最初の返信（9/24 13:22）で、自分の日時（10:33）でもその上に置かれる。
+        assert_eq!(i64::from(q.quoted_in), ids[0]);
     }
 
     /// 会話ビューは下書きを常に隠し、ゴミ箱の行は Trash フォルダから開いたときだけ見せる。

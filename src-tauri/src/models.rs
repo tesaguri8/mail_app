@@ -756,6 +756,9 @@ pub struct UnseenQuote {
     pub subject: Option<String>,
     /// 見出しを除いた本文。
     pub body: String,
+    /// この引用を含んでいたメールの id。会話ビューでは、日時のある枠を自分の日時の位置へ移すので、
+    /// 枠を載せたバブルと違うことがある（docs/THREADING.md §5）。
+    pub quoted_in: i32,
 }
 
 /// 会話ビュー（スレッド情報＋時系列のメッセージ）。

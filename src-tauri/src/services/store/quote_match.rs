@@ -268,6 +268,8 @@ pub fn unseen_quotes(
     known: &[String],
 ) -> rusqlite::Result<Vec<UnseenQuote>> {
     let mut out: Vec<UnseenQuote> = Vec::new();
+    // 枠に付ける「含んでいたメール」。会話ビューのバブルの id（`ThreadMessage.id`）と同じ変換にそろえる。
+    let quoted_in = email_id as i32;
     // 直前の引用を枠として出したか（読めない引用をその枠に残すため）。
     let mut last_shown = false;
     // 再解析で入れた、返信の向きから推定した差出人（block_order → (推定の差出人, 照合できたか)）。
@@ -311,6 +313,7 @@ pub fn unseen_quotes(
                     guess_depth: u32::try_from(q.gt_depth).ok(),
                     subject: q.subject,
                     body: q.body,
+                    quoted_in,
                 });
             }
             continue;
@@ -346,6 +349,7 @@ pub fn unseen_quotes(
                     guess_depth: None,
                     subject: q.subject,
                     body: q.body,
+                    quoted_in,
                 });
             }
             continue;
@@ -379,6 +383,7 @@ pub fn unseen_quotes(
             guess_depth: None,
             subject: q.subject,
             body: q.body,
+            quoted_in,
         });
     }
     Ok(out)

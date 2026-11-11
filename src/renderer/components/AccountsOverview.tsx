@@ -7,10 +7,14 @@ import { mailList, homeUnreadCounts } from '../services/mail';
 import { getHomeCountFilter, getHomeCountShow, PREFS_EVENT } from '../config/prefs';
 import { MAIL_FILTERS, matchesFilters } from './mailFilters';
 import { useOnTabActivated } from '../hooks/useTabActive';
+import { useAccountSyncStatus } from '../hooks/useAccountSyncStatus';
+import { AccountStatusDot } from './AccountStatusDot';
 
 /**
  * ホーム右カラム：アカウント別の新着（未読）数を“ゴースト”表示（背景なし・文字のみ）。
  * クリックでその場展開 → 最新件名＋3行プレビュー →「もっと読む」でメールモードへ。
+ * アドレスの左に接続状況の印（サイドバー・設定と同じ AccountStatusDot）。印は押す場所ではなく、
+ * 押せば行と同じく展開する。
  */
 export function AccountsOverview({
   accounts,
@@ -20,6 +24,7 @@ export function AccountsOverview({
   onOpenMail: (accountId: number, mailId?: number) => void;
 }) {
   const { t } = useTranslation();
+  const { statuses: syncStatus } = useAccountSyncStatus();
   const [expanded, setExpanded] = useState<number | null>(null);
   const [previews, setPreviews] = useState<Record<number, MailSummary[]>>({});
   // 展開中のプレビューに掛ける絞り込み（メール画面と共通のトグル）。
@@ -103,7 +108,14 @@ export function AccountsOverview({
             onClick={() => toggle(a.id)}
             className="flex w-full shrink-0 items-baseline justify-between gap-3 text-left text-white/85 hover:text-white"
           >
-            <span className="truncate">{a.email}</span>
+            {/* 行は文字の下端（items-baseline）でそろえる。印は文字を持たないので self-center で
+                行の高さの中央に置き、ベースラインの計算から外す（アドレスの文字の中心にそろう）。 */}
+            <span className="flex min-w-0 items-baseline gap-2">
+              <span className="flex self-center">
+                <AccountStatusDot status={syncStatus[a.id]} />
+              </span>
+              <span className="truncate">{a.email}</span>
+            </span>
             {countShow && (
               <span className="shrink-0 tabular-nums">
                 {counts[a.id]?.[countFilter] ?? (countFilter === 'all' ? a.unread_count : 0)}

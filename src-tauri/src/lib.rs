@@ -7,11 +7,6 @@ use services::datadir;
 use services::store::Store;
 use tauri::Manager;
 
-/// ログの 1 ファイルの上限（バイト）。
-const LOG_FILE_BYTES: u128 = 5 * 1024 * 1024;
-/// ログを残す世代の数（いま書いているファイルを含む）。
-const LOG_FILES: usize = 5;
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 開発時: プロジェクト直下（または親）の .env を環境変数へ読み込む。
@@ -19,14 +14,8 @@ pub fn run() {
     let _ = dotenvy::dotenv();
 
     tauri::Builder::default()
-        // ログは 5MB × 5 世代まで残す。既定（40KB・1 世代）では数分で入れ替わり、
-        // つながらなくなった経緯を後から追えなかった（2026-11-11 vaio: Rondine.log が 4〜18KB）。
-        .plugin(
-            tauri_plugin_log::Builder::default()
-                .max_file_size(LOG_FILE_BYTES)
-                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(LOG_FILES))
-                .build(),
-        )
+        // ログは 5MB × 5 世代・INFO 以上（services/applog.rs）。
+        .plugin(services::applog::plugin())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -35,6 +24,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
+            services::applog::log_startup(app.handle());
             // データルート配下に mail.db を開き、マイグレーションを適用（docs/DATA_STORAGE.md）。
             let base = app.path().app_data_dir().expect("app_data_dir");
             let db_path = datadir::db_path(&base);

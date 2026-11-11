@@ -253,3 +253,71 @@ fn an_unreachable_host_is_tried_a_few_times_an_hour_not_every_round() {
     // 0・1・3・7・15・31 分（間は 1・2・4・8・16 分）＝ 6 回。
     assert_eq!(after, 6);
 }
+
+/// 試験のあいだ、ログの行を貯めておく記録係（試験の実行体に 1 つだけ据える）。
+struct Capture(Mutex<Vec<(String, log::Level, String)>>);
+
+impl log::Log for Capture {
+    fn enabled(&self, _: &log::Metadata) -> bool {
+        true
+    }
+    fn log(&self, r: &log::Record) {
+        self.0
+            .lock()
+            .unwrap()
+            .push((r.target().to_owned(), r.level(), r.args().to_string()));
+    }
+    fn flush(&self) {}
+}
+
+fn captured() -> &'static Capture {
+    static CAPTURE: std::sync::OnceLock<&'static Capture> = std::sync::OnceLock::new();
+    CAPTURE.get_or_init(|| {
+        let c: &'static Capture = Box::leak(Box::new(Capture(Mutex::new(Vec::new()))));
+        log::set_logger(c).expect("この試験の実行体で、ほかに記録係を据えていない");
+        log::set_max_level(log::LevelFilter::Trace);
+        c
+    })
+}
+
+#[test]
+fn every_connection_leaves_an_info_line_that_the_log_file_keeps() {
+    let capture = captured();
+    let (g, clock) = gate();
+    let host = "log-line.example.invalid";
+    g.enter(host, PORT, Urgency::Auto)
+        .unwrap()
+        .finish(&unreachable());
+    clock.advance(Duration::from_secs(61));
+    g.enter(host, PORT, Urgency::Auto)
+        .unwrap()
+        .finish(&Ok::<(), ImapError>(()));
+    g.enter(host, PORT, Urgency::Auto)
+        .unwrap()
+        .finish_reach(&Ok(()));
+
+    let key = format!("{host}:{PORT}");
+    let lines: Vec<_> = capture
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, _, m)| m.contains(&key))
+        .cloned()
+        .collect();
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    for (n, (target, level, message)) in lines.iter().enumerate() {
+        assert_eq!(*level, log::Level::Info, "{message}");
+        assert!(
+            message.contains(&format!("直近 1 時間 {} 回", n + 1)),
+            "{message}"
+        );
+        // 本番のログの設定（水準・target の絞り）で、ファイルまで届く。
+        assert!(
+            crate::services::applog::keeps(target, *level),
+            "{target} の INFO がログに残らない"
+        );
+    }
+    assert!(lines[0].2.contains("失敗"), "{}", lines[0].2);
+    assert!(lines[1].2.contains("成功"), "{}", lines[1].2);
+}

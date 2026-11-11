@@ -40,6 +40,7 @@ mod tags;
 pub(crate) mod test_support;
 mod thread_activity;
 mod thread_days;
+mod thread_filter;
 mod threads;
 mod tombstones;
 mod unseen_frames;

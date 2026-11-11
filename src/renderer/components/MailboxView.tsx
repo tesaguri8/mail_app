@@ -73,7 +73,6 @@ import { threadList, threadDayCounts, threadDayUnread } from '../services/thread
 import {
   PAGE_SIZE,
   dayLayout,
-  daysOfRows,
   emptySlots,
   fillSlots,
   ALL_FOLDED,
@@ -85,7 +84,6 @@ import {
   foldedDayOf,
   indexOfId,
   jumpRow,
-  loadedPrefix,
   loadedRows,
   pagesToLoad,
   retallyDays,
@@ -116,14 +114,20 @@ import { useDayFold } from '../hooks/useDayFold';
 import { Compose, composeKey, type ComposeTarget } from './Compose';
 import { useTabActiveRef } from '../hooks/useTabActive';
 import { FolderIcons } from './FolderIcons';
-import { MAIL_FILTERS, matchesFilters, matchesNoneOfFilters, senderTone } from './mailFilters';
+import {
+  MAIL_FILTERS,
+  matchesFilters,
+  matchesNoneOfFilters,
+  senderTone,
+  toThreadFilter,
+} from './mailFilters';
 import { Tooltip } from './Tooltip';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { Dropdown } from './Dropdown';
 import { AccountStatusDot, accountStatusLabel } from './AccountStatusDot';
 import { useAccountSyncStatus } from '../hooks/useAccountSyncStatus';
 import { PrintMail } from './PrintMail';
-import { DateFilter, matchesDate, type DateRange } from './DateFilter';
+import { DateFilter, dateBounds, matchesDate, type DateRange } from './DateFilter';
 import { SpamConflictAlert } from './SpamConflictAlert';
 import { TagFilter, matchesTags } from './TagFilter';
 import { TagPicker } from './TagPicker';
@@ -654,24 +658,26 @@ export function MailboxView({
   const tagById = new Map(tags.map((tg) => [tg.id, tg]));
 
   // 一覧の取得: 日ごとの件数（thread_day_counts）から全期間ぶんの枠を先に作り、見えている位置の
-  // 前後だけを OFFSET で読む（docs/MAIL_LIST_TIMELINE.md）。絞り込み中は画面側の絞り込みで件数が
-  // ずれるので、いままでどおり上から順に読み足す（loadMore・AUTO_FILL_CAP）。
+  // 前後だけを OFFSET で読む（docs/MAIL_LIST_TIMELINE.md）。絞り込み（トグル・期間・タグ）は DB 側で
+  // かけ、件数・一覧・未読に同じ条件を渡すので、絞り込み中も枠と OFFSET が揃う（§3）。
   // 切替時の取り違えを防ぐため、呼び出しトークンで整合を取る（古い読み込みの結果は捨てる）。
-  // フィルタで可視行が少ないとき、ビューポートが埋まるまで自動で読み足す上限（一気読みの安全弁）。
-  const AUTO_FILL_CAP = 1500;
   const loadTokenRef = useRef(0);
   // 読んでいる最中のページ番号（同じページを二重に頼まない）。
   const inFlightRef = useRef<Set<number>>(new Set());
   // いま見えている範囲（[start, end) 件目。同期後の読み直しで、その位置を読み直すのに使う）。
   const visibleRangeRef = useRef<[number, number]>([0, PAGE_SIZE]);
-  // 画面側の絞り込み（トグル・期間・タグ）がかかっているか。かかっていれば、つまみを出さずに
-  // 上から順に読み足す（DB の件数と画面の行がずれるため）。検索モードも同じくつまみを出さない。
-  const filtering = filters.size > 0 || dateFilter != null || tagFilter.size > 0;
-  const timelineMode = !searchMode && !filtering;
-  const timelineModeRef = useRef(timelineMode);
-  timelineModeRef.current = timelineMode;
+  // 一覧の絞り込み（トグル・期間・タグ）を、DB の問い合わせに渡す形にしたもの（null なら絞らない）。
+  // 読み込みは ref から引く（読み直しの途中で条件が変わっても、その時点の条件で読む）。
+  const threadFilter = useMemo(
+    () => toThreadFilter(filters, filterInvert, dateBounds(dateFilter), tagFilter),
+    [filters, filterInvert, dateFilter, tagFilter]
+  );
+  const filterRef = useRef(threadFilter);
+  filterRef.current = threadFilter;
+  // つまみ（全期間ぶんの枠）で並べるか。検索は関連順で日付の並びではないので、つまみを出さない。
+  const timelineMode = !searchMode;
   // 読み込んでいない続きがあるか（全件選択で DB から引き直すかの判断に使う）。
-  const hasMore = timelineMode ? mails.length < slots.length : loadedPrefix(slots) < slots.length;
+  const hasMore = mails.length < slots.length;
 
   // [start, end) 件目を見せるのに足りないページだけを OFFSET で読み、枠へ入れる。
   const requestRange = (start: number, end: number) => {
@@ -679,7 +685,7 @@ export function MailboxView({
     const token = loadTokenRef.current;
     for (const page of pagesToLoad(slotsRef.current, start, end, inFlightRef.current)) {
       inFlightRef.current.add(page);
-      threadList(queryAccount, folder, PAGE_SIZE, page * PAGE_SIZE)
+      threadList(queryAccount, folder, PAGE_SIZE, page * PAGE_SIZE, filterRef.current)
         .then((rows) => {
           if (loadTokenRef.current !== token) return; // 切替後の結果は破棄
           setSlots((prev) => fillSlots(prev, page * PAGE_SIZE, rows));
@@ -693,21 +699,17 @@ export function MailboxView({
 
   // 一覧を読み直す。日ごとの件数で枠を作り直し、見せる範囲だけを読んでから差し替える（読み込み中の
   // 空白を挟まない）。
-  // - reset: フォルダ/アカウント切替。先頭の 1 ページを読み、先頭に戻す
-  // - それ以外（操作・同期のあと）: つまみのときは見えている範囲を読み直し、位置はそのまま
-  // - 絞り込み中は、keepScroll なら読み込み済みの先頭部分を、無ければ先頭の 1 ページを読み直す（従来どおり）
-  const loadMails = (opts?: { keepScroll?: boolean; reset?: boolean }) => {
+  // - reset: フォルダ/アカウント切替・絞り込みの変更。先頭の 1 ページを読み、先頭に戻す
+  // - それ以外（操作・同期のあと）: 見えている範囲を読み直し、位置はそのまま
+  const loadMails = (opts?: { reset?: boolean }) => {
     const token = ++loadTokenRef.current;
     inFlightRef.current = new Set();
     const reset = opts?.reset ?? false;
-    const [start, end] = reset
-      ? [0, PAGE_SIZE]
-      : timelineModeRef.current
-        ? visibleRangeRef.current
-        : [0, opts?.keepScroll ? Math.max(PAGE_SIZE, loadedPrefix(slotsRef.current)) : PAGE_SIZE];
+    const [start, end] = reset ? [0, PAGE_SIZE] : visibleRangeRef.current;
+    const filter = filterRef.current;
     return Promise.all([
-      threadDayCounts(queryAccount, folder),
-      threadList(queryAccount, folder, Math.max(1, end - start), start),
+      threadDayCounts(queryAccount, folder, filter),
+      threadList(queryAccount, folder, Math.max(1, end - start), start, filter),
     ])
       .then(([counts, rows]) => {
         if (loadTokenRef.current !== token) return;
@@ -720,7 +722,7 @@ export function MailboxView({
         if (reset) listRef.current?.scrollTo({ top: 0 });
         // 未読の数は一覧の表示を待たせない（件数と一緒に待つと、その分だけ一覧が遅れる）。
         // 投げっぱなし: 読み直しが重なったら、古い結果は token で捨てる。
-        threadDayUnread(queryAccount, folder)
+        threadDayUnread(queryAccount, folder, filter)
           .then((unread) => {
             if (loadTokenRef.current === token) setDays((prev) => withUnread(prev, unread));
           })
@@ -729,56 +731,17 @@ export function MailboxView({
       .catch(() => undefined);
   };
 
-  // 絞り込み中: 続きを読み込んで末尾に追加（先頭から途切れずに読んだ部分の次のページ）。
-  const loadMore = () => {
-    if (selected == null || searchMode) return;
-    const prefix = loadedPrefix(slotsRef.current);
-    if (prefix >= slotsRef.current.length) return;
-    requestRange(prefix, prefix + PAGE_SIZE);
-  };
-
-  // 一覧のスクロール: 絞り込み中は続きの自動読み込み（つまみのときは下の effect が止まった場所を読む）。
-  const onListScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    if (timelineMode) return;
-    const el = e.currentTarget;
-    if (el.scrollHeight - el.scrollTop - el.clientHeight < 400) loadMore();
-  };
-
-  // 自動追い読み込み: フィルタ絞り込みは前段でクライアント側適用のため、読み込み済みページ内の
-  // 一致が数件だと一覧がスクロール可能にならない。すると続きを読む「きっかけ」（スクロール）が
-  // 起きず、少数の一致だけ表示して止まって見える（ウィンドウを小さくすると溢れてスクロールでき、
-  // 続きが読める、という回避挙動になっていた）。ここではビューポートが埋まる＝スクロール可能に
-  // なるまで、上限（AUTO_FILL_CAP 件）まで次ページを自動で読み足す。内容量・ウィンドウ/サイドバー
-  // 幅の変化のたびに scrollHeight を実測して再判定する。上限超過後は通常のスクロールで続きを読む。
-  // つまみのとき（絞り込み無し）は枠が全期間ぶんあるので要らない。
+  // 絞り込みを変えたら、絞り込んだ一覧を先頭から読み直す（件数・枠・未読もその条件で作り直す）。
+  // 最初の描画では読まない（下のアカウント/フォルダの effect が読む）。
+  const filterKey = JSON.stringify(threadFilter);
+  const filterKeyRef = useRef(filterKey);
   useEffect(() => {
-    const el = listRef.current;
-    if (!el || timelineMode) return;
-    const fill = () => {
-      if (searchMode || !hasMore) return;
-      if (loadedPrefix(slotsRef.current) >= AUTO_FILL_CAP) return; // 一気読みの安全弁（以降は手動スクロール）
-      if (el.clientHeight <= 0) return; // 未レイアウト時は判定しない
-      if (el.scrollHeight <= el.clientHeight + 1) loadMore(); // まだスクロールできない＝続きを読む
-    };
-    fill();
-    const ro = new ResizeObserver(fill);
-    ro.observe(el);
-    return () => ro.disconnect();
+    if (filterKeyRef.current === filterKey) return;
+    filterKeyRef.current = filterKey;
+    if (selected != null) void loadMails({ reset: true });
+    // 条件が変わったときだけ（loadMails は ref と selected/folder だけを見る）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    slots,
-    searchResults,
-    hasMore,
-    searchMode,
-    filters,
-    filterInvert,
-    dateFilter,
-    tagFilter,
-    folder,
-    selected,
-    timelineMode,
-    collapsed,
-  ]);
+  }, [filterKey]);
 
   useEffect(() => {
     setOpened(null);
@@ -819,10 +782,22 @@ export function MailboxView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openRequest]);
 
+  // 一覧の絞り込み述語（下の passesFilters）。更新で条件から外れた行を抜くのに使う（コールバックからも
+  // 最新の条件を見られるよう ref に置く）。
+  const passesFiltersRef = useRef<(m: ThreadListItem) => boolean>(() => true);
+  const keepMatching =
+    (update: (list: ThreadListItem[]) => ThreadListItem[]) => (list: ThreadListItem[]) => {
+      const next = update(list);
+      return filterRef.current == null ? next : next.filter((m) => passesFiltersRef.current(m));
+    };
+
   // 通常一覧・検索結果の両方へ同じ更新（既読/スター/削除/タグ）を反映する。
   // 一覧から外れた行（削除・移動）は枠から抜いて詰め、日ごとの件数も減らす（DB 側でも消えるので、
   // 後ろの offset もそのまま揃う）。
-  const updateLists = (fn: (list: ThreadListItem[]) => ThreadListItem[]) => {
+  // 絞り込み中は、更新で条件から外れた行（スターを外した・タグを外した 等）も抜く。DB も同じ値になるので、
+  // 抜いたあとの件数と OFFSET は DB で絞った一覧と揃ったまま（今までどおり、その場で一覧から消える）。
+  const updateLists = (update: (list: ThreadListItem[]) => ThreadListItem[]) => {
+    const fn = keepMatching(update);
     const before = slotsRef.current;
     const { slots: next, removed } = updateLoaded(before, fn);
     slotsRef.current = next;
@@ -840,8 +815,9 @@ export function MailboxView({
     const t = activeReadRef.current;
     if (!t) return;
     activeReadRef.current = null;
-    const mark = (prev: ThreadListItem[]) =>
-      prev.map((m) => (m.id === t.rowId ? { ...m, is_read: true, unread_count: 0 } : m));
+    const mark = keepMatching((prev: ThreadListItem[]) =>
+      prev.map((m) => (m.id === t.rowId ? { ...m, is_read: true, unread_count: 0 } : m))
+    );
     const before = slotsRef.current;
     const next = updateLoaded(before, mark).slots;
     slotsRef.current = next;
@@ -849,6 +825,8 @@ export function MailboxView({
     setDays((prev) => retallyDays(prev, before, next, []));
     setSearchResults(mark);
     mailSetRead(t.ids, true).catch(() => undefined);
+    // keepMatching は ref だけを見る。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // スレッドを閉じた（opened=null）ら既読化。別スレッドへの切替は openMail 側で処理する。
   useEffect(() => {
@@ -867,7 +845,7 @@ export function MailboxView({
       const stored = (e as CustomEvent<{ stored?: number }>).detail?.stored;
       if (!shouldRefreshOnSync(stored)) return;
       setSyncTick((n) => n + 1);
-      if (!syncing) loadMails({ keepScroll: true });
+      if (!syncing) loadMails();
     };
     window.addEventListener(MAIL_SYNCED_EVENT, onSynced);
     return () => window.removeEventListener(MAIL_SYNCED_EVENT, onSynced);
@@ -885,7 +863,7 @@ export function MailboxView({
       if (timer != null) window.clearTimeout(timer);
       timer = window.setTimeout(() => {
         timer = null;
-        void loadMails({ keepScroll: true });
+        void loadMails();
       }, LISTED_RELOAD_DELAY_MS);
     });
     return () => {
@@ -900,7 +878,7 @@ export function MailboxView({
   // 同じ。下書きフォルダを表示中でも見えるように）。送った分は "sync:sent" でも届く。
   useEffect(() => {
     if (selected == null) return;
-    const unlisten = listen(COMPOSE_WINDOW_DONE_EVENT, () => void loadMails({ keepScroll: true }));
+    const unlisten = listen(COMPOSE_WINDOW_DONE_EVENT, () => void loadMails());
     return () => void unlisten.then((off) => off());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, folder]);
@@ -1009,7 +987,7 @@ export function MailboxView({
       }
       setStatus(t('mailbox.result', { fetched, stored }));
       // 手動同期後も読み込み済みの位置を保つ（先頭ページへ巻き戻さない）。
-      await loadMails({ keepScroll: true });
+      await loadMails();
       if (shouldRefreshOnSync(stored)) setSyncTick((n) => n + 1);
     } catch (e) {
       setStatus('✕ ' + String(e));
@@ -1143,7 +1121,7 @@ export function MailboxView({
       /* noop */
     }
     // DB 全体へ適用したときは、表示中の窓を DB の実状態に合わせて取り直す。
-    if (wasAll) await loadMails({ keepScroll: true });
+    if (wasAll) await loadMails();
   };
   const actStar = async (value: boolean) => {
     // スターはスレッド全体に効かせる（表示も会話単位で集約）。代表メールだけに付けると
@@ -1157,7 +1135,7 @@ export function MailboxView({
     } catch {
       /* noop */
     }
-    if (wasAll) await loadMails({ keepScroll: true });
+    if (wasAll) await loadMails();
   };
   // 削除・復元などが失敗したときの共通後始末。原因をトーストで知らせ、楽観更新で消した行を
   // 一覧から復帰させる（黙って握り潰すと「ボタンが効かない」ように見えるため）。
@@ -1411,21 +1389,18 @@ export function MailboxView({
         : matchesFilters(m, filters);
     return togglePass && matchesDate(m.date, dateFilter) && matchesTags(m.tag_ids, tagFilter);
   };
-  // 検索モードでは FTS 結果を、絞り込み中は読み込み済み一覧を対象に、絞り込みを重ねて表示する。
-  // 絞り込み中は先頭から途切れずに読んだ部分だけ（上から順に読み足す）。つまみのときは枠をそのまま並べる。
-  const filteredRows = timelineMode
-    ? []
-    : (searchMode ? searchResults : mails.slice(0, loadedPrefix(slots))).filter(passesFilters);
+  // 検索モードでは FTS 結果に絞り込みを重ねて表示する（検索結果は全部手元にあるので、画面側で絞る）。
+  // それ以外は DB で絞った枠をそのまま並べる。
+  const filteredRows = searchMode ? searchResults.filter(passesFilters) : [];
+  passesFiltersRef.current = passesFilters;
 
   // 日の見出しと畳み（docs/MAIL_LIST_TIMELINE.md §6。畳んだ日は collapsed）。
-  // つまみのときは DB の日ごとの件数、絞り込み中は手元の行を日ごとに数える。検索は関連順なので見出しを置かない。
+  // つまみのときは DB の日ごとの件数（絞り込み中も DB で絞った件数）。検索は関連順なので見出しを置かない。
   const timelineLayout = useMemo(
     () => dayLayout(days, collapsed, slots.length),
     [days, collapsed, slots.length]
   );
-  const listLayout = timelineMode
-    ? timelineLayout
-    : dayLayout(searchMode ? [] : daysOfRows(filteredRows), collapsed, filteredRows.length);
+  const listLayout = timelineMode ? timelineLayout : dayLayout([], collapsed, filteredRows.length);
   const layoutRef = useRef(listLayout);
   layoutRef.current = listLayout;
   // 見えている（開いている日の）読み込み済みの行。矢印キー・範囲選択・全選択はここから引く。
@@ -1540,7 +1515,8 @@ export function MailboxView({
   const listScrollTop = rowVirtualizer.scrollOffset ?? 0;
   const topRow = rowVirtualizer.getVirtualItems().find((v) => v.end > listScrollTop)?.index;
   const viewOffset = topRow == null ? null : slotAtRow(listLayout, topRow);
-  // つまみを出すのは、絞り込み無し・日付の分かるスレッドがある・一覧がスクロールできるとき。
+  // つまみを出すのは、検索中でない・日付の分かるスレッドがある・一覧がスクロールできるとき
+  // （絞り込み中も、件数と跳び先が絞った一覧と揃うので出す）。
   // 畳んだ日があれば、一覧が画面に収まっていても出す（畳んだ日へ飛べるように）。
   const showScrubber =
     timelineMode &&
@@ -1742,15 +1718,14 @@ export function MailboxView({
   };
 
   // 「フォルダ内の一致する全件」を選択する（表示範囲＝読み込み済みではなく DB 全体が対象）。
-  // 現在のアカウント/フォルダの全スレッド代表を取得し、表示中と同じ絞り込みを適用して一致行を
+  // 現在のアカウント/フォルダの、表示中と同じ絞り込みに一致する全スレッド代表を DB から引いて
   // すべて選択する。email_ids も保持し、既読/削除/迷惑/タグをスレッド全体へ適用できるようにする。
   const selectAllMatching = async () => {
     if (searchMode || selected == null) return;
     setSelectingAll(true);
     try {
       // limit は実質無制限（全代表を一括取得）。offset 0 から引く。
-      const all = await threadList(queryAccount, folder, 1_000_000, 0);
-      const matched = all.filter(passesFilters);
+      const matched = await threadList(queryAccount, folder, 1_000_000, 0, filterRef.current);
       allMatchRowsRef.current = matched;
       setSelectedIds(new Set(matched.map((m) => m.id)));
       setMatchCount(matched.length);
@@ -2015,7 +1990,7 @@ export function MailboxView({
         />
         <FolderIcons value={folder} onChange={setFolder} />
         {/* 迷惑登録の矛盾（住所録/グリーンなのに迷惑）を知らせる情報アイコン。矛盾が無ければ非表示。 */}
-        <SpamConflictAlert onResolved={() => loadMails({ keepScroll: true })} />
+        <SpamConflictAlert onResolved={() => loadMails()} />
         <Tooltip label={anyOpen ? t('mailbox.foldAll') : t('mailbox.unfoldAll')}>
           <button
             onClick={toggleAllDays}
@@ -2154,7 +2129,7 @@ export function MailboxView({
           <TimelineScrubber days={days} viewOffset={viewOffset} onJump={jumpToOffset} />
         )}
         <div className="relative h-full min-w-0 flex-1">
-          <div ref={listRef} className="h-full overflow-y-auto" onScroll={onListScroll}>
+          <div ref={listRef} className="h-full overflow-y-auto">
             {rowCount === 0 ? (
               <div className="p-2">
                 <div className="px-2 py-3 text-sm text-white/50">
@@ -2212,12 +2187,6 @@ export function MailboxView({
                   );
                 })}
               </ul>
-            )}
-            {/* 続きあり: スクロールで追加読み込み。表示中/全スレッド数を出す（あとどれくらいか分かる）。 */}
-            {!searchMode && !timelineMode && hasMore && visibleMails.length > 0 && (
-              <div className="px-2 py-3 text-center text-xs text-white/35">
-                {t('mailbox.loadedOf', { shown: loadedPrefix(slots), total: slots.length })}
-              </div>
             )}
           </div>
           {showPinned && pinnedDay != null && (

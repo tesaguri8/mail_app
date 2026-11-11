@@ -912,7 +912,6 @@
       "retrySoon": " · Next automatic try shortly"
     },
     "allAccounts": "All accounts",
-    "loadedOf": "Showing {{shown}} / {{total}} (scroll for more)",
     "dayDate": "{{weekday}}, {{monthShort}} {{day}}",
     "dayDateYear": "{{weekday}}, {{monthShort}} {{day}}, {{year}}",
     "dayCount_one": "{{count}} thread",

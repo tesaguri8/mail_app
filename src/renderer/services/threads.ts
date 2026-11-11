@@ -3,13 +3,23 @@ import type { ThreadView } from '@bindings/ThreadView';
 import type { ThreadListItem } from '@bindings/ThreadListItem';
 import type { ThreadDayCount } from '@bindings/ThreadDayCount';
 import type { ThreadDayUnread } from '@bindings/ThreadDayUnread';
+import type { ThreadFilter } from '@bindings/ThreadFilter';
 
 // スレッド単位のメール一覧（代表＝フォルダ内最新＋「N通」件数）。docs/THREADING.md §5。
 // accountId が null なら全アカウント横断。offset でページング。
-export const threadList = (accountId: number | null, folder: string, limit: number, offset = 0) =>
+// filter は画面の絞り込み（トグル・期間・タグ。null なら絞らない）。日ごとの件数・未読にも同じものを渡すと、
+// 件数の累計がそのまま絞り込んだ一覧の offset になる（docs/MAIL_LIST_TIMELINE.md §3）。
+export const threadList = (
+  accountId: number | null,
+  folder: string,
+  limit: number,
+  offset = 0,
+  filter: ThreadFilter | null = null
+) =>
   invoke<ThreadListItem[]>('thread_list', {
     accountId: accountId ?? null,
     folder,
+    filter,
     limit,
     offset,
   });
@@ -44,11 +54,19 @@ export const messageReassign = (emailId: number, targetThread: number) =>
 export const threadRebuild = (accountId: number) => invoke<void>('thread_rebuild', { accountId });
 
 // フォルダ内のスレッドを、代表メールの日付（端末ローカル）ごとに数える（メール一覧の日付のつまみ用）。
-// 並びと絞り込みは threadList と同じで、累計がそのまま一覧の offset になる。docs/MAIL_LIST_TIMELINE.md。
-export const threadDayCounts = (accountId: number | null, folder: string) =>
-  invoke<ThreadDayCount[]>('thread_day_counts', { accountId: accountId ?? null, folder });
+// 並びと絞り込み（filter）は threadList と同じで、累計がそのまま一覧の offset になる。docs/MAIL_LIST_TIMELINE.md。
+export const threadDayCounts = (
+  accountId: number | null,
+  folder: string,
+  filter: ThreadFilter | null = null
+) =>
+  invoke<ThreadDayCount[]>('thread_day_counts', { accountId: accountId ?? null, folder, filter });
 
 // 日ごとの未読のあるスレッドの数（一覧の日の見出し用・未読のある日だけ）。一覧を出したあとで引く
 // （件数と一緒に待つと一覧の表示が遅れる）。docs/MAIL_LIST_TIMELINE.md §6。
-export const threadDayUnread = (accountId: number | null, folder: string) =>
-  invoke<ThreadDayUnread[]>('thread_day_unread', { accountId: accountId ?? null, folder });
+export const threadDayUnread = (
+  accountId: number | null,
+  folder: string,
+  filter: ThreadFilter | null = null
+) =>
+  invoke<ThreadDayUnread[]>('thread_day_unread', { accountId: accountId ?? null, folder, filter });

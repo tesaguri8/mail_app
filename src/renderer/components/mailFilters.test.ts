@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { matchesFilters, matchesNoneOfFilters, senderTone } from './mailFilters';
+import { matchesFilters, matchesNoneOfFilters, senderTone, toThreadFilter } from './mailFilters';
 
 /** 試験用の一覧行。既定は「既読・スター無し・知り合いでない・添付なし」。 */
 const row = (over: Partial<Parameters<typeof matchesFilters>[0]> = {}) => ({
@@ -102,5 +102,34 @@ describe('senderTone（差出人の表示名の色）', () => {
   });
   it('宛先を表示する行（送信済み・下書き）には付けない', () => {
     expect(senderTone(row({ is_replied: true, is_known: true }), true)).toBeNull();
+  });
+});
+
+describe('toThreadFilter（DB に渡す絞り込み）', () => {
+  const none = new Set<number>();
+  it('何も絞らなければ null（flag だけでも絞らない）', () => {
+    expect(toThreadFilter(f(), false, null, none)).toBeNull();
+    expect(toThreadFilter(f('flag'), true, null, none)).toBeNull();
+  });
+  it('トグルはそのまま、flag は落とす。反転は条件があるときだけ', () => {
+    expect(toThreadFilter(f('star', 'flag', 'known'), true, null, none)).toEqual({
+      toggles: ['star', 'known'],
+      invert: true,
+      date: null,
+      tag_ids: [],
+    });
+    // 期間・タグだけなら反転は効かない（画面の反転ボタンも押せない）
+    expect(toThreadFilter(f(), true, null, new Set([3, 5]))).toEqual({
+      toggles: [],
+      invert: false,
+      date: null,
+      tag_ids: [3, 5],
+    });
+  });
+  it('期間は端が無くても渡す（日時の無いメールを外すため）', () => {
+    expect(toThreadFilter(f(), false, { since: null, until: null }, none)?.date).toEqual({
+      since: null,
+      until: null,
+    });
   });
 });

@@ -4,25 +4,42 @@
 //! その並びの式（を端末ローカルの日付にしたもの）から取るので、同じ日のスレッドは一覧の中で連続し、
 //! **日ごとの件数の累計が、そのまま一覧の `OFFSET` になる**（試験 `day_offsets_match_list_paging`）。
 
-use rusqlite::params;
+use rusqlite::types::Value;
 
 use super::emails::folder_predicate;
 use super::thread_activity::activity_ts;
+use super::thread_filter::FilterSql;
 use super::Store;
-use crate::models::{ThreadDayCount, ThreadDayUnread};
+use crate::models::{ThreadDayCount, ThreadDayUnread, ThreadFilter};
 
 impl Store {
-    /// フォルダ内のスレッドを、会話の最後のやり取りの日付（端末ローカル）ごとに数える。
-    ///
-    /// 絞り込み（アカウント・フォルダ・迷惑の隔離・代表フラグ）は `list_threads` と同じ。
-    /// 並びは一覧と同じ新しい順で、日時の無いスレッド（`date_key` = None）は最後に 1 つにまとめる。
-    /// `account_id` が None なら全アカウント横断。
-    ///
-    /// ローカル日付は SQLite の `'localtime'`（このプロセスの時間帯＝WebView と同じ機械の設定）で出す。
+    /// 絞り込み無しの `thread_day_counts_filtered`（試験用）。
+    #[cfg(test)]
     pub fn thread_day_counts(
         &self,
         account_id: Option<i64>,
         folder: &str,
+    ) -> rusqlite::Result<Vec<ThreadDayCount>> {
+        self.thread_day_counts_filtered(account_id, folder, &ThreadFilter::default())
+    }
+
+    /// フォルダ内のスレッドを、会話の最後のやり取りの日付（端末ローカル）ごとに数える。
+    ///
+    /// 絞り込み（アカウント・フォルダ・迷惑の隔離・代表フラグ・画面のトグル/期間/タグ `filter`）は
+    /// `list_threads_filtered` と同じで、同じ `filter` なら累計がそのまま一覧の OFFSET になる
+    /// （docs/MAIL_LIST_TIMELINE.md §3）。
+    /// 並びは一覧と同じ新しい順で、日時の無いスレッド（`date_key` = None）は最後に 1 つにまとめる。
+    /// `account_id` が None なら全アカウント横断。
+    ///
+    /// ローカル日付は SQLite の `'localtime'`（このプロセスの時間帯＝WebView と同じ機械の設定）で出す。
+    ///
+    /// # Errors
+    /// 問い合わせに失敗したとき。
+    pub fn thread_day_counts_filtered(
+        &self,
+        account_id: Option<i64>,
+        folder: &str,
+        filter: &ThreadFilter,
     ) -> rusqlite::Result<Vec<ThreadDayCount>> {
         // 参照専用接続（一覧の読み取りと同じく、書き込みに待たされない）。
         let conn = self.read_conn.lock().unwrap();
@@ -31,15 +48,17 @@ impl Store {
         } else {
             ""
         };
+        let fs = FilterSql::build(&conn, filter, folder, "emails.", 3)?;
         // ORDER BY は一覧の並び（最後のやり取りの新しい順。NULL は最後）に合わせる。
         let sql = format!(
             "SELECT date({act}, 'unixepoch', 'localtime') AS d, count(*)
              FROM emails
-             WHERE {fp} {acct} AND is_folder_rep = 1
+             WHERE {fp} {acct} AND is_folder_rep = 1{filter}
              GROUP BY d
              ORDER BY d IS NULL, d DESC",
             act = activity_ts(""),
             fp = folder_predicate(folder, "", "?1"),
+            filter = fs.clause,
         );
         let mut stmt = conn.prepare(&sql)?;
         let map = |r: &rusqlite::Row| -> rusqlite::Result<ThreadDayCount> {
@@ -48,7 +67,21 @@ impl Store {
                 count: r.get::<_, i64>(1)? as i32,
             })
         };
-        query_by_account(&mut stmt, folder, account_id, map)
+        let binds = fs.binds(vec![Value::from(folder.to_owned())], account_id);
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(binds), map)?
+            .collect();
+        rows
+    }
+
+    /// 絞り込み無しの `thread_day_unread_filtered`（試験用）。
+    #[cfg(test)]
+    pub fn thread_day_unread(
+        &self,
+        account_id: Option<i64>,
+        folder: &str,
+    ) -> rusqlite::Result<Vec<ThreadDayUnread>> {
+        self.thread_day_unread_filtered(account_id, folder, &ThreadFilter::default())
     }
 
     /// フォルダ内の未読のあるスレッドを、会話の最後のやり取りの日付（端末ローカル）ごとに数える（未読のある日だけ）。
@@ -57,12 +90,19 @@ impl Store {
     /// 未読が 1 通でもある）と同じ。代表の行ごとに未読を探すと全スレッドぶん引くことになり遅い
     /// （`[実測]` vaio の約 2.8 万スレッドで件数だけの 4〜5 倍）ので、**未読のメールから逆に引く**:
     /// 未読だけの部分索引（`idx_emails_unread`）で未読のスレッドを集め、その代表の最後のやり取りの日付で数える。
-    pub fn thread_day_unread(
+    ///
+    /// `filter` は一覧と同じ絞り込み（絞り込んだスレッドのうち、未読のあるものを数える）。
+    ///
+    /// # Errors
+    /// 問い合わせに失敗したとき。
+    pub fn thread_day_unread_filtered(
         &self,
         account_id: Option<i64>,
         folder: &str,
+        filter: &ThreadFilter,
     ) -> rusqlite::Result<Vec<ThreadDayUnread>> {
         let conn = self.read_conn.lock().unwrap();
+        let fs = FilterSql::build(&conn, filter, folder, "r.", 3)?;
         let (acct_t, acct) = if account_id.is_some() {
             ("AND t.account_id = ?2", "AND account_id = ?2")
         } else {
@@ -80,13 +120,14 @@ impl Store {
                  UNION
                  SELECT id FROM emails
                  WHERE {fp} {acct} AND is_read = 0 AND logical_thread_id IS NULL AND is_folder_rep = 1
-             )
+             ){filter}
              GROUP BY d
              ORDER BY d IS NULL, d DESC",
             fp = folder_predicate(folder, "", "?1"),
             fp_t = folder_predicate(folder, "t.", "?1"),
             fp_r2 = folder_predicate(folder, "r2.", "?1"),
             act = activity_ts("r."),
+            filter = fs.clause,
         );
         let mut stmt = conn.prepare(&sql)?;
         let map = |r: &rusqlite::Row| -> rusqlite::Result<ThreadDayUnread> {
@@ -95,24 +136,11 @@ impl Store {
                 unread: r.get::<_, i64>(1)? as i32,
             })
         };
-        query_by_account(&mut stmt, folder, account_id, map)
-    }
-}
-
-/// `?1` = フォルダ・`?2` = アカウント（あれば）で問い合わせを流す。
-fn query_by_account<T>(
-    stmt: &mut rusqlite::Statement<'_>,
-    folder: &str,
-    account_id: Option<i64>,
-    map: impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
-) -> rusqlite::Result<Vec<T>> {
-    match account_id {
-        Some(a) => stmt
-            .query_map(params![folder, a], map)?
-            .collect::<rusqlite::Result<_>>(),
-        None => stmt
-            .query_map(params![folder], map)?
-            .collect::<rusqlite::Result<_>>(),
+        let binds = fs.binds(vec![Value::from(folder.to_owned())], account_id);
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(binds), map)?
+            .collect();
+        rows
     }
 }
 
@@ -120,6 +148,7 @@ fn query_by_account<T>(
 mod tests {
     use super::*;
     use crate::services::store::emails::{insert_email, NewEmail};
+    use rusqlite::params;
 
     fn test_store() -> Store {
         let store = Store::open_in_memory_for_test();

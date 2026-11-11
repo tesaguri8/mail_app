@@ -854,6 +854,56 @@ pub struct ThreadDayUnread {
     pub unread: i32,
 }
 
+/// スレッド一覧の絞り込みトグル（メール画面のツールバー）。docs/FILTERING.md §2。
+/// 要再確認（flag）は印を付ける手段が無いので、まだ絞り込みに使わない（画面側でも送らない）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub enum ThreadToggle {
+    /// このフォルダのスレッドに未読がある。
+    Unread,
+    /// 代表メールに本来の添付（本文に埋め込んだ画像でないもの）がある。
+    Attachment,
+    /// スレッドのどれか 1 通にスターがある。
+    Star,
+    /// 差出人がグリーン（住所録の本人か、認定ドメイン）。
+    Green,
+    /// 差出人が住所録のお気に入り。
+    Vip,
+    /// 差出人が住所録にいる。
+    Known,
+    /// 差出人に自分から送ったことがある。
+    Replied,
+}
+
+/// 期間の絞り込み（会話の最後のやり取りの時刻、epoch 秒）。`since` 以上・`until` 未満。
+/// どちらも None でも、日時の無いスレッドは外す（画面側の `matchesDate` と同じ）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ThreadDateBounds {
+    // epoch 秒は JS の number で正確に表せる（2^53 未満）ので bigint にしない。
+    #[ts(type = "number | null")]
+    pub since: Option<i64>,
+    #[ts(type = "number | null")]
+    pub until: Option<i64>,
+}
+
+/// スレッド一覧の絞り込み（`thread_list` / `thread_day_counts` / `thread_day_unread` で共通）。
+/// 3 つに同じ値を渡すと、日ごとの件数の累計がそのまま絞り込んだ一覧の OFFSET になる。
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ThreadFilter {
+    /// 選んだトグル（すべて満たす＝AND）。
+    pub toggles: Vec<ThreadToggle>,
+    /// トグルを反転する（選んだ条件の**どれにも当てはまらない**ものに絞る）。期間・タグには効かない。
+    pub invert: bool,
+    /// 期間（None なら絞らない）。
+    pub date: Option<ThreadDateBounds>,
+    /// タグ（代表メールがどれか 1 つを持つ＝OR。空なら絞らない）。
+    #[ts(type = "Array<number>")]
+    pub tag_ids: Vec<i64>,
+}
+
 /// 添付ファイル（一覧/ダウンロード状態）。
 /// `is_downloaded` が false のときは本体未取得（メタのみ）。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

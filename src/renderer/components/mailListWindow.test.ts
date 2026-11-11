@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { ThreadListItem } from '@bindings/ThreadListItem';
 import {
   dayLayout,
-  daysOfRows,
   emptySlots,
   fillSlots,
   ALL_FOLDED,
@@ -15,7 +14,6 @@ import {
   foldedDayOf,
   indexOfId,
   jumpRow,
-  loadedPrefix,
   loadedRows,
   pagesToLoad,
   retallyDays,
@@ -105,29 +103,6 @@ describe('toDayCounts / withUnread', () => {
   });
 });
 
-describe('daysOfRows', () => {
-  // 端末ローカルの日付にする（時間帯に依らず、その日の正午）
-  const at = (id: number, day: string | null, read = true): ThreadListItem => ({
-    ...row(id),
-    date: day ? new Date(`${day}T12:00:00`).toISOString() : null,
-    is_read: read,
-  });
-  it('手元の行を並び順のまま日ごとに数え、日時の無い行は直前の日に入れる', () => {
-    const rows = [
-      at(1, null),
-      at(2, '2026-11-06', false),
-      at(3, '2026-11-06'),
-      at(4, '2026-11-05', false),
-      at(5, null, false),
-    ];
-    expect(daysOfRows(rows)).toEqual([
-      { dateKey: '2026-11-06', count: 3, unread: 1 },
-      { dateKey: '2026-11-05', count: 2, unread: 2 },
-    ]);
-    expect(daysOfRows([at(1, null)])).toEqual([]);
-  });
-});
-
 describe('fillSlots / pagesToLoad', () => {
   it('飛んだ先のページだけを読み、読んだ位置に入れる', () => {
     let slots = emptySlots(250);
@@ -159,9 +134,8 @@ describe('fillSlots / pagesToLoad', () => {
     slots = fillSlots(slots, 2, [2, 3, 4].map(row));
     expect(slots.map((m) => m?.id ?? null)).toEqual([1, null, 2, 3, 4]);
   });
-  it('先頭から途切れずに読んだ件数と、読んだ行', () => {
+  it('読んだ行と、その位置', () => {
     const slots = fillSlots(fillSlots(emptySlots(6), 0, [1, 2].map(row)), 4, [5].map(row));
-    expect(loadedPrefix(slots)).toBe(2);
     expect(loadedRows(slots).map((m) => m.id)).toEqual([1, 2, 5]);
     expect(indexOfId(slots, 5)).toBe(4);
     expect(indexOfId(slots, 9)).toBe(-1);

@@ -12,6 +12,7 @@ fn frame(from: &str, date: Option<&str>, body: &str) -> UnseenQuote {
         subject: Some("スラブ案の見積り".into()),
         body: body.into(),
         quoted_in: 0,
+        root_of_ref: None,
     }
 }
 

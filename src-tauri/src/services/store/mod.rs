@@ -20,6 +20,7 @@ mod google_accounts;
 mod greendomain;
 mod inferred_ids;
 mod migrations;
+pub mod missing_refs;
 mod org_contacts;
 mod org_tidy;
 mod organizations;

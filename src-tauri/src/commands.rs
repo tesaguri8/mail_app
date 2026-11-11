@@ -3270,6 +3270,65 @@ pub fn rebuild_plan(store: State<Store>, account_id: i64) -> Result<RebuildPlan,
     })
 }
 
+/// 会話の References にあって手元に無いメールを、サーバーで Message-ID から探して取り込む
+/// （docs/THREADING.md §5）。画面が会話を開き、`ThreadView.missing_refs` に探す時期の ID があるとき
+/// 1 回だけ呼ぶ。同じ会話の探しが走っていれば何もしない。後退中（門が断った）なら探さずに 0 を返す
+/// （次に開いたときに探す）。戻り値は取り込んだ通数（1 以上なら画面は会話を読み直す）。
+#[tauri::command]
+pub async fn thread_fetch_missing(
+    app: AppHandle,
+    store: State<'_, Store>,
+    pool: State<'_, ImapPool>,
+    email_id: i64,
+) -> Result<u32, String> {
+    let Some(view) = store.thread_view(email_id).map_err(|e| e.to_string())? else {
+        return Ok(0);
+    };
+    let due = crate::services::store::missing_refs::due_ids(&view);
+    let (Some(first), false) = (view.messages.first(), due.is_empty()) else {
+        return Ok(0);
+    };
+    let Some(_running) = imap_sync::ref_fetch::InFlight::try_begin(i64::from(view.thread.id))
+    else {
+        return Ok(0);
+    };
+    let account_id = i64::from(first.account_id);
+    let (email, login_user, host, port) = store
+        .get_account_imap(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "アカウントが見つかりません".to_string())?;
+    let service = app.config().identifier.clone();
+    let password = keyring::Entry::new(&service, &email)
+        .and_then(|e| e.get_password())
+        .map_err(|e| format!("資格情報を取得できません: {e}"))?;
+    let slot = pool.fetch_slot(account_id);
+    let db_path = store.path();
+    let now = chrono::Utc::now().timestamp();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        imap_sync::ref_fetch::fetch_missing(
+            &db_path,
+            account_id,
+            &due,
+            &slot,
+            &host,
+            port,
+            &login_user,
+            &password,
+            now,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    match outcome {
+        Ok(o) => Ok(u32::try_from(o.found.len()).unwrap_or(u32::MAX)),
+        // 後退中で張らなかった・順番待ちを諦めた: 探さなかった ID は次に開いたときに探す。
+        Err(imap_sync::ref_fetch::RefFetchError::Connect(
+            ImapError::Backoff(_) | ImapError::Busy,
+        )) => Ok(0),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// 1通の全文をサーバーから再取得して本文キャッシュを復元する（要約保存の解除）。
 /// emails.uid で該当メッセージだけを取り直すので、アカウント全体の再同期は不要。
 /// 復元後の本文（body_compacted=false）を返す。

@@ -4,6 +4,7 @@ import {
   keepMatch,
   sameThreadView,
   scrollAfterRefresh,
+  shouldFetchMissingRefs,
   shouldRefreshOnSync,
 } from './conversationRefresh';
 
@@ -64,5 +65,23 @@ describe('keepMatch（検索の位置を保つ）', () => {
   });
   it('まだどれも見ていなければ最初の一致', () => {
     expect(keepMatch(0, 3)).toEqual({ idx: 1, total: 3 });
+  });
+});
+
+describe('shouldFetchMissingRefs（手元に無いメールを探しに行くか）', () => {
+  const withRefs = (states: ('due' | 'absent')[]): ThreadView =>
+    ({
+      ...view([1]),
+      missing_refs: states.map((state, i) => ({ message_id: `r${i}@x`, state })),
+    }) as unknown as ThreadView;
+
+  it('探す時期の ID があり、この画面でまだ探していなければ探す', () => {
+    expect(shouldFetchMissingRefs(withRefs(['absent', 'due']), new Set())).toBe(true);
+  });
+  it('探した会話・探す時期の ID が無い会話・読む前は探さない', () => {
+    expect(shouldFetchMissingRefs(withRefs(['due']), new Set([1]))).toBe(false);
+    expect(shouldFetchMissingRefs(withRefs(['absent']), new Set())).toBe(false);
+    expect(shouldFetchMissingRefs(withRefs([]), new Set())).toBe(false);
+    expect(shouldFetchMissingRefs(null, new Set())).toBe(false);
   });
 });

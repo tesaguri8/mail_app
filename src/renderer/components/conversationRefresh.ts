@@ -38,3 +38,18 @@ export function keepMatch(idx: number, total: number): { idx: number; total: num
   if (total <= 0) return { idx: 0, total: 0 };
   return { idx: Math.min(Math.max(idx, 1), total), total };
 }
+
+/**
+ * 会話の References にあって手元に無いメールを、サーバーへ探しに行くか（docs/THREADING.md §5）。
+ * まだ探していない（または 30 日後の探し直しの時期が来た）ものがあり、この画面で開いてから
+ * まだ探しに行っていない会話だけ。探すのはバックエンドが 1 会話 1 回に絞るが、画面からも
+ * 開き直しのたびに呼ばないようにする。
+ */
+export function shouldFetchMissingRefs(
+  view: ThreadView | null,
+  tried: ReadonlySet<number>
+): boolean {
+  return (
+    view != null && !tried.has(view.thread.id) && view.missing_refs.some((r) => r.state === 'due')
+  );
+}

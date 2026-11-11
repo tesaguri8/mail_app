@@ -339,6 +339,12 @@ const MIGRATIONS: &[Migration] = &[
         version: 72,
         sql: include_str!("migrations/0072_inferred_message_ids.sql"),
     },
+    Migration {
+        // 73 は会話の References にあって手元に無いメールを、サーバーへ探しに行った結果
+        // （会話を開いたときに 1 回だけ探し、見つからなかったことも覚える。docs/THREADING.md §5）。
+        version: 73,
+        sql: include_str!("migrations/0073_ref_lookups.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

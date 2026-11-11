@@ -570,6 +570,21 @@ impl Store {
         }
         // 同じ枠は会話の中で 1 回だけにし、日時のある枠は自分の日時の位置（その後の最初のメールの上）へ移す。
         super::unseen_frames::arrange(&mut messages);
+        // ④ References にあって手元に無いメール（欠けた ID）。会話の根が欠けていれば、いちばん古い枠を
+        // 根とみなす。根を探しに行って取り込んだら、根の枠をふつうのバブルに置き換える。
+        let refs = super::missing_refs::collect(conn, &messages)?;
+        let account_id = messages.first().map_or(0, |m| i64::from(m.account_id));
+        if let Some(root) = refs.root.as_deref() {
+            let missing = refs.root_is_missing();
+            let fetched = !missing && super::missing_refs::was_fetched(conn, account_id, root)?;
+            super::unseen_frames::bind_root(&mut messages, root, missing, fetched);
+        }
+        let missing_refs = super::missing_refs::states(
+            conn,
+            account_id,
+            &refs.missing,
+            chrono::Utc::now().timestamp(),
+        )?;
         // 集計はメッセージから算出（保存値に依存しない）。
         let message_count = messages.len() as i32;
         let unread_count = messages.iter().filter(|m| !m.is_read).count() as i32;
@@ -597,7 +612,11 @@ impl Store {
             participants,
             is_user_renamed,
         };
-        Ok(Some(ThreadView { thread, messages }))
+        Ok(Some(ThreadView {
+            thread,
+            messages,
+            missing_refs,
+        }))
     }
 
     /// スレッドにアプリ独自タイトルを付ける（再件名）。

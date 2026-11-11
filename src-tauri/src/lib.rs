@@ -118,6 +118,7 @@ pub fn run() {
             commands::mail_reprocess,
             commands::rebuild_plan,
             commands::mail_refetch,
+            commands::thread_fetch_missing,
             commands::mail_attachments,
             commands::attachment_download,
             commands::attachment_view,

@@ -6,12 +6,7 @@ import type { ThreadDayUnread } from '@bindings/ThreadDayUnread';
 
 // スレッド単位のメール一覧（代表＝フォルダ内最新＋「N通」件数）。docs/THREADING.md §5。
 // accountId が null なら全アカウント横断。offset でページング。
-export const threadList = (
-  accountId: number | null,
-  folder: string,
-  limit: number,
-  offset = 0,
-) =>
+export const threadList = (accountId: number | null, folder: string, limit: number, offset = 0) =>
   invoke<ThreadListItem[]>('thread_list', {
     accountId: accountId ?? null,
     folder,
@@ -22,6 +17,11 @@ export const threadList = (
 // 指定メールが属する論理スレッドの会話（時系列・古い順）を取得する。
 // 未割当の旧データはバックエンドが遅延割当する（docs/THREADING.md §5）。
 export const threadView = (emailId: number) => invoke<ThreadView>('thread_view', { emailId });
+
+// 会話の References にあって手元に無いメールを、サーバーで探して取り込む（開いたときに 1 回）。
+// 取り込んだ通数を返す（1 以上なら会話を読み直す）。docs/THREADING.md §5。
+export const threadFetchMissing = (emailId: number) =>
+  invoke<number>('thread_fetch_missing', { emailId });
 
 // スレッドにアプリ独自タイトルを付ける（再件名）。title=null で既定へ戻す。
 export const threadRename = (threadId: number, title: string | null) =>

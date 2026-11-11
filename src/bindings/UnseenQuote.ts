@@ -43,4 +43,9 @@ body: string,
  * この引用を含んでいたメールの id。会話ビューでは、日時のある枠を自分の日時の位置へ移すので、
  * 枠を載せたバブルと違うことがある（docs/THREADING.md §5）。
  */
-quoted_in: number, };
+quoted_in: number, 
+/**
+ * 会話の根（References の先頭）が手元に無く、この枠がその根とみなせるとき、その Message-ID
+ * （山括弧なし）。日時のある枠のうち、会話のどのメールよりも古いものに付ける（docs/THREADING.md §5）。
+ */
+root_of_ref: string | null, };

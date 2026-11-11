@@ -35,6 +35,7 @@ const quote = (body: string): UnseenQuote => ({
   guessed: false,
   guess_depth: null,
   quoted_in: 1,
+  root_of_ref: null,
 });
 
 describe('UnseenQuotes の本文のリンク', () => {

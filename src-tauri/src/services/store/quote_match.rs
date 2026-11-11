@@ -364,6 +364,7 @@ pub fn unseen_quotes(
                     subject: q.subject,
                     body: q.body,
                     quoted_in,
+                    root_of_ref: None,
                 });
             }
             continue;
@@ -400,6 +401,7 @@ pub fn unseen_quotes(
                     subject: q.subject,
                     body: q.body,
                     quoted_in,
+                    root_of_ref: None,
                 });
             }
             continue;
@@ -434,6 +436,7 @@ pub fn unseen_quotes(
             subject: q.subject,
             body: q.body,
             quoted_in,
+            root_of_ref: None,
         });
     }
     Ok(out)

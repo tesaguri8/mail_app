@@ -98,6 +98,8 @@ fn since_date(days: i64) -> String {
         .to_string()
 }
 
+pub mod ref_fetch;
+
 pub use super::imap_conn::{
     connect_login, connect_login_with, ImapError, ImapSession, ImapTimeouts, Urgency,
 };
@@ -231,6 +233,36 @@ fn scope_folders(
     }
 }
 
+/// フォルダ一覧の 1 行（名前と属性）。属性は `\Noselect` と、特殊用途など文字のまま届く Custom だけ持つ。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Listed {
+    name: String,
+    attrs: Vec<String>,
+}
+
+impl Listed {
+    fn from_name(n: &imap::types::Name) -> Self {
+        use imap::types::NameAttribute;
+        let attrs = n
+            .attributes()
+            .iter()
+            .filter_map(|a| match a {
+                NameAttribute::NoSelect => Some("\\Noselect".to_string()),
+                NameAttribute::Custom(c) => Some(c.to_string()),
+                _ => None,
+            })
+            .collect();
+        Self {
+            name: n.name().to_string(),
+            attrs,
+        }
+    }
+
+    fn has_attr(&self, attr: &str) -> bool {
+        self.attrs.iter().any(|a| a.eq_ignore_ascii_case(attr))
+    }
+}
+
 /// フォルダ一覧から該当メールボックス名を判定する。
 /// 1) 特殊用途属性（\Sent 等。RFC 6154 SPECIAL-USE。システム属性以外は Custom で来る）。
 /// 2) よくある名前（末端名 or フルネームで大小無視の一致）。
@@ -238,28 +270,23 @@ fn detect_mailbox<'a>(
     names: impl IntoIterator<Item = &'a imap::types::Name>,
     spec: &FolderSpec,
 ) -> Option<String> {
-    use imap::types::NameAttribute;
-    let list: Vec<&imap::types::Name> = names.into_iter().collect();
-    for n in &list {
-        let hit = n.attributes().iter().any(
-            |a| matches!(a, NameAttribute::Custom(c) if c.eq_ignore_ascii_case(spec.special_use)),
-        );
-        if hit {
-            return Some(n.name().to_string());
-        }
-    }
-    for n in &list {
-        let full = n.name();
-        let leaf = full.rsplit(['/', '.']).next().unwrap_or(full);
-        if spec
-            .names
-            .iter()
-            .any(|c| leaf.eq_ignore_ascii_case(c) || full.eq_ignore_ascii_case(c))
-        {
-            return Some(full.to_string());
-        }
-    }
-    None
+    let list: Vec<Listed> = names.into_iter().map(Listed::from_name).collect();
+    detect_listed(&list, spec).map(|i| list[i].name.clone())
+}
+
+/// [`detect_mailbox`] の本体（一覧の何番目か）。
+fn detect_listed(list: &[Listed], spec: &FolderSpec) -> Option<usize> {
+    list.iter()
+        .position(|n| n.has_attr(spec.special_use))
+        .or_else(|| {
+            list.iter().position(|n| {
+                let full = n.name.as_str();
+                let leaf = full.rsplit(['/', '.']).next().unwrap_or(full);
+                spec.names
+                    .iter()
+                    .any(|c| leaf.eq_ignore_ascii_case(c) || full.eq_ignore_ascii_case(c))
+            })
+        })
 }
 
 /// 実際に IMAP ログインを試す（認証の確認）。成功なら Ok。タイムアウトつき。

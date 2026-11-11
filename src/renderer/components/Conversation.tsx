@@ -37,7 +37,7 @@ import type { AttachmentSummary } from '@bindings/AttachmentSummary';
 import { mailGet, mailAttachments, mailRefetch } from '../services/mail';
 import { attachmentImage } from '../utils/imageCache';
 import { greenDomainAdd, greenDomainWarn } from '../services/green';
-import { threadRename, threadSplit, threadView } from '../services/threads';
+import { threadFetchMissing, threadRename, threadSplit, threadView } from '../services/threads';
 import { parseAddress } from '../utils/address';
 import { copyText } from '../utils/clipboard';
 import { getBubbleHtml, getInlineImages, PREFS_EVENT } from '../config/prefs';
@@ -59,7 +59,12 @@ import type { ImageAction } from './ImageActions';
 import { PrintMail } from './PrintMail';
 import { UnseenQuotes, visibleUnseenQuotes } from './UnseenQuotes';
 import { ContextMenu, type MenuItem } from './ContextMenu';
-import { keepMatch, sameThreadView, scrollAfterRefresh } from './conversationRefresh';
+import {
+  keepMatch,
+  sameThreadView,
+  scrollAfterRefresh,
+  shouldFetchMissingRefs,
+} from './conversationRefresh';
 import { LinkGuard } from './LinkGuard';
 import { linkTrust } from './linkTrust';
 import type { CalendarPanelInitial } from './CalendarPanel';
@@ -1129,6 +1134,22 @@ export function Conversation({
       /* 裏の読み直しの失敗は、今の表示のまま（次の合図でまた読む） */
     }
   }, [openedId]);
+  // References にあって手元に無いメールを、会話を開いたときに 1 回だけサーバーへ探しに行き、
+  // 取り込めたら読み直す（docs/THREADING.md §5）。失敗しても今の表示のまま（未受信の枠が残るだけ）。
+  const refsTried = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    if (!shouldFetchMissingRefs(view, refsTried.current) || !view) return;
+    refsTried.current.add(view.thread.id);
+    const forId = openedId;
+    threadFetchMissing(forId)
+      .then((n) => {
+        if (n > 0 && openedRef.current === forId) void refresh();
+      })
+      .catch(() => {
+        /* 探せなかった（資格情報なし等）: 今の表示のまま。探さなかった ID はバックエンドが覚えておらず、
+           この会話を次に別の画面で開いたときにまた探す */
+      });
+  }, [view, openedId, refresh]);
   const lastRefreshKey = useRef(refreshKey);
   useEffect(() => {
     if (lastRefreshKey.current === refreshKey) return;

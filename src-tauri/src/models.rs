@@ -759,6 +759,9 @@ pub struct UnseenQuote {
     /// この引用を含んでいたメールの id。会話ビューでは、日時のある枠を自分の日時の位置へ移すので、
     /// 枠を載せたバブルと違うことがある（docs/THREADING.md §5）。
     pub quoted_in: i32,
+    /// 会話の根（References の先頭）が手元に無く、この枠がその根とみなせるとき、その Message-ID
+    /// （山括弧なし）。日時のある枠のうち、会話のどのメールよりも古いものに付ける（docs/THREADING.md §5）。
+    pub root_of_ref: Option<String>,
 }
 
 /// 会話ビュー（スレッド情報＋時系列のメッセージ）。
@@ -768,6 +771,29 @@ pub struct ThreadView {
     pub thread: ThreadSummary,
     /// 時系列（古い順）のメッセージ。
     pub messages: Vec<ThreadMessage>,
+    /// 会話の References / In-Reply-To にあって手元に無い Message-ID（References の順）。
+    /// `Due` が 1 つでもあれば、画面は `thread_fetch_missing` で 1 回だけ探しに行く。
+    pub missing_refs: Vec<MissingRef>,
+}
+
+/// 会話の References にあって手元に無いメール 1 通（docs/THREADING.md §5）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct MissingRef {
+    /// Message-ID（山括弧なし）。
+    pub message_id: String,
+    pub state: MissingRefState,
+}
+
+/// 手元に無いメールを、サーバーへ探しに行くか。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub enum MissingRefState {
+    /// まだ探していない、または 30 日後の探し直しの時期が来た。
+    Due,
+    /// 探したが見つからなかった（または見つけて取り込んだ後に消えた）。自動では探さない。
+    Absent,
 }
 
 /// スレッド単位のメール一覧の 1 行（代表メール＋件数）。docs/THREADING.md §5。

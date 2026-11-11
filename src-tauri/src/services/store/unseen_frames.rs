@@ -210,5 +210,92 @@ fn place(lists: &mut [Vec<UnseenQuote>], times: &[Option<MessageAt>]) {
     }
 }
 
+/// 枠と会話のメールの日時の隔たり（分）。時差の無い枠は、メールの差出人の現地時刻と比べる。
+fn gap_minutes(at: At, m: &MessageAt) -> i64 {
+    match at {
+        At::Utc(min) => (m.utc_minute - min).abs(),
+        At::Local(t) => (m.local - t).num_minutes().abs(),
+    }
+}
+
+/// 枠どうしの古さを比べる鍵（時差の無い枠は書かれたままの時刻を UTC とみなす。並べるだけに使う）。
+fn rough_minute(at: At) -> i64 {
+    match at {
+        At::Utc(m) => m,
+        At::Local(t) => t.and_utc().timestamp().div_euclid(60),
+    }
+}
+
+/// 根とみなした枠を取り寄せたメールと同じとみなす、日時の隔たりの上限（分）。時差の書き違いを見込む。
+const ROOT_MATCH_MINUTES: i64 = 24 * 60;
+
+/// 会話の根（References の先頭）と未受信の枠を結び付ける（`arrange` の後に呼ぶ）。
+///
+/// - 根が手元に無い（`root_missing`）: 先頭のメールの上に置いた日時のある枠（＝会話のどのメールより
+///   古い）のうち、いちばん古いものに `root_of_ref` を付ける。
+/// - 根を探しに行って取り込んだ（`root_fetched`）: 取り込んだメールと差出人のアドレスが同じで、日時が
+///   1 日以内の枠のうち、いちばん近い 1 つを外す。Message-ID で同じメールと確かめた根なので、日時が
+///   照らし合わせ（`quote_match::find_quoted_email`）の幅から外れていても、ふつうのバブルに置き換える。
+pub fn bind_root(
+    messages: &mut [ThreadMessage],
+    root: &str,
+    root_missing: bool,
+    root_fetched: bool,
+) {
+    if root_missing {
+        let oldest = messages.first_mut().and_then(|m| {
+            m.unseen_quotes
+                .iter_mut()
+                .filter(|q| !q.guessed)
+                .filter_map(|q| {
+                    q.date
+                        .as_deref()
+                        .and_then(frame_at)
+                        .map(|at| (rough_minute(at), q))
+                })
+                .min_by_key(|(k, _)| *k)
+                .map(|(_, q)| q)
+        });
+        if let Some(q) = oldest {
+            q.root_of_ref = Some(root.to_string());
+        }
+        return;
+    }
+    if !root_fetched {
+        return;
+    }
+    let Some(pos) = messages
+        .iter()
+        .position(|m| m.message_id.as_deref() == Some(root))
+    else {
+        return;
+    };
+    let (Some(at), Some(addr)) = (
+        message_at(messages[pos].date.as_deref()),
+        messages[pos].from_address.as_deref().map(str::to_lowercase),
+    ) else {
+        return;
+    };
+    // 根の枠は、根のメールの上か、その次のメールの上に置かれている。
+    let end = (pos + 2).min(messages.len());
+    let best = (pos..end)
+        .flat_map(|i| {
+            messages[i]
+                .unseen_quotes
+                .iter()
+                .enumerate()
+                .map(move |(j, q)| (i, j, q))
+        })
+        .filter(|(_, _, q)| !q.guessed && split_sender(&q.from).0.as_deref() == Some(addr.as_str()))
+        .filter_map(|(i, j, q)| {
+            let gap = gap_minutes(q.date.as_deref().and_then(frame_at)?, &at);
+            (gap <= ROOT_MATCH_MINUTES).then_some((gap, i, j))
+        })
+        .min();
+    if let Some((_, i, j)) = best {
+        messages[i].unseen_quotes.remove(j);
+    }
+}
+
 #[cfg(test)]
 mod tests;

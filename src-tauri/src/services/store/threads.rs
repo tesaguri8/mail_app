@@ -765,6 +765,20 @@ pub fn process_pending_at(
         rows
     };
     let total = ids.len();
+    // いま入ったメールで、送信済みの控えに無い Message-ID を推定する（docs/THREADING.md §2）。
+    // 結べば、下の割当で返信が控えの会話に入る。失敗しても割当は続ける（変更は巻き戻る）。
+    {
+        let tx = conn.transaction()?;
+        match super::inferred_ids::link_for_pending(&tx, account_id, &ids) {
+            Ok(n) => {
+                tx.commit()?;
+                if n > 0 {
+                    log::info!("inferred Message-ID for {n} sent copies");
+                }
+            }
+            Err(e) => log::warn!("Message-ID inference skipped: {e}"),
+        }
+    }
     // 小さめのチャンク＋チャンク間で書き込みロックを一瞬手放す。メタ索引バックフィルで
     // 大量の未スレッド行が来ても、UI の書き込み（既読化・会話を開く際の割当）が割り込めるように
     // する（WAL の書き込みは 1 つずつ。長いトランザクションで握り続けると UI が待たされる）。
@@ -1140,6 +1154,7 @@ pub fn process_pending_conn(conn: &Connection, account_id: i64) -> rusqlite::Res
             .collect::<rusqlite::Result<_>>()?;
         rows
     };
+    super::inferred_ids::link_for_pending(conn, account_id, &ids)?;
     for id in &ids {
         assign_thread(conn, *id)?;
         super::emails::maintain_folder_rep_on_insert(conn, *id)?;

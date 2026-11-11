@@ -447,9 +447,11 @@ pub fn recompute_reps_for_thread(conn: &Connection, thread_id: i64) -> rusqlite:
              WHERE logical_thread_id = ?1 AND folder = ?2 AND is_folder_rep = 1",
             params![thread_id, folder],
         )?;
+        // `+folder`: (folder, date_ts) の索引で並べようとして、フォルダの全行を舐める計画を避ける
+        // （会話の索引で引けば数行の並べ替えで済む）。
         conn.execute(
             "UPDATE emails SET is_folder_rep = 1 WHERE id = (
-                SELECT id FROM emails WHERE logical_thread_id = ?1 AND folder = ?2
+                SELECT id FROM emails WHERE logical_thread_id = ?1 AND +folder = ?2
                 ORDER BY date_ts DESC, id DESC LIMIT 1)",
             params![thread_id, folder],
         )?;

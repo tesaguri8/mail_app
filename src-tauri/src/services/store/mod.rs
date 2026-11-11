@@ -18,6 +18,7 @@ mod emails;
 mod events;
 mod google_accounts;
 mod greendomain;
+mod inferred_ids;
 mod migrations;
 mod org_contacts;
 mod org_tidy;
@@ -43,6 +44,7 @@ mod tombstones;
 mod unseen_frames;
 
 pub use accounts::{NewAccount, SmtpAccount};
+pub use inferred_ids::link_sent_copies_at;
 pub use calendar_sync::{ApplyOutcome, LocalChange, RecurringInstance, RemoteEvent, SyncedCalendar};
 pub use contact_sync::{ContactIdentity, ContactPush, RemoteContact};
 pub use crate::models::GoogleService;

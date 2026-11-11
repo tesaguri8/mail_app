@@ -19,8 +19,10 @@ pub(super) fn activity_ts(p: &str) -> String {
 
 /// 会話の「自分が最後に送った時刻」の数え方: 送信済みフォルダの、迷惑に隔離していない自分の送信。
 /// 下書き・ゴミ箱・迷惑は数えない（ゴミ箱へ移した送信は folder が 'trash' になる）。
+/// `+folder` で folder の索引を使わせない: (folder, date_ts) の索引で MAX を取ろうとして、
+/// 送信済みの全行を新しい順に舐める計画になる（5 万行で 1 会話 8 ms）。会話の索引で引けば数行で済む。
 const SENT_OF_THREAD: &str = "SELECT MAX(date_ts) AS ts FROM emails
-     WHERE logical_thread_id = ?1 AND folder = 'sent' AND is_junk = 0";
+     WHERE logical_thread_id = ?1 AND +folder = 'sent' AND is_junk = 0";
 
 /// 会話に入った 1 通に、その会話の `thread_sent_ts` を付ける（取り込みの割当ごと。O(会話の送信数)）。
 /// 入ったのが自分の送信なら、会話の全部の行を配り直す（受信箱の代表の並びが上がる）。

@@ -17,7 +17,7 @@
 //! `inferred_message_ids` に残す。同じ控えに別の X が 2 つ以上来たら結ばない（以後も試さない）。
 //! 結んだら、控えと X を参照するメールの会話を割り当て直す。
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -255,38 +255,122 @@ fn decide<'a>(
         .collect())
 }
 
+/// 控え 1 通に対してすること（[`plan`] が決め、[`apply`] が書く）。
+struct Action {
+    copy_id: i64,
+    canonical_key: String,
+    kind: ActionKind,
+}
+
+enum ActionKind {
+    /// X を入れる（手がかりにした R の id）。
+    Link { x: String, src: i64 },
+    /// 結ばない（既に結んでいた X があれば取り消す）。
+    Conflict { old: Option<String> },
+}
+
+impl Action {
+    /// 会話を割り当て直すときに、参照しているメールを探す X（入れる X か、取り消す X）。
+    fn x(&self) -> Option<&str> {
+        match &self.kind {
+            ActionKind::Link { x, .. } => Some(x),
+            ActionKind::Conflict { old } => old.as_deref(),
+        }
+    }
+}
+
+/// 照らし合わせて、控えごとにすることを決める（読むだけ。書き込みはしない）。
+fn plan(conn: &Connection, account_id: i64, scope: Scope<'_>) -> rusqlite::Result<Vec<Action>> {
+    let copies = load_copies(conn, account_id)?;
+    if copies.is_empty() {
+        // ID の無い控えも、推定で ID を入れた控えも無い（alpha.35 以降だけのアカウント）。
+        // 結んだ控えは残す: あとから別の X が来たら取り消すため。
+        return Ok(Vec::new());
+    }
+    let replies = load_dangling(conn, account_id, &scope)?;
+    if replies.is_empty() {
+        return Ok(Vec::new());
+    }
+    let own = own_address(conn, account_id)?;
+    let decisions = decide(conn, own.as_deref(), &copies, &replies)?;
+    Ok(decisions
+        .into_iter()
+        .map(|(i, d)| {
+            let c = &copies[i];
+            let kind = match d {
+                Decision::Link(x, src) => ActionKind::Link {
+                    x: x.to_string(),
+                    src,
+                },
+                Decision::Conflict => ActionKind::Conflict {
+                    old: c.linked.clone(),
+                },
+            };
+            Action {
+                copy_id: c.id,
+                canonical_key: c.canonical_key.clone(),
+                kind,
+            }
+        })
+        .collect())
+}
+
+/// X ごとに、それを In-Reply-To か References に持つメール（会話の割当済み）の id を集める。
+///
+/// X ごとに表を引くと、References の中を探すので毎回全表走査になる（vaio の 5.4 万行で 1 回
+/// 0.22 秒）。1 回だけ走査して、Rust 側で突き合わせる。
+fn referencing(
+    conn: &Connection,
+    account_id: i64,
+    xs: &HashSet<&str>,
+) -> rusqlite::Result<HashMap<String, Vec<i64>>> {
+    let mut out: HashMap<String, Vec<i64>> = HashMap::new();
+    if xs.is_empty() {
+        return Ok(out);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT id, in_reply_to, references_ids FROM emails
+         WHERE account_id = ?1 AND logical_thread_id IS NOT NULL
+           AND (in_reply_to IS NOT NULL OR references_ids IS NOT NULL)",
+    )?;
+    let rows = stmt.query_map(params![account_id], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+    for row in rows {
+        let (id, irt, refs) = row?;
+        let hits: BTreeSet<&str> = irt
+            .as_deref()
+            .map(str::trim)
+            .into_iter()
+            .chain(refs.as_deref().unwrap_or("").split_whitespace())
+            .filter(|t| xs.contains(t))
+            .collect();
+        for x in hits {
+            out.entry(x.to_string()).or_default().push(id);
+        }
+    }
+    Ok(out)
+}
+
 /// 控えと、X を参照するメールの会話を割り当て直す（手動の割当は動かさない）。
 ///
 /// 該当するメールの会話の auto メンバーを外して古い順に割り当て直し、空になった会話を掃除して、
-/// 新しい会話の代表と「最後のやり取り」を貼り直す。
-fn rethread(
-    conn: &Connection,
-    account_id: i64,
-    copy_ids: &[i64],
-    xs: &[String],
-) -> rusqlite::Result<()> {
+/// 新しい会話の代表と「最後のやり取り」を貼り直す。会話は主キーで引く。
+fn rethread(conn: &Connection, copy_ids: &[i64], ref_ids: &[i64]) -> rusqlite::Result<()> {
     let mut old_threads: BTreeSet<i64> = BTreeSet::new();
     {
         let mut by_id =
             conn.prepare_cached("SELECT logical_thread_id FROM emails WHERE id = ?1")?;
-        for id in copy_ids {
+        for id in copy_ids.iter().chain(ref_ids) {
             if let Some(Some(t)) = by_id
                 .query_row(params![id], |r| r.get::<_, Option<i64>>(0))
                 .optional()?
             {
                 old_threads.insert(t);
-            }
-        }
-        let mut by_ref = conn.prepare_cached(
-            "SELECT DISTINCT logical_thread_id FROM emails
-             WHERE account_id = ?1 AND logical_thread_id IS NOT NULL
-               AND (in_reply_to = ?2
-                    OR instr(' ' || COALESCE(references_ids, '') || ' ', ' ' || ?2 || ' ') > 0)",
-        )?;
-        for x in xs {
-            let ts = by_ref.query_map(params![account_id, x], |r| r.get::<_, i64>(0))?;
-            for t in ts {
-                old_threads.insert(t?);
             }
         }
     }
@@ -337,78 +421,99 @@ fn rethread(
     Ok(())
 }
 
-/// 推定して、控えに Message-ID を入れる（会話の割り当て直しまで）。結んだ控えの数を返す。
-fn link_in_scope(conn: &Connection, account_id: i64, scope: Scope<'_>) -> rusqlite::Result<usize> {
-    let copies = load_copies(conn, account_id)?;
-    if copies.is_empty() {
-        // ID の無い控えも、推定で ID を入れた控えも無い（alpha.35 以降だけのアカウント）。
-        // 結んだ控えは残す: あとから別の X が来たら取り消すため。
-        return Ok(0);
-    }
-    let replies = load_dangling(conn, account_id, &scope)?;
-    if replies.is_empty() {
-        return Ok(0);
-    }
-    let own = own_address(conn, account_id)?;
-    let decisions = decide(conn, own.as_deref(), &copies, &replies)?;
-    if decisions.is_empty() {
-        return Ok(0);
-    }
+/// 決めたことを書き、関係する会話を割り当て直す。結んだ控えの数を返す。
+///
+/// 決めてから書くまでの間に、別の経路（取り込み・起動時の背景処理）が同じ控えを書き換えて
+/// いれば、その控えは飛ばす（Message-ID が空のときだけ入れ、記録が既にあれば足さない）。
+fn apply(
+    conn: &Connection,
+    account_id: i64,
+    actions: &[Action],
+    refs: &HashMap<String, Vec<i64>>,
+) -> rusqlite::Result<usize> {
     let mut linked = 0;
     let mut copy_ids = Vec::new();
-    let mut xs = Vec::new();
-    for (i, d) in &decisions {
-        let c = &copies[*i];
-        match d {
-            Decision::Link(x, src) => {
-                conn.execute(
+    let mut ref_ids = Vec::new();
+    for a in actions {
+        match &a.kind {
+            ActionKind::Link { x, src } => {
+                let n = conn.execute(
                     "UPDATE emails SET message_id = ?2
                      WHERE id = ?1 AND COALESCE(trim(message_id), '') = ''",
-                    params![c.id, x],
+                    params![a.copy_id, x],
                 )?;
-                conn.execute(
+                if n == 0 {
+                    continue;
+                }
+                let n = conn.execute(
                     "INSERT INTO inferred_message_ids
                        (account_id, canonical_key, state, message_id, source_email_id)
-                     VALUES (?1, ?2, 'linked', ?3, ?4)",
-                    params![account_id, c.canonical_key, x, src],
+                     VALUES (?1, ?2, 'linked', ?3, ?4)
+                     ON CONFLICT(account_id, canonical_key) DO NOTHING",
+                    params![account_id, a.canonical_key, x, src],
                 )?;
-                linked += 1;
-                xs.push((*x).to_string());
-            }
-            Decision::Conflict => {
-                if let Some(old) = &c.linked {
+                if n == 0 {
+                    // 記録が既にある（conflict / reverted）控えには入れない。
                     conn.execute(
                         "UPDATE emails SET message_id = NULL WHERE id = ?1 AND message_id = ?2",
-                        params![c.id, old],
+                        params![a.copy_id, x],
                     )?;
-                    xs.push(old.clone());
+                    continue;
+                }
+                linked += 1;
+            }
+            ActionKind::Conflict { old } => {
+                if let Some(old) = old {
+                    conn.execute(
+                        "UPDATE emails SET message_id = NULL WHERE id = ?1 AND message_id = ?2",
+                        params![a.copy_id, old],
+                    )?;
                 }
                 conn.execute(
                     "INSERT INTO inferred_message_ids (account_id, canonical_key, state)
                      VALUES (?1, ?2, 'conflict')
                      ON CONFLICT(account_id, canonical_key)
                      DO UPDATE SET state = 'conflict', message_id = NULL",
-                    params![account_id, c.canonical_key],
+                    params![account_id, a.canonical_key],
                 )?;
             }
         }
-        copy_ids.push(c.id);
+        copy_ids.push(a.copy_id);
+        if let Some(ids) = a.x().and_then(|x| refs.get(x)) {
+            ref_ids.extend_from_slice(ids);
+        }
     }
-    rethread(conn, account_id, &copy_ids, &xs)?;
+    rethread(conn, &copy_ids, &ref_ids)?;
     Ok(linked)
+}
+
+/// 決めて、書くまでを 1 つの接続（呼び出し側のトランザクション）で行う。結んだ控えの数を返す。
+fn link_in_scope(conn: &Connection, account_id: i64, scope: Scope<'_>) -> rusqlite::Result<usize> {
+    let actions = plan(conn, account_id, scope)?;
+    if actions.is_empty() {
+        return Ok(0);
+    }
+    let xs: HashSet<&str> = actions.iter().filter_map(Action::x).collect();
+    let refs = referencing(conn, account_id, &xs)?;
+    apply(conn, account_id, &actions, &refs)
 }
 
 /// 起動時の照らし合わせを済ませた印（app_settings のキー）。済ませたあとは、取り込みのたびの
 /// 推定（[`link_for_pending`]）が新しく入った返信と控えを拾うので、起動のたびには流さない。
 const KEY_SCANNED: &str = "inferred_message_ids_scanned";
 
-/// 起動時に 1 回だけ: ID の無い控えのあるアカウントごとに、親が手元に無いメールすべてと
+/// 1 つのトランザクションで書く控えの数。UI の書き込みが間に割り込めるよう小さくする。
+const APPLY_CHUNK: usize = 10;
+
+/// 起動時に 1 回だけ（の本体）: ID の無い控えのあるアカウントごとに、親が手元に無いメールすべてと
 /// 照らし合わせる。結んだ控えの数を返す。対象は送信済みの ID の無い控えだけなので、無ければすぐ終わる。
-/// 済ませたら印を付け、次の起動からは何もしない。
+///
+/// 決めるのは読むだけで済ませ、書くのは [`APPLY_CHUNK`] 通ずつの短いトランザクションに分けて、
+/// 間で `pause` だけ書き込みのロックを手放す。済ませたら印を付け、次からは何もしない。
 ///
 /// # Errors
-/// 問い合わせ・更新に失敗したとき（そのアカウントの変更は取り消され、印も付けないので次回また試す）。
-pub(crate) fn link_all_accounts(conn: &Connection) -> rusqlite::Result<usize> {
+/// 問い合わせ・更新に失敗したとき（書き終えたチャンクは残る。印は付けないので次回また試す）。
+fn link_all_conn(conn: &Connection, pause: std::time::Duration) -> rusqlite::Result<usize> {
     let scanned = conn
         .query_row(
             "SELECT 1 FROM app_settings WHERE key = ?1",
@@ -430,9 +535,18 @@ pub(crate) fn link_all_accounts(conn: &Connection) -> rusqlite::Result<usize> {
     };
     let mut total = 0;
     for account_id in accounts {
-        let tx = conn.unchecked_transaction()?;
-        total += link_in_scope(&tx, account_id, Scope::All)?;
-        tx.commit()?;
+        let actions = plan(conn, account_id, Scope::All)?;
+        if actions.is_empty() {
+            continue;
+        }
+        let xs: HashSet<&str> = actions.iter().filter_map(Action::x).collect();
+        let refs = referencing(conn, account_id, &xs)?;
+        for chunk in actions.chunks(APPLY_CHUNK) {
+            let tx = conn.unchecked_transaction()?;
+            total += apply(&tx, account_id, chunk, &refs)?;
+            tx.commit()?;
+            std::thread::sleep(pause);
+        }
     }
     conn.execute(
         "INSERT INTO app_settings (key, value) VALUES (?1, '1')
@@ -440,6 +554,17 @@ pub(crate) fn link_all_accounts(conn: &Connection) -> rusqlite::Result<usize> {
         params![KEY_SCANNED],
     )?;
     Ok(total)
+}
+
+/// 起動時に 1 回だけ: 送信済みの控えに無い Message-ID を推定して入れる（[`link_all_conn`]）。
+/// UI 用の接続を塞がないよう、別の接続で背景のブロッキングスレッドから呼ぶ。結んだ控えの数を返す。
+///
+/// # Errors
+/// DB を開けないとき、または問い合わせ・更新に失敗したとき。
+pub fn link_sent_copies_at(db_path: &std::path::Path) -> rusqlite::Result<usize> {
+    let conn = Connection::open(db_path)?;
+    conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
+    link_all_conn(&conn, std::time::Duration::from_millis(15))
 }
 
 /// 取り込みのたび: まだ会話の無い（いま入った）メールを見て推定する。結んだ控えの数を返す。
@@ -496,6 +621,8 @@ impl Store {
                 .collect::<rusqlite::Result<_>>()?;
             out
         };
+        let xs: HashSet<&str> = rows.iter().map(|(_, x)| x.as_str()).collect();
+        let refs = referencing(&tx, account_id, &xs)?;
         for (id, _) in &rows {
             tx.execute(
                 "UPDATE emails SET message_id = NULL WHERE id = ?1",
@@ -508,8 +635,13 @@ impl Store {
             params![account_id],
         )?;
         let ids: Vec<i64> = rows.iter().map(|(id, _)| *id).collect();
-        let xs: Vec<String> = rows.into_iter().map(|(_, x)| x).collect();
-        rethread(&tx, account_id, &ids, &xs)?;
+        let ref_ids: Vec<i64> = rows
+            .iter()
+            .filter_map(|(_, x)| refs.get(x))
+            .flatten()
+            .copied()
+            .collect();
+        rethread(&tx, &ids, &ref_ids)?;
         tx.commit()?;
         Ok(ids.len())
     }

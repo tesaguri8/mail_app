@@ -43,6 +43,17 @@ pub fn run() {
                 }
             }
             app.manage(store);
+            // alpha.34 までの送信済みの控えに無い Message-ID を、相手の返信から一度だけ推定して入れる
+            // （docs/THREADING.md §2）。初回は数十秒かかりうるので、起動の通り道から外し、別の接続で
+            // 背景に回す。fire-and-forget: 失敗はログに残すだけで、印を付けないので次回の起動でまた試す。
+            let infer_path = db_path.clone();
+            tauri::async_runtime::spawn_blocking(
+                move || match services::store::link_sent_copies_at(&infer_path) {
+                    Ok(n) if n > 0 => log::info!("inferred Message-ID for {n} sent copies"),
+                    Ok(_) => {}
+                    Err(e) => log::warn!("Message-ID inference skipped: {e}"),
+                },
+            );
             // 同期のキャンセル状態（中断ボタン用）。
             app.manage(commands::SyncControl::default());
             // アカウントごとの IMAP 接続プール（接続＋ログインを使い回す）。

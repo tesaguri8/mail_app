@@ -43,6 +43,7 @@ mod threads;
 mod tombstones;
 
 pub use accounts::{NewAccount, SmtpAccount};
+pub use inferred_ids::link_sent_copies_at;
 pub use calendar_sync::{ApplyOutcome, LocalChange, RecurringInstance, RemoteEvent, SyncedCalendar};
 pub use contact_sync::{ContactIdentity, ContactPush, RemoteContact};
 pub use crate::models::GoogleService;
@@ -117,13 +118,6 @@ impl Store {
         // 失敗しても起動は続ける（フィルタが効かないだけで、次回起動で作り直しを試みる）。
         if let Err(e) = sent_addresses::ensure_built(&conn) {
             log::warn!("sent address index build skipped: {e}");
-        }
-        // alpha.34 までの送信済みの控えに無い Message-ID を、相手の返信から推定して入れる
-        // （docs/THREADING.md §2）。対象は ID の無い控えだけ。失敗しても起動は続け、次回も試す。
-        match inferred_ids::link_all_accounts(&conn) {
-            Ok(n) if n > 0 => log::info!("inferred Message-ID for {n} sent copies"),
-            Ok(_) => {}
-            Err(e) => log::warn!("Message-ID inference skipped: {e}"),
         }
         // 参照専用の別接続。WAL の読み取りは書き込みと並行できるので、UI の読み取りが
         // 背景の書き込みに待たされない。query_only で誤って書き込まないよう保護する。

@@ -153,7 +153,7 @@ fn records(store: &Store) -> Vec<(String, String, Option<String>)> {
 }
 
 fn startup(store: &Store) -> usize {
-    link_all_accounts(&store.conn.lock().unwrap()).unwrap()
+    link_all_conn(&store.conn.lock().unwrap(), std::time::Duration::ZERO).unwrap()
 }
 
 #[test]
@@ -560,4 +560,271 @@ fn references_の並びの判定() {
     assert!(!chain_fits(Some("x"), "x", Some("p0")));
     assert!(!chain_fits(None, "x", Some("p0")));
     assert!(!chain_fits(Some("p0"), "x", Some("p0")));
+}
+
+/// 計測用の 1 通（日時は秒で与える）。
+#[allow(clippy::too_many_arguments)]
+fn mk_at(
+    key: &str,
+    mid: Option<&str>,
+    folder: &str,
+    from: &str,
+    to: &str,
+    subject: &str,
+    ts: i64,
+    irt: Option<&str>,
+    refs: Option<&str>,
+) -> NewEmail {
+    let mut e = mk(key, mid, folder, from, to, subject, 1, irt, refs);
+    e.date_ts = Some(ts);
+    e.date = chrono::DateTime::from_timestamp(ts, 0).map(|d| d.to_rfc3339());
+    e
+}
+
+/// vaio に近い件数（emails 約 5 万行、ID の無い控え 200 通、結べるもの 150 通、親の無い返信 2,400 通）
+/// で、起動時の推定と、取り込み 1 回ぶんの推定にかかる時間を測る。
+/// `cargo test --lib inferred_ids::tests::計測 -- --ignored --nocapture`
+#[test]
+#[ignore = "計測用（5 万行を作るので数十秒かかる）"]
+fn 計測_5_万行で起動時と取り込みの推定() {
+    use std::time::Instant;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mail.db");
+    let store = Store::open(&path).unwrap();
+    store
+        .conn
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO accounts (id, email, imap_host, smtp_host) VALUES (1, ?1, 'i', 's')",
+            params![ME],
+        )
+        .unwrap();
+    let base = 1_780_000_000_i64;
+    let mut rows: Vec<NewEmail> = Vec::new();
+    // ふつうの会話: 5 通ずつ、References を積む（9,450 会話 = 47,250 通）。
+    for i in 0..9_450 {
+        let mut chain: Vec<String> = Vec::new();
+        for k in 0..5 {
+            let mid = format!("f{i}.{k}@example.invalid");
+            let (from, to, folder) = if k % 2 == 0 {
+                (format!("p{i}@example.invalid"), ME.to_string(), "inbox")
+            } else {
+                (ME.to_string(), format!("p{i}@example.invalid"), "sent")
+            };
+            let refs = (!chain.is_empty()).then(|| chain.join(" "));
+            rows.push(mk_at(
+                &mid,
+                Some(&mid),
+                folder,
+                &from,
+                &to,
+                &format!("Re: 用件 {i}"),
+                base + i64::from(i) * 600 + k * 60,
+                chain.last().map(String::as_str),
+                refs.as_deref(),
+            ));
+            chain.push(mid);
+        }
+    }
+    // 親が手元に無い返信（メーリングリスト等）: 2,400 通。
+    for i in 0..2_400 {
+        let mid = format!("lost{i}@example.invalid");
+        let gone = format!("gone{i}@example.invalid");
+        rows.push(mk_at(
+            &mid,
+            Some(&mid),
+            "inbox",
+            &format!("l{i}@example.invalid"),
+            ME,
+            &format!("Re: 迷子 {i}"),
+            base + 1_000 + i64::from(i) * 7,
+            Some(&gone),
+            Some(&gone),
+        ));
+    }
+    // ID の無い控え 200 通。うち 150 通に返信（R）と、その返信への返信が 1 通ずつ届いている。
+    for i in 0..200 {
+        let to = format!("c{i}@example.invalid");
+        let t0 = base + 2_000 + i64::from(i) * 3_600;
+        rows.push(mk_at(
+            &format!("bare{i}"),
+            None,
+            "sent",
+            ME,
+            &to,
+            &format!("相談 {i}"),
+            t0,
+            None,
+            None,
+        ));
+        if i < 150 {
+            let x = format!("x{i}@relay.invalid");
+            let r = format!("r{i}@example.invalid");
+            rows.push(mk_at(
+                &r,
+                Some(&r),
+                "inbox",
+                &to,
+                ME,
+                &format!("Re: 相談 {i}"),
+                t0 + 600,
+                Some(&x),
+                Some(&x),
+            ));
+            let r2 = format!("rr{i}@example.invalid");
+            let refs2 = format!("{x} {r}");
+            rows.push(mk_at(
+                &r2,
+                Some(&r2),
+                "inbox",
+                &to,
+                ME,
+                &format!("Re: 相談 {i}"),
+                t0 + 1_200,
+                Some(&r),
+                Some(&refs2),
+            ));
+        }
+    }
+    let n_rows = rows.len();
+    {
+        let t = Instant::now();
+        let mut conn = store.conn.lock().unwrap();
+        let tx = conn.transaction().unwrap();
+        for e in &rows {
+            let InsertOutcome::Inserted(id) = insert_email(&tx, e).unwrap() else {
+                panic!("挿入されるはず");
+            };
+            assign_thread(&tx, id).unwrap();
+        }
+        tx.commit().unwrap();
+        eprintln!("用意: {n_rows} 通 {:.1} 秒", t.elapsed().as_secs_f64());
+    }
+
+    let t = Instant::now();
+    let linked = link_sent_copies_at(&path).unwrap();
+    let startup_secs = t.elapsed().as_secs_f64();
+    eprintln!("起動時の推定: 結んだ控え {linked} 通 {startup_secs:.2} 秒（チャンク間の待ち 15 ms を含む）");
+    assert_eq!(linked, 150);
+    {
+        let conn = store.conn.lock().unwrap();
+        let split: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM emails c JOIN emails r
+                   ON r.account_id = c.account_id AND r.in_reply_to = c.message_id
+                 WHERE c.folder = 'sent' AND c.canonical_key LIKE 'sent:bare%'
+                   AND c.logical_thread_id IS NOT r.logical_thread_id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(split, 0, "控えと返信が同じ会話");
+        let rr_split: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM emails r JOIN emails rr
+                   ON rr.account_id = r.account_id AND rr.in_reply_to = r.message_id
+                 WHERE r.message_id LIKE 'r%@example.invalid' AND rr.message_id LIKE 'rr%'
+                   AND r.logical_thread_id IS NOT rr.logical_thread_id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rr_split, 0, "返信への返信も同じ会話");
+    }
+
+    // 取り込み 1 回ぶん: 残りの控えの 1 通へ返信が届く（ふつうのメール 20 通と一緒に）。
+    let t = Instant::now();
+    {
+        let conn = store.conn.lock().unwrap();
+        let to = "c150@example.invalid";
+        let x = "x150@relay.invalid";
+        insert_email(
+            &conn,
+            &mk_at(
+                "r150@example.invalid",
+                Some("r150@example.invalid"),
+                "inbox",
+                to,
+                ME,
+                "Re: 相談 150",
+                base + 9_000_000,
+                Some(x),
+                Some(x),
+            ),
+        )
+        .unwrap();
+        for k in 0..20 {
+            let mid = format!("new{k}@example.invalid");
+            insert_email(
+                &conn,
+                &mk_at(
+                    &mid,
+                    Some(&mid),
+                    "inbox",
+                    "n@example.invalid",
+                    ME,
+                    "お知らせ",
+                    base + 9_000_100 + k,
+                    None,
+                    None,
+                ),
+            )
+            .unwrap();
+        }
+        process_pending_conn(&conn, 1).unwrap();
+    }
+    eprintln!(
+        "取り込み 1 回（21 通、うち結べる返信 1 通）: {:.2} 秒",
+        t.elapsed().as_secs_f64()
+    );
+    let t = Instant::now();
+    {
+        let conn = store.conn.lock().unwrap();
+        for k in 0..20 {
+            let mid = format!("plain{k}@example.invalid");
+            insert_email(
+                &conn,
+                &mk_at(
+                    &mid,
+                    Some(&mid),
+                    "inbox",
+                    "n@example.invalid",
+                    ME,
+                    "お知らせ",
+                    base + 9_100_000 + k,
+                    None,
+                    None,
+                ),
+            )
+            .unwrap();
+        }
+        // 推定だけにかかる分を分けて測る（残りは従来の会話の割当）。
+        let pending: Vec<i64> = conn
+            .prepare("SELECT id FROM emails WHERE logical_thread_id IS NULL")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        let ti = Instant::now();
+        assert_eq!(link_for_pending(&conn, 1, &pending).unwrap(), 0);
+        eprintln!("  うち推定だけ: {:.3} 秒", ti.elapsed().as_secs_f64());
+        process_pending_conn(&conn, 1).unwrap();
+    }
+    eprintln!(
+        "取り込み 1 回（20 通、結べるもの無し）: {:.2} 秒",
+        t.elapsed().as_secs_f64()
+    );
+    let c150: Option<String> = store
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT message_id FROM emails WHERE canonical_key = 'sent:bare150'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(c150.as_deref(), Some("x150@relay.invalid"));
 }

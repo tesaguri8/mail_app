@@ -230,6 +230,37 @@ pub fn build_message(msg: &OutgoingMessage) -> Result<Message, String> {
     }
 }
 
+/// 送信する 1 通を組み立てたもの。SMTP で送る版（`email`）と Sent へ APPEND する版（`raw`）は
+/// 同じ組み立てから取り出すので、Message-ID を含めて同じバイト列になる。
+pub struct PreparedSend {
+    /// SMTP で送る版。lettre は `formatted()` をそのまま送り、送るときに Message-ID を足さない。
+    pub email: Message,
+    /// Sent へ APPEND する RFC822 バイト列（Bcc は含まれない）。
+    pub raw: Vec<u8>,
+}
+
+/// 送信用に 1 通を組み立てる。Message-ID が無ければ組み立てずにエラーにする。
+///
+/// 0.1.0-alpha.34 までは通常の送信で Message-ID を付けておらず、相手に届いた版には中継（SMTP
+/// サーバー）が ID を付け、Sent へ APPEND した控えにだけ ID が無かった。控えから自分の送信を
+/// 同定できず、相手の返信の In-Reply-To が手元のどのメールとも結び付かなくなる。採番し忘れた
+/// 経路が増えても同じことが起きないよう、送信はこの関数を通して ID を必須にする。
+///
+/// # Errors
+/// `msg.message_id` が無い・空のとき、または [`build_message`] が失敗したとき。
+pub fn prepare_send(msg: &OutgoingMessage) -> Result<PreparedSend, String> {
+    if !msg
+        .message_id
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty())
+    {
+        return Err("送信するメールに Message-ID がありません".to_string());
+    }
+    let email = build_message(msg)?;
+    let raw = email.formatted();
+    Ok(PreparedSend { email, raw })
+}
+
 /// 組み立て済みメッセージを SMTP で送信する。成功なら Ok(())。
 pub fn send(config: &SmtpConfig, email: &Message) -> Result<(), String> {
     let creds = Credentials::new(config.user.clone(), config.password.clone());
@@ -344,6 +375,45 @@ mod tests {
             header(&m, "Message-ID").as_deref(),
             Some("<1792.ab@example.invalid>")
         );
+    }
+
+    /// バイト列のヘッダ部から Message-ID の行を数えて、値を返す。
+    fn message_ids_in(raw: &[u8]) -> Vec<String> {
+        let text = String::from_utf8_lossy(raw);
+        let head = text
+            .split("\r\n\r\n")
+            .next()
+            .unwrap_or("")
+            .replace("\r\n ", " ");
+        head.lines()
+            .filter(|l| l.to_ascii_lowercase().starts_with("message-id: "))
+            .map(|l| l["message-id: ".len()..].trim().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn 送る版と_sent_へ保存する版は同じ_message_id_を持つ() {
+        let mut m = outgoing();
+        m.message_id = Some(new_message_id(&m.from_email));
+        m.in_reply_to = Some("parent@example.invalid".into());
+        m.attachments = vec![("a.txt".into(), b"x".to_vec(), "text/plain".into())];
+        let p = prepare_send(&m).expect("組み立てられる");
+        // SMTP の送信は lettre が email.formatted() を流す。APPEND の raw と同じ 1 行だけの ID。
+        let sent = message_ids_in(&p.email.formatted());
+        let saved = message_ids_in(&p.raw);
+        assert_eq!(saved, vec![m.message_id.clone().unwrap()]);
+        assert_eq!(sent, saved, "送る版と控えの ID が違う");
+        assert_eq!(p.email.formatted(), p.raw, "送る版と控えのバイト列が違う");
+    }
+
+    #[test]
+    fn message_id_が無い送信は組み立てない() {
+        // lettre は Message-ID を補わない（ここで止めないと、控えだけ ID 無しになる）。
+        let mut m = outgoing();
+        assert!(message_ids_in(&build_message(&m).unwrap().formatted()).is_empty());
+        assert!(prepare_send(&m).is_err());
+        m.message_id = Some("  ".into());
+        assert!(prepare_send(&m).is_err());
     }
 
     #[test]

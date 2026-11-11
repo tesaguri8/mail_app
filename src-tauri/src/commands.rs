@@ -776,9 +776,8 @@ pub async fn mail_send(
         self_mark,
     };
 
-    // 送信メッセージを 1 度だけ組み立て、SMTP 送信と Sent 保存で共有する。
-    let email = smtp::build_message(&message)?;
-    let raw = email.formatted(); // Sent へ APPEND する RFC822 バイト列（Bcc は含まれない）
+    // 送信メッセージを 1 度だけ組み立て、SMTP 送信と Sent 保存で共有する（Message-ID も同じ）。
+    let smtp::PreparedSend { email, raw } = smtp::prepare_send(&message)?;
 
     tauri::async_runtime::spawn_blocking(move || smtp::send(&config, &email))
         .await

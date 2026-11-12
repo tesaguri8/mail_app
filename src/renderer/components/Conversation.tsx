@@ -65,6 +65,7 @@ import {
   sameThreadView,
   scrollAfterRefresh,
   shouldFetchMissingRefs,
+  markMessagesRead,
 } from './conversationRefresh';
 import { LinkGuard } from './LinkGuard';
 import { linkTrust } from './linkTrust';
@@ -1043,6 +1044,7 @@ export function Conversation({
   handlers,
   query,
   refreshKey,
+  readSignal,
 }: {
   openedId: number;
   /** 閲覧中のフォルダ。trash/spam を見ているとき以外は、それらのメールを会話から隠す。 */
@@ -1052,6 +1054,9 @@ export function Conversation({
   query?: string;
   /** 同期で新しいメールが入るたびに変わる合図。変わったら会話を裏で読み直す（送った返信を出す）。 */
   refreshKey?: number;
+  /** 一覧の側で既読にしたメール（未読のスレッドを見て既読にしたとき）。`seq` が進んだら、その id の
+   * バブルの未読の点を消す（会話を読み直さない）。 */
+  readSignal?: { ids: number[]; seq: number };
 }) {
   const { t } = useTranslation();
   const [view, setView] = useState<ThreadView | null>(null);
@@ -1178,6 +1183,13 @@ export function Conversation({
            この会話を次に別の画面で開いたときにまた探す */
       });
   }, [view, openedId, refresh]);
+  // 一覧の側で既読にしたら、読み込み済みの会話のその id だけを既読にする（合図が進んだときだけ）。
+  const lastReadSeq = useRef(readSignal?.seq);
+  useEffect(() => {
+    if (!readSignal || lastReadSeq.current === readSignal.seq) return;
+    lastReadSeq.current = readSignal.seq;
+    setView((v) => markMessagesRead(v, readSignal.ids));
+  }, [readSignal]);
   const lastRefreshKey = useRef(refreshKey);
   useEffect(() => {
     if (lastRefreshKey.current === refreshKey) return;

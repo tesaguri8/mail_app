@@ -53,3 +53,21 @@ export function shouldFetchMissingRefs(
     view != null && !tried.has(view.thread.id) && view.missing_refs.some((r) => r.state === 'due')
   );
 }
+
+/**
+ * 開いている会話で、`ids` のメールを既読にした形にする（未読のスレッドを見て既読にした合図。
+ * 読み直さずにバブルの未読の点を消す）。`ids` に無いメールはそのまま（手動で未読に戻したものを
+ * 勝手に既読にしない）。変わるものが無ければ同じ値を返す（描き直さない）。
+ */
+export function markMessagesRead(
+  view: ThreadView | null,
+  ids: readonly number[]
+): ThreadView | null {
+  if (!view) return view;
+  const set = new Set(ids);
+  if (!view.messages.some((m) => set.has(m.id) && !m.is_read)) return view;
+  return {
+    ...view,
+    messages: view.messages.map((m) => (set.has(m.id) && !m.is_read ? { ...m, is_read: true } : m)),
+  };
+}

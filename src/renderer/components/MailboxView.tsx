@@ -238,11 +238,14 @@ export function MailboxView({
   accounts,
   openRequest,
   onAccountChange,
+  onFilteredCountChange,
 }: {
   accounts: AccountSummary[];
   openRequest: MailOpenRequest | null;
   /** 表示中アカウントの変化を親へ通知（フッターの件数表示用）。'all'=全アカウント。 */
   onAccountChange?: (id: number | 'all' | null) => void;
+  /** 絞り込み中のスレッドの件数を親へ通知（フッターの件数表示用。絞り込んでいなければ null）。 */
+  onFilteredCountChange?: (count: number | null) => void;
 }) {
   const { t, i18n } = useTranslation();
   // アカウントごとのメールの接続状況（アカウント選択の印）。
@@ -825,6 +828,8 @@ export function MailboxView({
   // 未読の絞り込みから消さない（keepMatching が passesWhileReading で当てる）。手動で既読/未読を
   // 切り替えたらこの予約は取り消す（下の onSetRead / actRead）。
   const activeReadRef = useRef<ActiveRead | null>(null);
+  // 時間が来て既読にしたメールを、開いている会話へ知らせる合図（Conversation の readSignal）。
+  const [readSignal, setReadSignal] = useState<{ ids: number[]; seq: number }>({ ids: [], seq: 0 });
   // 一覧の行を既読にした形へ直す（絞り込みから外れて抜いた行も、日の件数・未読も updateLists が直す）。
   const markRowRead = (rowId: number) =>
     updateLists((prev) =>
@@ -835,6 +840,8 @@ export function MailboxView({
     if (!t || t.read) return;
     activeReadRef.current = { ...t, read: true };
     markRowRead(t.rowId);
+    // 開いている会話のバブルの未読の点も消す（読み直さない）。
+    setReadSignal((prev) => ({ ids: t.ids, seq: prev.seq + 1 }));
     mailSetRead(t.ids, true).catch(() => undefined);
   }, tabActiveNow);
   // 開いている未読スレッドから離れる。時間が来ていなければ未読のまま、来ていたら（既読にした行を）
@@ -1419,6 +1426,12 @@ export function MailboxView({
   // 検索モードでは FTS 結果に絞り込みを重ねて表示する（検索結果は全部手元にあるので、画面側で絞る）。
   // それ以外は DB で絞った枠をそのまま並べる。
   const filteredRows = searchMode ? searchResults.filter(passesFilters) : [];
+  // 絞り込み中の件数（DB で絞った枠の数。検索中は検索結果に絞り込みを重ねた数）をフッターへ。
+  const filteredCount =
+    threadFilter == null ? null : searchMode ? filteredRows.length : slots.length;
+  useEffect(() => {
+    onFilteredCountChange?.(filteredCount);
+  }, [filteredCount, onFilteredCountChange]);
   passesFiltersRef.current = passesFilters;
 
   // 日の見出しと畳み（docs/MAIL_LIST_TIMELINE.md §6。畳んだ日は collapsed）。
@@ -2347,6 +2360,7 @@ export function MailboxView({
       handlers={conversationHandlers}
       query={query.trim() ? query : undefined}
       refreshKey={syncTick}
+      readSignal={readSignal}
     />
   ) : (
     <div className="flex h-full items-center justify-center text-sm text-white/40">

@@ -11,7 +11,7 @@
 import type { ThreadDayCount } from '@bindings/ThreadDayCount';
 import type { ThreadDayUnread } from '@bindings/ThreadDayUnread';
 import type { ThreadListItem } from '@bindings/ThreadListItem';
-import { localDayKey, type DayCount } from './timeline/dayCounts';
+import type { DayCount } from './timeline/dayCounts';
 
 /** 一覧の枠。null はまだ読み込んでいない位置（高さだけのプレースホルダを出す）。 */
 export type Slots = readonly (ThreadListItem | null)[];
@@ -64,27 +64,6 @@ export function withUnread(days: readonly ListDay[], rows: readonly ThreadDayUnr
 /** 日ごとの未読を、`withUnread` に渡せる形にする（読み直しの間、前の数を出しておくのに使う）。 */
 export function unreadOf(days: readonly ListDay[]): ThreadDayUnread[] {
   return days.filter((d) => d.unread > 0).map((d) => ({ date_key: d.dateKey, unread: d.unread }));
-}
-
-/**
- * 手元の行の並び（絞り込み中の一覧）を日ごとに数える。日時の無い行は直前の行の日に数える
- * （先頭なら最初に日の分かる行の日。会話の countByLocalDay と同じ扱い）。日の分かる行が無ければ空。
- */
-export function daysOfRows(rows: readonly ThreadListItem[]): ListDay[] {
-  const keys = rows.map((m) => localDayKey(m.date));
-  let current = keys.find((k): k is string => k !== null);
-  if (current === undefined) return [];
-  const days: ListDay[] = [];
-  rows.forEach((m, i) => {
-    current = keys[i] ?? current;
-    const last = days[days.length - 1];
-    const unread = isUnread(m) ? 1 : 0;
-    if (last && last.dateKey === current) {
-      last.count += 1;
-      last.unread += unread;
-    } else days.push({ dateKey: current as string, count: 1, unread });
-  });
-  return days;
 }
 
 /** 未読のあるスレッドか（一覧の未読の印と同じ判定）。 */
@@ -145,12 +124,6 @@ export function pagesToLoad(
     }
   }
   return pages;
-}
-
-/** 先頭から途切れずに読み込んである件数（絞り込み中は、ここまでを上から順に見せる）。 */
-export function loadedPrefix(slots: Slots): number {
-  const i = slots.indexOf(null);
-  return i === -1 ? slots.length : i;
 }
 
 /** 読み込んである行（並び順のまま。未読み込みの位置は飛ばす）。 */

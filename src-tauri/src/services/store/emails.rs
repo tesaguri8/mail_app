@@ -1,6 +1,7 @@
 use super::contact_lookup::{contact_exists_sql, contact_name_for};
 use super::Store;
-use crate::models::{AttachmentSummary, MailDetail, MailSummary, ThreadListItem};
+use crate::models::{AttachmentSummary, MailDetail, MailSummary, ThreadFilter, ThreadListItem};
+use rusqlite::types::Value;
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// サーバー側の恒久削除（Trash 移動→完全削除）に必要な 1 通分の参照。
@@ -958,6 +959,18 @@ impl Store {
         Ok(rows)
     }
 
+    /// 絞り込み無しの `list_threads_filtered`（試験用）。
+    #[cfg(test)]
+    pub fn list_threads(
+        &self,
+        account_id: Option<i64>,
+        folder: &str,
+        limit: i64,
+        offset: i64,
+    ) -> rusqlite::Result<Vec<ThreadListItem>> {
+        self.list_threads_filtered(account_id, folder, &ThreadFilter::default(), limit, offset)
+    }
+
     /// スレッド単位のメール一覧（代表＝フォルダ内最新）。docs/THREADING.md §5。
     /// 論理スレッド未割当の旧データは 1 通ずつ（負値の擬似 gkey）で扱う。
     /// message_count は全フォルダ横断のスレッド総件数、unread_count は当フォルダの未読。
@@ -965,10 +978,17 @@ impl Store {
     /// 並びは会話の「最後のやり取り」（そのフォルダの最新と、同じ会話の自分の送信の
     /// 新しい方。[`super::thread_activity::activity_ts`]）。行の時刻（`date`）も最後のやり取りの時刻にする（一覧の日付の見出しと揃う）。
     /// 差出人・冒頭・未読などは今までどおりフォルダ内の代表から出す。
-    pub fn list_threads(
+    ///
+    /// `filter` は画面の絞り込み（トグル・期間・タグ）。同じ `filter` の `thread_day_counts_filtered` と
+    /// 累計と OFFSET が一致する（docs/MAIL_LIST_TIMELINE.md §3）。
+    ///
+    /// # Errors
+    /// 問い合わせに失敗したとき。
+    pub fn list_threads_filtered(
         &self,
         account_id: Option<i64>,
         folder: &str,
+        filter: &ThreadFilter,
         limit: i64,
         offset: i64,
     ) -> rusqlite::Result<Vec<ThreadListItem>> {
@@ -979,6 +999,7 @@ impl Store {
         } else {
             ""
         };
+        let fs = super::thread_filter::FilterSql::build(&conn, filter, folder, "emails.", 5)?;
         // まず page CTE で「表示する 100 件の代表 id」だけを部分索引で引く（副問い合わせ無し）。
         // そのうえで重い列（件数・連絡先照合・ID収集）を「その 100 件だけ」に対して評価する。
         // ※ 副問い合わせを本体 SELECT に直書きすると、ORDER BY+LIMIT より前に該当全行
@@ -986,7 +1007,7 @@ impl Store {
         let sql = format!(
             "WITH page AS MATERIALIZED (
                 SELECT id, {act} AS act_ts FROM emails
-                WHERE {fp_page} {acct} AND is_folder_rep = 1
+                WHERE {fp_page} {acct} AND is_folder_rep = 1{filter}
                 ORDER BY {act} DESC, id DESC
                 LIMIT ?2 OFFSET ?3
              )
@@ -1030,6 +1051,7 @@ impl Store {
             known_vip = known_vip_cols("r.from_address"),
             replied = replied_col("r.from_address"),
             fp_page = folder_predicate(folder, "", "?1"),
+            filter = fs.clause,
             fp_sub = folder_predicate(folder, "t.", "?1"),
             // 件数バッジ（msg_count）は会話ビューの表示内容に合わせる。下書きは常に数えない。
             // 同じ Message-ID の写し（自分宛の受信箱と送信済み）は会話で 1 つにまとめるので 1 通と数える。
@@ -1074,14 +1096,17 @@ impl Store {
                 is_replied: row.get::<_, i64>(19)? != 0,
             })
         };
-        let mut rows: Vec<ThreadListItem> = match account_id {
-            Some(a) => stmt
-                .query_map(params![folder, limit, offset, a], map)?
-                .collect::<rusqlite::Result<_>>()?,
-            None => stmt
-                .query_map(params![folder, limit, offset], map)?
-                .collect::<rusqlite::Result<_>>()?,
-        };
+        let binds = fs.binds(
+            vec![
+                Value::from(folder.to_owned()),
+                Value::Integer(limit),
+                Value::Integer(offset),
+            ],
+            account_id,
+        );
+        let mut rows: Vec<ThreadListItem> = stmt
+            .query_map(rusqlite::params_from_iter(binds), map)?
+            .collect::<rusqlite::Result<_>>()?;
         // グリーン（本人 or 認定ドメイン）をまとめて付与する。
         let set = super::greendomain::green_domain_set(&conn)?;
         for m in rows.iter_mut() {

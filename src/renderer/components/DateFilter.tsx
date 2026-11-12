@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Tooltip } from './Tooltip';
 import { CalendarDays, GripHorizontal, X } from 'lucide-react';
+import type { ThreadDateBounds } from '@bindings/ThreadDateBounds';
 
 export type DateMode = 'after' | 'before' | 'range';
 export type DateRange = { mode: DateMode; start: string; end: string };
@@ -17,6 +18,23 @@ export function matchesDate(dateStr: string | null, df: DateRange | null): boole
   if (df.mode === 'after') return df.start ? startOk : true;
   if (df.mode === 'before') return df.end ? endOk : true;
   return startOk && endOk;
+}
+
+/**
+ * 期間の絞り込みを、DB で引く境目（epoch 秒。since 以上・until 未満）にする（docs/MAIL_LIST_TIMELINE.md §3）。
+ * matchesDate と同じ結果になる: 日単位で両端を含み、期間が指定されていれば日時の無いメールは外す
+ * （端が無くても null ではなく空の境目を返すのはそのため）。
+ */
+export function dateBounds(df: DateRange | null): ThreadDateBounds | null {
+  if (!df) return null;
+  // 秒に丸める向き: 時刻は秒単位なので、ts >= ms/1000 ⇔ ts >= ceil(ms/1000)（until も同じ）。
+  const sec = (ms: number) => (Number.isNaN(ms) ? null : Math.ceil(ms / 1000));
+  const since = df.start ? sec(new Date(`${df.start}T00:00:00`).getTime()) : null;
+  // matchesDate の「23:59:59.999 以下」＝「その 1 ms 後より前」。
+  const until = df.end ? sec(new Date(`${df.end}T23:59:59.999`).getTime() + 1) : null;
+  if (df.mode === 'after') return { since, until: null };
+  if (df.mode === 'before') return { since: null, until };
+  return { since, until };
 }
 
 const inputCls =

@@ -11,7 +11,7 @@ use crate::models::{
     RebuildPlan, RecipientSuggestion, RemoteImage, RetentionReport, SendInput,
     ServerAccountSummary, SignatureSummary, SpamSenderConflict, SpamSettings, SpamVerdict,
     StorageInfo, SureMergePreview, SureMergeResult, SyncListed, SyncProgress,
-    SyncResult, TagSummary, ThreadDayCount, ThreadDayUnread, ThreadListItem, ThreadView, UnlinkedOrgName,
+    SyncResult, TagSummary, ThreadDayCount, ThreadDayUnread, ThreadFilter, ThreadListItem, ThreadView, UnlinkedOrgName,
 };
 use crate::models::{AccountSyncStatus, ComposeHandoff, SentSynced, SyncErrorKind};
 use crate::services::attachment_fetch;
@@ -1224,15 +1224,17 @@ pub fn mail_list(
 }
 
 /// フォルダ内のスレッドを、代表メールの日付（端末ローカル）ごとに数える（メール一覧の日付のつまみ用）。
-/// 並びと絞り込みは `thread_list` と同じで、累計がそのまま一覧の offset になる。docs/MAIL_LIST_TIMELINE.md。
+/// 並びと絞り込みは `thread_list` と同じで、同じ `filter` なら累計がそのまま一覧の offset になる。
+/// `filter` が None なら絞り込まない。docs/MAIL_LIST_TIMELINE.md。
 #[tauri::command]
 pub fn thread_day_counts(
     store: State<Store>,
     account_id: Option<i64>,
     folder: String,
+    filter: Option<ThreadFilter>,
 ) -> Result<Vec<ThreadDayCount>, String> {
     store
-        .thread_day_counts(account_id, &folder)
+        .thread_day_counts_filtered(account_id, &folder, &filter.unwrap_or_default())
         .map_err(|e| e.to_string())
 }
 
@@ -1243,23 +1245,32 @@ pub fn thread_day_unread(
     store: State<Store>,
     account_id: Option<i64>,
     folder: String,
+    filter: Option<ThreadFilter>,
 ) -> Result<Vec<ThreadDayUnread>, String> {
     store
-        .thread_day_unread(account_id, &folder)
+        .thread_day_unread_filtered(account_id, &folder, &filter.unwrap_or_default())
         .map_err(|e| e.to_string())
 }
 
 /// スレッド単位のメール一覧（代表＝フォルダ内最新＋件数バッジ）。docs/THREADING.md §5。
+/// `filter` は画面の絞り込み（トグル・期間・タグ。None なら絞り込まない）。
 #[tauri::command]
 pub fn thread_list(
     store: State<Store>,
     account_id: Option<i64>,
     folder: String,
+    filter: Option<ThreadFilter>,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<ThreadListItem>, String> {
     store
-        .list_threads(account_id, &folder, limit, offset)
+        .list_threads_filtered(
+            account_id,
+            &folder,
+            &filter.unwrap_or_default(),
+            limit,
+            offset,
+        )
         .map_err(|e| e.to_string())
 }
 

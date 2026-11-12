@@ -10,6 +10,8 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { MailSummary } from '@bindings/MailSummary';
+import type { ThreadFilter } from '@bindings/ThreadFilter';
+import type { ThreadToggle } from '@bindings/ThreadToggle';
 
 /** メール一覧の絞り込みトグル（メール画面・ホームの展開で共用）。
  *  flag（要再確認）は設定手段が入るまで非適用（アイコンのみ）。 */
@@ -23,6 +25,34 @@ export const MAIL_FILTERS: { key: string; Icon: LucideIcon }[] = [
   { key: 'attachment', Icon: Paperclip },
   { key: 'flag', Icon: Flag },
 ];
+
+/** DB で絞れるトグル（キー → ThreadToggle）。flag は非適用なので載せない。 */
+const DB_TOGGLES: Record<string, ThreadToggle> = {
+  unread: 'unread',
+  attachment: 'attachment',
+  star: 'star',
+  green: 'green',
+  vip: 'vip',
+  known: 'known',
+  replied: 'replied',
+};
+
+/**
+ * 画面の絞り込み（トグル・反転・期間の境目・タグ）を、一覧と日ごとの件数の問い合わせに渡す形にする
+ * （docs/MAIL_LIST_TIMELINE.md §3）。matchesFilters / matchesNoneOfFilters / matchesDate / matchesTags と
+ * 同じ結果を DB で出す。何も絞らなければ null（flag だけを選んだときも、今までどおり絞らない）。
+ */
+export function toThreadFilter(
+  filters: Set<string>,
+  invert: boolean,
+  date: ThreadFilter['date'],
+  tagIds: Set<number>
+): ThreadFilter | null {
+  const toggles = [...filters].flatMap((k) => (k in DB_TOGGLES ? [DB_TOGGLES[k]] : []));
+  if (toggles.length === 0 && date == null && tagIds.size === 0) return null;
+  // 反転は「選んだ条件のどれにも当てはまらない」。条件が無ければ反転は効かない（画面と同じ）。
+  return { toggles, invert: invert && toggles.length > 0, date, tag_ids: [...tagIds] };
+}
 
 /** matchesFilters が参照する最小フィールド（一覧の行＝メール/スレッドどちらでも可）。 */
 type FilterableRow = Pick<

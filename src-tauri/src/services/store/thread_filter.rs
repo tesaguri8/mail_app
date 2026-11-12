@@ -53,11 +53,19 @@ impl FilterSql {
         } else {
             None
         };
+        // 読書中の行（未読の条件でだけ、既読でも通す）。
+        let reading_ph = filter
+            .reading_id
+            .filter(|_| filter.toggles.contains(&ThreadToggle::Unread))
+            .map(|id| bind(Value::Integer(id)));
         let mut parts: Vec<String> = filter
             .toggles
             .iter()
             .map(|t| {
-                let pred = toggle_sql(*t, p, &fp_t, green_ph.as_deref());
+                let mut pred = toggle_sql(*t, p, &fp_t, green_ph.as_deref());
+                if let (ThreadToggle::Unread, Some(ph)) = (t, reading_ph.as_deref()) {
+                    pred = format!("({pred}) OR {p}id = {ph}");
+                }
                 // 列が NULL の行でも真偽を決める（画面側は NULL を偽として扱う）。
                 if filter.invert {
                     format!("NOT COALESCE(({pred}), 0)")

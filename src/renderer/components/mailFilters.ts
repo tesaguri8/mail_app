@@ -51,7 +51,14 @@ export function toThreadFilter(
   const toggles = [...filters].flatMap((k) => (k in DB_TOGGLES ? [DB_TOGGLES[k]] : []));
   if (toggles.length === 0 && date == null && tagIds.size === 0) return null;
   // 反転は「選んだ条件のどれにも当てはまらない」。条件が無ければ反転は効かない（画面と同じ）。
-  return { toggles, invert: invert && toggles.length > 0, date, tag_ids: [...tagIds] };
+  // 読書中の行（reading_id）は問い合わせる時点で足す（MailboxView の queryFilter）。
+  return {
+    toggles,
+    invert: invert && toggles.length > 0,
+    date,
+    tag_ids: [...tagIds],
+    reading_id: null,
+  };
 }
 
 /** matchesFilters が参照する最小フィールド（一覧の行＝メール/スレッドどちらでも可）。 */

@@ -109,10 +109,11 @@ import {
 } from './mailListWindow';
 import { TimelineScrubber } from './timeline/TimelineScrubber';
 import { shouldRefreshOnSync } from './conversationRefresh';
+import { passesWhileReading, useReadAfterDelay, type ActiveRead } from './readAfterDelay';
 import { localDayKey } from './timeline/dayCounts';
 import { useDayFold } from '../hooks/useDayFold';
 import { Compose, composeKey, type ComposeTarget } from './Compose';
-import { useTabActiveRef } from '../hooks/useTabActive';
+import { useTabActive, useTabActiveRef } from '../hooks/useTabActive';
 import { FolderIcons } from './FolderIcons';
 import {
   MAIL_FILTERS,
@@ -248,6 +249,7 @@ export function MailboxView({
   const { statuses: syncStatus } = useAccountSyncStatus();
   // このタブが表示中か（隠れている間は全体のキー操作を受けない。KeepAlivePanel）。
   const tabActive = useTabActiveRef();
+  const tabActiveNow = useTabActive();
   // 'all' = 全アカウント横断表示 / number = 特定アカウント / null = 未選択。
   const [selected, setSelected] = useState<number | 'all' | null>(() => {
     // ホームからの遷移（特定アカウント指定）が最優先。
@@ -674,6 +676,13 @@ export function MailboxView({
   );
   const filterRef = useRef(threadFilter);
   filterRef.current = threadFilter;
+  // 問い合わせに渡す絞り込み。開いて既読にした読書中の行は、離れるまで未読の絞り込みに残す
+  // （reading_id。DB 側でも残すので、件数の累計と OFFSET が手元の一覧と揃ったまま）。
+  const queryFilter = () => {
+    const f = filterRef.current;
+    const a = activeReadRef.current;
+    return f && a?.read ? { ...f, reading_id: a.rowId } : f;
+  };
   // つまみ（全期間ぶんの枠）で並べるか。検索は関連順で日付の並びではないので、つまみを出さない。
   const timelineMode = !searchMode;
   // 読み込んでいない続きがあるか（全件選択で DB から引き直すかの判断に使う）。
@@ -685,7 +694,7 @@ export function MailboxView({
     const token = loadTokenRef.current;
     for (const page of pagesToLoad(slotsRef.current, start, end, inFlightRef.current)) {
       inFlightRef.current.add(page);
-      threadList(queryAccount, folder, PAGE_SIZE, page * PAGE_SIZE, filterRef.current)
+      threadList(queryAccount, folder, PAGE_SIZE, page * PAGE_SIZE, queryFilter())
         .then((rows) => {
           if (loadTokenRef.current !== token) return; // 切替後の結果は破棄
           setSlots((prev) => fillSlots(prev, page * PAGE_SIZE, rows));
@@ -706,7 +715,7 @@ export function MailboxView({
     inFlightRef.current = new Set();
     const reset = opts?.reset ?? false;
     const [start, end] = reset ? [0, PAGE_SIZE] : visibleRangeRef.current;
-    const filter = filterRef.current;
+    const filter = queryFilter();
     return Promise.all([
       threadDayCounts(queryAccount, folder, filter),
       threadList(queryAccount, folder, Math.max(1, end - start), start, filter),
@@ -788,7 +797,10 @@ export function MailboxView({
   const keepMatching =
     (update: (list: ThreadListItem[]) => ThreadListItem[]) => (list: ThreadListItem[]) => {
       const next = update(list);
-      return filterRef.current == null ? next : next.filter((m) => passesFiltersRef.current(m));
+      if (filterRef.current == null) return next;
+      // 読書中の行は、時間が来て既読にしても離れるまでは未読として当てる（未読の絞り込みから消さない）。
+      const passes = passesWhileReading(passesFiltersRef.current, activeReadRef.current);
+      return next.filter(passes);
     };
 
   // 通常一覧・検索結果の両方へ同じ更新（既読/スター/削除/タグ）を反映する。
@@ -807,16 +819,16 @@ export function MailboxView({
     setSearchResults(fn);
   };
 
-  // 「アクティブ（開いている未読スレッド）」は、そこから離れるまで未読のまま保つ。別スレッドを
-  // 開く/閉じる/画面を離れるときに flushActiveRead() で既読化する（読書中は未読フィルタから
-  // 消えない）。手動で既読/未読を切り替えたらこの予約は取り消す（下の onSetRead / actRead）。
-  const activeReadRef = useRef<{ rowId: number; ids: number[] } | null>(null);
-  const flushActiveRead = useCallback(() => {
-    const t = activeReadRef.current;
-    if (!t) return;
-    activeReadRef.current = null;
+  // 「アクティブ（開いている未読スレッド）」は、見ている時間が READ_AFTER_MS に達したら既読にする
+  // （readAfterDelay.ts。窓が裏・最小化・フォーカス外・タブが隠れている間は数えない）。それより前に
+  // 離れたら（別スレッドを開く/閉じる/画面を離れる）未読のまま残す。既読にしても、離れるまでは
+  // 未読の絞り込みから消さない（keepMatching が passesWhileReading で当てる）。手動で既読/未読を
+  // 切り替えたらこの予約は取り消す（下の onSetRead / actRead）。
+  const activeReadRef = useRef<ActiveRead | null>(null);
+  // 一覧の行を既読にした形へ直し、日の未読も数え直す（絞り込みは keepMatching が当てる）。
+  const markRowRead = (rowId: number) => {
     const mark = keepMatching((prev: ThreadListItem[]) =>
-      prev.map((m) => (m.id === t.rowId ? { ...m, is_read: true, unread_count: 0 } : m))
+      prev.map((m) => (m.id === rowId ? { ...m, is_read: true, unread_count: 0 } : m))
     );
     const before = slotsRef.current;
     const next = updateLoaded(before, mark).slots;
@@ -824,16 +836,36 @@ export function MailboxView({
     setSlots(next);
     setDays((prev) => retallyDays(prev, before, next, []));
     setSearchResults(mark);
+  };
+  const readTimer = useReadAfterDelay(() => {
+    const t = activeReadRef.current;
+    if (!t || t.read) return;
+    activeReadRef.current = { ...t, read: true };
+    markRowRead(t.rowId);
     mailSetRead(t.ids, true).catch(() => undefined);
-    // keepMatching は ref だけを見る。
+  }, tabActiveNow);
+  // 開いている未読スレッドから離れる。時間が来ていなければ未読のまま、来ていたら（既読にした行を）
+  // 普段の絞り込みに戻す（未読で絞り込み中なら、ここで一覧から消える）。
+  const leaveActiveRead = useCallback(() => {
+    const t = activeReadRef.current;
+    if (!t) return;
+    activeReadRef.current = null;
+    readTimer.cancel();
+    if (t.read) markRowRead(t.rowId);
+    // keepMatching / markRowRead は ref だけを見る。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  // スレッドを閉じた（opened=null）ら既読化。別スレッドへの切替は openMail 側で処理する。
+  }, [readTimer]);
+  // 手動で既読/未読を切り替えたときに、待っている予約を取り消す（手動を優先）。
+  const dropActiveRead = () => {
+    activeReadRef.current = null;
+    readTimer.cancel();
+  };
+  // スレッドを閉じた（opened=null）ら離れる。別スレッドへの切替は openMail 側で処理する。
   useEffect(() => {
-    if (opened == null) flushActiveRead();
-  }, [opened, flushActiveRead]);
-  // 画面を離れる（アンマウント）ときも、開いていた未読スレッドを既読化する。
-  useEffect(() => () => flushActiveRead(), [flushActiveRead]);
+    if (opened == null) leaveActiveRead();
+  }, [opened, leaveActiveRead]);
+  // 画面を離れる（アンマウント）ときも離れる（時計は useReadAfterDelay が止める）。
+  useEffect(() => () => leaveActiveRead(), [leaveActiveRead]);
 
   // 自動同期（と送った直後の Sent の同期）の完了で一覧を再読み込み（手動同期中は onSync 側が
   // 再読込するのでスキップ）。開いている会話は、手動同期中でも読み直す（syncTick）。
@@ -1001,14 +1033,16 @@ export function MailboxView({
   const openMail = async (id: number) => {
     try {
       const d = await mailGet(id);
-      // 別スレッドへ移るときだけ、前にアクティブだった未読スレッドを既読化する。
-      // 開いたスレッドはアクティブな間は未読のまま（会話を見ている＝まだ読書中）。抜けたとき
-      // （別を開く／閉じる／画面を離れる）に既読化するよう予約する。
+      // 別スレッドへ移るときだけ、前にアクティブだった未読スレッドから離れ、開いたのが未読なら
+      // 時計を回し始める（READ_AFTER_MS 見たら既読。同じスレッドの開き直しでは数え直さない）。
       if (activeReadRef.current?.rowId !== id) {
-        flushActiveRead();
+        leaveActiveRead();
         const row = mails.find((m) => m.id === id) ?? searchResults.find((m) => m.id === id);
         const ids = row && row.email_ids.length ? row.email_ids : [id];
-        activeReadRef.current = row && !row.is_read ? { rowId: id, ids } : null;
+        if (row && !row.is_read) {
+          activeReadRef.current = { rowId: id, ids, read: false };
+          readTimer.start();
+        }
       }
       setOpened(d);
     } catch {
@@ -1111,7 +1145,7 @@ export function MailboxView({
     const ids = emailIdsFor(targetIds()); // reset より前に対象 id を確定させる
     // 手動の既読/未読切替がアクティブ予約と重なるなら、離脱時の自動既読を取り消す（手動を優先）。
     if (activeReadRef.current && (wasAll || selectedIds.has(activeReadRef.current.rowId))) {
-      activeReadRef.current = null;
+      dropActiveRead();
     }
     patchMails(selectedIds, { is_read: read, unread_count: read ? 0 : 1 });
     if (wasAll) resetSelection();
@@ -1725,7 +1759,7 @@ export function MailboxView({
     setSelectingAll(true);
     try {
       // limit は実質無制限（全代表を一括取得）。offset 0 から引く。
-      const matched = await threadList(queryAccount, folder, 1_000_000, 0, filterRef.current);
+      const matched = await threadList(queryAccount, folder, 1_000_000, 0, queryFilter());
       allMatchRowsRef.current = matched;
       setSelectedIds(new Set(matched.map((m) => m.id)));
       setMatchCount(matched.length);
@@ -2235,7 +2269,7 @@ export function MailboxView({
     onSetRead: async (id, read) => {
       // 会話内で手動に既読/未読を切り替えたら、離脱時の自動既読の予約を取り消す（手動を優先）。
       if (activeReadRef.current && activeReadRef.current.ids.includes(id)) {
-        activeReadRef.current = null;
+        dropActiveRead();
       }
       updateLists((prev) =>
         prev.map((row) => {

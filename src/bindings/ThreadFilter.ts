@@ -22,4 +22,10 @@ date: ThreadDateBounds | null,
 /**
  * タグ（代表メールがどれか 1 つを持つ＝OR。空なら絞らない）。
  */
-tag_ids: Array<number>, };
+tag_ids: Array<number>, 
+/**
+ * 読書中の行（代表メールの id）。未読の絞り込みでは、既読でもこの行を通す
+ * （開いて既読にしても、離れるまでは未読の絞り込みから消さない。画面側の `passesWhileReading`）。
+ * 一覧・件数・未読に同じ値を渡すので、読書中も件数の累計が OFFSET のまま揃う。
+ */
+reading_id: number | null, };

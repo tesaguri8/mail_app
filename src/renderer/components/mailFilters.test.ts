@@ -117,6 +117,7 @@ describe('toThreadFilter（DB に渡す絞り込み）', () => {
       invert: true,
       date: null,
       tag_ids: [],
+      reading_id: null,
     });
     // 期間・タグだけなら反転は効かない（画面の反転ボタンも押せない）
     expect(toThreadFilter(f(), true, null, new Set([3, 5]))).toEqual({
@@ -124,6 +125,7 @@ describe('toThreadFilter（DB に渡す絞り込み）', () => {
       invert: false,
       date: null,
       tag_ids: [3, 5],
+      reading_id: null,
     });
   });
   it('期間は端が無くても渡す（日時の無いメールを外すため）', () => {

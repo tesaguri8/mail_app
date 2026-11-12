@@ -36,8 +36,7 @@ import type { TagSummary } from '@bindings/TagSummary';
 import type { AttachmentSummary } from '@bindings/AttachmentSummary';
 import { mailGet, mailAttachments, mailRefetch } from '../services/mail';
 import { attachmentImage } from '../utils/imageCache';
-import { greenDomainAdd, greenDomainWarn } from '../services/green';
-import { FreemailGreenPrompt } from './FreemailGreenPrompt';
+import { useSenderGreen } from './SenderGreen';
 import { threadFetchMissing, threadRename, threadSplit, threadView } from '../services/threads';
 import { parseAddress } from '../utils/address';
 import { copyText } from '../utils/clipboard';
@@ -272,41 +271,26 @@ function Bubble({
     handlers.onSetRead(m.id, !read);
     setRead((v) => !v);
   };
-  // グリーン認定/解除（差出人ドメイン単位）を折りたたみバブルからも操作する。
-  // null＝ThreadMessage の is_green を使う（メール切替でリセット）。
-  const [greenOverride, setGreenOverride] = useState<boolean | null>(null);
-  useEffect(() => setGreenOverride(null), [m.id, m.is_green]);
-  // フリーメールで断られたときの「住所録に登録してこの人だけグリーンに」の確認を出しているか。
-  const [freemailAsk, setFreemailAsk] = useState(false);
-  useEffect(() => setFreemailAsk(false), [m.id]);
-  const isGreen = greenOverride ?? m.is_green;
-  // 本文のリンクを左クリックで開いてよいか（グリーン・住所録・返信歴・自分のメール。
-  // なりすましの疑いがあれば止める。docs/MAIL_SECURITY.md §2.1）。
-  const trust = linkTrust({ ...m, is_green: isGreen, own: out });
+  // グリーン認定/解除（差出人ドメイン単位）を折りたたみバブルからも操作する。フリーメールの確認・
+  // 住所録の本人で外せないときのお知らせは、全文表示の MailBody と同じ useSenderGreen が出す。
   const senderDomain =
     !out && (m.from_address ?? '').includes('@')
       ? (m.from_address ?? '').split('@').pop()?.trim().toLowerCase() || ''
       : '';
-  // フリーメール（gmail.com 等）はドメイン単位で信頼できないため認定は拒否される（false）。
-  // そのときはバッジを変えず、差出人を住所録に登録して「この人だけ」グリーンにするかを
-  // バブルの中で訊く（全文表示の MailBody と同じ FreemailGreenPrompt）。
-  const toggleGreen = async () => {
-    if (!senderDomain) return;
-    const next = !isGreen;
-    setFreemailAsk(false);
-    try {
-      if (next) {
-        if (!(await greenDomainAdd(senderDomain))) {
-          setFreemailAsk(true);
-          return;
-        }
-      } else await greenDomainWarn(senderDomain);
-      setGreenOverride(next);
-      handlers.onGreenChange?.();
-    } catch {
-      /* noop */
-    }
-  };
+  const green = useSenderGreen({
+    domain: senderDomain,
+    address: (m.from_address ?? '').trim(),
+    name: m.from_name,
+    baseGreen: m.is_green,
+    resetKey: m.id,
+    onChanged: () => handlers.onGreenChange?.(),
+    onOpenContact: handlers.onEditContact,
+  });
+  const isGreen = green.isGreen;
+  const toggleGreen = green.toggle;
+  // 本文のリンクを左クリックで開いてよいか（グリーン・住所録・返信歴・自分のメール。
+  // なりすましの疑いがあれば止める。docs/MAIL_SECURITY.md §2.1）。
+  const trust = linkTrust({ ...m, is_green: isGreen, own: out });
   // 展開時に読む詳細（添付・HTML・画像は従来の MailBody を再利用）。
   const [detail, setDetail] = useState<MailDetail | null>(null);
   useEffect(() => {
@@ -605,9 +589,10 @@ function Bubble({
           {/* 差出人＋時刻（相手は左、自分は右にそろえる）。スレッドヘッダのすぐ下に貼り付き（sticky）、
               固定中は「アプリと同じ背景を同じ位置に」貼る（bg-fixed でビューポート基準に合わせる）。
               写真は不透明なので下から潜り込む本文はラベル下端でスパッと隠れ、かつ周囲と一体で透明に
-              見える。バブルが尽きるとラベルも一緒に上へ流れて次のラベルと交代する。 */}
+              見える。バブルが尽きるとラベルも一緒に上へ流れて次のラベルと交代する。
+              狭い幅では折り返す（1 行に詰めると、右側のスター・返信などが切れて押せなかった）。 */}
           <div
-            className={`sticky top-0 z-10 mb-0.5 flex items-center gap-1.5 px-1 py-0.5 text-[10px] text-white/45 ${
+            className={`sticky top-0 z-10 mb-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 px-1 py-0.5 text-[10px] text-white/45 ${
               out ? 'justify-end' : 'justify-start'
             } ${stuck ? 'rounded-b-md shadow-sm shadow-black/20' : ''}`}
             // 固定中だけ、アプリと同じ背景を同じ位置（bg-fixed=ビューポート基準）で貼る。写真は不透明
@@ -729,20 +714,7 @@ function Bubble({
               ))}
           </div>
 
-          {freemailAsk && senderDomain && (
-            <div className="mb-1">
-              <FreemailGreenPrompt
-                domain={senderDomain}
-                name={m.from_name}
-                address={(m.from_address ?? '').trim()}
-                onGreen={() => {
-                  setGreenOverride(true);
-                  handlers.onGreenChange?.();
-                }}
-                onClose={() => setFreemailAsk(false)}
-              />
-            </div>
-          )}
+          {green.panel && <div className="mb-1">{green.panel}</div>}
 
           {expanded && detail ? (
             // 全文表示: 従来の MailBody をそのまま埋め込む（添付・HTML・外部画像・タグ・スター）。
@@ -774,9 +746,9 @@ function Bubble({
                         })
                     : undefined
                 }
-                onGreenChange={(green) => {
+                onGreenChange={(g) => {
                   // 全文表示の中で変えたときも、バブルの見出しの印をその場で合わせる。
-                  setGreenOverride(green);
+                  green.setGreen(g);
                   handlers.onGreenChange?.();
                 }}
                 highlight={highlight}

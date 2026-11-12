@@ -31,8 +31,7 @@ import type { TagSummary } from '@bindings/TagSummary';
 import { DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import { mailAttachments, mailRefetch } from '../services/mail';
 import { getInlineImages, getRemoteImageMode, PREFS_EVENT } from '../config/prefs';
-import { greenDomainAdd, greenDomainWarn } from '../services/green';
-import { FreemailGreenPrompt } from './FreemailGreenPrompt';
+import { useSenderGreen } from './SenderGreen';
 import {
   clearEmailLookupCache,
   EmailAdd,
@@ -204,18 +203,28 @@ export function MailBody({
   // 全文再取得（要約保存の解除）の結果でこのメールだけ本文を差し替える。
   const [refreshed, setRefreshed] = useState<MailDetail | null>(null);
   const [refetching, setRefetching] = useState(false);
-  // グリーン認定/解除の即時反映（メール切替でリセット）。null＝props の is_green を使う。
-  const [greenOverride, setGreenOverride] = useState<boolean | null>(null);
-  // フリーメールで断られたときの「住所録に登録してこの人だけグリーンに」の確認を出しているか。
-  const [freemailAsk, setFreemailAsk] = useState(false);
   // 表示に使う本文（再取得済みがあればそれ、無ければ props の detail）。
   const d = refreshed ?? detail;
-  const isGreen = greenOverride ?? d.is_green;
-  // 本文のリンクを左クリックで開いてよいか（会話のバブルと同じ判定。docs/MAIL_SECURITY.md §2.1）。
-  const trust = linkTrust({ ...d, is_green: isGreen, own: d.is_own });
   const senderDomain = (d.from_address ?? '').includes('@')
     ? (d.from_address ?? '').split('@').pop()?.trim().toLowerCase() || ''
     : '';
+  // 差出人のグリーン（葉っぱ）の付け外し。即時反映はメール切替でリセット（SenderGreen）。
+  const green = useSenderGreen({
+    domain: senderDomain,
+    address: (d.from_address ?? '').trim(),
+    name: d.from_name,
+    baseGreen: d.is_green,
+    resetKey: detail.id,
+    onChanged: (g) => {
+      // 住所録が変わったかもしれないので、アドレスの ＋/編集 の照合も引き直す。
+      forgetEmailLookup(d.from_address ?? '');
+      onGreenChange?.(g);
+    },
+    onOpenContact: onEditContact,
+  });
+  const isGreen = green.isGreen;
+  // 本文のリンクを左クリックで開いてよいか（会話のバブルと同じ判定。docs/MAIL_SECURITY.md §2.1）。
+  const trust = linkTrust({ ...d, is_green: isGreen, own: d.is_own });
   // Reply-To（返信先指定）が From と別のときだけヘッダに出す（返信がこちらへ飛ぶことを明示）。
   const replyToAddr = ((d.reply_to ?? '').match(/<([^>]+)>/)?.[1] ?? d.reply_to ?? '')
     .trim()
@@ -303,8 +312,6 @@ export function MailBody({
     setSelected(new Set());
     setAttachmentsLoaded(false);
     setRefreshed(null);
-    setGreenOverride(null);
-    setFreemailAsk(false);
     // インライン画像（cid:）は has_attachments に数えないため（例: 本文が画像 1 枚だけの
     // multipart/related）、本文が cid: を参照するときも添付メタを読み込む。読まないと
     // 本文中のインライン画像を解決できず、プレースホルダのまま何も表示されない。
@@ -590,26 +597,11 @@ export function MailBody({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail.id, detail.body_state]);
 
-  // 差出人ドメインをグリーン認定/解除（一覧のバッジは onGreenChange で更新）。
-  // フリーメール（gmail.com 等）はドメイン単位で信頼できないため認定は拒否される。そのときは
-  // 差出人を住所録に登録して「この人だけ」グリーンにするかをその場で訊く（FreemailGreenPrompt）。
-  const toggleGreen = async () => {
-    if (!senderDomain) return;
-    const next = !isGreen;
+  // 差出人ドメインをグリーン認定/解除（一覧のバッジは onGreenChange で更新）。フリーメールの確認・
+  // 住所録の本人で外せないときのお知らせは useSenderGreen が出す（green.panel）。
+  const toggleGreen = () => {
     setNote('');
-    setFreemailAsk(false);
-    try {
-      if (next) {
-        if (!(await greenDomainAdd(senderDomain))) {
-          setFreemailAsk(true);
-          return;
-        }
-      } else await greenDomainWarn(senderDomain);
-      setGreenOverride(next);
-      onGreenChange?.(next);
-    } catch {
-      /* noop */
-    }
+    void green.toggle();
   };
 
   const COMPOSE_ACTIONS = [
@@ -640,11 +632,14 @@ export function MailBody({
       {/* ヘッダ（件名・差出人・操作）。本文は下の body で内部スクロールするため、ヘッダは
           カード上部に据え置かれる（裏を本文が流れない＝カードと同じ透過のまま保てる）。 */}
       <div className="border-b border-white/10 px-5 py-3">
-        <div className="flex items-start justify-between gap-3">
-          <h3 className="min-w-0 truncate text-sm font-semibold">
+        {/* 狭い幅では道具の行を折り返す（件名の下へ回り、さらに入り切らなければ 2 行目へ）。
+            shrink-0 で 1 行に並べると、カードの overflow-hidden で右側の道具が切れて押せなかった。
+            件名は 8rem を目安に、それより狭ければ縮めて省略する（最小幅で枠をはみ出さない）。 */}
+        <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+          <h3 className="min-w-0 flex-[1_1_8rem] truncate text-sm font-semibold">
             {d.subject ?? '(no subject)'}
           </h3>
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-1">
             {/* スター切替 */}
             {onToggleStar && (
               <button
@@ -797,22 +792,10 @@ export function MailBody({
         {/* 操作の結果（再取得の失敗 等）。道具の行に詰めると狭い幅で切れて読めないので、
             行の下に出して折り返す。 */}
         {note && <p className="mt-1 whitespace-normal break-words text-xs text-white/65">{note}</p>}
-        {freemailAsk && senderDomain && (
-          <FreemailGreenPrompt
-            domain={senderDomain}
-            name={d.from_name}
-            address={(d.from_address ?? '').trim()}
-            onGreen={() => {
-              // 住所録が変わったので、アドレスの ＋/編集 の照合も引き直す。
-              forgetEmailLookup(d.from_address ?? '');
-              setGreenOverride(true);
-              onGreenChange?.(true);
-            }}
-            onClose={() => setFreemailAsk(false)}
-          />
-        )}
+        {green.panel}
         <div className="mt-1 text-xs text-white/50">
-          <div className="flex items-baseline justify-between gap-3">
+          {/* 差出人と日時。狭い幅では日時を次の行へ回す（1 行に詰めると日時が枠の外で切れた）。 */}
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3">
             <SenderAddressLine
               name={d.from_name}
               address={d.from_address}
@@ -850,7 +833,7 @@ export function MailBody({
             <span className="shrink-0">{formatDateTime(d.date)}</span>
           </div>
           {showReplyTo && (
-            <div className="break-words text-sky-300/80">
+            <div className="wrap-anywhere text-sky-300/80">
               {t('mailbox.replyTo')}:{' '}
               <LinkifyEmails
                 text={d.reply_to ?? ''}
@@ -861,7 +844,7 @@ export function MailBody({
             </div>
           )}
           {d.to_addresses && (
-            <div className="break-words">
+            <div className="wrap-anywhere">
               {t('mailbox.to')}:{' '}
               <LinkifyEmails
                 text={d.to_addresses}
@@ -872,7 +855,7 @@ export function MailBody({
             </div>
           )}
           {d.cc_addresses && (
-            <div className="break-words">
+            <div className="wrap-anywhere">
               {t('mailbox.cc')}:{' '}
               <LinkifyEmails
                 text={d.cc_addresses}

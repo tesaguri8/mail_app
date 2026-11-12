@@ -13,6 +13,7 @@ import {
   contactUpsert,
 } from '../services/contacts';
 import { googleAccounts } from '../services/google';
+import { greenDomainList } from '../services/green';
 import { draftFromPrefill } from '../components/ContactEditor';
 import { defaultTargets } from '../components/ContactSyncTargets';
 
@@ -62,3 +63,43 @@ export const createSenderContact = async (
 
 /** ゴミ箱の連絡先を戻す（普段の「復元」と同じ）。 */
 export const restoreSenderContact = (contact: ContactSummary) => contactRestore(contact.id);
+
+/** 氏名の突き合わせ用の正規化（全半角統一・空白除去・小文字化）。 */
+const foldName = (s?: string | null) =>
+  (s ?? '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+
+/**
+ * 同じアドレスの連絡先のうち、差出人名に「関連する」もの（完全一致・空白差のほか、姓のみ/名のみ等の
+ * 部分一致）。同じ代表アドレスが別人（前任）に紐づくときの取り違えを防ぐ。差出人名が無ければ null。
+ */
+export const contactNamed = (
+  matches: ContactSummary[],
+  name: string | null | undefined
+): ContactSummary | null => {
+  const want = foldName(name);
+  if (!want) return null;
+  return (
+    matches.find((m) => {
+      const dn = foldName(m.display_name);
+      return dn === want || dn.includes(want) || want.includes(dn);
+    }) ?? null
+  );
+};
+
+/**
+ * 差出人を「住所録の本人」としてグリーンにしている連絡先（削除されていないもの）。無ければ null。
+ * 何人もいれば、差出人名に関連する人を優先する（住所録で開く先）。
+ */
+export const findKeptContact = async (
+  address: string,
+  name: string | null | undefined
+): Promise<ContactSummary | null> => {
+  const matches = await contactLookupEmail(address);
+  return contactNamed(matches, name) ?? matches[0] ?? null;
+};
+
+/** ドメインがグリーン（手動認定 or 住所録由来。警告・フリーメールは除く）か。 */
+export const isDomainGreen = async (domain: string): Promise<boolean> => {
+  const d = domain.trim().toLowerCase();
+  return (await greenDomainList()).some((e) => e.kind === 'green' && e.domain === d);
+};

@@ -8,6 +8,7 @@ import { Copy, Mail, Pencil, Plus, UserPlus } from 'lucide-react';
 import type { ContactSummary } from '@bindings/ContactSummary';
 import { contactLookupEmail } from '../services/contacts';
 import { copyText } from '../utils/clipboard';
+import { contactNamed } from '../utils/senderContact';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 
 /** 「表示名 <メール>」に整形。表示名が無ければアドレスのみ。 */
@@ -41,10 +42,6 @@ export const clearEmailLookupCache = () => emailLookupCache.clear();
 /** そのアドレスの照合だけ捨てる（住所録に登録した直後など）。 */
 export const forgetEmailLookup = (email: string) => emailLookupCache.delete(lookupKey(email));
 
-/** 氏名の突き合わせ用の正規化（全半角統一・空白除去・小文字化）。 */
-const foldName = (s?: string | null) =>
-  (s ?? '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
-
 /** アドレスに対する住所録の操作（＋で追加 / 編集）。 */
 type ContactActionProps = {
   email: string;
@@ -74,16 +71,9 @@ function useContactAction({ email, name, onAdd, onEdit }: ContactActionProps) {
   const registered = count > 0;
   const dup = count > 1;
 
-  // 差出人名に「関連する」既存を優先（完全一致・空白差のほか、姓のみ/名のみ等の部分一致）。
-  // 同じ代表アドレスが別人（前任）に紐づくときの取り違えを防ぐ。
-  const wantName = foldName(name);
-  const named =
-    matches && wantName
-      ? (matches.find((m) => {
-          const dn = foldName(m.display_name);
-          return dn === wantName || dn.includes(wantName) || wantName.includes(dn);
-        }) ?? null)
-      : null;
+  // 差出人名に「関連する」既存を優先（contactNamed。前任の取り違えを防ぐ）。
+  const wantName = (name ?? '').trim();
+  const named = matches ? contactNamed(matches, name) : null;
   // クリック動作: 名前が関連する既存があれば編集。差出人名が無ければ（判別できないので）
   // 従来どおり編集。差出人名があるのに関連する既存が無い＝別人とみなして新規追加にする
   // （アドレスが 1 件だけ一致でも、名前が違えば開かず新規登録にする）。
@@ -211,7 +201,8 @@ function useAddressMenu(
   return { onContextMenu, node };
 }
 
-/** アドレスの文字（クリックで新規メール。無ければ素の文字）。 */
+/** アドレスの文字（クリックで新規メール。無ければ素の文字）。ボタンは既定で中央寄せなので、
+ *  狭い幅で折り返したときに字下げのように見えないよう左寄せにする。 */
 function AddressText({
   email,
   onCompose,
@@ -228,7 +219,7 @@ function AddressText({
       onClick={() => onCompose(email)}
       onContextMenu={onContextMenu}
       title={t('mailbox.composeTo', { email })}
-      className="cursor-pointer rounded hover:text-sky-300 hover:underline focus:outline-none focus:text-sky-300"
+      className="cursor-pointer rounded text-left hover:text-sky-300 hover:underline focus:outline-none focus:text-sky-300"
     >
       {email}
     </button>

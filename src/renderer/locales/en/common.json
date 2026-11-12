@@ -159,7 +159,10 @@
     "freemailClose": "Close",
     "freemailRegistered": "Added {{name}} ({{address}}) to your address book. This person is now green.",
     "freemailRestored": "Restored \"{{name}}\" from the trash. {{address}} is now green.",
-    "freemailFailed": "Couldn't add the contact: {{error}}"
+    "freemailFailed": "Couldn't add the contact: {{error}}",
+    "keptPerson": "{{name}} ({{address}}) is green because they're in your address book. To remove it, remove them from your address book.",
+    "keptDomainUnset": "Removed the green approval for {{domain}}. {{name}} ({{address}}) stays green because they're in your address book. To remove it, remove them from your address book.",
+    "openContact": "Open in address book"
   },
   "search": {
     "placeholder": "Search mail",

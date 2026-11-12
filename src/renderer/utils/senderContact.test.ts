@@ -13,6 +13,8 @@ vi.mock('../services/contacts', () => ({
   contactRestore: vi.fn(),
 }));
 vi.mock('../services/google', () => ({ googleAccounts: vi.fn(async () => []) }));
+const greenList = vi.fn();
+vi.mock('../services/green', () => ({ greenDomainList: (...a: unknown[]) => greenList(...a) }));
 vi.mock('../config/prefs', () => ({
   getNewContactTarget: () => true,
   setNewContactTarget: vi.fn(),
@@ -20,7 +22,10 @@ vi.mock('../config/prefs', () => ({
 
 import {
   classifySender,
+  contactNamed,
   createSenderContact,
+  findKeptContact,
+  isDomainGreen,
   findSenderInBook,
   senderDisplayName,
 } from './senderContact';
@@ -85,5 +90,33 @@ describe('createSenderContact', () => {
     });
     expect(upsert.mock.calls[0][0].display_name).toBe('x@gmail.invalid');
     expect(targetAdd).not.toHaveBeenCalled();
+  });
+});
+
+describe('findKeptContact / contactNamed', () => {
+  it('削除されていない連絡先のうち、差出人名に関連する人を優先する（無ければ先頭）', async () => {
+    const a = { id: 1, display_name: '前任 次郎' } as unknown as ContactSummary;
+    const b = { id: 2, display_name: '山田太郎' } as unknown as ContactSummary;
+    expect(contactNamed([a, b], '山田 太郎')?.id).toBe(2);
+    expect(contactNamed([a, b], null)).toBeNull();
+    lookup.mockResolvedValue([a, b]);
+    expect((await findKeptContact('info@x.invalid', '山田 太郎'))?.id).toBe(2);
+    expect((await findKeptContact('info@x.invalid', '別人'))?.id).toBe(1);
+    // 照合は削除されていないものだけ（ゴミ箱の人はグリーンにしていない）。
+    expect(lookup).toHaveBeenLastCalledWith('info@x.invalid');
+    lookup.mockResolvedValue([]);
+    expect(await findKeptContact('none@x.invalid', null)).toBeNull();
+  });
+});
+
+describe('isDomainGreen', () => {
+  it('グリーンの行（手動・住所録由来）だけを見る。警告は外す', async () => {
+    greenList.mockResolvedValue([
+      { domain: 'corp.invalid', kind: 'green' },
+      { domain: 'warn.invalid', kind: 'warning' },
+    ]);
+    expect(await isDomainGreen(' Corp.invalid ')).toBe(true);
+    expect(await isDomainGreen('warn.invalid')).toBe(false);
+    expect(await isDomainGreen('gmail.com')).toBe(false);
   });
 });

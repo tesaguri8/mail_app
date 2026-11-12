@@ -159,7 +159,10 @@
     "freemailClose": "閉じる",
     "freemailRegistered": "{{name}}さん（{{address}}）を住所録に登録しました。この人はグリーンです。",
     "freemailRestored": "「{{name}}」をゴミ箱から戻しました。{{address}} はグリーンです。",
-    "freemailFailed": "登録できませんでした: {{error}}"
+    "freemailFailed": "登録できませんでした: {{error}}",
+    "keptPerson": "{{name}}さん（{{address}}）は住所録に登録されているためグリーンです。外すには住所録から外してください。",
+    "keptDomainUnset": "{{domain}} のグリーン認定を外しました。ただし{{name}}さん（{{address}}）は住所録に登録されているので、グリーンのままです。外すには住所録から外してください。",
+    "openContact": "住所録で開く"
   },
   "search": {
     "placeholder": "メールを検索",

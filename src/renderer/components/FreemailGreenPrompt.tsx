@@ -9,6 +9,17 @@ import {
   type SenderInBook,
 } from '../utils/senderContact';
 
+/** グリーンの確認・お知らせの枠（狭い幅でも折り返す。SenderGreen と共有）。 */
+export const GREEN_NOTICE_BOX =
+  'mt-2 flex min-w-0 flex-wrap items-start gap-x-3 gap-y-2 rounded-md border border-emerald-400/25 bg-emerald-950/40 px-3 py-2 text-xs text-white/80';
+/** 枠の中の文言（切らずに折り返す）。 */
+export const GREEN_NOTICE_TEXT = 'min-w-0 flex-1 basis-48 whitespace-normal break-words';
+/** 主の操作・閉じるボタン。 */
+export const GREEN_NOTICE_PRIMARY =
+  'rounded bg-emerald-600/80 px-2.5 py-1 text-white hover:bg-emerald-500 disabled:opacity-50';
+export const GREEN_NOTICE_SECONDARY =
+  'rounded bg-white/10 px-2.5 py-1 text-white/80 hover:bg-white/15 disabled:opacity-50';
+
 /** 確認の中身（読み込み中・確認・処理中・結果）。 */
 type Phase =
   | { kind: 'checking' }
@@ -102,27 +113,21 @@ export function FreemailGreenPrompt({
       role="alertdialog"
       aria-live="polite"
       data-testid="freemail-green-prompt"
-      className="mt-2 flex min-w-0 flex-wrap items-start gap-x-3 gap-y-2 rounded-md border border-emerald-400/25 bg-emerald-950/40 px-3 py-2 text-xs text-white/80"
+      className={GREEN_NOTICE_BOX}
     >
       <LeafyGreen size={14} className="mt-0.5 shrink-0 text-emerald-300" aria-hidden />
       {/* 長い文言・長いアドレスでも切らずに折り返す（break-words で途中改行も許す）。 */}
-      <p className="min-w-0 flex-1 basis-48 whitespace-normal break-words">
-        {pending ? t('green.freemailChecking') : message}
-      </p>
+      <p className={GREEN_NOTICE_TEXT}>{pending ? t('green.freemailChecking') : message}</p>
       <div className="ml-auto flex shrink-0 items-center gap-2">
         {action && (
-          <button
-            onClick={action.onClick}
-            disabled={pending}
-            className="rounded bg-emerald-600/80 px-2.5 py-1 text-white hover:bg-emerald-500 disabled:opacity-50"
-          >
+          <button onClick={action.onClick} disabled={pending} className={GREEN_NOTICE_PRIMARY}>
             {action.label}
           </button>
         )}
         <button
           onClick={onClose}
           disabled={phase.kind === 'busy'}
-          className="rounded bg-white/10 px-2.5 py-1 text-white/80 hover:bg-white/15 disabled:opacity-50"
+          className={GREEN_NOTICE_SECONDARY}
         >
           {finished || phase.kind === 'error'
             ? t('green.freemailClose')

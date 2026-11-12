@@ -1966,14 +1966,16 @@ pub fn contact_get(store: State<Store>, id: i64) -> Result<ContactSummary, Strin
     store.get_contact(id).map_err(|e| e.to_string())
 }
 
-/// 指定メールアドレスを持つ連絡先を返す（非削除）。メールの ＋/編集 切替・重複数表示に使う。
+/// 指定メールアドレスを持つ連絡先を返す。メールの ＋/編集 切替・重複数表示に使う。
+/// `include_deleted` が真ならゴミ箱のものも含める（既定は非削除だけ）。
 #[tauri::command]
 pub fn contact_lookup_email(
     store: State<Store>,
     email: String,
+    include_deleted: Option<bool>,
 ) -> Result<Vec<ContactSummary>, String> {
     store
-        .lookup_contacts_by_email(&email)
+        .lookup_contacts_by_email(&email, include_deleted.unwrap_or(false))
         .map_err(|e| e.to_string())
 }
 

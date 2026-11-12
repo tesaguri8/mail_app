@@ -910,6 +910,7 @@
     "syncing": "Syncing…",
     "accountTotal": "{{total}} messages",
     "accountTotalOf": "{{shown}} / {{total}} messages",
+    "filteredTotal": "{{filtered}} threads filtered / {{total}} messages",
     "syncStatus": {
       "reachable": "Server reachable (not synced yet)",
       "never": "Not synced yet",

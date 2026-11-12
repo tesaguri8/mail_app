@@ -5,6 +5,36 @@ import { useActivities } from '../stores/activity';
 import { contactCountLabel, type ContactCount } from '../stores/contactCount';
 
 /**
+ * フッター左のメールの件数の文言（キーと値）。メールモードでなければ null。
+ * - 絞り込み中: 「絞り込み n スレッド / 全 m 件」（一覧が数えるのはスレッド、全体はメールの通数）
+ * - それ以外: 「メール ローカル / サーバ 件」（サーバの数が分からなければ「メール n 件」）
+ *
+ * @param total 表示中アカウントのローカル保存件数
+ * @param serverTotal 同じ集計のサーバ総数
+ * @param filtered 絞り込み中のスレッドの件数（絞り込んでいなければ null）
+ */
+export function mailCountLabel(
+  total: number | null | undefined,
+  serverTotal: number | null | undefined,
+  filtered: number | null | undefined
+): { key: string; values: Record<string, string> } | null {
+  if (total == null) return null;
+  if (filtered != null) {
+    return {
+      key: 'mailbox.filteredTotal',
+      values: { filtered: filtered.toLocaleString(), total: total.toLocaleString() },
+    };
+  }
+  if (serverTotal != null && serverTotal > 0) {
+    return {
+      key: 'mailbox.accountTotalOf',
+      values: { shown: total.toLocaleString(), total: serverTotal.toLocaleString() },
+    };
+  }
+  return { key: 'mailbox.accountTotal', values: { total: total.toLocaleString() } };
+}
+
+/**
  * 全ビュー共通のボトムバー（常設）。右側の 1 本のスライダーで、背景の濃さ（image）と
  * 文字色の白→黒（type）を切り替えて調整する。アイコンでモードを選ぶ。
  * 将来はステータス・今日のメッセージ等を左側に置ける。
@@ -18,6 +48,7 @@ export function BottomBar({
   onModeChange,
   mailTotal,
   mailServerTotal,
+  mailFiltered,
   contactCount,
 }: {
   /** 背景のかぶせ（暗さ）。0〜BAR_MAX。 */
@@ -33,6 +64,8 @@ export function BottomBar({
   mailTotal?: number | null;
   /** 同じ集計のサーバ総数（IMAP EXISTS 合計）。分かれば「ローカル/サーバ」表示にする。 */
   mailServerTotal?: number | null;
+  /** 絞り込み中のスレッドの件数（絞り込んでいなければ null）。あれば「絞り込み n スレッド / 全 m 件」。 */
+  mailFiltered?: number | null;
   /** 連絡先の一覧に出している件数（連絡先の一覧を出しているときだけ。他は null）。 */
   contactCount?: ContactCount | null;
 }) {
@@ -50,14 +83,10 @@ export function BottomBar({
         const { key, values } = contactCountLabel(contactCount);
         return t(key, values);
       })()
-    : mailTotal != null
-      ? mailServerTotal != null && mailServerTotal > 0
-        ? t('mailbox.accountTotalOf', {
-            shown: mailTotal.toLocaleString(),
-            total: mailServerTotal.toLocaleString(),
-          })
-        : t('mailbox.accountTotal', { total: mailTotal.toLocaleString() })
-      : null;
+    : (() => {
+        const label = mailCountLabel(mailTotal, mailServerTotal, mailFiltered);
+        return label ? t(label.key, label.values) : null;
+      })();
   const value = mode === 'ink' ? ink : dim;
   const setValue = mode === 'ink' ? onInkChange : onDimChange;
   const pct = Math.round((value / BAR_MAX) * 100);

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ThreadView } from '@bindings/ThreadView';
 import {
   keepMatch,
+  markMessagesRead,
   sameThreadView,
   scrollAfterRefresh,
   shouldFetchMissingRefs,
@@ -83,5 +84,40 @@ describe('shouldFetchMissingRefs（手元に無いメールを探しに行くか
     expect(shouldFetchMissingRefs(withRefs(['absent']), new Set())).toBe(false);
     expect(shouldFetchMissingRefs(withRefs([]), new Set())).toBe(false);
     expect(shouldFetchMissingRefs(null, new Set())).toBe(false);
+  });
+});
+
+describe('markMessagesRead（一覧で既読にしたら、会話のバブルの未読の点も消す）', () => {
+  const thread = (msgs: [number, boolean][]): ThreadView =>
+    ({
+      thread: { id: 1 },
+      messages: msgs.map(([id, is_read]) => ({ id, is_read })),
+    }) as unknown as ThreadView;
+
+  it('合図の id の未読だけを既読にする', () => {
+    const v = markMessagesRead(
+      thread([
+        [1, false],
+        [2, false],
+        [3, true],
+      ]),
+      [1, 3]
+    );
+    expect(v?.messages.map((m) => [m.id, m.is_read])).toEqual([
+      [1, true],
+      [2, false],
+      [3, true],
+    ]);
+  });
+
+  it('合図に無いメール（手動で未読に戻したもの等）は触らない', () => {
+    const v = markMessagesRead(thread([[5, false]]), [1]);
+    expect(v?.messages[0].is_read).toBe(false);
+  });
+
+  it('変わるものが無ければ同じ値を返す（描き直さない）', () => {
+    const v = thread([[1, true]]);
+    expect(markMessagesRead(v, [1])).toBe(v);
+    expect(markMessagesRead(null, [1])).toBeNull();
   });
 });

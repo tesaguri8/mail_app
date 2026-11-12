@@ -40,6 +40,8 @@ export default function App() {
   const [mailOpen, setMailOpen] = useState<MailOpenRequest | null>(null);
   // メール画面で現在表示中のアカウント選択（'all'=全て）。フッターの件数表示に使う。
   const [mailSel, setMailSel] = useState<number | 'all' | null>(null);
+  // メール画面で絞り込み中のスレッドの件数（絞り込んでいなければ null）。
+  const [mailFiltered, setMailFiltered] = useState<number | null>(null);
   // 背景のかぶせ（暗さ）。写真によって文字が見づらい時に上げる。
   const [dim, setDim] = useState<number>(readDim);
   useEffect(() => writeDim(dim), [dim]);
@@ -161,7 +163,12 @@ export default function App() {
             />
           </KeepAlivePanel>
           <KeepAlivePanel active={view === 'mail'}>
-            <MailboxView accounts={accounts} openRequest={mailOpen} onAccountChange={setMailSel} />
+            <MailboxView
+              accounts={accounts}
+              openRequest={mailOpen}
+              onAccountChange={setMailSel}
+              onFilteredCountChange={setMailFiltered}
+            />
           </KeepAlivePanel>
           <KeepAlivePanel active={view === 'contacts'}>
             <AddressBook />
@@ -183,6 +190,7 @@ export default function App() {
           onModeChange={setBarMode}
           mailTotal={mailTotal}
           mailServerTotal={mailServerTotal}
+          mailFiltered={view === 'mail' ? mailFiltered : null}
           contactCount={view === 'contacts' ? contactCount : null}
         />
       </div>

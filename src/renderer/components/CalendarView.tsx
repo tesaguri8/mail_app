@@ -17,6 +17,7 @@ import {
   Download,
   Lock,
   Search,
+  RefreshCcw,
 } from 'lucide-react';
 import type { EventSummary } from '@bindings/EventSummary';
 import type { EventInput } from '@bindings/EventInput';
@@ -44,7 +45,10 @@ import {
   eventSearch,
   eventLocationSuggest,
   eventTitleSuggest,
+  gcalCalendarResync,
 } from '../services/calendar';
+import { ContextMenu } from './ContextMenu';
+import { resyncHadDrift, resyncVars } from '../utils/gcalResync';
 import { expandEvents, presetToRule, ruleToPreset, RECUR_PRESETS, type RecurPreset } from '../utils/recurrence';
 import { htmlToText } from '../utils/htmlToText';
 import { isHoliday, holidayName } from '../utils/holidays';
@@ -1405,6 +1409,35 @@ function CalendarSidebar({
     await calendarSetVisible(c.id, !c.visible).catch(() => undefined);
     onChanged();
   };
+  // Google カレンダーの右クリックメニュー（「最初から同期し直す」）。
+  const [gMenu, setGMenu] = useState<{ x: number; y: number; cal: CalendarSummary } | null>(null);
+  // 同期し直しの状態と結果（行の下に出す。null=出していない）。
+  const [resync, setResync] = useState<{
+    id: number;
+    phase: 'running' | 'done' | 'error';
+    text: string;
+  } | null>(null);
+  const runResync = async (c: CalendarSummary) => {
+    if (c.account_disconnected) {
+      setResync({ id: c.id, phase: 'error', text: t('cal.resyncDisconnected') });
+      return;
+    }
+    setResync({ id: c.id, phase: 'running', text: t('cal.resyncRunning') });
+    try {
+      const r = await gcalCalendarResync(c.id);
+      const text = t('cal.resyncDone', resyncVars(r));
+      setResync({
+        id: c.id,
+        phase: 'done',
+        text: resyncHadDrift(r) ? `${text} ${t('cal.resyncDrift')}` : text,
+      });
+      // 予定を読み直す（自動同期のあとと同じ合図）。
+      window.dispatchEvent(new Event(CALENDAR_SYNCED_EVENT));
+      onChanged();
+    } catch (e) {
+      setResync({ id: c.id, phase: 'error', text: t('cal.resyncFailed', { error: String(e) }) });
+    }
+  };
 
   return (
     <aside className="flex w-56 shrink-0 flex-col gap-3 overflow-y-auto text-white">
@@ -1488,25 +1521,69 @@ function CalendarSidebar({
 
           // Google 行: 表示トグルのみ（改名・色・削除は同期で上書きされるため出さない）。
           // 読み取り専用（購読カレンダー等）は鍵アイコンで示す＝ここの予定は Google へ送れない。
+          // 右クリックで「最初から同期し直す」（結果は行の下に出す）。
           const googleRow = (c: CalendarSummary) => {
             const ro = !isWritableCalendar(c);
+            const status = resync?.id === c.id ? resync : null;
             return (
-              <li
-                key={c.id}
-                className="flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-white/10"
-                title={ro ? t('cal.readonly') : undefined}
-              >
-                <input
-                  type="checkbox"
-                  checked={c.visible}
-                  onChange={() => toggle(c)}
-                  className="shrink-0"
-                  style={{ accentColor: c.color ?? DEFAULT_COLOR }}
-                />
-                {/* 色はチェックボックスで表現。ここは Google 連携の目印にロゴを出す。 */}
-                <GoogleGlyph size={10} />
-                <span className="min-w-0 flex-1 truncate text-sm">{c.name || t('cal.defaultCalendar')}</span>
-                {ro && <Lock size={11} className="shrink-0 text-white/35" aria-label={t('cal.readonly')} />}
+              <li key={c.id} className="rounded-lg">
+                <div
+                  className="flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-white/10"
+                  title={ro ? t('cal.readonly') : undefined}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setGMenu({ x: e.clientX, y: e.clientY, cal: c });
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={c.visible}
+                    onChange={() => toggle(c)}
+                    className="shrink-0"
+                    style={{ accentColor: c.color ?? DEFAULT_COLOR }}
+                  />
+                  {/* 色はチェックボックスで表現。ここは Google 連携の目印にロゴを出す。 */}
+                  <GoogleGlyph size={10} />
+                  <span className="min-w-0 flex-1 truncate text-sm">
+                    {c.name || t('cal.defaultCalendar')}
+                  </span>
+                  {ro && (
+                    <Lock
+                      size={11}
+                      className="shrink-0 text-white/35"
+                      aria-label={t('cal.readonly')}
+                    />
+                  )}
+                  {status?.phase === 'running' && (
+                    <RefreshCcw
+                      size={11}
+                      className="shrink-0 animate-spin text-white/50"
+                      aria-hidden
+                    />
+                  )}
+                </div>
+                {status && (
+                  <div
+                    role="status"
+                    className={`mx-1 mb-1 flex items-start gap-1.5 rounded-md px-2 py-1 text-[11px] leading-snug ${
+                      status.phase === 'error'
+                        ? 'bg-rose-500/15 text-rose-200'
+                        : 'bg-white/5 text-white/70'
+                    }`}
+                  >
+                    <p className="min-w-0 flex-1 whitespace-normal break-words">{status.text}</p>
+                    {status.phase !== 'running' && (
+                      <button
+                        onClick={() => setResync(null)}
+                        title={t('mailbox.close')}
+                        aria-label={t('mailbox.close')}
+                        className="shrink-0 rounded p-0.5 text-white/50 hover:bg-white/15 hover:text-white"
+                      >
+                        <X size={11} />
+                      </button>
+                    )}
+                  </div>
+                )}
               </li>
             );
           };
@@ -1550,6 +1627,22 @@ function CalendarSidebar({
                   <ul className="space-y-0.5">{cals.map(googleRow)}</ul>
                 </div>
               ))}
+              {gMenu && (
+                <ContextMenu
+                  x={gMenu.x}
+                  y={gMenu.y}
+                  header={gMenu.cal.name || t('cal.defaultCalendar')}
+                  items={[
+                    {
+                      key: 'resync',
+                      label: t('cal.resync'),
+                      Icon: RefreshCcw,
+                      onClick: () => void runResync(gMenu.cal),
+                    },
+                  ]}
+                  onClose={() => setGMenu(null)}
+                />
+              )}
             </>
           );
         })()}

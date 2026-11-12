@@ -105,6 +105,9 @@ pub struct SyncedCalendar {
     pub sync_token: Option<String>,
     /// owner | writer | reader | freeBusyReader。
     pub access_role: String,
+    /// 最後に全件を取り直してから 24 時間を超えた（または一度も取り直していない）。
+    /// 増分ではなく全件で取り直す（増分の取りこぼしを 1 日以内に直す）。
+    pub full_due: bool,
 }
 
 /// apply_remote_event の結果（同期サマリの集計用）。
@@ -116,6 +119,33 @@ pub enum ApplyOutcome {
     Deleted,
     /// 変化なし（既に削除済み、または手元と同じ版＝etag が同じ）。何も書き換えていない。
     Skipped,
+}
+
+/// apply_remote_event の詳しい結果（全件の取り直しで、戻した・新しく入った件数を数える）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteApplied {
+    /// 手元に無かった予定を新しく入れた。
+    Inserted,
+    /// 手元で削除扱いだった予定を戻した（deleted_at を NULL に）。
+    Restored,
+    /// 手元にある予定を新しい版で書き換えた。
+    Updated,
+    /// Google 側の削除を取り込んだ（ローカルを論理削除 / 1 回だけの削除を記録）。
+    Deleted,
+    /// 変化なし（既に削除済み、または手元と同じ版）。
+    Unchanged,
+}
+
+impl From<RemoteApplied> for ApplyOutcome {
+    fn from(a: RemoteApplied) -> Self {
+        match a {
+            RemoteApplied::Inserted | RemoteApplied::Restored | RemoteApplied::Updated => {
+                ApplyOutcome::Upserted
+            }
+            RemoteApplied::Deleted => ApplyOutcome::Deleted,
+            RemoteApplied::Unchanged => ApplyOutcome::Skipped,
+        }
+    }
 }
 
 /// 取り込み済みの Google の予定（同じ版かどうかを見るための最小限）。
@@ -183,7 +213,8 @@ impl Store {
     ) -> rusqlite::Result<Vec<SyncedCalendar>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, external_id, sync_token, COALESCE(access_role, 'reader') \
+            "SELECT id, external_id, sync_token, COALESCE(access_role, 'reader'), \
+                    last_full_sync_at IS NULL OR last_full_sync_at <= datetime('now', '-1 day') \
              FROM calendars \
              WHERE account_id = ?1 AND source = 'google' AND sync_enabled = 1 \
                AND external_id IS NOT NULL",
@@ -194,6 +225,7 @@ impl Store {
                 external_id: r.get(1)?,
                 sync_token: r.get(2)?,
                 access_role: r.get(3)?,
+                full_due: r.get(4)?,
             })
         })?;
         rows.collect()
@@ -240,11 +272,28 @@ impl Store {
     // ── 予定の取り込み / 送信 ────────────────────────────────────────
 
     /// Google 側の 1 予定をローカルへ反映する（external_id で突き合わせ）。
+    ///
+    /// # Errors
+    /// DB の読み書きに失敗したとき。
     pub fn apply_remote_event(
         &self,
         calendar_local_id: i64,
         ev: &RemoteEvent,
     ) -> rusqlite::Result<ApplyOutcome> {
+        self.apply_remote_event_detail(calendar_local_id, ev)
+            .map(ApplyOutcome::from)
+    }
+
+    /// [`Self::apply_remote_event`] と同じ反映をして、新しく入れた・戻した・書き換えたを分けて返す。
+    /// 手元で削除扱いの予定も、Google から（cancelled でなく）返ってくれば戻す。
+    ///
+    /// # Errors
+    /// DB の読み書きに失敗したとき。
+    pub fn apply_remote_event_detail(
+        &self,
+        calendar_local_id: i64,
+        ev: &RemoteEvent,
+    ) -> rusqlite::Result<RemoteApplied> {
         let conn = self.conn.lock().unwrap();
         let stored: Option<StoredRemote> = conn
             .query_row(
@@ -274,7 +323,7 @@ impl Store {
                     && st.calendar_id == Some(calendar_local_id)
             })
         {
-            return Ok(ApplyOutcome::Skipped);
+            return Ok(RemoteApplied::Unchanged);
         }
         let existing = stored.map(|st| (st.id, st.deleted_at));
 
@@ -307,10 +356,10 @@ impl Store {
                     )?;
                     // 本体の削除なら、1 回だけ変更された回も一緒に消す（孤立させない）。
                     cascade_delete_instances(&conn, id)?;
-                    Ok(ApplyOutcome::Deleted)
+                    Ok(RemoteApplied::Deleted)
                 }
-                _ if recorded => Ok(ApplyOutcome::Deleted),
-                _ => Ok(ApplyOutcome::Skipped),
+                _ if recorded => Ok(RemoteApplied::Deleted),
+                _ => Ok(RemoteApplied::Unchanged),
             };
         }
 
@@ -332,6 +381,11 @@ impl Store {
             })
             .unwrap_or((None, None));
 
+        let applied = match &existing {
+            Some((_, Some(_))) => RemoteApplied::Restored,
+            Some((_, None)) => RemoteApplied::Updated,
+            None => RemoteApplied::Inserted,
+        };
         let event_id = match existing {
             Some((id, _)) => {
                 conn.execute(
@@ -398,7 +452,7 @@ impl Store {
         };
         // Google 側の全リマインダーを反映する（全置き換え）。
         replace_event_reminders(&conn, event_id, &ev.reminders)?;
-        Ok(ApplyOutcome::Upserted)
+        Ok(applied)
     }
 
     /// 指定カレンダーの未送信ローカル変更（dirty=1）を返す。

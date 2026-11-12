@@ -345,6 +345,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 73,
         sql: include_str!("migrations/0073_ref_lookups.sql"),
     },
+    Migration {
+        // 74 は Google カレンダーの「最後に全件を取り直した時刻」（増分の取りこぼしを 1 日以内に直す）。
+        version: 74,
+        sql: include_str!("migrations/0074_calendar_full_sync.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。

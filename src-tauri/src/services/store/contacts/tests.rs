@@ -335,8 +335,35 @@ fn soft_delete_hides_restore_and_purge() {
 fn lookup_by_email_is_case_insensitive() {
     let s = store();
     s.upsert_contact(&person("山田", &["Taro@X.jp"])).unwrap();
-    assert_eq!(s.lookup_contacts_by_email("taro@x.JP").unwrap().len(), 1);
-    assert!(s.lookup_contacts_by_email("other@x.jp").unwrap().is_empty());
+    assert_eq!(
+        s.lookup_contacts_by_email("taro@x.JP", false)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(s
+        .lookup_contacts_by_email("other@x.jp", false)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn lookup_by_email_can_include_trash() {
+    let s = store();
+    let a = s
+        .upsert_contact(&person("山田", &["taro@gmail.invalid"]))
+        .unwrap();
+    s.delete_contact(a.id as i64).unwrap();
+    // 既定（非削除だけ）では出ず、ゴミ箱を含めると削除の印つきで出る。
+    assert!(s
+        .lookup_contacts_by_email("taro@gmail.invalid", false)
+        .unwrap()
+        .is_empty());
+    let all = s
+        .lookup_contacts_by_email(" TARO@gmail.invalid ", true)
+        .unwrap();
+    assert_eq!(all.len(), 1);
+    assert!(all[0].deleted_at.is_some());
 }
 
 #[test]

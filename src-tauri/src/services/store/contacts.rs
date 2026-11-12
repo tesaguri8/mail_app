@@ -201,24 +201,34 @@ impl Store {
         load_contact(&conn, id)
     }
 
-    /// 指定メールアドレスを持つ（非削除の）連絡先を返す（一覧用の形）。メールアドレスの
-    /// ＋/編集 アイコン切替と重複数の表示に使う。小文字の完全一致（式索引）。
+    /// 指定メールアドレスを持つ連絡先を返す（一覧用の形）。メールアドレスの ＋/編集 アイコン切替と
+    /// 重複数の表示に使う。小文字の完全一致（式索引）。
+    ///
+    /// - `include_deleted`: 偽なら削除されていないものだけ。真ならゴミ箱のものも含める
+    ///   （差出人を住所録に登録する前に、同じアドレスが既にあるかを確かめるため）
     ///
     /// # Errors
     /// DB の読み出しに失敗したとき。
-    pub fn lookup_contacts_by_email(&self, email: &str) -> rusqlite::Result<Vec<ContactSummary>> {
+    pub fn lookup_contacts_by_email(
+        &self,
+        email: &str,
+        include_deleted: bool,
+    ) -> rusqlite::Result<Vec<ContactSummary>> {
         let addr = email.trim();
         if addr.is_empty() {
             return Ok(Vec::new());
         }
+        let alive = if include_deleted {
+            ""
+        } else {
+            "c.deleted_at IS NULL AND "
+        };
+        let cond = format!(
+            "{alive}EXISTS (SELECT 1 FROM contact_emails ce \
+             WHERE ce.contact_id = c.id AND lower(ce.value) = lower(?1))"
+        );
         let conn = self.conn.lock().unwrap();
-        query_summaries(
-            &conn,
-            "c.deleted_at IS NULL AND EXISTS (SELECT 1 FROM contact_emails ce \
-             WHERE ce.contact_id = c.id AND lower(ce.value) = lower(?1))",
-            SUMMARY_ORDER,
-            &[&addr],
-        )
+        query_summaries(&conn, &cond, SUMMARY_ORDER, &[&addr])
     }
 
     /// 連絡先を作成または更新し、確定後の連絡先を返す（編集画面の保存）。

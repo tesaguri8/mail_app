@@ -147,7 +147,19 @@
     "warnHint": "意図的に外したドメイン。住所録にあっても自動グリーンにしません（再登録を防止）。",
     "makeGreen": "グリーンにする",
     "restore": "元に戻す",
-    "freemail": "「{{domain}}」はフリーメールのため、ドメイン単位ではグリーンにできません。信頼するなら差出人を住所録に登録してください。"
+    "freemail": "「{{domain}}」はフリーメールのため、ドメイン単位ではグリーンにできません。信頼するなら差出人を住所録に登録してください。",
+    "freemailChecking": "住所録を確かめています…",
+    "freemailAsk": "{{domain}} はドメインごとには認められません。{{name}}さん（{{address}}）を住所録に登録して、この人だけグリーンにしますか？",
+    "freemailAskNoName": "{{domain}} はドメインごとには認められません。{{address}} を住所録に登録して、この人だけグリーンにしますか？",
+    "freemailTrashed": "{{domain}} はドメインごとには認められません。{{address}} はゴミ箱の連絡先「{{name}}」にあります。ゴミ箱から戻して、この人だけグリーンにしますか？",
+    "freemailAlive": "{{address}} は住所録の「{{name}}」に既に登録されています。新しくは作りません。",
+    "freemailRegister": "登録する",
+    "freemailRestore": "戻す",
+    "freemailCancel": "やめる",
+    "freemailClose": "閉じる",
+    "freemailRegistered": "{{name}}さん（{{address}}）を住所録に登録しました。この人はグリーンです。",
+    "freemailRestored": "「{{name}}」をゴミ箱から戻しました。{{address}} はグリーンです。",
+    "freemailFailed": "登録できませんでした: {{error}}"
   },
   "search": {
     "placeholder": "メールを検索",

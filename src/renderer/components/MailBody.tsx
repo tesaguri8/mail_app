@@ -14,8 +14,6 @@ import {
   LeafyGreen,
   Loader2,
   Paperclip,
-  Pencil,
-  Plus,
   Printer,
   RefreshCw,
   Reply,
@@ -32,10 +30,18 @@ import type { AttachmentSummary } from '@bindings/AttachmentSummary';
 import type { TagSummary } from '@bindings/TagSummary';
 import { DEFAULT_TAG_COLOR } from '../utils/tagColors';
 import { mailAttachments, mailRefetch } from '../services/mail';
-import type { ContactSummary } from '@bindings/ContactSummary';
 import { getInlineImages, getRemoteImageMode, PREFS_EVENT } from '../config/prefs';
 import { greenDomainAdd, greenDomainWarn } from '../services/green';
-import { contactLookupEmail } from '../services/contacts';
+import { FreemailGreenPrompt } from './FreemailGreenPrompt';
+import {
+  clearEmailLookupCache,
+  EmailAdd,
+  forgetEmailLookup,
+  HOVER_ADD_BUTTON,
+  HOVER_ADD_PILL,
+  LinkifyEmails,
+  SenderAddressLine,
+} from './EmailAddress';
 import { mailLoadRemote, senderRemoteAllowed, senderSetRemotePolicy } from '../services/mail';
 import { AutoLinkText, HtmlText, inlineCidRefs, remoteImageUrls } from './HtmlText';
 import { LinkGuard } from './LinkGuard';
@@ -61,144 +67,6 @@ import { EmlInnerAttachments, isEmlAttachment } from './EmlInnerAttachments';
 import { useToast } from './SyncProvider';
 import { hasReadableBody, htmlHasContent } from '../utils/mailBody';
 import { formatSize } from '../utils/fileSize';
-
-/** 「表示名 <メール>」に整形。表示名が無ければアドレスのみ。 */
-function formatAddress(name: string | null, address: string | null): string {
-  const a = (address ?? '').trim();
-  const n = (name ?? '').trim();
-  if (!a) return '—';
-  return n ? `${n} <${a}>` : a;
-}
-
-/** 本文/ヘッダ中のメールアドレス検出。 */
-const EMAIL_RE = /([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/g;
-
-/** メールアドレスごとの住所録照合キャッシュ（同一アドレスの重複ルックアップを避ける）。
- *  住所録が変わり得るので、メール画面を離れるとき（MailBody アンマウント）にクリアする。 */
-const emailLookupCache = new Map<string, Promise<ContactSummary[]>>();
-function lookupEmailCached(email: string): Promise<ContactSummary[]> {
-  const key = email.trim().toLowerCase();
-  let p = emailLookupCache.get(key);
-  if (!p) {
-    p = contactLookupEmail(email).catch(() => [] as ContactSummary[]);
-    emailLookupCache.set(key, p);
-  }
-  return p;
-}
-
-/** 氏名の突き合わせ用の正規化（全半角統一・空白除去・小文字化）。 */
-const foldName = (s?: string | null) =>
-  (s ?? '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
-
-/**
- * メールアドレス＋（ホバー/フォーカスで現れる）操作ボタン。
- * 住所録に未登録＝＋（追加）、登録済み＝編集アイコン。重複（複数登録）があれば件数を黄色字で表示。
- */
-function EmailAdd({
-  email,
-  name,
-  onAdd,
-  onEdit,
-  onCompose,
-}: {
-  email: string;
-  name?: string | null;
-  onAdd: (name: string | null, email: string) => void;
-  onEdit?: (id: number) => void;
-  /** アドレスのクリックでこのアドレス宛の新規メール作成を開く。 */
-  onCompose?: (email: string) => void;
-}) {
-  const { t } = useTranslation();
-  const [matches, setMatches] = useState<ContactSummary[] | null>(null);
-  useEffect(() => {
-    let alive = true;
-    lookupEmailCached(email).then((r) => alive && setMatches(r));
-    return () => {
-      alive = false;
-    };
-  }, [email]);
-
-  const count = matches?.length ?? 0;
-  const registered = count > 0;
-  const dup = count > 1;
-
-  // 差出人名に「関連する」既存を優先（完全一致・空白差のほか、姓のみ/名のみ等の部分一致）。
-  // 同じ代表アドレスが別人（前任）に紐づくときの取り違えを防ぐ。
-  const wantName = foldName(name);
-  const named =
-    matches && wantName
-      ? (matches.find((m) => {
-          const dn = foldName(m.display_name);
-          return dn === wantName || dn.includes(wantName) || wantName.includes(dn);
-        }) ?? null)
-      : null;
-  // クリック動作: 名前が関連する既存があれば編集。差出人名が無ければ（判別できないので）
-  // 従来どおり編集。差出人名があるのに関連する既存が無い＝別人とみなして新規追加にする
-  // （アドレスが 1 件だけ一致でも、名前が違えば開かず新規登録にする）。
-  const willEdit = registered && !!onEdit && (named != null || !wantName);
-
-  const handle = () => {
-    if (willEdit && matches && onEdit) onEdit((named ?? matches[0]).id);
-    else onAdd(name ?? null, email);
-  };
-  const title = willEdit
-    ? dup
-      ? t('mailbox.editContactDup', { count })
-      : t('mailbox.editContact')
-    : t('mailbox.addContact');
-
-  return (
-    <span className="group/email">
-      {onCompose ? (
-        <button
-          type="button"
-          onClick={() => onCompose(email)}
-          title={t('mailbox.composeTo', { email })}
-          className="cursor-pointer rounded hover:text-sky-300 hover:underline focus:outline-none focus:text-sky-300"
-        >
-          {email}
-        </button>
-      ) : (
-        <span>{email}</span>
-      )}
-      <button
-        onClick={handle}
-        title={title}
-        aria-label={title}
-        className={`${HOVER_ADD_BUTTON} group-hover/email:opacity-100`}
-      >
-        {/* 重複件数は ::after で出す（文字にしないので、写したときに件数が混ざらない）。 */}
-        <span
-          data-count={dup ? count : undefined}
-          className={`${HOVER_ADD_PILL} ${
-            dup
-              ? 'after:ml-0.5 after:text-[9px] after:font-semibold after:text-amber-300 after:content-[attr(data-count)]'
-              : ''
-          }`}
-        >
-          {willEdit ? <Pencil size={11} /> : <Plus size={11} />}
-        </span>
-      </button>
-    </span>
-  );
-}
-
-/**
- * 本文中の日付・アドレスの横に、ホバー/フォーカスで現れる＋ボタン（の外枠）。
- * - 幅 0 で右へはみ出して描く: 見えない間も幅を取らず（「12:50」と「:57」の間に隙間を作らない）、
- *   現れても文字が左右に動かない
- * - inline-flex にしない: flex の中身はブロック扱いになり、選んで写すと前後に改行が入る
- *   （Chromium / WebView2 で確かめた）
- */
-const HOVER_ADD_BUTTON =
-  'inline-block w-0 overflow-visible whitespace-nowrap align-middle opacity-0 transition-opacity focus:opacity-100 focus:outline-none';
-
-/**
- * ＋ボタンの見た目（丸い枠）。後ろの文字に重なって出るので、背景は不透明にして手前に描く。
- * 中身も inline-flex にしない（上と同じ理由）。
- */
-const HOVER_ADD_PILL =
-  'relative z-10 ml-0.5 inline-block h-4 rounded-full bg-zinc-700 px-1 leading-4 text-white/80 shadow hover:bg-sky-600 hover:text-white [&>svg]:inline [&>svg]:align-[-1px]';
 
 /**
  * 本文中の日付＋（ホバー/フォーカスで現れる）カレンダー追加ボタン。
@@ -269,61 +137,6 @@ export function makeRenderDate(
   };
 }
 
-/** ヘッダの差出人/宛先。onAdd があればアドレスに＋/編集を出す（無ければ従来のテキスト）。 */
-function AddressLine({
-  name,
-  address,
-  onAdd,
-  onEdit,
-  onCompose,
-}: {
-  name: string | null;
-  address: string | null;
-  onAdd?: (name: string | null, email: string) => void;
-  onEdit?: (id: number) => void;
-  onCompose?: (email: string) => void;
-}) {
-  const a = (address ?? '').trim();
-  const n = (name ?? '').trim();
-  if (!a) return <>—</>;
-  if (!onAdd) return <>{formatAddress(name, address)}</>;
-  return (
-    // inline-flex にしない（選んで写すと名前・アドレス・「>」の間に改行が入る。HOVER_ADD_BUTTON）。
-    <span className="break-words">
-      {n && <>{n} &lt;</>}
-      <EmailAdd email={a} name={n || null} onAdd={onAdd} onEdit={onEdit} onCompose={onCompose} />
-      {n && <>&gt;</>}
-    </span>
-  );
-}
-
-/** プレーン本文中のメールアドレスをリンク化し、それぞれに＋/編集を出す。 */
-function LinkifyEmails({
-  text,
-  onAdd,
-  onEdit,
-  onCompose,
-}: {
-  text: string;
-  onAdd?: (name: string | null, email: string) => void;
-  onEdit?: (id: number) => void;
-  onCompose?: (email: string) => void;
-}) {
-  if (!onAdd) return <>{text}</>;
-  const parts = text.split(EMAIL_RE);
-  return (
-    <>
-      {parts.map((p, i) =>
-        i % 2 === 1 ? (
-          <EmailAdd key={i} email={p} onAdd={onAdd} onEdit={onEdit} onCompose={onCompose} />
-        ) : (
-          <span key={i}>{p}</span>
-        ),
-      )}
-    </>
-  );
-}
-
 /**
  * メール本文の表示（インライン）。Phase: プレーン本文のみ（HTML/リモート画像は
  * 後続でサニタイズ＋ブロック。docs/MAIL_SECURITY.md）。既定は引用除去後の clean_body。
@@ -375,7 +188,8 @@ export function MailBody({
   /** ヘッダの「カレンダーに追加」から、このメールに紐づくカレンダー入力を開く。 */
   onOpenCalendar?: () => void;
   /** グリーン認定/解除で一覧のバッジを更新するための通知。 */
-  onGreenChange?: () => void;
+  /** グリーンを変えた（新しい値）。親は一覧のバッジ・会話のバブルの印を更新する。 */
+  onGreenChange?: (green: boolean) => void;
   /** 検索語（複数）。本文中の一致を <mark> でハイライトする。 */
   highlight?: string[];
   /** ヘッダに「とじる（畳む）」ボタンを出す。会話バブルの展開解除に使う。 */
@@ -392,6 +206,8 @@ export function MailBody({
   const [refetching, setRefetching] = useState(false);
   // グリーン認定/解除の即時反映（メール切替でリセット）。null＝props の is_green を使う。
   const [greenOverride, setGreenOverride] = useState<boolean | null>(null);
+  // フリーメールで断られたときの「住所録に登録してこの人だけグリーンに」の確認を出しているか。
+  const [freemailAsk, setFreemailAsk] = useState(false);
   // 表示に使う本文（再取得済みがあればそれ、無ければ props の detail）。
   const d = refreshed ?? detail;
   const isGreen = greenOverride ?? d.is_green;
@@ -475,7 +291,7 @@ export function MailBody({
   }, []);
 
   // メール画面を離れるときに住所録照合キャッシュをクリア（連絡先の追加/編集を次回反映）。
-  useEffect(() => () => emailLookupCache.clear(), []);
+  useEffect(() => () => clearEmailLookupCache(), []);
 
   // メール切り替えごとに添付メタを読み込む（本体は押下時に取得）。
   useEffect(() => {
@@ -488,6 +304,7 @@ export function MailBody({
     setAttachmentsLoaded(false);
     setRefreshed(null);
     setGreenOverride(null);
+    setFreemailAsk(false);
     // インライン画像（cid:）は has_attachments に数えないため（例: 本文が画像 1 枚だけの
     // multipart/related）、本文が cid: を参照するときも添付メタを読み込む。読まないと
     // 本文中のインライン画像を解決できず、プレースホルダのまま何も表示されない。
@@ -774,20 +591,22 @@ export function MailBody({
   }, [detail.id, detail.body_state]);
 
   // 差出人ドメインをグリーン認定/解除（一覧のバッジは onGreenChange で更新）。
-  // フリーメール（gmail.com 等）はドメイン単位で信頼できないため認定は拒否され、理由を出す。
+  // フリーメール（gmail.com 等）はドメイン単位で信頼できないため認定は拒否される。そのときは
+  // 差出人を住所録に登録して「この人だけ」グリーンにするかをその場で訊く（FreemailGreenPrompt）。
   const toggleGreen = async () => {
     if (!senderDomain) return;
     const next = !isGreen;
     setNote('');
+    setFreemailAsk(false);
     try {
       if (next) {
         if (!(await greenDomainAdd(senderDomain))) {
-          setNote(t('green.freemail', { domain: senderDomain }));
+          setFreemailAsk(true);
           return;
         }
       } else await greenDomainWarn(senderDomain);
       setGreenOverride(next);
-      onGreenChange?.();
+      onGreenChange?.(next);
     } catch {
       /* noop */
     }
@@ -973,48 +792,61 @@ export function MailBody({
                 <X size={16} />
               </button>
             )}
-            {note && (
-              // 長い理由（フリーメールは認定不可 等）でも操作列を崩さないよう省略し、全文は title で。
-              <span className="ml-1 max-w-[16rem] truncate text-xs text-white/65" title={note}>
-                {note}
-              </span>
-            )}
           </div>
         </div>
+        {/* 操作の結果（再取得の失敗 等）。道具の行に詰めると狭い幅で切れて読めないので、
+            行の下に出して折り返す。 */}
+        {note && <p className="mt-1 whitespace-normal break-words text-xs text-white/65">{note}</p>}
+        {freemailAsk && senderDomain && (
+          <FreemailGreenPrompt
+            domain={senderDomain}
+            name={d.from_name}
+            address={(d.from_address ?? '').trim()}
+            onGreen={() => {
+              // 住所録が変わったので、アドレスの ＋/編集 の照合も引き直す。
+              forgetEmailLookup(d.from_address ?? '');
+              setGreenOverride(true);
+              onGreenChange?.(true);
+            }}
+            onClose={() => setFreemailAsk(false)}
+          />
+        )}
         <div className="mt-1 text-xs text-white/50">
           <div className="flex items-baseline justify-between gap-3">
-            <span className="min-w-0 truncate">
-              {d.verified_self && (
-                <span
-                  title={t('mailbox.verifiedSelf')}
-                  className="mr-1 inline-flex align-[-2px] text-sky-300"
-                >
-                  <BadgeCheck size={12} aria-label={t('mailbox.verifiedSelf')} />
-                </span>
-              )}
-              {d.is_vip && (
-                <Gem
-                  size={12}
-                  className="mr-1 inline fill-sky-300/30 align-[-1px] text-sky-300"
-                  aria-label={t('filter.vip')}
-                />
-              )}
-              {isGreen && (
-                <LeafyGreen
-                  size={12}
-                  className="mr-1 inline text-emerald-400 align-[-1px]"
-                  aria-label={t('green.badge')}
-                />
-              )}
-              {t('mailbox.from')}:{' '}
-              <AddressLine
-                name={d.from_name}
-                address={d.from_address}
-                onAdd={onAddContact}
-                onEdit={onEditContact}
-                onCompose={onComposeTo}
-              />
-            </span>
+            <SenderAddressLine
+              name={d.from_name}
+              address={d.from_address}
+              onAdd={onAddContact}
+              onEdit={onEditContact}
+              onCompose={onComposeTo}
+              prefix={
+                <>
+                  {d.verified_self && (
+                    <span
+                      title={t('mailbox.verifiedSelf')}
+                      className="mr-1 inline-flex align-[-2px] text-sky-300"
+                    >
+                      <BadgeCheck size={12} aria-label={t('mailbox.verifiedSelf')} />
+                    </span>
+                  )}
+                  {d.is_vip && (
+                    <Gem
+                      size={12}
+                      className="mr-1 inline fill-sky-300/30 align-[-1px] text-sky-300"
+                      aria-label={t('filter.vip')}
+                    />
+                  )}
+                  {isGreen && (
+                    <LeafyGreen
+                      size={12}
+                      className="mr-1 inline text-emerald-400 align-[-1px]"
+                      aria-label={t('green.badge')}
+                    />
+                  )}
+                  {t('mailbox.from')}:{' '}
+                </>
+              }
+            />
             <span className="shrink-0">{formatDateTime(d.date)}</span>
           </div>
           {showReplyTo && (

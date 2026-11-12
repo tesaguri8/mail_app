@@ -37,6 +37,7 @@ import type { AttachmentSummary } from '@bindings/AttachmentSummary';
 import { mailGet, mailAttachments, mailRefetch } from '../services/mail';
 import { attachmentImage } from '../utils/imageCache';
 import { greenDomainAdd, greenDomainWarn } from '../services/green';
+import { FreemailGreenPrompt } from './FreemailGreenPrompt';
 import { threadFetchMissing, threadRename, threadSplit, threadView } from '../services/threads';
 import { parseAddress } from '../utils/address';
 import { copyText } from '../utils/clipboard';
@@ -274,6 +275,9 @@ function Bubble({
   // null＝ThreadMessage の is_green を使う（メール切替でリセット）。
   const [greenOverride, setGreenOverride] = useState<boolean | null>(null);
   useEffect(() => setGreenOverride(null), [m.id, m.is_green]);
+  // フリーメールで断られたときの「住所録に登録してこの人だけグリーンに」の確認を出しているか。
+  const [freemailAsk, setFreemailAsk] = useState(false);
+  useEffect(() => setFreemailAsk(false), [m.id]);
   const isGreen = greenOverride ?? m.is_green;
   // 本文のリンクを左クリックで開いてよいか（グリーン・住所録・返信歴・自分のメール。
   // なりすましの疑いがあれば止める。docs/MAIL_SECURITY.md §2.1）。
@@ -283,13 +287,18 @@ function Bubble({
       ? (m.from_address ?? '').split('@').pop()?.trim().toLowerCase() || ''
       : '';
   // フリーメール（gmail.com 等）はドメイン単位で信頼できないため認定は拒否される（false）。
-  // その場合はバッジを変えない（理由の提示は本文ビュー側で行う）。
+  // そのときはバッジを変えず、差出人を住所録に登録して「この人だけ」グリーンにするかを
+  // バブルの中で訊く（全文表示の MailBody と同じ FreemailGreenPrompt）。
   const toggleGreen = async () => {
     if (!senderDomain) return;
     const next = !isGreen;
+    setFreemailAsk(false);
     try {
       if (next) {
-        if (!(await greenDomainAdd(senderDomain))) return;
+        if (!(await greenDomainAdd(senderDomain))) {
+          setFreemailAsk(true);
+          return;
+        }
       } else await greenDomainWarn(senderDomain);
       setGreenOverride(next);
       handlers.onGreenChange?.();
@@ -719,6 +728,21 @@ function Bubble({
               ))}
           </div>
 
+          {freemailAsk && senderDomain && (
+            <div className="mb-1">
+              <FreemailGreenPrompt
+                domain={senderDomain}
+                name={m.from_name}
+                address={(m.from_address ?? '').trim()}
+                onGreen={() => {
+                  setGreenOverride(true);
+                  handlers.onGreenChange?.();
+                }}
+                onClose={() => setFreemailAsk(false)}
+              />
+            </div>
+          )}
+
           {expanded && detail ? (
             // 全文表示: 従来の MailBody をそのまま埋め込む（添付・HTML・外部画像・タグ・スター）。
             // カードは高さ上限（max-h）＋ overflow-hidden にして「ヘッダ固定・本文だけ内部スクロール」
@@ -749,7 +773,11 @@ function Bubble({
                         })
                     : undefined
                 }
-                onGreenChange={handlers.onGreenChange}
+                onGreenChange={(green) => {
+                  // 全文表示の中で変えたときも、バブルの見出しの印をその場で合わせる。
+                  setGreenOverride(green);
+                  handlers.onGreenChange?.();
+                }}
                 highlight={highlight}
                 onCollapse={onToggleExpand}
               />

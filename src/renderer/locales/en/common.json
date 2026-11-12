@@ -147,7 +147,19 @@
     "warnHint": "Domains you intentionally excluded. They won't be auto-greened even if present in the address book (prevents re-adding).",
     "makeGreen": "Make green",
     "restore": "Reset",
-    "freemail": "\"{{domain}}\" is a freemail domain, so it can't be greened domain-wide. Add the sender to your address book to trust them individually."
+    "freemail": "\"{{domain}}\" is a freemail domain, so it can't be greened domain-wide. Add the sender to your address book to trust them individually.",
+    "freemailChecking": "Checking your address book…",
+    "freemailAsk": "{{domain}} can't be approved as a whole domain. Add {{name}} ({{address}}) to your address book and make just this person green?",
+    "freemailAskNoName": "{{domain}} can't be approved as a whole domain. Add {{address}} to your address book and make just this person green?",
+    "freemailTrashed": "{{domain}} can't be approved as a whole domain. {{address}} belongs to \"{{name}}\" in the trash. Restore it and make just this person green?",
+    "freemailAlive": "{{address}} is already in your address book as \"{{name}}\". No new contact was created.",
+    "freemailRegister": "Add",
+    "freemailRestore": "Restore",
+    "freemailCancel": "Cancel",
+    "freemailClose": "Close",
+    "freemailRegistered": "Added {{name}} ({{address}}) to your address book. This person is now green.",
+    "freemailRestored": "Restored \"{{name}}\" from the trash. {{address}} is now green.",
+    "freemailFailed": "Couldn't add the contact: {{error}}"
   },
   "search": {
     "placeholder": "Search mail",

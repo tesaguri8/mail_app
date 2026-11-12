@@ -825,18 +825,11 @@ export function MailboxView({
   // 未読の絞り込みから消さない（keepMatching が passesWhileReading で当てる）。手動で既読/未読を
   // 切り替えたらこの予約は取り消す（下の onSetRead / actRead）。
   const activeReadRef = useRef<ActiveRead | null>(null);
-  // 一覧の行を既読にした形へ直し、日の未読も数え直す（絞り込みは keepMatching が当てる）。
-  const markRowRead = (rowId: number) => {
-    const mark = keepMatching((prev: ThreadListItem[]) =>
+  // 一覧の行を既読にした形へ直す（絞り込みから外れて抜いた行も、日の件数・未読も updateLists が直す）。
+  const markRowRead = (rowId: number) =>
+    updateLists((prev) =>
       prev.map((m) => (m.id === rowId ? { ...m, is_read: true, unread_count: 0 } : m))
     );
-    const before = slotsRef.current;
-    const next = updateLoaded(before, mark).slots;
-    slotsRef.current = next;
-    setSlots(next);
-    setDays((prev) => retallyDays(prev, before, next, []));
-    setSearchResults(mark);
-  };
   const readTimer = useReadAfterDelay(() => {
     const t = activeReadRef.current;
     if (!t || t.read) return;
@@ -852,7 +845,7 @@ export function MailboxView({
     activeReadRef.current = null;
     readTimer.cancel();
     if (t.read) markRowRead(t.rowId);
-    // keepMatching / markRowRead は ref だけを見る。
+    // markRowRead（updateLists）は ref と state の更新関数だけを見る。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [readTimer]);
   // 手動で既読/未読を切り替えたときに、待っている予約を取り消す（手動を優先）。

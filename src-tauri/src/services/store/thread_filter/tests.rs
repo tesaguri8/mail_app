@@ -206,6 +206,7 @@ fn cases() -> Vec<ThreadFilter> {
             until: Some(mid + 120 * 3600),
         }),
         tag_ids: vec![1],
+        reading_id: None,
     });
     v
 }
@@ -291,39 +292,90 @@ fn 絞り込み中も日ごとの件数と未読が一覧と揃う() {
     seed(&store);
     for account in [Some(1), None] {
         for f in cases() {
-            let days = store
-                .thread_day_counts_filtered(account, "inbox", &f)
-                .unwrap();
-            let all = store
-                .list_threads_filtered(account, "inbox", &f, 10_000, 0)
-                .unwrap();
-            let total: i32 = days.iter().map(|d| d.count).sum();
-            assert_eq!(total as usize, all.len(), "{f:?}");
-            let mut offset = 0usize;
-            let mut unread_expect = Vec::new();
-            for d in &days {
-                let n = d.count as usize;
-                let page = store
-                    .list_threads_filtered(account, "inbox", &f, n as i64, offset as i64)
-                    .unwrap();
-                let ids: Vec<i32> = page.iter().map(|m| m.id).collect();
-                let expect: Vec<i32> = all[offset..offset + n].iter().map(|m| m.id).collect();
-                assert_eq!(ids, expect, "{f:?} @ {:?}", d.date_key);
-                let k = page.iter().filter(|m| m.unread_count > 0).count();
-                if k > 0 {
-                    unread_expect.push((d.date_key.clone(), k as i32));
-                }
-                offset += n;
-            }
-            let unread: Vec<_> = store
-                .thread_day_unread_filtered(account, "inbox", &f)
-                .unwrap()
-                .into_iter()
-                .map(|u| (u.date_key, u.unread))
-                .collect();
-            assert_eq!(unread, unread_expect, "{f:?}");
+            assert_days_match(&store, account, &f);
         }
     }
+}
+
+/// 日ごとの件数の累計が一覧の OFFSET になり、日ごとの未読がその一覧の未読と日ごとに一致する。
+fn assert_days_match(store: &Store, account: Option<i64>, f: &ThreadFilter) {
+    let days = store
+        .thread_day_counts_filtered(account, "inbox", f)
+        .unwrap();
+    let all = store
+        .list_threads_filtered(account, "inbox", f, 10_000, 0)
+        .unwrap();
+    let total: i32 = days.iter().map(|d| d.count).sum();
+    assert_eq!(total as usize, all.len(), "{f:?}");
+    let mut offset = 0usize;
+    let mut unread_expect = Vec::new();
+    for d in &days {
+        let n = d.count as usize;
+        let page = store
+            .list_threads_filtered(account, "inbox", f, n as i64, offset as i64)
+            .unwrap();
+        let ids: Vec<i32> = page.iter().map(|m| m.id).collect();
+        let expect: Vec<i32> = all[offset..offset + n].iter().map(|m| m.id).collect();
+        assert_eq!(ids, expect, "{f:?} @ {:?}", d.date_key);
+        let k = page.iter().filter(|m| m.unread_count > 0).count();
+        if k > 0 {
+            unread_expect.push((d.date_key.clone(), k as i32));
+        }
+        offset += n;
+    }
+    let unread: Vec<_> = store
+        .thread_day_unread_filtered(account, "inbox", f)
+        .unwrap()
+        .into_iter()
+        .map(|u| (u.date_key, u.unread))
+        .collect();
+    assert_eq!(unread, unread_expect, "{f:?}");
+}
+
+/// 開いて既読にした読書中の行（`reading_id`）は、未読の絞り込みに同じ位置のまま残り、
+/// 件数・OFFSET・未読も揃う。反転（未読でないもの）には出さず、未読以外の絞り込みでは効かない。
+#[test]
+fn 読書中の行は既読にしても未読の絞り込みに残る() {
+    let store = test_store();
+    seed(&store);
+    let unread = toggles(&[ThreadToggle::Unread], false);
+    let ids = |f: &ThreadFilter| -> Vec<i32> {
+        store
+            .list_threads_filtered(Some(1), "inbox", f, 10_000, 0)
+            .unwrap()
+            .iter()
+            .map(|m| m.id)
+            .collect()
+    };
+    let before = ids(&unread);
+    let row = before[before.len() / 2];
+    // スレッドを丸ごと既読にする（5 秒経って既読にしたのと同じ）。
+    store
+        .conn
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE emails SET is_read = 1
+             WHERE id = ?1
+                OR logical_thread_id = (SELECT logical_thread_id FROM emails WHERE id = ?1)",
+            [row],
+        )
+        .unwrap();
+    let reading = |f: ThreadFilter| ThreadFilter {
+        reading_id: Some(i64::from(row)),
+        ..f
+    };
+    // 読書中の印が無ければ消え、あれば同じ位置に残る。
+    assert!(!ids(&unread).contains(&row));
+    assert_eq!(ids(&reading(unread.clone())), before);
+    for account in [Some(1), None] {
+        assert_days_match(&store, account, &reading(unread.clone()));
+    }
+    // 反転（未読でないもの）には出さない（画面側も読書中の行を未読として当てる）。
+    assert!(!ids(&reading(toggles(&[ThreadToggle::Unread], true))).contains(&row));
+    // 未読以外の絞り込みでは効かない。
+    let star = toggles(&[ThreadToggle::Star], false);
+    assert_eq!(ids(&reading(star.clone())), ids(&star));
 }
 
 /// 絞り込みが無ければ、今までの問い合わせと同じ結果（既定値は何も絞らない）。

@@ -153,7 +153,6 @@ struct StoredRemote {
     id: i64,
     deleted_at: Option<String>,
     etag: Option<String>,
-    calendar_id: Option<i64>,
 }
 
 impl Store {
@@ -287,6 +286,12 @@ impl Store {
     /// [`Self::apply_remote_event`] と同じ反映をして、新しく入れた・戻した・書き換えたを分けて返す。
     /// 手元で削除扱いの予定も、Google から（cancelled でなく）返ってくれば戻す。
     ///
+    /// 手元の予定は**そのカレンダーの中で** Google の予定 ID を引く（`(calendar_id, external_id)`）。
+    /// 予定 ID はカレンダーをまたいで一意ではない — 招待された予定は主催者と招待された側の両方に
+    /// 同じ ID で載り、カレンダーを移しても ID は変わらない（移動元には同じ ID が cancelled で載る）。
+    /// ID だけで引くと 1 行が両方の間を行き来し、片方の取り消しがもう片方を消していた
+    /// （`[実測]` 2026-11-13 vaio）。移動は「移動元の行が消え、移動先に行ができる（か戻る）」になる。
+    ///
     /// # Errors
     /// DB の読み書きに失敗したとき。
     pub fn apply_remote_event_detail(
@@ -297,20 +302,19 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let stored: Option<StoredRemote> = conn
             .query_row(
-                "SELECT id, deleted_at, etag, calendar_id FROM events \
-                 WHERE source = 'google' AND external_id = ?1",
-                params![ev.external_id],
+                "SELECT id, deleted_at, etag FROM events \
+                 WHERE calendar_id = ?1 AND source = 'google' AND external_id = ?2",
+                params![calendar_local_id, ev.external_id],
                 |r| {
                     Ok(StoredRemote {
                         id: r.get(0)?,
                         deleted_at: r.get(1)?,
                         etag: r.get(2)?,
-                        calendar_id: r.get(3)?,
                     })
                 },
             )
             .optional()?;
-        // 手元と同じ版（etag が同じ・同じカレンダー・削除されていない）なら何もしない。
+        // 手元と同じ版（etag が同じ・削除されていない）なら何もしない。
         // 同期トークンを受け付けないカレンダー（Google の祝日カレンダーは毎回 410 を返す）は毎回
         // フル取得になるので、ここで落とさないと変化の無い予定まで「取り込み」に数え、書き直して
         // しまう（`[実測]` 2026-10-09: 日本の祝日 169 件が同期のたびに取り込みとして出ていた）。
@@ -320,7 +324,6 @@ impl Store {
                 st.deleted_at.is_none()
                     && st.etag.is_some()
                     && st.etag == ev.etag
-                    && st.calendar_id == Some(calendar_local_id)
             })
         {
             return Ok(RemoteApplied::Unchanged);
@@ -392,7 +395,7 @@ impl Store {
                     "UPDATE events SET \
                         title = ?1, description = ?2, location = ?3, start_at = ?4, end_at = ?5, \
                         all_day = ?6, recurrence = ?7, reminder_minutes = ?8, color = ?9, \
-                        availability = ?10, visibility = ?11, calendar_id = ?12, \
+                        availability = ?10, visibility = ?11, \
                         remote_calendar = (SELECT external_id FROM calendars WHERE id = ?12), \
                         etag = ?13, recurring_external_id = ?15, original_start_at = ?16, \
                         dirty = 0, deleted_at = NULL, updated_at = CURRENT_TIMESTAMP \

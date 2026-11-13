@@ -350,6 +350,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 74,
         sql: include_str!("migrations/0074_calendar_full_sync.sql"),
     },
+    Migration {
+        // 75 は Google の予定をカレンダーの中で引く一意の索引（予定 ID はカレンダーをまたいで一意でない）。
+        version: 75,
+        sql: include_str!("migrations/0075_gcal_event_key.sql"),
+    },
 ];
 
 /// 「既に適用済み」を示すエラーか（別枝で同じ列/表を先に追加していた等）。
@@ -751,6 +756,55 @@ mod tests {
         assert_eq!((token, last), (None, None));
         // 外部キーの整合が取れている。
         assert_eq!(count("SELECT count(*) FROM pragma_foreign_key_check"), 0);
+    }
+
+    #[test]
+    fn migration_0075_folds_same_google_event_in_a_calendar_and_keys_it() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_until(&conn, 74).unwrap();
+        conn.execute_batch(
+            "INSERT INTO calendars (id, source, external_id, last_full_sync_at) VALUES
+               (5, 'google', 'cal5', CURRENT_TIMESTAMP), (6, 'google', 'cal6', CURRENT_TIMESTAMP);
+             INSERT INTO events (id, title, start_at, calendar_id, source, external_id, dirty, deleted_at) VALUES
+               (1, '消えた写し', '2026-11-12', 5, 'google', 'g1', 0, '2026-11-10'),
+               (2, '生きている', '2026-11-12', 5, 'google', 'g1', 0, NULL),
+               (3, '別のカレンダー', '2026-11-12', 6, 'google', 'g1', 0, NULL),
+               (4, '手元の予定', '2026-11-12', 5, 'local', NULL, 1, NULL);",
+        )
+        .unwrap();
+        run(&conn).unwrap();
+        let got: Vec<(i64, String, Option<String>, bool)> = conn
+            .prepare(
+                "SELECT id, source, external_id, deleted_at IS NOT NULL FROM events ORDER BY id",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        // 同じカレンダーの重なりは、削除されていない行を残し、もう片方は連携を外してゴミ箱へ。
+        // 別のカレンダーの同じ ID は別の予定として残る。
+        assert_eq!(
+            got,
+            [
+                (1, "local".into(), None, true),
+                (2, "google".into(), Some("g1".into()), false),
+                (3, "google".into(), Some("g1".into()), false),
+                (4, "local".into(), None, false),
+            ]
+        );
+        // 同じカレンダーに同じ ID は入らない。別のカレンダーなら入る。
+        let dup = "INSERT INTO events (title, start_at, calendar_id, source, external_id)
+                   VALUES ('x', '2026-11-12', ?1, 'google', 'g1')";
+        assert!(conn.execute(dup, params![5]).is_err());
+        let due: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM calendars WHERE source = 'google' AND last_full_sync_at IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(due, 2, "次の同期で全件を取り直す");
     }
 
     #[test]

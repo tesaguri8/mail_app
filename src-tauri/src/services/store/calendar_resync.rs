@@ -230,4 +230,6 @@ impl Store {
 }
 
 #[cfg(test)]
+mod moved_tests;
+#[cfg(test)]
 mod tests;

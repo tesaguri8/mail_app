@@ -46,6 +46,9 @@ pub struct GCalendarListEntry {
     pub primary: Option<bool>,
     #[serde(default)]
     pub deleted: Option<bool>,
+    /// 利用者が Google 側で「リストに表示しない」にしたカレンダー（showHidden=true のときだけ返る）。
+    #[serde(default)]
+    pub hidden: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -170,7 +173,9 @@ pub async fn list_calendars(
     let mut out = Vec::new();
     let mut page_token: Option<String> = None;
     loop {
-        let mut query: Vec<(&str, String)> = vec![("maxResults", "250".into())];
+        // 非表示にしただけのカレンダーも返させる（既定では返らず、「無くなった」と取り違える）。
+        let mut query: Vec<(&str, String)> =
+            vec![("maxResults", "250".into()), ("showHidden", "true".into())];
         if let Some(pt) = &page_token {
             query.push(("pageToken", pt.clone()));
         }

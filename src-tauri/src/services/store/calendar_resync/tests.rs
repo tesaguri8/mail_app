@@ -351,3 +351,32 @@ fn 予定の取得が404なら外す_グーグル以外のカレンダーは外�
     // 2 回目は何もしない。
     assert_eq!(s.remove_google_calendar(cal).unwrap(), None);
 }
+
+#[test]
+fn 非表示のカレンダーは外さず_削除の印のものは外す() {
+    let s = Store::open_in_memory_for_test();
+    let a = s
+        .upsert_google_account("a@example.invalid", None, None)
+        .unwrap();
+    let shown = s
+        .upsert_google_calendar(a, "shown", "表示", None, "owner", true)
+        .unwrap();
+    let hidden = s
+        .upsert_google_calendar(a, "hidden", "非表示にした", None, "owner", false)
+        .unwrap();
+    let deleted = s
+        .upsert_google_calendar(a, "deleted", "消した", None, "owner", false)
+        .unwrap();
+    // 同期は showHidden=true で一覧を取り、hidden は「ある」に入れ、deleted は入れない。
+    let removed = s
+        .prune_missing_google_calendars(a, &seen(&["shown", "hidden"]))
+        .unwrap();
+    let ids: Vec<i64> = removed.iter().map(|r| r.id).collect();
+    assert_eq!(ids, vec![deleted]);
+    assert!(calendar_events(&s, shown).is_some());
+    assert!(
+        calendar_events(&s, hidden).is_some(),
+        "非表示にしただけでは外さない"
+    );
+    assert_eq!(calendar_events(&s, deleted), None);
+}

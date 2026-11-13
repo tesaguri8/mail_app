@@ -41,12 +41,8 @@ pub async fn sync_account(
         .await
         .map_err(|e| e.to_string())?;
     // 一覧に返ってきた（削除の印が無い）カレンダー。返ってこなかったものは Google 側で消えた。
-    let mut present: HashSet<String> = HashSet::new();
-    for c in &cals {
-        if c.deleted == Some(true) {
-            continue;
-        }
-        present.insert(c.id.clone());
+    let (present, to_upsert) = sort_calendar_list(&cals);
+    for c in to_upsert {
         let name = c.summary.clone().unwrap_or_default();
         store
             .upsert_google_calendar(
@@ -95,6 +91,20 @@ pub async fn sync_account(
         .touch_google_account_synced(account_id, GoogleService::Calendar)
         .map_err(|e| e.to_string())?;
     Ok(result)
+}
+
+/// カレンダーの一覧を「ある」とみなす Google の ID と、手元へ取り込むものに分ける。
+///
+/// - 削除の印（deleted）が付いたものは「無い」（手元から外す対象）
+/// - 利用者が「リストに表示しない」にしたもの（hidden）は「ある」が、取り込まない（今までどおり、
+///   非表示は新しく追加しない。手元に既にあれば外さずに残す）
+fn sort_calendar_list(
+    cals: &[api::GCalendarListEntry],
+) -> (HashSet<String>, Vec<&api::GCalendarListEntry>) {
+    let live = cals.iter().filter(|c| c.deleted != Some(true));
+    let present = live.clone().map(|c| c.id.clone()).collect();
+    let to_upsert = live.filter(|c| c.hidden != Some(true)).collect();
+    (present, to_upsert)
 }
 
 /// 単一カレンダーの未送信ローカル変更（dirty=1）だけを Google へ送る（pull はしない）。
@@ -451,6 +461,30 @@ fn log_full(r: &GcalFullResync, next_token: &str) {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    fn entry(id: &str, hidden: bool, deleted: bool) -> api::GCalendarListEntry {
+        api::GCalendarListEntry {
+            id: id.into(),
+            hidden: hidden.then_some(true),
+            deleted: deleted.then_some(true),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn 非表示のカレンダーはあるとみなすが取り込まない_削除の印は無いとみなす() {
+        let cals = [
+            entry("shown", false, false),
+            entry("hidden", true, false),
+            entry("deleted", false, true),
+        ];
+        let (present, to_upsert) = sort_calendar_list(&cals);
+        let mut p: Vec<&str> = present.iter().map(String::as_str).collect();
+        p.sort();
+        assert_eq!(p, vec!["hidden", "shown"]);
+        let ids: Vec<&str> = to_upsert.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, vec!["shown"]);
+    }
 
     #[test]
     fn 消す対象の始まりは取り直しの期間より2日後ろ() {

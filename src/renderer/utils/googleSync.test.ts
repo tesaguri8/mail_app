@@ -23,7 +23,15 @@ describe('summarizeGoogleSync', () => {
   it('件数のある項目だけを並べ、何も無い種類は「変更なし」', () => {
     const r: GoogleSyncResult = {
       ...empty,
-      calendar: { pulled: 0, pushed: 0, deleted_in: 0, deleted_out: 0, calendars: 3 },
+      calendar: {
+        pulled: 0,
+        pushed: 0,
+        deleted_in: 0,
+        deleted_out: 0,
+        calendars: 3,
+        full: [],
+        calendars_removed: 0,
+      },
       contacts: {
         pulled: 12,
         pushed: 0,
@@ -65,7 +73,15 @@ describe('summarizeGoogleSync', () => {
   it('同期しなかった種類は出さない（連絡先を同期しないアカウント）', () => {
     const r: GoogleSyncResult = {
       ...empty,
-      calendar: { pulled: 4, pushed: 1, deleted_in: 0, deleted_out: 0, calendars: 1 },
+      calendar: {
+        pulled: 4,
+        pushed: 1,
+        deleted_in: 0,
+        deleted_out: 0,
+        calendars: 1,
+        full: [],
+        calendars_removed: 0,
+      },
     };
     expect(summarizeGoogleSync(r, t)).toBe('calendar: eventsPulled=4 / eventsPushed=1');
   });

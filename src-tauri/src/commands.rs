@@ -13,7 +13,7 @@ use crate::models::{
     StorageInfo, SureMergePreview, SureMergeResult, SyncListed, SyncProgress,
     SyncResult, TagSummary, ThreadDayCount, ThreadDayUnread, ThreadFilter, ThreadListItem, ThreadView, UnlinkedOrgName,
 };
-use crate::models::{AccountSyncStatus, ComposeHandoff, SentSynced, SyncErrorKind};
+use crate::models::{AccountSyncStatus, ComposeHandoff, GcalFullResync, SentSynced, SyncErrorKind};
 use crate::services::attachment_fetch;
 use crate::services::autoconfig;
 use crate::services::checksum::simple_checksum;
@@ -3043,6 +3043,44 @@ pub async fn google_sync(
         google::account::SyncScope { calendar, contacts },
     )
     .await)
+}
+
+/// Google カレンダー 1 つを最初から同期し直す（同期トークンを捨てて全件を取り直し、手元を合わせる）。
+/// 返ってこなかった予定は削除扱い・手元で削除扱いでも返ってきた予定は戻す（docs/CALENDAR_SYNC.md）。
+/// そのアカウントのカレンダーを同期し、このカレンダーの取り直しの結果を返す。
+#[tauri::command]
+pub async fn gcal_calendar_resync(
+    app: AppHandle,
+    store: State<'_, Store>,
+    calendar_id: i64,
+) -> Result<GcalFullResync, String> {
+    let (account_id, _, _) = store
+        .google_calendar_meta(calendar_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Google のカレンダーではありません")?;
+    store
+        .request_calendar_full_resync(calendar_id)
+        .map_err(|e| e.to_string())?;
+    log::info!("gcal_calendar_resync: cal {calendar_id} を最初から同期し直す");
+    let res = google_sync(app, store.clone(), account_id, true, false).await?;
+    if let Some(e) = res.calendar_error {
+        return Err(e);
+    }
+    // Google 側で消えていたカレンダーは、同期の中で一覧から外れている。
+    if store
+        .google_calendar_meta(calendar_id)
+        .map_err(|e| e.to_string())?
+        .is_none()
+    {
+        return Err("このカレンダーは Google から無くなっていたので、一覧から外しました".into());
+    }
+    res.calendar
+        .and_then(|c| {
+            c.full
+                .into_iter()
+                .find(|f| i64::from(f.calendar_id) == calendar_id)
+        })
+        .ok_or_else(|| "取り直せませんでした（ログを確かめてください）".to_string())
 }
 
 /// 連絡先の同期先に Google アカウントを加える（作成待ちを置き、次の同期で作る）。

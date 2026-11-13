@@ -2,6 +2,7 @@ mod account_profiles;
 mod accounts;
 mod attachnames;
 mod bodyrepair;
+mod calendar_resync;
 mod calendar_sync;
 mod calendars;
 mod contact_dedupe;
@@ -47,7 +48,10 @@ mod unseen_frames;
 
 pub use accounts::{NewAccount, SmtpAccount};
 pub use inferred_ids::link_sent_copies_at;
-pub use calendar_sync::{ApplyOutcome, LocalChange, RecurringInstance, RemoteEvent, SyncedCalendar};
+pub use calendar_resync::{FullPullReconciled, RemovedCalendar};
+pub use calendar_sync::{
+    ApplyOutcome, LocalChange, RecurringInstance, RemoteApplied, RemoteEvent, SyncedCalendar,
+};
 pub use contact_sync::{ContactIdentity, ContactPush, RemoteContact};
 pub use crate::models::GoogleService;
 pub use emails::{

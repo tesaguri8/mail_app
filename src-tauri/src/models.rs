@@ -387,6 +387,46 @@ pub struct GcalSyncResult {
     pub deleted_out: i32,
     /// 同期したカレンダー数。
     pub calendars: i32,
+    /// 全件で取り直したカレンダーごとの結果（増分だけなら空）。
+    pub full: Vec<GcalFullResync>,
+    /// Google 側で消えたので手元から外したカレンダーの数（一覧に無い / 予定の取得が 404）。
+    pub calendars_removed: i32,
+}
+
+/// なぜ全件で取り直したか。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub enum GcalFullReason {
+    /// 同期トークンが無い（初めての同期、または「最初から同期し直す」）。
+    Fresh,
+    /// 最後に全件を取り直してから 24 時間を超えた（増分の取りこぼしを 1 日以内に直す）。
+    Daily,
+    /// 同期トークンが失効した（410。祝日カレンダーは毎回これ）。
+    Expired,
+}
+
+/// 1 つのカレンダーを全件で取り直した結果（docs/CALENDAR_SYNC.md）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct GcalFullResync {
+    /// ローカルの calendars.id。
+    pub calendar_id: i32,
+    pub reason: GcalFullReason,
+    /// Google から返ってきた件数（cancelled も含む）。
+    pub fetched: i32,
+    /// 手元に無かったので新しく入れた件数。
+    pub inserted: i32,
+    /// 手元で削除扱いだったのを戻した件数。
+    pub restored: i32,
+    /// 手元にあって新しい版で書き換えた件数。
+    pub updated: i32,
+    /// Google 側の削除（cancelled）を取り込んだ件数。
+    pub deleted: i32,
+    /// 手元にあるのに返ってこなかったので削除扱いにした件数（増分の取りこぼしの跡）。
+    pub removed: i32,
+    /// 返ってこなかったので外した「1 回だけの削除」の記録の件数。
+    pub uncancelled: i32,
 }
 
 /// Google 連絡先同期（push → pull）の結果サマリ。

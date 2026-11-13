@@ -5,9 +5,12 @@
 
 use super::api::{self, ApiError};
 use super::convert;
-use crate::models::GcalSyncResult;
-use crate::services::store::{ApplyOutcome, GoogleService, Store};
-use chrono::{Duration, Local};
+use crate::models::{GcalFullReason, GcalFullResync, GcalSyncResult};
+use crate::services::store::{
+    FullPullReconciled, GoogleService, RemoteApplied, RemovedCalendar, Store, SyncedCalendar,
+};
+use chrono::{DateTime, Duration, Local};
+use std::collections::HashSet;
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
 
@@ -37,10 +40,9 @@ pub async fn sync_account(
     let cals = api::list_calendars(&client, access_token)
         .await
         .map_err(|e| e.to_string())?;
-    for c in &cals {
-        if c.deleted == Some(true) {
-            continue;
-        }
+    // 一覧に返ってきた（削除の印が無い）カレンダー。返ってこなかったものは Google 側で消えた。
+    let (present, to_upsert) = sort_calendar_list(&cals);
+    for c in to_upsert {
         let name = c.summary.clone().unwrap_or_default();
         store
             .upsert_google_calendar(
@@ -52,6 +54,15 @@ pub async fn sync_account(
                 c.primary == Some(true),
             )
             .map_err(|e| e.to_string())?;
+    }
+
+    // 一覧に無くなったカレンダーは、その予定ごと手元から外す（同期対象からも外れる）。
+    for gone in store
+        .prune_missing_google_calendars(account_id, &present)
+        .map_err(|e| e.to_string())?
+    {
+        log_removed(&gone, "カレンダーの一覧に無い");
+        result.calendars_removed += 1;
     }
 
     // 2) 同期対象カレンダーごとに push → pull。
@@ -71,17 +82,7 @@ pub async fn sync_account(
                 log::warn!("sync_account: push 失敗 cal {local_id} (ext {ext_id})（スキップ）: {e}");
             }
         }
-        if let Err(e) = pull_calendar(
-            store,
-            &client,
-            access_token,
-            local_id,
-            ext_id,
-            cal.sync_token.as_deref(),
-            &mut result,
-        )
-        .await
-        {
+        if let Err(e) = pull_calendar(store, &client, access_token, &cal, &mut result).await {
             log::warn!("sync_account: pull 失敗 cal {local_id} (ext {ext_id})（スキップ）: {e}");
         }
     }
@@ -90,6 +91,20 @@ pub async fn sync_account(
         .touch_google_account_synced(account_id, GoogleService::Calendar)
         .map_err(|e| e.to_string())?;
     Ok(result)
+}
+
+/// カレンダーの一覧を「ある」とみなす Google の ID と、手元へ取り込むものに分ける。
+///
+/// - 削除の印（deleted）が付いたものは「無い」（手元から外す対象）
+/// - 利用者が「リストに表示しない」にしたもの（hidden）は「ある」が、取り込まない（今までどおり、
+///   非表示は新しく追加しない。手元に既にあれば外さずに残す）
+fn sort_calendar_list(
+    cals: &[api::GCalendarListEntry],
+) -> (HashSet<String>, Vec<&api::GCalendarListEntry>) {
+    let live = cals.iter().filter(|c| c.deleted != Some(true));
+    let present = live.clone().map(|c| c.id.clone()).collect();
+    let to_upsert = live.filter(|c| c.hidden != Some(true)).collect();
+    (present, to_upsert)
 }
 
 /// 単一カレンダーの未送信ローカル変更（dirty=1）だけを Google へ送る（pull はしない）。
@@ -190,29 +205,101 @@ async fn push_calendar(
     Ok(())
 }
 
-/// Google 側の予定を取り込む。sync_token があれば増分、なければフル（過去 1 年〜）。
+/// 全件を取り直す期間の始まり（過去 1 年）。
+fn full_time_min() -> DateTime<Local> {
+    Local::now() - Duration::days(365)
+}
+
+/// 返ってこなかった予定を消す対象の始まり（ローカル表現の日付）。取り直しの timeMin から 2 日
+/// 後ろへ寄せる（Google の timeMin は「終わりがそれより後」の予定を返す。境目の予定を、時差や
+/// 終日の扱いの違いで誤って消さない）。
+fn reconcile_cutoff(time_min: DateTime<Local>) -> String {
+    (time_min + Duration::days(2))
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+/// 1 回の取り込みの集計（全件の取り直しの報告に使う）。
+#[derive(Default)]
+struct PullTally {
+    fetched: usize,
+    inserted: usize,
+    restored: usize,
+    updated: usize,
+    deleted: usize,
+    /// 全件のときだけ: 返ってきた予定の Google の ID（cancelled も含む）。
+    seen: HashSet<String>,
+}
+
+impl PullTally {
+    fn count(&mut self, applied: RemoteApplied) {
+        match applied {
+            RemoteApplied::Inserted => self.inserted += 1,
+            RemoteApplied::Restored => self.restored += 1,
+            RemoteApplied::Updated => self.updated += 1,
+            RemoteApplied::Deleted => self.deleted += 1,
+            RemoteApplied::Unchanged => {}
+        }
+    }
+}
+
+/// 全件の取り直しの報告（同期結果とログ用）。
+fn full_report(
+    local_id: i64,
+    reason: GcalFullReason,
+    t: &PullTally,
+    rec: FullPullReconciled,
+) -> GcalFullResync {
+    let n = |v: usize| i32::try_from(v).unwrap_or(i32::MAX);
+    GcalFullResync {
+        calendar_id: i32::try_from(local_id).unwrap_or(i32::MAX),
+        reason,
+        fetched: n(t.fetched),
+        inserted: n(t.inserted),
+        restored: n(t.restored),
+        updated: n(t.updated),
+        deleted: n(t.deleted),
+        removed: n(rec.removed),
+        uncancelled: n(rec.uncancelled),
+    }
+}
+
+/// Google 側の予定を取り込む。
+///
+/// 次のときは増分ではなく全件（過去 1 年〜）で取り直し、手元を合わせる（docs/CALENDAR_SYNC.md）:
+/// - 同期トークンが無い（初めて / 「最初から同期し直す」）
+/// - `full_due`（最後に全件を取り直してから 24 時間を超えた）
+/// - 同期トークンが失効した（410）
+///
+/// 全件のときは、返ってきた予定を手元で削除扱いでも戻し、期間の中で返ってこなかった予定を削除扱いに
+/// する（未送信のローカル変更は残す）。増分が予定を取りこぼしたまま「取得 0 件」を返し続けても、
+/// 1 日以内に直る（`[実測]` vaio 2026-11-10）。
 async fn pull_calendar(
     store: &Store,
     client: &reqwest::Client,
     token: &str,
-    local_id: i64,
-    ext_id: &str,
-    sync_token: Option<&str>,
+    cal: &SyncedCalendar,
     result: &mut GcalSyncResult,
 ) -> Result<(), String> {
-    let full_time_min = || (Local::now() - Duration::days(365)).to_rfc3339();
-    let mut use_sync: Option<String> = sync_token.map(str::to_string);
-    let mut time_min: Option<String> = if use_sync.is_none() {
-        Some(full_time_min())
+    let (local_id, ext_id) = (cal.local_id, cal.external_id.as_str());
+    let sync_token = cal.sync_token.as_deref();
+    // 全件で取り直す理由（None なら増分）。
+    let mut full: Option<GcalFullReason> = match (sync_token, cal.full_due) {
+        (None, _) => Some(GcalFullReason::Fresh),
+        (Some(_), true) => Some(GcalFullReason::Daily),
+        (Some(_), false) => None,
+    };
+    let mut use_sync: Option<String> = if full.is_none() {
+        sync_token.map(str::to_string)
     } else {
         None
     };
+    let mut time_min_at = full_time_min();
     let mut page_token: Option<String> = None;
-    // 取得した件数と、そのうち取り込んだ・削除を取り込んだ件数（同期のたびの量を追えるように）。
-    let (before_pulled, before_deleted) = (result.pulled, result.deleted_in);
-    let mut fetched = 0usize;
+    let mut tally = PullTally::default();
 
     loop {
+        let time_min = full.map(|_| time_min_at.to_rfc3339());
         let page = match api::list_events(
             client,
             token,
@@ -225,34 +312,49 @@ async fn pull_calendar(
         {
             Ok(p) => p,
             Err(ApiError::SyncTokenExpired) => {
-                // トークン失効 → フル同期へフォールバック。Google の祝日カレンダーなど、発行した
-                // トークンを毎回 410 で返すカレンダーがある（`[実測]` 2026-10-09）。そこでは毎回
-                // フル取得になるが、同じ版の予定は store 側で落とす（取り込みに数えない）。
+                // トークン失効 → 全件へ。Google の祝日カレンダーなど、発行したトークンを毎回 410 で
+                // 返すカレンダーがある（`[実測]` 2026-10-09）。そこでは毎回全件になるが、同じ版の予定は
+                // store 側で落とす（取り込みに数えない）。全件は 1 回として数える（ここでやり直す）。
                 log::debug!(
-                    "pull_calendar: cal {local_id} の同期トークンが失効（410）→ フル同期へ"
+                    "pull_calendar: cal {local_id} の同期トークンが失効（410）→ 全件で取り直す"
                 );
                 store
                     .set_calendar_sync_token(local_id, None)
                     .map_err(|e| e.to_string())?;
                 use_sync = None;
                 page_token = None;
-                time_min = Some(full_time_min());
+                full = Some(GcalFullReason::Expired);
+                time_min_at = full_time_min();
+                tally = PullTally::default();
                 continue;
+            }
+            Err(ApiError::NotFound) => {
+                // カレンダーが Google 側で消えた（一覧から消えるまでの間も 404 になる）。毎回 WARN を
+                // 出し続けないよう、ここで手元から外す（`[実測]` vaio 2026-11-12: 30 秒ごとに 404）。
+                if let Some(gone) = store
+                    .remove_google_calendar(local_id)
+                    .map_err(|e| e.to_string())?
+                {
+                    log_removed(&gone, "予定の取得が 404");
+                    result.calendars_removed += 1;
+                }
+                return Ok(());
             }
             Err(e) => return Err(e.to_string()),
         };
 
-        fetched += page.items.len();
+        tally.fetched += page.items.len();
         for gev in &page.items {
-            if let Some(re) = convert::remote_from_gevent(gev) {
-                match store
-                    .apply_remote_event(local_id, &re)
-                    .map_err(|e| e.to_string())?
-                {
-                    ApplyOutcome::Upserted => result.pulled += 1,
-                    ApplyOutcome::Deleted => result.deleted_in += 1,
-                    ApplyOutcome::Skipped => {}
+            if full.is_some() {
+                if let Some(id) = &gev.id {
+                    tally.seen.insert(id.clone());
                 }
+            }
+            if let Some(re) = convert::remote_from_gevent(gev) {
+                let applied = store
+                    .apply_remote_event_detail(local_id, &re)
+                    .map_err(|e| e.to_string())?;
+                tally.count(applied);
             }
         }
 
@@ -264,21 +366,159 @@ async fn pull_calendar(
         store
             .set_calendar_sync_token(local_id, page.next_sync_token.as_deref())
             .map_err(|e| e.to_string())?;
-        // 同期のたびに出るので、取得が 0 件のときは debug に落とす。
-        let level = if fetched > 0 {
-            log::Level::Info
+        let next_token = if page.next_sync_token.is_some() {
+            "あり"
         } else {
-            log::Level::Debug
+            "なし"
         };
-        log::log!(
-            level,
-            "pull_calendar: cal {local_id} ({}) 取得 {fetched} 件 → 取り込み {} / 削除 {} / 次のトークン {}",
-            if use_sync.is_some() { "増分" } else { "フル" },
-            result.pulled - before_pulled,
-            result.deleted_in - before_deleted,
-            if page.next_sync_token.is_some() { "あり" } else { "なし" },
-        );
+        match full {
+            Some(reason) => {
+                let rec = store
+                    .reconcile_full_pull(local_id, &tally.seen, &reconcile_cutoff(time_min_at))
+                    .map_err(|e| e.to_string())?;
+                store
+                    .mark_calendar_full_synced(local_id)
+                    .map_err(|e| e.to_string())?;
+                let report = full_report(local_id, reason, &tally, rec);
+                log_full(&report, next_token);
+                result.pulled += report.inserted + report.restored + report.updated;
+                result.deleted_in += report.deleted + report.removed;
+                result.full.push(report);
+            }
+            None => {
+                result.pulled += i32::try_from(tally.inserted + tally.restored + tally.updated)
+                    .unwrap_or(i32::MAX);
+                result.deleted_in += i32::try_from(tally.deleted).unwrap_or(i32::MAX);
+                // 同期のたびに出るので、取得が 0 件のときは debug に落とす。
+                let level = if tally.fetched > 0 {
+                    log::Level::Info
+                } else {
+                    log::Level::Debug
+                };
+                log::log!(
+                    level,
+                    "pull_calendar: cal {local_id} (増分) 取得 {} 件 → 新規 {} / 戻した {} / 更新 {} / 削除 {} / 次のトークン {next_token}",
+                    tally.fetched,
+                    tally.inserted,
+                    tally.restored,
+                    tally.updated,
+                    tally.deleted,
+                );
+            }
+        }
         break;
     }
     Ok(())
+}
+
+/// Google から無くなったカレンダーを外したことをログに出す。
+fn log_removed(gone: &RemovedCalendar, why: &str) {
+    log::info!(
+        "sync_account: Google から無くなったカレンダーを外した cal {}「{}」（ext {}・{why}）予定 {} 件も消した",
+        gone.id,
+        gone.name,
+        gone.external_id,
+        gone.events,
+    );
+}
+
+/// 全件の取り直しをログに出す。手動・初回・1 日 1 回は必ず INFO。トークンが毎回失効する
+/// カレンダー（祝日）は同期のたびに来るので、何も変わらなければ debug に落とす。
+///
+/// 「戻した」「返ってこなかったので消した」が 0 でなければ、増分が取りこぼしていた跡
+/// （増分では届かなかった差）なので WARN で残す（後から食い違いを追えるように）。
+fn log_full(r: &GcalFullResync, next_token: &str) {
+    let changed = r.inserted + r.restored + r.updated + r.deleted + r.removed + r.uncancelled;
+    let drift = r.restored + r.removed + r.uncancelled > 0;
+    let level = if drift {
+        log::Level::Warn
+    } else if r.reason == GcalFullReason::Expired && changed == 0 {
+        log::Level::Debug
+    } else {
+        log::Level::Info
+    };
+    let why = match r.reason {
+        GcalFullReason::Fresh => "最初から",
+        GcalFullReason::Daily => "1 日 1 回",
+        GcalFullReason::Expired => "トークン失効",
+    };
+    log::log!(
+        level,
+        "pull_calendar: cal {} 全件を取り直し（{why}）取得 {} 件 → 新規 {} / 戻した {} / 更新 {} / 削除 {} / 返ってこなかったので消した {} / 1 回だけの削除の記録を外した {} / 次のトークン {next_token}{}",
+        r.calendar_id,
+        r.fetched,
+        r.inserted,
+        r.restored,
+        r.updated,
+        r.deleted,
+        r.removed,
+        r.uncancelled,
+        if drift { "（増分と食い違っていた）" } else { "" },
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn entry(id: &str, hidden: bool, deleted: bool) -> api::GCalendarListEntry {
+        api::GCalendarListEntry {
+            id: id.into(),
+            hidden: hidden.then_some(true),
+            deleted: deleted.then_some(true),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn 非表示のカレンダーはあるとみなすが取り込まない_削除の印は無いとみなす() {
+        let cals = [
+            entry("shown", false, false),
+            entry("hidden", true, false),
+            entry("deleted", false, true),
+        ];
+        let (present, to_upsert) = sort_calendar_list(&cals);
+        let mut p: Vec<&str> = present.iter().map(String::as_str).collect();
+        p.sort();
+        assert_eq!(p, vec!["hidden", "shown"]);
+        let ids: Vec<&str> = to_upsert.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, vec!["shown"]);
+    }
+
+    #[test]
+    fn 消す対象の始まりは取り直しの期間より2日後ろ() {
+        let t = Local.with_ymd_and_hms(2025, 11, 12, 23, 30, 0).unwrap();
+        assert_eq!(reconcile_cutoff(t), "2025-11-14");
+    }
+
+    #[test]
+    fn 取り込みの結果を種類ごとに数える() {
+        let mut t = PullTally::default();
+        for a in [
+            RemoteApplied::Inserted,
+            RemoteApplied::Restored,
+            RemoteApplied::Restored,
+            RemoteApplied::Updated,
+            RemoteApplied::Deleted,
+            RemoteApplied::Unchanged,
+        ] {
+            t.count(a);
+        }
+        t.fetched = 6;
+        let r = full_report(
+            5,
+            GcalFullReason::Daily,
+            &t,
+            FullPullReconciled {
+                removed: 1,
+                uncancelled: 0,
+            },
+        );
+        assert_eq!(
+            (r.fetched, r.inserted, r.restored, r.updated, r.deleted, r.removed),
+            (6, 1, 2, 1, 1, 1)
+        );
+        assert_eq!(r.calendar_id, 5);
+    }
 }

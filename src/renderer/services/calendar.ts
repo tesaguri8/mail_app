@@ -6,6 +6,7 @@ import type { CalendarInput } from '@bindings/CalendarInput';
 import type { EventAttendee } from '@bindings/EventAttendee';
 import type { AttendeeInput } from '@bindings/AttendeeInput';
 import type { IcsImportReport } from '@bindings/IcsImportReport';
+import type { GcalFullResync } from '@bindings/GcalFullResync';
 
 // Tauri v2 は camelCase の引数キーを snake_case の Rust 引数へ自動変換する。
 
@@ -81,3 +82,10 @@ export const icsImport = (path: string) => invoke<IcsImportReport>('ics_import',
 
 /** 全予定を .ics ファイルへ書き出す。 */
 export const icsExport = (path: string) => invoke<void>('ics_export', { path });
+
+/**
+ * Google カレンダー 1 つを最初から同期し直す（同期トークンを捨てて全件を取り直し、手元を合わせる）。
+ * 返ってこなかった予定は削除扱い、手元で削除扱いでも返ってきた予定は戻す（docs/CALENDAR_SYNC.md）。
+ */
+export const gcalCalendarResync = (calendarId: number) =>
+  invoke<GcalFullResync>('gcal_calendar_resync', { calendarId });

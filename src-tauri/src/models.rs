@@ -389,6 +389,8 @@ pub struct GcalSyncResult {
     pub calendars: i32,
     /// 全件で取り直したカレンダーごとの結果（増分だけなら空）。
     pub full: Vec<GcalFullResync>,
+    /// Google 側で消えたので手元から外したカレンダーの数（一覧に無い / 予定の取得が 404）。
+    pub calendars_removed: i32,
 }
 
 /// なぜ全件で取り直したか。

@@ -28,4 +28,8 @@ calendars: number,
 /**
  * 全件で取り直したカレンダーごとの結果（増分だけなら空）。
  */
-full: Array<GcalFullResync>, };
+full: Array<GcalFullResync>, 
+/**
+ * Google 側で消えたので手元から外したカレンダーの数（一覧に無い / 予定の取得が 404）。
+ */
+calendars_removed: number, };

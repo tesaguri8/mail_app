@@ -7,7 +7,7 @@ use super::api::{self, ApiError};
 use super::convert;
 use crate::models::{GcalFullReason, GcalFullResync, GcalSyncResult};
 use crate::services::store::{
-    FullPullReconciled, GoogleService, RemoteApplied, Store, SyncedCalendar,
+    FullPullReconciled, GoogleService, RemoteApplied, RemovedCalendar, Store, SyncedCalendar,
 };
 use chrono::{DateTime, Duration, Local};
 use std::collections::HashSet;
@@ -40,10 +40,13 @@ pub async fn sync_account(
     let cals = api::list_calendars(&client, access_token)
         .await
         .map_err(|e| e.to_string())?;
+    // 一覧に返ってきた（削除の印が無い）カレンダー。返ってこなかったものは Google 側で消えた。
+    let mut present: HashSet<String> = HashSet::new();
     for c in &cals {
         if c.deleted == Some(true) {
             continue;
         }
+        present.insert(c.id.clone());
         let name = c.summary.clone().unwrap_or_default();
         store
             .upsert_google_calendar(
@@ -55,6 +58,15 @@ pub async fn sync_account(
                 c.primary == Some(true),
             )
             .map_err(|e| e.to_string())?;
+    }
+
+    // 一覧に無くなったカレンダーは、その予定ごと手元から外す（同期対象からも外れる）。
+    for gone in store
+        .prune_missing_google_calendars(account_id, &present)
+        .map_err(|e| e.to_string())?
+    {
+        log_removed(&gone, "カレンダーの一覧に無い");
+        result.calendars_removed += 1;
     }
 
     // 2) 同期対象カレンダーごとに push → pull。
@@ -306,6 +318,18 @@ async fn pull_calendar(
                 tally = PullTally::default();
                 continue;
             }
+            Err(ApiError::NotFound) => {
+                // カレンダーが Google 側で消えた（一覧から消えるまでの間も 404 になる）。毎回 WARN を
+                // 出し続けないよう、ここで手元から外す（`[実測]` vaio 2026-11-12: 30 秒ごとに 404）。
+                if let Some(gone) = store
+                    .remove_google_calendar(local_id)
+                    .map_err(|e| e.to_string())?
+                {
+                    log_removed(&gone, "予定の取得が 404");
+                    result.calendars_removed += 1;
+                }
+                return Ok(());
+            }
             Err(e) => return Err(e.to_string()),
         };
 
@@ -375,6 +399,17 @@ async fn pull_calendar(
         break;
     }
     Ok(())
+}
+
+/// Google から無くなったカレンダーを外したことをログに出す。
+fn log_removed(gone: &RemovedCalendar, why: &str) {
+    log::info!(
+        "sync_account: Google から無くなったカレンダーを外した cal {}「{}」（ext {}・{why}）予定 {} 件も消した",
+        gone.id,
+        gone.name,
+        gone.external_id,
+        gone.events,
+    );
 }
 
 /// 全件の取り直しをログに出す。手動・初回・1 日 1 回は必ず INFO。トークンが毎回失効する

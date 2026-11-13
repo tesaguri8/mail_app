@@ -48,7 +48,7 @@ mod unseen_frames;
 
 pub use accounts::{NewAccount, SmtpAccount};
 pub use inferred_ids::link_sent_copies_at;
-pub use calendar_resync::FullPullReconciled;
+pub use calendar_resync::{FullPullReconciled, RemovedCalendar};
 pub use calendar_sync::{
     ApplyOutcome, LocalChange, RecurringInstance, RemoteApplied, RemoteEvent, SyncedCalendar,
 };

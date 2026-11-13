@@ -9,6 +9,8 @@ use serde_json::Value;
 pub enum ApiError {
     /// syncToken が失効した（410 Gone）。カレンダーをフル同期し直す必要がある。
     SyncTokenExpired,
+    /// 対象が無い（404）。予定の取得では、カレンダーが Google 側で消えた（上位で手元から外す）。
+    NotFound,
     /// その他のエラー（メッセージ）。
     Message(String),
 }
@@ -17,6 +19,7 @@ impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ApiError::SyncTokenExpired => write!(f, "同期トークンが失効しました"),
+            ApiError::NotFound => write!(f, "Google API エラー（HTTP 404）: 見つかりません"),
             ApiError::Message(m) => write!(f, "{m}"),
         }
     }
@@ -147,6 +150,9 @@ async fn check(resp: reqwest::Response) -> Result<reqwest::Response, ApiError> {
     }
     if status.as_u16() == 410 {
         return Err(ApiError::SyncTokenExpired);
+    }
+    if status.as_u16() == 404 {
+        return Err(ApiError::NotFound);
     }
     let body = resp.text().await.unwrap_or_default();
     Err(ApiError::Message(format!(

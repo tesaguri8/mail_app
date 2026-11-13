@@ -153,7 +153,12 @@ export function useAutoSync(accounts: AccountSummary[]): () => void {
             if (g.disconnected_at != null || !g.sync_calendar) continue;
             try {
               const r = await googleSync(g.id, { calendar: true, contacts: false });
-              if (r.calendar && r.calendar.pulled + r.calendar.deleted_in > 0) calChanged = true;
+              // Google から無くなったカレンダーを外したときも、一覧を読み直す。
+              if (
+                r.calendar &&
+                r.calendar.pulled + r.calendar.deleted_in + r.calendar.calendars_removed > 0
+              )
+                calChanged = true;
             } catch {
               // アカウント単位の失敗は無視して次へ。
             }

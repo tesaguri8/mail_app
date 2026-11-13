@@ -216,3 +216,138 @@ fn 全件の取り直しは24時間ごと_手動の同期し直しで次に全�
         "手動で同期し直すと、次は最初から"
     );
 }
+
+/// カレンダーの行と予定の件数（そのカレンダーに属するもの）。無ければ None。
+fn calendar_events(s: &Store, id: i64) -> Option<i64> {
+    let conn = s.conn.lock().unwrap();
+    let exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM calendars WHERE id = ?1)",
+            params![id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    exists.then(|| {
+        conn.query_row(
+            "SELECT COUNT(*) FROM events WHERE calendar_id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    })
+}
+
+#[test]
+fn 一覧に無くなったカレンダーだけを予定ごと外す() {
+    let s = Store::open_in_memory_for_test();
+    let a = s
+        .upsert_google_account("a@example.invalid", None, None)
+        .unwrap();
+    let b = s
+        .upsert_google_account("b@example.invalid", None, None)
+        .unwrap();
+    let mine = s
+        .upsert_google_calendar(a, "mine", "マイ", None, "owner", true)
+        .unwrap();
+    let gone = s
+        .upsert_google_calendar(a, "gone", "当銘", None, "owner", false)
+        .unwrap();
+    let other = s
+        .upsert_google_calendar(b, "gone", "別アカウント", None, "owner", true)
+        .unwrap();
+    let local = s
+        .upsert_calendar(&crate::models::CalendarInput {
+            id: None,
+            name: "手元".into(),
+            color: None,
+            kind: None,
+        })
+        .unwrap()
+        .id as i64;
+    for (cal, id) in [(mine, "e-mine"), (gone, "e-gone"), (other, "e-other")] {
+        s.apply_remote_event(cal, &remote(id, id, "2026-11-12T10:00"))
+            .unwrap();
+    }
+    // 1 回だけの削除の記録も一緒に消える（CASCADE）。
+    let cancelled = RemoteEvent {
+        cancelled: true,
+        instance: Some(RecurringInstance {
+            recurring_external_id: "m".into(),
+            original_start_at: "2026-11-20T10:00".into(),
+        }),
+        ..remote("m_1120", "", "2026-11-20T10:00")
+    };
+    s.apply_remote_event(gone, &cancelled).unwrap();
+
+    let removed = s
+        .prune_missing_google_calendars(a, &seen(&["mine"]))
+        .unwrap();
+    assert_eq!(removed.len(), 1);
+    assert_eq!(
+        (removed[0].id, removed[0].name.as_str(), removed[0].events),
+        (gone, "当銘", 1)
+    );
+    assert_eq!(calendar_events(&s, gone), None, "消えたカレンダーは外す");
+    assert_eq!(calendar_events(&s, mine), Some(1), "一覧にあるものは残す");
+    assert_eq!(
+        calendar_events(&s, other),
+        Some(1),
+        "ほかのアカウントには触らない"
+    );
+    assert!(
+        calendar_events(&s, local).is_some(),
+        "Google 以外には触らない"
+    );
+    let conn = s.conn.lock().unwrap();
+    let left: i64 = conn
+        .query_row("SELECT COUNT(*) FROM event_cancelled_instances", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(left, 0);
+    drop(conn);
+    // 同期対象にも出ない。
+    assert!(s
+        .list_synced_google_calendars(a)
+        .unwrap()
+        .iter()
+        .all(|c| c.local_id != gone));
+}
+
+#[test]
+fn 一覧が空なら何も外さない() {
+    let s = Store::open_in_memory_for_test();
+    let cal = calendar(&s, "mine");
+    let acct = s
+        .upsert_google_account("owner@example.invalid", None, None)
+        .unwrap();
+    assert!(s
+        .prune_missing_google_calendars(acct, &HashSet::new())
+        .unwrap()
+        .is_empty());
+    assert!(calendar_events(&s, cal).is_some());
+}
+
+#[test]
+fn 予定の取得が404なら外す_グーグル以外のカレンダーは外さない() {
+    let s = Store::open_in_memory_for_test();
+    let cal = calendar(&s, "gone");
+    s.apply_remote_event(cal, &remote("e1", "e1", "2026-11-12T10:00"))
+        .unwrap();
+    let local = s
+        .upsert_calendar(&crate::models::CalendarInput {
+            id: None,
+            name: "手元".into(),
+            color: None,
+            kind: None,
+        })
+        .unwrap()
+        .id as i64;
+    assert_eq!(s.remove_google_calendar(local).unwrap(), None);
+    assert!(calendar_events(&s, local).is_some());
+    let gone = s.remove_google_calendar(cal).unwrap().unwrap();
+    assert_eq!((gone.external_id.as_str(), gone.events), ("gone", 1));
+    assert_eq!(calendar_events(&s, cal), None);
+    // 2 回目は何もしない。
+    assert_eq!(s.remove_google_calendar(cal).unwrap(), None);
+}

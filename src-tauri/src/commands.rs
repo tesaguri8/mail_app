@@ -3062,9 +3062,17 @@ pub async fn gcal_calendar_resync(
         .request_calendar_full_resync(calendar_id)
         .map_err(|e| e.to_string())?;
     log::info!("gcal_calendar_resync: cal {calendar_id} を最初から同期し直す");
-    let res = google_sync(app, store, account_id, true, false).await?;
+    let res = google_sync(app, store.clone(), account_id, true, false).await?;
     if let Some(e) = res.calendar_error {
         return Err(e);
+    }
+    // Google 側で消えていたカレンダーは、同期の中で一覧から外れている。
+    if store
+        .google_calendar_meta(calendar_id)
+        .map_err(|e| e.to_string())?
+        .is_none()
+    {
+        return Err("このカレンダーは Google から無くなっていたので、一覧から外しました".into());
     }
     res.calendar
         .and_then(|c| {
